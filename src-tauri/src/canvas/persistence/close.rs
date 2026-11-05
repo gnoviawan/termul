@@ -27,7 +27,7 @@ pub enum CloseMode {
     Discard,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CloseOutcome {
     /// False when the project had no mount.

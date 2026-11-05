@@ -17,6 +17,7 @@ function file(filePath: string, content: string, isDirty: boolean): EditorFileSt
   return {
     filePath,
     content,
+    kind: 'text',
     originalContent: 'disk',
     isDirty,
     language: '',

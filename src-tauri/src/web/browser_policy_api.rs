@@ -107,25 +107,29 @@ fn caller<T>(
         .ok_or_else(|| refuse(PolicyRefusal::StoreUnavailable))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectQuery {
     #[serde(default)]
     project_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyProjectBody {
     project_id: String,
     expected_revision: u64,
+    // Parsed into a `ProjectOpWire` by the service; the spec documents that shape.
+    #[schemars(with = "crate::acp::browser_policy::ProjectOpWire")]
     op: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyAppBody {
     expected_revision: u64,
+    // Parsed into an `AppOpWire` by the service; the spec documents that shape.
+    #[schemars(with = "crate::acp::browser_policy::AppOpWire")]
     op: Value,
 }
 

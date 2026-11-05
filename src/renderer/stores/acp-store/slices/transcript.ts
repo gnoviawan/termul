@@ -27,8 +27,10 @@ import {
   setCachedSessionPayload,
   unpinSessionPayload
 } from '@/lib/acp-history-persistence'
+import { splitReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { logFrontendError } from '@/lib/log-api'
 import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
+import { forgetComposerSession } from '../composer-options'
 import {
   acceptsSessionTranscriptEvents,
   cacheOptionsFromSession,
@@ -49,6 +51,8 @@ import {
   withCommands
 } from '../helpers'
 import { useAcpStore } from '../index'
+import { withRateLimit } from '../rate-limit'
+import { forgetRegistryMcpServers } from '../registry-mcp-fingerprints'
 import {
   activeWirePromptTurns,
   bugReportCollectors,
@@ -70,7 +74,6 @@ import {
   rejectTerminalAssistCollector,
   terminalAssistCollectors
 } from '../shared-state'
-import { mergedLifecycleField, withCodexThreadStates } from '../subagent-lifecycle'
 import {
   appendSubagentChunk,
   MAX_SUBAGENT_TEXT_CHARS,
@@ -342,6 +345,8 @@ const MAX_LIVE_TOOL_CALL_CONTENT_CHARS = 256 * 1024
  * subset — the same contract the durable mirror applies.
  */
 const MAX_LIVE_TOOL_CALL_TOTAL_CHARS = 384 * 1024
+/** Bound for the canonical subagent record in the degraded subset. */
+const MAX_SUBAGENT_RECORD_CHARS = 16 * 1024
 
 /** Agent-controlled titles are unbounded strings — bound them like the durable path. */
 const MAX_LIVE_TOOL_CALL_TITLE_CHARS = 1024
@@ -554,13 +559,15 @@ export function clampLiveToolCallFields<T extends LiveToolCallShape>(
     reduced.locations = next.locations
   }
   if (next.rawOutput !== undefined) reduced.rawOutput = next.rawOutput
-  // Three scalars from the ingest extractor: tiny and bounded.
-  if (next.subagentUsage !== undefined && serializedLength(next.subagentUsage) <= 256) {
-    reduced.subagentUsage = next.subagentUsage
+  // The host bounds the record's prompt (8000 chars) and other strings.
+  if (next.subagent !== undefined && serializedLength(next.subagent) <= MAX_SUBAGENT_RECORD_CHARS) {
+    reduced.subagent = next.subagent
   }
-  // Ingest caps each lifecycle string at 512 chars, so this stays small too.
-  if (next.subagentLifecycle !== undefined && serializedLength(next.subagentLifecycle) <= 2048) {
-    reduced.subagentLifecycle = next.subagentLifecycle
+  if (
+    next.subagentControl !== undefined &&
+    serializedLength(next.subagentControl) <= MAX_SUBAGENT_RECORD_CHARS
+  ) {
+    reduced.subagentControl = next.subagentControl
   }
   if (typeof next.parentToolCallId === 'string' && next.parentToolCallId.length <= 512) {
     reduced.parentToolCallId = next.parentToolCallId
@@ -726,6 +733,8 @@ export function dropSessionBookkeeping(
   historySeqWatermarks.delete(sessionId)
   inFlightDurabilityProbes.delete(sessionId)
   untrimmableSessions.delete(sessionId)
+  forgetRegistryMcpServers(sessionId)
+  forgetComposerSession(sessionId)
   // A close that keeps the transcript for an open tab keeps the links too: a
   // later history reopen re-splices the pre-switch conversation through them.
   if (opts.keepLiveSwitchLinks) return
@@ -1152,7 +1161,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
     // appended message use the same chip-rendering display blocks.
     // F-2 sibling: bound non-text block payloads (attachment/resource data)
     // at ingest — the echo path carries the same unbounded wire blocks.
-    const content = [...wireBlocksToDisplay(e.content)].map(clampLiveContentBlock)
+    const guarded = splitReadOnlyGuard(e.content ?? [])
+    const content = [...wireBlocksToDisplay(guarded.blocks)].map(clampLiveContentBlock)
     // spec-agent-switch-separator-redesign: a framed `# Conversation
     // handoff` echo persisted by an OLD-format sender (queued flush on a
     // stale build, another client) arrives verbatim — strip the preamble
@@ -1206,7 +1216,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         streaming: false,
         timestamp: Date.now(),
         seq: nextSeq(),
-        hostSeq: eventSeq
+        hostSeq: eventSeq,
+        ...(guarded.guard ? { readOnlyGuard: guarded.guard } : {})
       }
       if (duplicate) return {}
       return {
@@ -1479,7 +1490,7 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         return {
           toolCalls: {
             ...s.toolCalls,
-            [e.sessionId]: withCodexThreadStates([...list, stamped], stamped)
+            [e.sessionId]: [...list, stamped]
           }
         }
       }
@@ -1492,7 +1503,6 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       const merged = clampLiveToolCallFields(e.sessionId, {
         ...list[idx],
         ...stamped,
-        ...mergedLifecycleField(list[idx], stamped),
         // A live event turns a restored summary into a real timeline card.
         restoredSummary: undefined,
         // A legacy record without ordering stamps adopts the live ones.
@@ -1503,7 +1513,7 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       const next = [...list]
       next[idx] = merged
       return {
-        toolCalls: { ...s.toolCalls, [e.sessionId]: withCodexThreadStates(next, merged) }
+        toolCalls: { ...s.toolCalls, [e.sessionId]: next }
       }
     }
     if (useCoalesce) {
@@ -1539,7 +1549,6 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       const merged = clampLiveToolCallFields(e.sessionId, {
         ...list[idx],
         ...clampedUpdate,
-        ...mergedLifecycleField(list[idx], clampedUpdate),
         restoredSummary: undefined,
         // A legacy record without ordering stamps adopts live ones, so it
         // still sorts and splits turns like every live-ingested call.
@@ -1549,7 +1558,7 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       if (!merged) return {}
       const next = [...list]
       next[idx] = merged
-      return { toolCalls: { ...s.toolCalls, [e.sessionId]: withCodexThreadStates(next, merged) } }
+      return { toolCalls: { ...s.toolCalls, [e.sessionId]: next } }
     }
     if (useCoalesce) {
       coalesceSet(e.sessionId, apply)
@@ -1703,14 +1712,20 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
   },
 
   _onUsageUpdate: (e) => {
-    if (!Number.isFinite(e.used) || !Number.isFinite(e.size) || e.size <= 0 || e.used <= 0) {
-      return
-    }
+    const reportsTokens =
+      Number.isFinite(e.used) && Number.isFinite(e.size) && e.size > 0 && e.used > 0
+    const reportedLimit = e.rateLimit
+    if (!reportsTokens && !reportedLimit) return
     set((s) => {
       // Closed shells remain in `sessions` after eviction — still reject usage.
       if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       const prev = s.sessionUsage[e.sessionId]
-      const baselineUsed = prev?.baselineUsed ?? e.used
+      if (!reportsTokens && reportedLimit) {
+        return {
+          sessionUsage: { ...s.sessionUsage, [e.sessionId]: withRateLimit(prev, reportedLimit) }
+        }
+      }
+      const baselineUsed = prev && prev.used > 0 ? prev.baselineUsed : e.used
       const next: SessionUsage = {
         used: e.used,
         size: e.size,

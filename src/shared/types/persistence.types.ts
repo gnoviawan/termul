@@ -86,6 +86,8 @@ export const PersistenceKeys = {
   // The composer's unsent message per chat session (device scope).
   chatDraft: (projectId: string, sessionId: string): string =>
     `chat-draft/${projectId}/${sessionId}`,
+  // Chats started from a GitHub issue or PR, per project (device scope).
+  githubChatLinks: (projectId: string): string => `github/chat-links/${projectId}`,
   // ACP agent configuration (shared between devices, merged per field).
   acpAgents: 'acp/agents',
   acpAuthMethods: 'acp/auth-methods',
@@ -210,7 +212,14 @@ export interface PersistedRejectedOptionValues {
 export interface PersistedComposerOptions {
   modelId?: string
   modeId?: string
+  /** The last value of every option, the model option included (pre-`modelValues` shape). */
   configValues?: Record<string, string>
+  /**
+   * Non-model option values (effort, Fast, ...) per model id: a model brings
+   * back its own values. Absent on records written before it existed; those
+   * restore the flat `configValues`.
+   */
+  modelValues?: Record<string, Record<string, string>>
   isolationMode?: 'current' | 'worktree'
   baseBranch?: string | null
 }

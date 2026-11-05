@@ -5,21 +5,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AcpTransportError } from '@/lib/acp-transport/types'
 import { useAcpStore } from '@/stores/acp-store'
 import { FRESH } from '@/stores/acp-store/testkit'
+import { UsageCard } from '../agent-model-selector/mobile/MobileUsageCard'
 import { ClaudeAccountChip } from './ClaudeAccountChip'
 import { ClaudeLimitNotice } from './ClaudeLimitNotice'
 import { ClaudeLimitWarning } from './ClaudeLimitWarning'
 import { ClaudeSignInAction } from './ClaudeSignInAction'
-import { useClaudeResumeStore } from './use-claude-limit'
+import { setSwitchingTo, useClaudeResumeStore } from './use-claude-limit'
 
-const { api, switcher, openApp } = vi.hoisted(() => ({
+const { api, switcher, openApp, admits } = vi.hoisted(() => ({
   openApp: vi.fn(),
-  api: { list: vi.fn(), usage: vi.fn(), canManageAccounts: vi.fn(() => true) },
+  admits: { value: true },
+  api: { list: vi.fn(), usage: vi.fn() },
   switcher: { switchProjectClaudeAccount: vi.fn(), restartClaudeSession: vi.fn() }
 }))
 
 vi.mock('@/lib/claude-accounts-api', () => ({ claudeAccountsApi: api }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
+vi.mock('@/hooks/use-server-admits-remote-writes', () => ({
+  useServerAdmitsRemoteWrites: () => admits.value
+}))
 vi.mock('@/stores/settings-modal-store', () => ({
   useSettingsModalStore: Object.assign(
     (select: (s: { openApp: typeof openApp }) => unknown) => select({ openApp }),
@@ -33,11 +38,23 @@ vi.mock('@/stores/claude-account-switch', async () => {
   return { ...actual, ...switcher }
 })
 
-const read = (accountId: string, percent: number) => ({
+const usageWindow = (kind: string, percent: number) => ({
+  kind,
+  group: null,
+  scope: null,
+  percent,
+  resetsAt: null,
+  severity: null
+})
+
+const read = (accountId: string, percent: number, weekly?: number) => ({
   accountId,
   status: 'ok' as const,
   subscriptionType: 'max',
-  windows: [{ kind: 'session', group: null, scope: null, percent, resetsAt: null, severity: null }],
+  windows: [
+    usageWindow('session', percent),
+    ...(weekly === undefined ? [] : [usageWindow('weekly_all', weekly)])
+  ],
   checkedAt: Date.now(),
   message: null
 })
@@ -83,7 +100,7 @@ const limit = (
 
 beforeEach(() => {
   vi.clearAllMocks()
-  api.canManageAccounts.mockReturnValue(true)
+  admits.value = true
   api.list.mockResolvedValue({
     accounts: [
       { id: 'default', name: 'Personal', builtin: true, signedIn: true },
@@ -130,9 +147,21 @@ describe('ClaudeLimitNotice', () => {
     fireEvent.click(screen.getByRole('button', { name: /switch to work and continue/i }))
     await waitFor(() =>
       expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledWith('office', 'ab12', {
-        continueSessionId: 's1'
+        continueSessionIds: ['s1']
       })
     )
+  })
+
+  it('shows a switch that automatic switching started, without the offer', async () => {
+    seed(limit('rejected', 100))
+    setSwitchingTo('s1', 'Work')
+    render(<ClaudeLimitNotice sessionId="s1" />)
+    expect(await screen.findByText('Switching to Work and continuing…')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /switch to work and continue/i })).toBeNull()
+    act(() => setSwitchingTo('s1', null))
+    expect(
+      await screen.findByRole('button', { name: /switch to work and continue/i })
+    ).toBeInTheDocument()
   })
 
   it('offers to continue when the window resets when no account has room', async () => {
@@ -153,10 +182,40 @@ describe('ClaudeLimitNotice', () => {
     })
   })
 
+  it('offers to add an account when no account has room, except on a view-only connection', async () => {
+    api.usage.mockResolvedValue([read('default', 100), read('ab12', 100), read('cd34', 100)])
+    seed(limit('rejected', 100))
+    const { unmount } = render(<ClaudeLimitNotice sessionId="s1" />)
+    expect(await screen.findByText(/No other account has room left/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Add account' }))
+    expect(openApp).toHaveBeenCalledWith('provider')
+    unmount()
+
+    admits.value = false
+    render(<ClaudeLimitNotice sessionId="s1" />)
+    expect(await screen.findByText(/No other account has room left/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add account' })).not.toBeInTheDocument()
+  })
+
   it('ignores a rejected window that paid overage still covers', () => {
     seed({ ...limit('rejected', 100), overageInUse: true })
     const { container } = render(<ClaudeLimitNotice sessionId="s1" />)
     expect(container).toBeEmptyDOMElement()
+  })
+
+  it('appears when a turn is rejected at the limit', async () => {
+    seed()
+    render(<ClaudeLimitNotice sessionId="s1" />)
+    act(() =>
+      useAcpStore.getState()._onAgentError({
+        agentId: 'a1',
+        sessionId: 's1',
+        message: "Internal error: You've hit your 5-hour limit · resets 4am (Europe/Berlin)",
+        providerCode: 'provider_quota_exceeded'
+      })
+    )
+    expect(await screen.findByText('Personal reached its 5-hour limit')).toBeInTheDocument()
+    expect(screen.getByText(/Switch to Work \(4% used\) and continue\?/)).toBeInTheDocument()
   })
 })
 
@@ -168,7 +227,7 @@ describe('ClaudeLimitWarning', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Switch to Work' }))
     await waitFor(() =>
       expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledWith('office', 'ab12', {
-        continueSessionId: undefined
+        continueSessionIds: undefined
       })
     )
   })
@@ -200,15 +259,105 @@ describe('ClaudeLimitWarning', () => {
   })
 })
 
+describe('phone Select model sheet usage', () => {
+  it('shows the project account and its 5-hour reading', async () => {
+    api.usage.mockResolvedValue([read('default', 42), read('ab12', 4), read('cd34', 40)])
+    seed()
+    render(<UsageCard sessionId="s1" usage={null} compact={null} onManageAccounts={vi.fn()} />)
+
+    expect(await screen.findByText('5-hour limit · Personal')).toBeInTheDocument()
+    expect(screen.getByText('Usage')).toBeInTheDocument()
+    expect(screen.getByText('42%')).toBeInTheDocument()
+  })
+
+  it('says a signed-out account is signed out and opens account settings from the row', async () => {
+    api.list.mockResolvedValue({
+      accounts: [{ id: 'default', name: 'Personal', builtin: true, signedIn: false }],
+      defaultAccountId: 'default',
+      projectAccounts: {}
+    })
+    seed()
+    const onManageAccounts = vi.fn()
+    render(
+      <UsageCard sessionId="s1" usage={null} compact={null} onManageAccounts={onManageAccounts} />
+    )
+
+    const row = await screen.findByRole('button', { name: /Claude account/ })
+    expect(row).toHaveTextContent('Signed out · Personal')
+    expect(row).toHaveTextContent('Sign in')
+    fireEvent.click(row)
+    expect(onManageAccounts).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('ClaudeAccountChip', () => {
   it('shows the project account and its usage, and switches from its menu', async () => {
     seed()
     render(<ClaudeAccountChip sessionId="s1" />)
-    const chip = await screen.findByRole('button', { name: /Claude account: Personal, 100%/ })
+    const chip = await screen.findByRole('button', {
+      name: 'Claude account: Personal, 5-hour 100% used. Change account'
+    })
+    expect(chip).toHaveTextContent(/^Personal5h 100%$/)
     fireEvent.pointerDown(chip, { button: 0, ctrlKey: false })
     fireEvent.click(await screen.findByRole('menuitem', { name: /Work/ }))
     await waitFor(() =>
       expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledWith('office', 'ab12')
+    )
+  })
+
+  it('adds a weekly window only once it nears its limit', async () => {
+    api.usage.mockResolvedValue([read('default', 42, 86), read('ab12', 4, 60), read('cd34', 40)])
+    seed()
+    render(<ClaudeAccountChip sessionId="s1" />)
+    const chip = await screen.findByRole('button', {
+      name: 'Claude account: Personal, 5-hour 42% used, weekly 86% used. Change account'
+    })
+    expect(chip).toHaveTextContent(/^Personal5h 42%·Wk 86%$/)
+    fireEvent.pointerDown(chip, { button: 0, ctrlKey: false })
+    expect(await screen.findByRole('menuitem', { name: /^Personal/ })).toHaveTextContent(
+      'Max · 5-hour 42% · Weekly 86%'
+    )
+    expect(screen.getByRole('menuitem', { name: /Work/ })).toHaveTextContent(
+      'Max · 5-hour 4% · Weekly 60%'
+    )
+    expect(screen.getByRole('menuitem', { name: /Side/ })).toHaveTextContent('Max · 5-hour 40%')
+  })
+
+  it('announces no usage for a signed-out account', async () => {
+    api.list.mockResolvedValue({
+      accounts: [{ id: 'default', name: 'Personal', builtin: true, signedIn: false }],
+      defaultAccountId: 'default',
+      projectAccounts: {}
+    })
+    seed(limit('allowed', 31))
+    render(<ClaudeAccountChip sessionId="s1" />)
+    const chip = await screen.findByRole('button', {
+      name: 'Claude account: Personal. Change account'
+    })
+    expect(chip).toHaveTextContent(/^Personal$/)
+  })
+
+  it('keeps only the 5-hour window below the warning level', async () => {
+    api.usage.mockResolvedValue([read('default', 42, 79), read('ab12', 4), read('cd34', 40)])
+    seed()
+    render(<ClaudeAccountChip sessionId="s1" />)
+    const chip = await screen.findByRole('button', {
+      name: 'Claude account: Personal, 5-hour 42% used. Change account'
+    })
+    expect(chip).toHaveTextContent(/^Personal5h 42%$/)
+  })
+
+  it('shows the live 5-hour reading and a live weekly one beside it', async () => {
+    seed(limit('allowed', 31))
+    const { unmount } = render(<ClaudeAccountChip sessionId="s1" />)
+    expect(await screen.findByRole('button', { name: /Claude account/ })).toHaveTextContent(
+      /^Personal5h 31%$/
+    )
+    unmount()
+    seed({ ...limit('allowed_warning', 91), kind: 'seven_day' })
+    render(<ClaudeAccountChip sessionId="s1" />)
+    expect(await screen.findByRole('button', { name: /Claude account/ })).toHaveTextContent(
+      /^Personal5h 100%·Wk 91%$/
     )
   })
 

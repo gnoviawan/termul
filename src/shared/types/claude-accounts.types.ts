@@ -77,4 +77,6 @@ export interface ClaudeAccountsSnapshot {
   defaultAccountId: string
   /** Project id → Account id, only for Projects with an explicit choice. */
   projectAccounts: Record<string, string>
+  /** A chat at its Account's limit continues on the signed-in Account with the most room. */
+  autoSwitch: boolean
 }

@@ -39,6 +39,7 @@ vi.mock('@/stores/file-explorer-store', () => ({
 
 function openFile(filePath: string, content: string, originalContent: string): void {
   const file: EditorFileState = {
+    kind: 'text',
     filePath,
     content,
     originalContent,

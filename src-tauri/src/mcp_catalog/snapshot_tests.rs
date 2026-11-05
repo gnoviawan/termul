@@ -82,7 +82,11 @@ fn installable(
 #[test]
 fn the_fixture_covers_every_state_and_reason_class() {
     let catalog = load_embedded();
-    assert!(catalog.fetched_at.is_some());
+    assert!(catalog.source.updated_at.is_some());
+    assert!(
+        catalog.source.sample,
+        "the committed fixture is marked as the sample"
+    );
     let status = |name: &str, runners| {
         let item = catalog
             .items
@@ -187,7 +191,7 @@ fn the_fixture_covers_every_state_and_reason_class() {
     }
     assert_eq!(
         catalog.items.len(),
-        expected.len(),
+        expected.len() + ICON_FIXTURES.len(),
         "only the deleted row is dropped"
     );
     assert!(
@@ -236,7 +240,10 @@ fn a_valid_snapshot_loads_sorted_with_its_fetch_time() {
         .map(|item| item.name.as_str())
         .collect();
     assert_eq!(names, ["io.example/a", "io.example/b"]);
-    assert_eq!(catalog.fetched_at.as_deref(), Some("2026-10-27T00:00:00Z"));
+    assert_eq!(
+        catalog.source.updated_at.as_deref(),
+        Some("2026-10-27T00:00:00Z")
+    );
 }
 
 #[test]
@@ -282,7 +289,7 @@ fn a_corrupted_or_empty_snapshot_serves_an_empty_catalog() {
     ] {
         let catalog = load_or_empty(&gz, &meta);
         assert!(catalog.items.is_empty());
-        assert_eq!(catalog.fetched_at, None);
+        assert_eq!(catalog.source.updated_at, None);
     }
 }
 
@@ -293,7 +300,7 @@ fn a_row_that_does_not_parse_is_unsupported_without_failing_the_load() {
     broken["server"]["title"] = json!("Broken");
     let item = item_from_row(broken).expect("the row still browses");
     assert_eq!(item.title.as_deref(), Some("Broken"));
-    assert_eq!(item.options, None);
+    assert!(item.parsed.is_none());
     assert_eq!(
         item_status(&item, ALL_RUNNERS),
         (
@@ -326,4 +333,36 @@ fn parsing_ignores_schema_and_unknown_fields() {
         json!([{ "type": "streamable-http", "url": "https://mcp.example.com/mcp", "extra": 1 }]);
     let item = item_from_row(row).unwrap();
     assert_eq!(item_status(&item, ALL_RUNNERS), installable(remote(0)));
+}
+
+const ICON_FIXTURES: [(&str, &str); 3] = [
+    ("ai.abmeter/abmeter", "https://abmeter.ai/favicon.svg"),
+    ("ai.agenttrust/mcp-server", "https://agenttrust.ai/icon.png"),
+    (
+        "ai.alpic.mcp/alpic-mcp",
+        "https://raw.githubusercontent.com/alpic-ai/public-assets/refs/heads/main/alpic%20logo%20light%20200x200.png",
+    ),
+];
+
+#[test]
+fn the_fixture_picks_one_https_logo_for_each_server_that_lists_icons() {
+    let catalog = load_embedded();
+    let icon = |name: &str| {
+        catalog
+            .items
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap_or_else(|| panic!("{name} is in the fixture"))
+            .icon
+            .as_ref()
+            .map(|source| source.url().to_string())
+    };
+    for (name, url) in ICON_FIXTURES {
+        assert_eq!(icon(name).as_deref(), Some(url), "{name}");
+    }
+    assert_eq!(
+        icon("io.github.BargLabs/cejel").as_deref(),
+        Some("https://cejel.dev/brand-icon.png")
+    );
+    assert_eq!(icon("to.hooka/mcp"), None);
 }

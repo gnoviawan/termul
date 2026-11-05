@@ -25,6 +25,8 @@ export interface ChatHistorySidebarEntry {
   agents?: string[]
   cwd?: string
   lastActivityAt: number
+  /** When the chat was first indexed; never re-stamped. Absent or 0 when unknown. */
+  createdAt?: number
   canOpen: boolean
 }
 

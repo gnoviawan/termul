@@ -78,7 +78,7 @@ export function scheduleAutoSave(filePath: string): void {
             failedAutoSavePaths.delete(filePath)
             return true
           }
-          if (!stillDirty || latest?.externalConflict) return false
+          if (latest?.kind !== 'text' || !stillDirty || latest.externalConflict) return false
           // Toast once per failure episode; the retry keeps trying quietly.
           if (!failedAutoSavePaths.has(filePath)) {
             failedAutoSavePaths.add(filePath)

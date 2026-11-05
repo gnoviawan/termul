@@ -29,19 +29,22 @@ Tap **Open menu** to see your chats, terminals and open files.
 
 ![The side menu with the project at the top, the Chats, Terminals and Editors tabs, a chat search, recent chats, and the footer buttons](/screenshots/remote-phone-drawer.png)
 
+The picture was taken before the tabs became icons and the **GitHub** tab was added.
+
 - The project at the top. Tap it to switch projects.
-- **Chats**, **Terminals** and **Editors** switch the list below. **Chats** shows a number when a chat waits for you.
+- **Chats**, **Terminals**, **Editors** and **GitHub** are four icon tabs that switch the list below. **Chats** shows a number when a chat waits for you. **GitHub** lists the project's issues and pull requests. See [GitHub issues and pull requests](/docs/git/github).
 - **Search chats…** filters the chat list.
 - The list. Tap an item to open it.
+
+The **Chats** list shows the chats you have open under **Active**. Closed chats are under **Today**, **Yesterday** and **Earlier**, sorted by when you started them. Each row shows when the chat was started, such as a time for today, "Yesterday 14:05", or a date for older chats. Reopening a chat does not change its time or its place in the list.
 
 The bottom of the side menu has these buttons:
 
 - **Settings** (gear) opens the app settings.
 - **Snapshots** (camera) opens your saved terminal layouts. See [Terminals](/docs/terminals).
 - **Git history** (clock) opens the commit history of the project.
-- **New chat**, **New terminal** or **Browse files**, depending on the list you are on.
-
-The last line shows the connection, for example **Connected · termul.example.com**. If the server stops, it shows **Host offline** and a **Retry** button.
+- **Automations** opens the automations of the project. See [Automations](/docs/automations).
+- **New chat**, **New terminal** or **Browse files**, depending on the list you are on. The **GitHub** list has no button here.
 
 ## Use the More menu
 
@@ -58,6 +61,32 @@ In a chat, tap **More** (⋯) for the actions that don't fit in the top bar.
 - **Close chat** closes the chat.
 
 On other tabs, such as a file or git history, the last item is **Close tab**.
+
+## Write a message
+
+The message box at the bottom of a chat has four controls: **+**, the model pill, the context ring, and send. The model pill shows the agent's icon and the model name. In a new chat, the row has **+**, the model pill and send.
+
+Tap anywhere in the message box to type.
+
+### Pick a model
+
+Tap the model pill to open **Select model**:
+
+- **Provider** at the top shows the current agent. Tap it to see all agents, with a search box, grouped into **Ready**, **Needs setup** and **Install**. Tap an agent to see its models. An agent under **Needs setup** is set up in the sheet: Termul saves it, starts it, and asks you to sign in when the agent needs it. You don't have to open Settings.
+- The agent's models, with a short description. Tap the star of a model to add it to your favorites on this device.
+- **Effort**, **Mode**, **Fast** and the agent's other options.
+- **Usage** shows your Claude account's 5-hour usage.
+
+Tap the back button or use the phone's Back to leave a sub-list.
+
+### Add to the chat
+
+Tap **+** to open **Add to chat**:
+
+- **Camera**, **Photos** and **Files** attach a picture or a file. Camera and Photos are off when the agent can't take images.
+- **Mention a file** adds a file from the project.
+- **Commands** opens the agent's commands and skills.
+- **MCP servers** shows how many servers are on, and lets you turn them on or off.
 
 ## Answer an approval
 

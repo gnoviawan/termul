@@ -35,7 +35,11 @@ pub(crate) mod raw_client;
 pub(crate) mod wire;
 
 #[cfg(test)]
+mod agent_api_key_tests;
+#[cfg(test)]
 mod canvas_gateway_tests;
+#[cfg(test)]
+mod chat_activity_tests;
 #[cfg(test)]
 mod chat_reads_tests;
 #[cfg(test)]
@@ -120,6 +124,7 @@ impl Host {
             acp_install: None,
             store: None,
             web_auth: None,
+            server_admin: None,
             allow_remote_writes: false,
             shared_live_writes_denied: false,
             pending_oauth_flows: Arc::new(parking_lot::RwLock::new(

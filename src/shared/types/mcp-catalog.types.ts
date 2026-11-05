@@ -1,14 +1,15 @@
 /**
  * Wire shapes of the host-owned MCP server catalog (spine AD-1 to AD-4).
- *
- * The host converts the official MCP Registry snapshot and answers paged
- * search. Every transport (`GET /mcp-catalog/search` and the `/ws` request
- * `search_mcp_catalog` on the web socket and the desktop channel) returns the
- * same `IpcResult<McpCatalogPage>`. The renderer never holds the full catalog
- * and never parses `server.json`.
  */
 
 import type { IpcResult } from './ipc.types'
+import type { McpInstallApi } from './mcp-install.types'
+
+export const MCP_REGISTRY_URL = 'https://registry.modelcontextprotocol.io'
+
+/** The host's caps on a search query (`search.rs` `MAX_QUERY_CHARS`, `MAX_QUERY_TERMS`). */
+export const MCP_CATALOG_MAX_QUERY_CHARS = 200
+export const MCP_CATALOG_MAX_QUERY_TERMS = 8
 
 /** Ranked best first; an item takes its best option's state. */
 export type McpCatalogState = 'installable' | 'needs-runtime' | 'unsupported' | 'source-only'
@@ -36,6 +37,13 @@ export type McpCatalogReason =
   | { code: 'unpinned-version' }
   | { code: 'invalid-package' }
   | { code: 'unsupported-registry'; registry: string }
+  | { code: 'invalid-command' }
+  | { code: 'invalid-header-name'; name: string }
+  | { code: 'control-character'; field: string }
+  | { code: 'duplicate-name'; name: string }
+  | { code: 'cmd-metacharacter'; field: string }
+  | { code: 'unsupported-launch-argument'; command: string; argument: string }
+  | { code: 'unsupported-runner'; command: string }
 
 /** The option an install would use: an index into the row's `remotes` or `packages`. */
 export interface McpCatalogDefaultOption {
@@ -56,6 +64,7 @@ export interface McpCatalogRow {
   defaultOption: McpCatalogDefaultOption | null
   /** Host-validated `https` link, or `null`. */
   repositoryUrl: string | null
+  hasIcon: boolean
 }
 
 export interface McpCatalogSearchRequest {
@@ -66,18 +75,43 @@ export interface McpCatalogSearchRequest {
   limit?: number
 }
 
-export interface McpCatalogPage {
+export interface McpCatalogSource {
+  updatedAt: string | null
+  sample: boolean
+}
+
+export interface McpCatalogPage extends McpCatalogSource {
   items: McpCatalogRow[]
   nextCursor: string | null
   total: number
-  /** When the bundled snapshot was fetched; `null` if it failed to load. */
-  snapshotFetchedAt: string | null
+}
+
+export type McpCatalogSync =
+  | { state: 'disabled' }
+  | { state: 'idle' }
+  | { state: 'syncing'; full: boolean; fetched: number }
+  | { state: 'failed'; error: string; retryAt: string }
+
+export interface McpCatalogStatus extends McpCatalogSource {
+  servers: number
+  sync: McpCatalogSync
+}
+
+export interface McpCatalogIconPayload {
+  contentType: string
+  base64: string
 }
 
 /**
- * The renderer facade. The desktop impl sends `search_mcp_catalog` over the
- * Tauri channel; the web impl calls `GET /mcp-catalog/search`.
+ * A logo as a `data:` URL, never a `blob:` URL. A `blob:` URL shares the app's
+ * origin, so opening a registry SVG through one runs its script against the
+ * app's storage. A `data:` document has an opaque origin (spine AD-15).
  */
-export interface McpCatalogApi {
+export type McpCatalogIconUrl = `data:${string}`
+
+export interface McpCatalogApi extends McpInstallApi {
   search(request: McpCatalogSearchRequest): Promise<IpcResult<McpCatalogPage>>
+  status(): Promise<IpcResult<McpCatalogStatus>>
+  setSync(enabled: boolean): Promise<IpcResult<McpCatalogStatus>>
+  icon(name: string): Promise<IpcResult<McpCatalogIconUrl>>
 }

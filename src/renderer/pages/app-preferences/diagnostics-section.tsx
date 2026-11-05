@@ -1,4 +1,5 @@
 import { Bug, Clipboard, Download, FileText, FolderOpen } from '@/components/icons'
+import { rowId } from '@/components/settings/row-id'
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { SettingsNotice } from '@/components/settings/SettingsNotice'
@@ -7,7 +8,6 @@ import { Button } from '@/components/ui/button'
 import { logApi } from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useReportBugStore } from '@/stores/report-bug-store'
-import { rowId } from './categories'
 import { APP_VERSION } from './updates-section'
 
 function ActionRow({

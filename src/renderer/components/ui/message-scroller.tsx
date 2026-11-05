@@ -131,6 +131,11 @@ function MessageScroller({ className, ...props }: React.ComponentProps<'div'>): 
   )
 }
 
+/**
+ * Scrolls vertically only. `overflow-x-hidden` stops a row's enter transform
+ * (the user bubble drifts in from x: 12) from flashing a horizontal scrollbar;
+ * wide content keeps its own `overflow-x-auto` region (tables, code, media).
+ */
 function MessageScrollerViewport({
   className,
   ...props
@@ -141,7 +146,7 @@ function MessageScrollerViewport({
       ref={registerViewport}
       data-slot="message-scroller-viewport"
       className={cn(
-        'size-full min-h-0 min-w-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable_both-edges]',
+        'size-full min-h-0 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain [scrollbar-gutter:stable_both-edges]',
         className
       )}
       {...props}

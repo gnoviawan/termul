@@ -31,6 +31,7 @@ use crate::acp::session_persistence::SessionPersistence;
 use crate::web::EventSink;
 
 mod ask;
+mod automation;
 mod canvas;
 pub use ask::IdleSignal;
 use ask::PendingAsk;
@@ -50,6 +51,9 @@ struct SessionAuth {
     /// rejected (the agent can't call tools before `session/new` completes,
     /// so this is purely defensive).
     real_session_id: Option<String>,
+    /// Bound by a history reopen whose outcome is not known yet. Such a token
+    /// can still be evicted, so `bound_credentials` does not hand it out.
+    reopen_pending: bool,
 }
 
 /// The shared host plan server. Owns the listener thread + the per-session
@@ -102,6 +106,8 @@ pub struct HostPlanServer {
     presence: Arc<Presence>,
     /// The newest export to each project file.
     exports: Arc<canvas::ExportClaims>,
+    /// Answers `Automation` frames when set; otherwise the installed service.
+    automation: std::sync::OnceLock<Arc<crate::automation::service::AutomationService>>,
 }
 
 impl HostPlanServer {
@@ -133,6 +139,7 @@ impl HostPlanServer {
             presence: Presence::new(Arc::clone(canvas.mounts())),
             canvas,
             exports: Arc::default(),
+            automation: std::sync::OnceLock::new(),
         });
         let server_for_thread = Arc::clone(&server);
         let (port_tx, port_rx) = std::sync::mpsc::channel::<u16>();
@@ -219,6 +226,7 @@ impl HostPlanServer {
                     provisional_sid: provisional_sid.clone(),
                     agent_id: agent_id.to_string(),
                     real_session_id: None,
+                    reopen_pending: false,
                 },
             );
         }
@@ -251,6 +259,35 @@ impl HostPlanServer {
                 );
             }
         }
+    }
+
+    /// `bind_session` for a history reopen (#1420). The token stays pending
+    /// until `settle_reopen_token` reports the reopen's outcome.
+    pub fn bind_reopen_session(&self, token: &str, real_session_id: &str) {
+        self.bind_session(token, real_session_id);
+        if let Some(auth) = self.sessions.lock().get_mut(token) {
+            auth.reopen_pending = true;
+        }
+    }
+
+    /// The `(port, token, provisional_session_id)` that `agent_id` already
+    /// holds for `real_session_id`, if any. A reopen on the same agent passes
+    /// them again so the agent sees an unchanged `termul` server and keeps its
+    /// live session instead of rebuilding it. A pending reopen token does not
+    /// count: a failed reopen evicts it.
+    #[must_use]
+    pub fn bound_credentials(
+        &self,
+        agent_id: &str,
+        real_session_id: &str,
+    ) -> Option<(u16, String, String)> {
+        let sessions = self.sessions.lock();
+        let (token, auth) = sessions.iter().find(|(_, auth)| {
+            !auth.reopen_pending
+                && auth.agent_id == agent_id
+                && auth.real_session_id.as_deref() == Some(real_session_id)
+        })?;
+        Some((self.port(), token.clone(), auth.provisional_sid.clone()))
     }
 
     /// Mark an accepted prompt turn as active before the agent can call tools.
@@ -300,12 +337,16 @@ impl HostPlanServer {
     /// reopen is in flight.
     ///
     /// - `reopened == true`: the agent now holds the new token. Drop the
-    ///   session's other tokens and its per-session state, keeping `new_token`.
+    ///   session's other tokens and its per-session state, keeping `new_token`,
+    ///   which a later reopen on the same agent may now reuse.
     /// - `reopened == false`: evict `new_token` only. The earlier token and the
     ///   session's state (plan cache, title flags) are untouched.
     pub fn settle_reopen_token(&self, real_session_id: &str, new_token: &str, reopened: bool) {
         if reopened {
             self.unregister_session_except(real_session_id, Some(new_token));
+            if let Some(auth) = self.sessions.lock().get_mut(new_token) {
+                auth.reopen_pending = false;
+            }
         } else {
             // Not `unregister_by_token`: it also drops the plan cache of the
             // token's bound session, and this session is still live.
@@ -605,6 +646,10 @@ impl HostPlanServer {
                     req.canvas_params,
                 )
                 .await
+            }
+            FrameKind::Automation => {
+                self.automation_call(&real_session_id, req.automation_tool, req.automation_input)
+                    .await
             }
             FrameKind::AskUser => {
                 let Some(input) = req.ask else {

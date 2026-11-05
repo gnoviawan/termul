@@ -9,7 +9,7 @@ import type {
   ToolCallStatus,
   ToolKind
 } from '@/lib/acp-api'
-import { isSubagentCall } from './tool-call-summary'
+import { isSubagentCall, isSubagentControlCall } from './tool-call-summary'
 
 export type ToolIconName =
   | 'read'
@@ -51,12 +51,12 @@ export function kindIcon(kind: ToolKind | undefined): ToolIconName {
 }
 
 /**
- * Icon name for a full tool call. Subagent/Task dispatches get the 'agent'
- * (robot) icon regardless of their reported kind; everything else falls back
- * to the kind-based mapping.
+ * Icon name for a full tool call. Subagent dispatches and calls that steer
+ * subagents get the 'agent' (robot) icon regardless of their reported kind;
+ * everything else falls back to the kind-based mapping.
  */
 export function toolIconName(toolCall: ToolCall): ToolIconName {
-  if (isSubagentCall(toolCall)) return 'agent'
+  if (isSubagentCall(toolCall) || isSubagentControlCall(toolCall)) return 'agent'
   return kindIcon(toolCall.kind)
 }
 

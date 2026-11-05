@@ -44,3 +44,7 @@ io.github.mbtest870-ctrl/agenza
 ai.fluxink/mcp-server
 # latest version deprecated
 io.github.sharan01x/usetested
+# icons, see ICON_FIXTURES in snapshot_tests.rs
+ai.abmeter/abmeter
+ai.agenttrust/mcp-server
+ai.alpic.mcp/alpic-mcp

@@ -4,7 +4,7 @@ Tokens are OKLCH `"L C H"` on `:root`. Tailwind maps `oklch(var(--token) / <alph
 
 ## Allowed layers
 
-1. Semantic roles: `background`, `foreground`, `card`, `popover`, `primary`, `primary-fill`, `secondary`, `muted`, `accent`, `destructive`, `destructive-fill`, `success`, `success-fill`, `warning`, `connection`, `border`, `input`, `field-border`, `ring`, `overlay`.
+1. Semantic roles: `background`, `foreground`, `card`, `popover`, `primary`, `primary-fill`, `secondary`, `muted`, `accent`, `destructive`, `destructive-fill`, `success`, `success-fill`, `warning`, `connection`, `border`, `input`, `field-border`, `ring`, `focus-ring`, `overlay`.
 2. Product identity: `project-{blue,purple,green,yellow,red,cyan,pink,orange,gray}` — chips, graph lanes, pickers only.
 3. Chrome bar (legacy): `status-bar` and `status-bar-{color}`. The StatusBar does not use them now. The tokens stay for back-compat (`statusBarColors` in `lib/colors.ts`). Do not use them in new UI.
 4. Diff: `diff-added`, `diff-modified` (changed files, not a warning). Deletions use `destructive`.
@@ -12,7 +12,7 @@ Tokens are OKLCH `"L C H"` on `:root`. Tailwind maps `oklch(var(--token) / <alph
 
 Nothing else exists. `green-500`, `amber-400`, `white`, `black` are bugs.
 
-The default dark theme (`termul`) paints neutrals from an explicit ramp. Other themes still derive surfaces from one neutral plus a 4% brand tint. Brand fill stays the composer blue: palette `primary` and `accent` are `#3b82f6`, and `--primary-fill` is the solid-fill step of that blue.
+The default dark theme (`termul`) paints neutrals from an explicit ramp. Other themes still derive surfaces from one neutral plus a 4% brand tint. Termul uses the Interfere blue (`termul-brand.ts`): link and text `--primary` is `#3b9eff`; the solid fill `--primary-fill` (also `--accent` and `--sidebar-primary`) is pinned to `#0d74ce` through `chrome.brandFill`, with white `--primary-foreground` (4.77:1). Hover `#0e6abe` (5.49:1) and pressed `#0e60ae` (6.36:1) are shared with Termul Light.
 
 | Token | Role | Source |
 | --- | --- | --- |
@@ -25,21 +25,38 @@ The default dark theme (`termul`) paints neutrals from an explicit ramp. Other t
 | `foreground` | Primary copy | Bone `#e5e5e6` |
 | `secondary-foreground` | Secondary labels | Mist `#d0d6e0` |
 | `muted-foreground` | Muted copy | Fog `#8a8f98` |
-| `ring` | Focus | Bone |
+| `ring` | Theme ink (keycap highlight, not focus) | Bone |
+| `focus-ring` | Keyboard focus edge | A tint of `ring` lifted until it reaches 4:1 on card, background and popover |
 
-The default light theme (`termul-light`) uses the paper ramp. Page, card, and popover are the same white, so a raised pane needs `border-border` to separate from the page. The primary button uses the same blue as Termul dark: palette `primary` is `#3b82f6`, so `--primary-fill` matches. Status hues stay. `data-flat-elevation` removes drop shadows on surfaces only. `button` and `[data-keep-shadow]` keep their emboss, including `Button` used as a link and the switch thumb. Other families keep derived surfaces.
+The default light theme (`termul-light`) uses Interfere neutrals. The page is `#fcfcfc`, and cards and popovers are white `#ffffff`, so raised panes separate by elevation (`--elevation-*`, Interfere s-default / s-large / s-extra-large) as well as `border-border`. Brand is the same blue family as Termul dark: fill `#0d74ce` with white text, hover `#0e6abe`, pressed `#0e60ae`. `--primary` text resolves to `#026ec6`: the AA solver darkens `#0d74ce` so it also clears 4.5:1 on the `secondary` wash (`#0d74ce` on `#f0f0f0` is about 4.3:1). `--accent` is the brand fill, not maroon. Status hues stay. Other families keep derived surfaces.
 
 | Token | Role | Source |
 | --- | --- | --- |
-| `background`, `terminal-bg`, `card`, `popover` | Main canvas and panels | Paper `#ffffff` |
-| `sidebar-background`, `muted` | Sidebar and quiet well | Sidebar mist `#f9f9f9` |
-| `secondary` | Hover | 5% black on paper |
-| `border`, `input` | Hairline | 10% black on paper |
-| `foreground` | Primary copy | Graphite ink `#0d0d0d` |
-| `secondary-foreground` | Secondary labels | Mid ash `#5d5d5d` |
-| `muted-foreground` | Muted copy | Hollow `#8f8f8f`, lifted if it misses AA |
+| `background`, `terminal-bg` | Page canvas | Interfere page `#fcfcfc` |
+| `card`, `popover` | Raised panels | Container `#ffffff` |
+| `sidebar-background` | Sidebar and shell | `#f6f6f6` |
+| `secondary` | Hover wash | `#f0f0f0` |
+| `muted` | Quiet well | `#f2f2f2` |
+| `border` / `input` | Hairline / input edge | `#ededed` / `#d9d9d9` |
+| `foreground` | Primary copy | gray-12 `#202020` |
+| `secondary-foreground`, `muted-foreground` | Secondary and muted copy | gray-11 `#646464` (5.5:1 on the shell) |
 
-`--primary`, `--success`, `--warning`, and `--destructive` are text-on-card tokens (AA-shifted). Solid primary / success / destructive buttons use `bg-primary-fill` / `bg-success-fill` / `bg-destructive-fill` with matching `*-foreground`. Solid warning buttons use `bg-warning text-warning-foreground`. Do not use `--accent` for new state. It is maroon in Termul Light. Selection, hover and focus are neutral (see State). Washes stay on the text token (`bg-primary/10 text-primary`).
+`--primary`, `--success`, `--warning`, and `--destructive` are text-on-card tokens (AA-shifted). Solid primary / success / destructive buttons use `bg-primary-fill` / `bg-success-fill` / `bg-destructive-fill` with matching `*-foreground`. Solid warning buttons use `bg-warning text-warning-foreground`. Do not use `--accent` for new state. In Termul themes it is the solid brand fill. Selection, hover and focus are neutral (see State). Washes stay on the text token (`bg-primary/10 text-primary`).
+
+## Component tokens
+
+Full CSS values (not `"L C H"`), set per theme through `ThemeChrome.tokens`. Every theme without chrome tokens gets `COMPONENT_TOKEN_DEFAULTS` in `lib/themes/component-tokens.ts`, which reproduce the pre-token look exactly (`theme-regression.test.ts` pins this).
+
+| Tokens | Consumer |
+| --- | --- |
+| `--primary-fill-hover`, `--primary-fill-active` | `bg-primary-fill-hover`, `bg-primary-fill-active` on `default` / `composer` buttons |
+| `--shadow-emboss`, `--shadow-emboss-hover` | `shadow-emboss`, `shadow-emboss-hover` |
+| `--switch-track-{on,off}{,-hover,-active,-disabled}`, `--switch-thumb-{on,off}{,-disabled}`, `--switch-thumb-shadow`, `--switch-disabled-opacity` | `.switch-track`, `.switch-thumb` (index.css). Do not put `ring-*` or `shadow-*` utilities on the thumb; they override the token. |
+| `--elevation-{2xs,xs,sm,md,lg,xl,2xl}`, `--elevation-{pill,panel,menu}` | `shadow-*` utilities (tailwind.config.ts) |
+| `--skeleton` | `Skeleton` fill (alpha in Termul Light, so it reads on page and card) |
+| `--ghost-hover-foreground` | `ghost` / `outline` hover ink. Defaults to `accent-foreground`; Termul uses `foreground`. |
+
+Terminal ANSI colors and selection do not follow `--primary`. Termul pins them in `termul-terminal.ts` (`palette.terminal`), so a brand change never alters terminal output. The status bar tint may follow primary.
 
 ## State
 
@@ -49,7 +66,7 @@ The default light theme (`termul-light`) uses the paper ramp. Page, card, and po
 | Rail row hover (hover and focus-within) | `bg-row-hover`; a fade that ends in it uses `from-row-hover-solid` | n/a |
 | Selected / you are here | `.keycap` (index.css) | `Check` icon, no fill |
 | Active segment in a track | `.keycap` | `bg-foreground/10` |
-| Focus | neutral `ring` | neutral `ring` |
+| Focus | `focus-ring` (dim, 4:1) | `focus-ring` (dim, 4:1) |
 
 The Rail paints `bg-sidebar`. Keycaps inside it (`[data-rail-surface]`) fill with `--rail-keycap`: `muted` in dark themes, `muted` plus 6% `foreground` in light themes. `--row-hover-solid` is flattened over `--sidebar-background`.
 

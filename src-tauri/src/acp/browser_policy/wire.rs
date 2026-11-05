@@ -13,9 +13,9 @@ use super::origin::{CanonicalOrigin, OriginPattern};
 use super::profile::ClearImpact;
 use super::refusal::PolicyRefusal;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
-enum ProjectOpWire {
+pub(crate) enum ProjectOpWire {
     AddOrigin { origin: String },
     RemoveOrigin { origin: String },
     AddPreapproval { action: ActionClass, origin: String },
@@ -23,9 +23,9 @@ enum ProjectOpWire {
     SetEphemeral { ephemeral: bool },
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
-enum AppOpWire {
+pub(crate) enum AppOpWire {
     SetGlobalProfile { enabled: bool },
     SetAskBeforePasswordSubmit { enabled: bool },
     AddPreapproval { action: ActionClass, origin: String },
@@ -99,7 +99,7 @@ pub fn parse_app_op(value: &Value, owned_ports: &[u16]) -> Result<AppOperation, 
     )
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PreapprovalView {
     pub action: ActionClass,
@@ -116,7 +116,7 @@ fn preapproval_views(items: &[Preapproval]) -> Vec<PreapprovalView> {
         .collect()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectPolicyView {
     pub project_id: String,
@@ -147,7 +147,7 @@ impl ProjectPolicyView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AppPolicyView {
     pub revision: u64,

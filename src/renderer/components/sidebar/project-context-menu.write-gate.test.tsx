@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { expectNotWriteGated, expectWriteGated } from '@/lib/test-utils/write-gate'
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import type { Project } from '@/types/project'
 
 const admits = vi.hoisted(() => ({ value: false }))
@@ -24,9 +25,7 @@ function renderMenu(project: Project) {
         project={project}
         groups={[]}
         availableShells={null}
-        selectProject={vi.fn()}
         onStartRename={vi.fn()}
-        onOpenSettings={vi.fn()}
         onOpenColorPicker={vi.fn()}
         onUpdateProject={vi.fn()}
         moveProjectToGroup={vi.fn()}
@@ -72,5 +71,18 @@ describe('ProjectContextMenuContent write gate', () => {
     const item = await screen.findByRole('menuitem', { name: /no git repo/ })
     expect(item).toHaveAttribute('data-disabled')
     expect(item.closest('[data-write-gate]')).toBeNull()
+  })
+})
+
+describe('ProjectContextMenuContent Settings', () => {
+  it('opens Project Settings for the right-clicked project without selecting it', async () => {
+    useSettingsModalStore.setState({ view: null, projectId: null })
+    renderMenu({ ...gitProject, id: 'not-active' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Settings/ }))
+
+    expect(useSettingsModalStore.getState()).toMatchObject({
+      view: 'project',
+      projectId: 'not-active'
+    })
   })
 })

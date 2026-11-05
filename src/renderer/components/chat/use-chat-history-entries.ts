@@ -1,8 +1,11 @@
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
+  ACTIVE_GROUP,
   groupSessionsByRecency,
   type HistoryGroup,
+  type RecencyKey,
+  recencyTime,
   scopeSessionIndex,
   UNASSIGNED_GROUP,
   unassignedSessions
@@ -37,6 +40,14 @@ interface UseChatHistoryEntriesOptions {
    * appears once. Must be memoized.
    */
   extraEntries?: ChatHistorySidebarEntry[]
+  /**
+   * Ids of the chats open in the active project's tree (the mobile Recents
+   * list). The matching entries form an Active group listed first and always
+   * rendered, outside the lazy window. Must be memoized.
+   */
+  activeIds?: ReadonlySet<string>
+  /** The timestamp that sorts and buckets entries. Defaults to last activity. */
+  timeKey?: RecencyKey
   /** Called after a chat row successfully opens (e.g. close a mobile drawer). */
   onSessionOpened?: () => void
   /** `log-api` source for a failed delete (the calling surface). */
@@ -46,11 +57,11 @@ interface UseChatHistoryEntriesOptions {
 export interface ChatHistoryEntries {
   /** Every scoped entry (extras merged in), unfiltered: empty means "no chats yet". */
   mergedEntries: ChatHistorySidebarEntry[]
-  /** The entries matching the query, newest first. */
+  /** The entries matching the query, newest first by `timeKey`. */
   filtered: ChatHistorySidebarEntry[]
-  /** The rendered window of `filtered`. */
+  /** The rendered entries of `filtered`: every active one, then the lazy window of the rest. */
   visible: ChatHistorySidebarEntry[]
-  /** `visible` grouped Today / Yesterday / Earlier, then the Unassigned bucket. */
+  /** `visible` grouped Active, then Today / Yesterday / Earlier, then the Unassigned bucket. */
   groups: { group: HistoryGroup; entries: ChatHistorySidebarEntry[] }[]
   hasMore: boolean
   /** Attach to the lazy-load sentinel below the list. */
@@ -63,13 +74,16 @@ export interface ChatHistoryEntries {
 /**
  * The chat history derivation shared by the desktop `ChatHistoryTab` and the
  * mobile Recents list: ADR 0002 scoping, Termul-created sessions only, query
- * filter, newest-first sort, the settled-count announcement, the lazy window
- * with its sentinel observer, recency groups, and the open/delete actions.
+ * filter, newest-first sort, the settled-count announcement, the Active group
+ * (mobile), the lazy window with its sentinel observer, recency groups, and
+ * the open/delete actions.
  */
 export function useChatHistoryEntries({
   query,
   scrollRootRef,
   extraEntries,
+  activeIds,
+  timeKey = 'lastActivityAt',
   onSessionOpened,
   logSource = 'ChatHistoryTab.delete'
 }: UseChatHistoryEntriesOptions): ChatHistoryEntries {
@@ -137,6 +151,7 @@ export function useChatHistoryEntries({
         agentConfigId: e.agentConfigId,
         agents: e.agents,
         lastActivityAt: e.lastActivityAt,
+        createdAt: e.createdAt,
         canOpen: true
       }))
 
@@ -168,8 +183,8 @@ export function useChatHistoryEntries({
       q.length === 0
         ? mergedEntries
         : mergedEntries.filter((e) => e.title.toLowerCase().includes(q))
-    return base.slice().sort((a, b) => b.lastActivityAt - a.lastActivityAt)
-  }, [mergedEntries, query])
+    return base.slice().sort((a, b) => recencyTime(b, timeKey) - recencyTime(a, timeKey))
+  }, [mergedEntries, query, timeKey])
 
   // Announce the settled result count to the mobile shell live region. Inert on
   // the desktop sidebar, where no region is mounted. An empty query stays silent.
@@ -193,17 +208,29 @@ export function useChatHistoryEntries({
     setVisibleCount(SIDEBAR_PAGE_SIZE)
   }, [query, activeProjectId, activeCwd, worktreePaths])
 
-  const visible = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
-  const hasMore = filtered.length > visible.length
+  // Active entries keep `filtered`'s order and skip the window, so an open
+  // chat is never paged out; the window pages the rest.
+  const { active, windowed, hasMore } = useMemo(() => {
+    const isActive = (entry: ChatHistorySidebarEntry): boolean => activeIds?.has(entry.id) ?? false
+    const activeEntries = activeIds && activeIds.size > 0 ? filtered.filter(isActive) : []
+    const rest = activeEntries.length > 0 ? filtered.filter((entry) => !isActive(entry)) : filtered
+    const page = rest.slice(0, visibleCount)
+    return { active: activeEntries, windowed: page, hasMore: rest.length > page.length }
+  }, [filtered, activeIds, visibleCount])
+  const visible = useMemo(
+    () => (active.length > 0 ? [...active, ...windowed] : windowed),
+    [active, windowed]
+  )
 
   const groups = useMemo(() => {
-    const assigned = visible.filter((entry) => !unassignedIds.has(entry.id))
-    const unassigned = visible.filter((entry) => unassignedIds.has(entry.id))
+    const assigned = windowed.filter((entry) => !unassignedIds.has(entry.id))
+    const unassigned = windowed.filter((entry) => unassignedIds.has(entry.id))
     const recency: { group: HistoryGroup; entries: ChatHistorySidebarEntry[] }[] =
-      groupSessionsByRecency(assigned, Date.now())
+      groupSessionsByRecency(assigned, Date.now(), timeKey)
+    if (active.length > 0) recency.unshift({ group: ACTIVE_GROUP, entries: active })
     if (unassigned.length > 0) recency.push({ group: UNASSIGNED_GROUP, entries: unassigned })
     return recency
-  }, [visible, unassignedIds])
+  }, [active, windowed, unassignedIds, timeKey])
 
   // Grow the window when the bottom sentinel scrolls into view (lazy load).
   // `visibleCount` is intentionally in the deps so the observer re-arms after

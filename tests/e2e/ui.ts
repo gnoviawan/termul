@@ -64,7 +64,7 @@ export async function openRailNewProjectModal(page: Page): Promise<void> {
  */
 export async function selectColumnTab(
   page: Page,
-  name: 'Chats' | 'Explorer' | 'Changes'
+  name: 'Chats' | 'Explorer' | 'Changes' | 'GitHub'
 ): Promise<void> {
   const tab = page.getByRole('tablist', { name: 'Side panel' }).getByRole('tab', {
     name: new RegExp(`^${name}`)

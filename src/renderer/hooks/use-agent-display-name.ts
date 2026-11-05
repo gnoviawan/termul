@@ -5,7 +5,7 @@ import { useAcpStore } from '@/stores/acp-store'
  * Live `agentId` → configured display name. Consent/auth events carry the
  * live agent id, not the config id, so reverse it through `configToLiveAgent`
  * and look up `agentConfigs` — the same resolution `BrowserAuthDialogHost`
- * inlines for `pendingBrowserOpen`. Returns undefined when the live id is
+ * inlines for `pendingSignIn`. Returns undefined when the live id is
  * unmapped or the config list hasn't loaded; callers fall back to "the agent".
  */
 export function useAgentDisplayName(agentId: string | undefined): string | undefined {

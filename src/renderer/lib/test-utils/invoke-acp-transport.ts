@@ -16,11 +16,21 @@
 
 import type { AcpCatalog } from '@shared/types/acp-catalog.types'
 import type {
+  ClaudeAccount,
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
 import type { IpcResult } from '@shared/types/ipc.types'
-import type { McpCatalogPage } from '@shared/types/mcp-catalog.types'
+import type {
+  McpCatalogIconPayload,
+  McpCatalogPage,
+  McpCatalogStatus
+} from '@shared/types/mcp-catalog.types'
+import type {
+  McpInstallCommitResult,
+  McpInstallFormReply,
+  McpInstallPlanReply
+} from '@shared/types/mcp-install.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import type { PersistedSessionSummary, WsAgentSummary } from '@shared/types/web-protocol.types'
 import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
@@ -160,6 +170,49 @@ export function createInvokeAcpTransport(): AcpTransport {
       if (result.success) return result.data
       throw new AcpTransportError(result.code, result.error)
     },
+    getMcpCatalogStatus: async () => {
+      const result = await invoke<IpcResult<McpCatalogStatus>>('get_mcp_catalog_status')
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
+    setMcpCatalogSync: async (enabled) => {
+      const result = await invoke<IpcResult<McpCatalogStatus>>('set_mcp_catalog_sync', { enabled })
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
+    describeMcpInstall: async (request) => {
+      const result = await invoke<IpcResult<McpInstallFormReply>>('describe_mcp_install', {
+        request
+      })
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
+    planMcpInstall: async (request) => {
+      const result = await invoke<IpcResult<McpInstallPlanReply>>('plan_mcp_install', { request })
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
+    commitMcpInstall: async (request) => {
+      const result = await invoke<IpcResult<McpInstallCommitResult>>('commit_mcp_install', {
+        request
+      })
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
+    cancelMcpInstall: async (request) => {
+      const result = await invoke<IpcResult<Record<string, never>>>('cancel_mcp_install', {
+        request
+      })
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
+    getMcpCatalogIcon: async (name) => {
+      const result = await invoke<IpcResult<McpCatalogIconPayload>>('get_mcp_catalog_icon', {
+        name
+      })
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
     probeRuntime: () => invoke<AcpRuntimeAvailability>('acp_probe_runtime'),
     setTurnTimeout: (secs) => invoke<void>('acp_set_turn_timeout', { secs }),
     setTurnIdleTimeout: (secs) => invoke<void>('acp_set_turn_idle_timeout', { secs }),
@@ -179,9 +232,28 @@ export function createInvokeAcpTransport(): AcpTransport {
     setDefaultClaudeAccount: async (accountId) => {
       await invoke('claude_accounts_set_default', { accountId })
     },
-    setProjectClaudeAccount: async (projectId, accountId) => {
-      await invoke('claude_accounts_set_project', { projectId, accountId })
+    setProjectClaudeAccount: (projectId, accountId, expectedAccountId) =>
+      invoke<boolean>('claude_accounts_set_project', {
+        projectId,
+        accountId,
+        expectedAccountId: expectedAccountId ?? null
+      }),
+    setClaudeAutoSwitch: async (enabled) => {
+      await invoke('claude_accounts_set_auto_switch', { enabled })
     },
+    addClaudeAccount: (name, options) =>
+      invokeCommand<ClaudeAccount>('claude_accounts_add', { name }, options),
+    renameClaudeAccount: async (accountId, name) => {
+      await invoke('claude_accounts_rename', { accountId, name })
+    },
+    removeClaudeAccount: (accountId) => invoke<string[]>('claude_accounts_remove', { accountId }),
+    startClaudeLinkLogin: (accountId) =>
+      invoke<string>('claude_accounts_start_link_login', { accountId }),
+    finishClaudeLinkLogin: async (accountId, code, options) => {
+      await invokeCommand('claude_accounts_finish_link_login', { accountId, code }, options)
+    },
+    cancelClaudeLogin: (accountId) =>
+      invoke<boolean>('claude_accounts_login_cancel', { accountId }),
     spawnAgent: (config, options, projectId) =>
       invokeCommand<SpawnAgentResult>(
         'acp_spawn_agent',
@@ -290,6 +362,8 @@ export function createInvokeAcpTransport(): AcpTransport {
     cancelPrompt: async (agentId, sessionId) => {
       await invoke('acp_cancel_prompt', { agentId, sessionId })
     },
+    stopSubagent: (agentId, rootSessionId, subagentId) =>
+      invoke('acp_stop_subagent', { agentId, rootSessionId, subagentId }),
     setConfigOption: (agentId, sessionId, configId, valueId) =>
       invoke<SessionConfigOption[] | null>('acp_set_config_option', {
         agentId,
@@ -314,8 +388,8 @@ export function createInvokeAcpTransport(): AcpTransport {
     stopBrowserAgent: async (sessionId) => {
       await invoke('browser_stop', { sessionId })
     },
-    authenticate: (agentId, methodId, gateway, options) =>
-      invokeCommandVoid('acp_authenticate', { agentId, methodId, gateway }, options),
+    authenticate: (agentId, methodId, input, options) =>
+      invokeCommandVoid('acp_authenticate', { agentId, methodId, ...input }, options),
     deliverAuthRedirect: (agentId, url, options) =>
       invokeCommand<number>('acp_auth_deliver_redirect', { agentId, url }, options),
     onEvent<T>(eventName: string, callback: (payload: T, eventSeq?: number) => void): () => void {

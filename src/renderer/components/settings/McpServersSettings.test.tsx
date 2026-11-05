@@ -288,6 +288,57 @@ describe('McpServersSettings', () => {
     )
   })
 
+  it('keeps catalog provenance only while an edit leaves the launch unchanged', async () => {
+    const catalog = {
+      source: 'mcp-registry' as const,
+      name: 'io.example/files',
+      version: '1.0.0',
+      kind: 'package' as const,
+      index: 0,
+      repositoryId: null,
+      launchDigest: 'digest-1'
+    }
+    useAcpStore.setState({
+      mcpServers: [
+        {
+          id: 'cat',
+          type: 'stdio',
+          name: 'Files',
+          command: 'npx',
+          args: ['-y', '@example/files'],
+          env: [{ name: 'TOKEN', value: 'old' }],
+          enabled: true,
+          catalog
+        }
+      ]
+    })
+    render(<McpServersSettings />)
+
+    chooseRowAction('Files', 'Edit as JSON')
+    const renamed = editorJson()
+    renamed.name = 'My files'
+    renamed.env = { TOKEN: 'new' }
+    typeJson(JSON.stringify(renamed))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(saveMcpServer).toHaveBeenCalledTimes(1))
+    expect(saveMcpServer).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'My files', env: [{ name: 'TOKEN', value: 'new' }], catalog })
+    )
+
+    chooseRowAction('Files', 'Edit as JSON')
+    const relaunched = editorJson()
+    relaunched.args = ['-y', '@example/files', '--root', '/']
+    typeJson(JSON.stringify(relaunched))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(saveMcpServer).toHaveBeenCalledTimes(2))
+    expect(saveMcpServer).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ catalog: expect.anything() })
+    )
+    expect(saveMcpServer).toHaveBeenLastCalledWith(
+      expect.objectContaining({ args: ['-y', '@example/files', '--root', '/'] })
+    )
+  })
+
   it('persists enabled: false from the edit JSON', async () => {
     useAcpStore.setState({
       mcpServers: [{ id: 's2', type: 'stdio', name: 'Files', command: 'node', enabled: true }]

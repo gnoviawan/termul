@@ -14,9 +14,12 @@ import type {
   TerminalGitStatusChangedCallback,
   TerminalSpawnOptions
 } from '@shared/types/ipc.types'
-import { Channel } from '@tauri-apps/api/core'
+import type { SessionLifecyclePayload } from '@shared/types/web-terminal-protocol.types'
+import { Channel, invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invokeIpcCommand } from './acp-transport/tauri-verdicts'
+import { createTauriCommandEditorTransport } from './command-editor-transport'
+import { forwardSessionExit, forwardSessionLifecycle } from './command-lifecycle/session-adapter'
 import { entityKeyOf } from './ipc/http'
 import { invokeIpc } from './ipc/tauri'
 import { logFrontendError } from './log-api'
@@ -33,12 +36,14 @@ const IPC_EVENTS = {
   TERMINAL_DATA: 'terminal-data',
   TERMINAL_EXIT: 'terminal-exit',
   TERMINAL_CWD_CHANGED: 'terminal-cwd-changed',
+  TERMINAL_SESSION_LIFECYCLE: 'terminal-session-lifecycle',
   TERMINAL_GIT_BRANCH_CHANGED: 'terminal-git-branch-changed',
   TERMINAL_GIT_STATUS_CHANGED: 'terminal-git-status-changed',
   TERMINAL_EXIT_CODE_CHANGED: 'terminal-exit-code-changed'
 } as const
 
 type EventPayloadMap = {
+  [IPC_EVENTS.TERMINAL_SESSION_LIFECYCLE]: SessionLifecyclePayload
   [IPC_EVENTS.TERMINAL_DATA]: { id: string; data: string }
   [IPC_EVENTS.TERMINAL_EXIT]: { id: string; exitCode: number | null; signal: number | null }
   [IPC_EVENTS.TERMINAL_CWD_CHANGED]: { terminalId: string; cwd: string }
@@ -212,6 +217,7 @@ function captureStackTrace(): string {
  * It maintains the same interface as the Electron preload script for easy migration.
  */
 export function createTauriTerminalApi(): TerminalApi {
+  const commandEditor = createTauriCommandEditorTransport(invoke)
   // Per-terminal data callback stored between onData registration and spawn
   const dataCallbacks = new Set<TerminalDataCallback>()
   /** Project each terminal was spawned or listed for (recovers a rotated claim via `list_preserved`). */
@@ -328,6 +334,10 @@ export function createTauriTerminalApi(): TerminalApi {
   }
 
   return {
+    submitCommand: commandEditor.submitCommand,
+    requestCompletion: commandEditor.requestCompletion,
+    cancelCompletion: commandEditor.cancelCompletion,
+    restorePrompt: commandEditor.restorePrompt,
     /**
      * Spawn a new terminal PTY
      *
@@ -575,6 +585,7 @@ export function createTauriTerminalApi(): TerminalApi {
           if (import.meta.env.DEV) {
             devLog(`[TauriTerminalAPI] Terminal ${payload.id} exited with code ${payload.exitCode}`)
           }
+          forwardSessionExit(payload.id)
           callback(payload.id, payload.exitCode ?? -1, payload.signal ?? undefined)
         },
         'terminal-exit'
@@ -586,13 +597,24 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onCwdChanged(callback: TerminalCwdChangedCallback): () => void {
-      return subscribeSharedEvent(
+      const stopLifecycle = subscribeSharedEvent(
+        IPC_EVENTS.TERMINAL_SESSION_LIFECYCLE,
+        (event) => {
+          forwardSessionLifecycle(event)
+        },
+        'terminal-session-lifecycle'
+      )
+      const stopCwd = subscribeSharedEvent(
         IPC_EVENTS.TERMINAL_CWD_CHANGED,
         (payload) => {
           callback(payload.terminalId, payload.cwd)
         },
         'terminal-cwd-changed'
       )
+      return () => {
+        stopLifecycle()
+        stopCwd()
+      }
     },
 
     /**

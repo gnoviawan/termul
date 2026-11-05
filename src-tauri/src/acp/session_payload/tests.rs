@@ -850,6 +850,161 @@ fn tool_call_summaries_fold_latest_field_wins_with_first_seq() {
 }
 
 #[test]
+fn subagent_dispatches_restore_as_cards_with_their_latest_record() {
+    let running = json!({"id": "child-1", "activity": "running", "title": "Review"});
+    let idle = json!({"id": "child-1", "activity": "idle",
+        "end": {"reason": "completed"}, "title": "Review"});
+    let records = vec![
+        user_prompt(1, Some("turn-1"), "review"),
+        tool_record(
+            2,
+            "tool_call",
+            json!({"toolCallId": "d1", "kind": "think", "status": "in_progress",
+                "_meta": {"termul/subagent": running}}),
+        ),
+        // A child call: restored under d1 for the subagent panel.
+        tool_record(
+            3,
+            "tool_call",
+            json!({"toolCallId": "c1", "kind": "read", "title": "Read src/a.ts",
+                "locations": [{"path": "src/a.ts"}],
+                "_meta": {"claudeCode": {"parentToolUseId": "d1"}}}),
+        ),
+        tool_record(
+            4,
+            "tool_call_update",
+            json!({"toolCallId": "d1", "status": "completed",
+                "_meta": {"termul/subagent": idle}}),
+        ),
+        // A nested dispatch keeps its parent dispatch id.
+        tool_record(
+            5,
+            "tool_call",
+            json!({"toolCallId": "d2", "_meta": {"termul/subagent": running,
+                "claudeCode": {"parentToolUseId": "d1"}}}),
+        ),
+        // A call that only steers subagents is not a card.
+        tool_record(
+            6,
+            "tool_call",
+            json!({"toolCallId": "w1", "kind": "other",
+                "_meta": {"termul/subagentControl": {"subagentIds": ["child-1"]}}}),
+        ),
+        prompt_complete(7, "turn-1"),
+    ];
+    let value = serde_json::to_value(materialize_session_payload(&metadata(), &records)).unwrap();
+    assert_eq!(
+        value["toolCalls"],
+        json!([
+            {"toolCallId": "d1", "kind": "think", "status": "completed",
+                "seq": 2, "timestamp": 102,
+                "_meta": {"termul/subagent": idle}, "restoredSummary": false},
+            {"toolCallId": "c1", "kind": "read", "locations": [{"path": "src/a.ts"}],
+                "title": "Read src/a.ts", "seq": 3, "timestamp": 103,
+                "_meta": {"claudeCode": {"parentToolUseId": "d1"}}, "restoredSummary": false},
+            {"toolCallId": "d2", "kind": "think", "seq": 5, "timestamp": 105,
+                "_meta": {"termul/subagent": running,
+                    "claudeCode": {"parentToolUseId": "d1"}},
+                "restoredSummary": false},
+        ])
+    );
+}
+
+fn subagent_chunk(seq: u64, parent: &str, role: &str, text: &str) -> PersistedEventRecord {
+    let mut chunk = chunk(seq, role, text);
+    chunk.payload["parentToolCallId"] = json!(parent);
+    chunk
+}
+
+#[test]
+fn a_restored_dispatch_carries_its_result_and_its_subagents_text() {
+    let record = json!({"id": "child-1", "activity": "idle", "end": {"reason": "completed"}});
+    let result = json!([{"type": "content", "content": {"type": "text", "text": "All clear."}}]);
+    let records = vec![
+        user_prompt(1, Some("turn-1"), "review"),
+        tool_record(
+            2,
+            "tool_call",
+            json!({"toolCallId": "d1", "kind": "think", "_meta": {"termul/subagent": record}}),
+        ),
+        subagent_chunk(3, "d1", "agent", "Checked a. "),
+        subagent_chunk(4, "d1", "thought", "hmm"),
+        subagent_chunk(5, "unknown", "agent", "lost"),
+        subagent_chunk(6, "d1", "agent", "Checked b."),
+        tool_record(
+            7,
+            "tool_call_update",
+            json!({"toolCallId": "d1", "status": "completed", "content": result,
+                "_meta": {"termul/subagent": record}}),
+        ),
+        prompt_complete(8, "turn-1"),
+    ];
+    let payload = materialize_session_payload(&metadata(), &records);
+    let value = serde_json::to_value(&payload).unwrap();
+    assert_eq!(
+        value["toolCalls"][0]["subagentText"],
+        json!("Checked a. Checked b.")
+    );
+    assert_eq!(value["toolCalls"][0]["content"], result);
+    assert_eq!(
+        payload.messages.len(),
+        1,
+        "subagent text never joins the main reply"
+    );
+}
+
+#[test]
+fn a_restored_subagent_keeps_only_its_newest_text_and_calls() {
+    let record = json!({"id": "child-1", "activity": "running"});
+    let mut records = vec![tool_record(
+        1,
+        "tool_call",
+        json!({"toolCallId": "d1", "_meta": {"termul/subagent": record}}),
+    )];
+    let mut seq = 1;
+    for step in 0..(MAX_RESTORED_CHILD_CALLS + 5) {
+        seq += 1;
+        records.push(tool_record(
+            seq,
+            "tool_call",
+            json!({"toolCallId": format!("c{step}"),
+                "kind": if step == 0 { "edit" } else { "read" },
+                "locations": [{"path": format!("src/{step}.ts")}],
+                "_meta": {"claudeCode": {"parentToolUseId": "d1"}}}),
+        ));
+    }
+    let long = "é".repeat(MAX_DURABLE_SUBAGENT_TEXT_CHARS);
+    for text in [long.as_str(), "end"] {
+        seq += 1;
+        records.push(subagent_chunk(seq, "d1", "agent", text));
+    }
+    // A call whose parent is not a restored dispatch stays out.
+    seq += 1;
+    records.push(tool_record(
+        seq,
+        "tool_call",
+        json!({"toolCallId": "stray", "kind": "read",
+            "_meta": {"claudeCode": {"parentToolUseId": "nobody"}}}),
+    ));
+    let calls = fold_tool_call_summaries(&records);
+    let ids: Vec<&str> = calls
+        .iter()
+        .map(|call| call.tool_call_id.as_str())
+        .collect();
+    assert_eq!(ids.len(), 2 + MAX_RESTORED_CHILD_CALLS);
+    assert_eq!(
+        ids[1], "c0",
+        "an edit past the cap stays a file-change summary"
+    );
+    assert!(calls[1].restored_summary);
+    assert_eq!(ids[2], "c5", "the oldest calls go first");
+    assert!(!ids.contains(&"stray"));
+    let text = calls[0].subagent_text.as_deref().unwrap();
+    assert_eq!(text.chars().count(), MAX_DURABLE_SUBAGENT_TEXT_CHARS);
+    assert!(text.ends_with("éend"));
+}
+
+#[test]
 fn tool_call_summaries_skip_malformed_fields_and_always_serialize() {
     let records = vec![
         tool_record(
@@ -1094,4 +1249,155 @@ fn subagent_chunks_stay_out_of_the_main_reply_bubbles() {
         opened += usize::from(opens);
     }
     assert_eq!(opened, payload.messages.len());
+}
+
+// --- reopen restores the session's model controls ----------------------------
+
+fn model_select(current: &str) -> Value {
+    json!({
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": current,
+        "options": [
+            {"value": "sonnet", "name": "Sonnet"},
+            {"value": "opus", "name": "Opus"},
+        ],
+    })
+}
+
+fn effort_select(current: &str) -> Value {
+    json!({
+        "id": "effort",
+        "name": "Effort",
+        "type": "select",
+        "currentValue": current,
+        "options": [
+            {"value": "low", "name": "Low"},
+            {"value": "high", "name": "High"},
+        ],
+    })
+}
+
+fn models(current: &str) -> Value {
+    json!({
+        "currentModelId": current,
+        "availableModels": [
+            {"modelId": "sonnet", "name": "Sonnet"},
+            {"modelId": "opus", "name": "Opus"},
+        ],
+    })
+}
+
+fn plan_and_default_modes() -> Value {
+    json!([
+        {"id": "default", "name": "Default"},
+        {"id": "plan", "name": "Plan"},
+    ])
+}
+
+fn session_created(seq: u64) -> PersistedEventRecord {
+    record(
+        seq,
+        "session_created",
+        json!({
+            "agentId": "runtime-1",
+            "sessionId": "session-1",
+            "modes": {"currentModeId": "default", "availableModes": plan_and_default_modes()},
+            "models": models("sonnet"),
+            "configOptions": [model_select("sonnet"), effort_select("low")],
+        }),
+    )
+}
+
+fn config_options_update(seq: u64, options: Value) -> PersistedEventRecord {
+    record(
+        seq,
+        "config_options_update",
+        json!({"agentId": "runtime-1", "sessionId": "session-1", "configOptions": options}),
+    )
+}
+
+fn mode_update(seq: u64, mode: &str) -> PersistedEventRecord {
+    record(
+        seq,
+        "mode_update",
+        json!({"agentId": "runtime-1", "sessionId": "session-1", "currentModeId": mode}),
+    )
+}
+
+fn wire_payload(records: &[PersistedEventRecord]) -> serde_json::Map<String, Value> {
+    match serde_json::to_value(materialize_session_payload(&metadata(), records)).unwrap() {
+        Value::Object(map) => map,
+        other => panic!("payload serializes to an object, got {other}"),
+    }
+}
+
+#[test]
+fn a_session_without_controls_records_omits_every_controls_key() {
+    let payload = wire_payload(&[
+        user_prompt(1, Some("t1"), "hi"),
+        chunk(2, "agent", "hello"),
+        prompt_complete(3, "t1"),
+    ]);
+    for key in ["configOptions", "modes", "models", "controlsSeq"] {
+        assert!(
+            !payload.contains_key(key),
+            "legacy payload must not carry {key}"
+        );
+    }
+}
+
+#[test]
+fn the_payload_carries_the_newest_controls_over_session_created() {
+    let payload = wire_payload(&[
+        session_created(1),
+        user_prompt(2, Some("t1"), "hi"),
+        config_options_update(3, json!([model_select("opus"), effort_select("high")])),
+        chunk(4, "agent", "hello"),
+        mode_update(5, "plan"),
+        prompt_complete(6, "t1"),
+    ]);
+    assert_eq!(
+        payload["configOptions"],
+        json!([model_select("opus"), effort_select("high")])
+    );
+    assert_eq!(payload["models"], models("opus"));
+    assert_eq!(
+        payload["modes"],
+        json!({"currentModeId": "plan", "availableModes": plan_and_default_modes()}),
+        "a mode_update without availableModes keeps the advertised list"
+    );
+    assert_eq!(payload["controlsSeq"], json!(5));
+}
+
+#[test]
+fn an_update_without_a_model_selector_keeps_the_created_models() {
+    let payload = wire_payload(&[
+        record(
+            1,
+            "session_created",
+            json!({"sessionId": "session-1", "models": models("sonnet")}),
+        ),
+        config_options_update(2, json!([effort_select("high")])),
+    ]);
+    assert_eq!(payload["configOptions"], json!([effort_select("high")]));
+    assert_eq!(payload["models"], models("sonnet"));
+    assert!(!payload.contains_key("modes"), "no record advertised modes");
+    assert_eq!(payload["controlsSeq"], json!(2));
+}
+
+#[test]
+fn controls_come_from_config_updates_when_the_log_has_no_session_created() {
+    // A pooled session promoted to durable persisted no `session_created`.
+    let payload = wire_payload(&[
+        config_options_update(3, json!([model_select("sonnet")])),
+        config_options_update(6, json!([model_select("opus")])),
+        user_prompt(7, Some("t1"), "hi"),
+    ]);
+    assert_eq!(payload["configOptions"], json!([model_select("opus")]));
+    assert_eq!(payload["models"], models("opus"));
+    assert!(!payload.contains_key("modes"));
+    assert_eq!(payload["controlsSeq"], json!(6));
 }

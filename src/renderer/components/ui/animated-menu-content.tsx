@@ -37,6 +37,17 @@ function bezierToken(name: string, fallback: CubicBezier): CubicBezier {
   return parts?.length === 4 && parts.every(Number.isFinite) ? (parts as CubicBezier) : fallback
 }
 
+type MenuPose = { opacity: number; scale?: number; x?: number }
+type MenuTransition = { duration: number; ease: CubicBezier | 'easeOut' }
+
+export interface MenuMotion {
+  initial: MenuPose
+  open: MenuPose
+  closed: MenuPose
+  openTransition: MenuTransition
+  closeTransition: MenuTransition
+}
+
 /**
  * The transitions.dev "Menu dropdown" motion on the app's motion tokens:
  * open `--duration-fast` from `--scale-medium`, close `--duration-quick` as a
@@ -44,13 +55,7 @@ function bezierToken(name: string, fallback: CubicBezier): CubicBezier {
  * motion is a 150ms fade (the app rule for anchored menus). Values are read
  * from the CSS variables so CSS and JS stay in step with the Radix menus.
  */
-export function menuMotion(reduced: boolean): {
-  initial: { opacity: number; scale?: number }
-  open: { opacity: number; scale?: number }
-  closed: { opacity: number; scale?: number }
-  openTransition: { duration: number; ease: CubicBezier | 'easeOut' }
-  closeTransition: { duration: number; ease: CubicBezier | 'easeOut' }
-} {
+export function menuMotion(reduced: boolean): MenuMotion {
   if (reduced) {
     const fade = { duration: FALLBACK.reducedFade / 1000, ease: 'easeOut' as const }
     return {
@@ -71,6 +76,37 @@ export function menuMotion(reduced: boolean): {
   }
 }
 
+/** Distance a side flyout travels in from its trigger, in px. */
+const FLYOUT_TRAVEL = 4
+
+/**
+ * A side flyout (a submenu beside its row): a short slide out of the trigger
+ * plus a fade, open `--duration-quick` on `--ease-smooth-out`, close faster as
+ * a fade only. Reduced motion: no animation at all.
+ */
+export function flyoutMotion(reduced: boolean, side: 'left' | 'right'): MenuMotion {
+  if (reduced) {
+    const none = { duration: 0, ease: 'easeOut' as const }
+    return {
+      initial: { opacity: 1 },
+      open: { opacity: 1 },
+      closed: { opacity: 0 },
+      openTransition: none,
+      closeTransition: none
+    }
+  }
+  const ease = bezierToken('--ease-smooth-out', FALLBACK.ease)
+  const open = msToken('--duration-quick', FALLBACK.close) / 1000
+  const x = side === 'right' ? -FLYOUT_TRAVEL : FLYOUT_TRAVEL
+  return {
+    initial: { opacity: 0, x },
+    open: { opacity: 1, x: 0 },
+    closed: { opacity: 0, x: 0 },
+    openTransition: { duration: open, ease },
+    closeTransition: { duration: (open * 2) / 3, ease }
+  }
+}
+
 /**
  * `PopoverContent` with the shared menu dropdown motion. `className` styles
  * the visible surface. It stays mounted
@@ -83,10 +119,13 @@ export function AnimatedMenuContent({
   className,
   children,
   contentClassName,
+  motionPreset = 'dropdown',
   ...props
 }: ComponentPropsWithoutRef<typeof PopoverContent> & {
   /** The popover's open state. */
   open: boolean
+  /** `flyout`: a side submenu that slides out of its row (see `flyoutMotion`). */
+  motionPreset?: 'dropdown' | 'flyout'
   /** Classes for the positioned Radix shell (for example a z-index). */
   contentClassName?: string
 }): React.JSX.Element | null {
@@ -94,12 +133,15 @@ export function AnimatedMenuContent({
   const [mounted, setMounted] = useState(open)
   if (open && !mounted) setMounted(true)
   if (!mounted) return null
-  const m = menuMotion(reduced)
+  const m =
+    motionPreset === 'flyout'
+      ? flyoutMotion(reduced, props.side === 'left' ? 'left' : 'right')
+      : menuMotion(reduced)
 
   return (
     <PopoverContent
       forceMount
-      data-menu-motion="dropdown"
+      data-menu-motion={motionPreset}
       // The Radix element is only a positioned shell; the visible surface
       // (border, fill, shadow) is the animated layer, so it scales and fades
       // as one piece instead of the frame appearing before its content.

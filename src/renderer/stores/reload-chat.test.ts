@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { acpApi } from '@/lib/acp-api'
-import { useAcpStore } from '@/stores/acp-store'
-import { FRESH } from '@/stores/acp-store/testkit'
 import {
-  reloadAgentChat,
-  reloadChatBlockedReason,
-  runningBackgroundAgentCount
-} from './reload-chat'
+  endedState,
+  type SubagentRecordOverrides,
+  subagentToolCall
+} from '@/lib/test-utils/subagent'
+import { switchBlockedReason, useAcpStore } from '@/stores/acp-store'
+import { FRESH } from '@/stores/acp-store/testkit'
+import { reloadAgentChat, reloadChatBlockedReason } from './reload-chat'
 
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 
@@ -152,14 +153,12 @@ describe('reloadAgentChat', () => {
 })
 
 describe('background agents and reload', () => {
-  const backgroundAgent = (id: string, extra: Record<string, unknown> = {}) => ({
-    toolCallId: id,
-    status: 'completed',
-    seq: 5,
-    rawInput: { description: 'Audit', prompt: 'p', run_in_background: true },
-    subagentLifecycle: { background: true },
-    ...extra
-  })
+  const backgroundAgent = (id: string, record: SubagentRecordOverrides = {}) =>
+    subagentToolCall(
+      { background: true, ...record },
+      { toolCallId: id, status: 'completed', seq: 5 }
+    )
+  const blocked = () => reloadChatBlockedReason(useAcpStore.getState(), 's1')
 
   beforeEach(() => {
     useAcpStore.setState((s) => ({
@@ -172,74 +171,26 @@ describe('background agents and reload', () => {
       sessions: { ...s.sessions, s1: session('s1', { busy: true }) },
       toolCalls: { s1: [backgroundAgent('a'), backgroundAgent('b')] }
     }))
-    expect(runningBackgroundAgentCount(useAcpStore.getState(), 's1')).toBe(2)
-    expect(reloadChatBlockedReason(useAcpStore.getState(), 's1')).toBe(
+    expect(blocked()).toBe(
       'Background agents are still running. Wait until they finish, or stop the reply.'
     )
   })
 
-  it('counts an agent with a known running state after the turn ends', () => {
-    useAcpStore.setState({
-      toolCalls: {
-        s1: [
-          backgroundAgent('a', { subagentLifecycle: { background: true, state: 'running' } }),
-          backgroundAgent('b', { subagentLifecycle: { background: true, state: 'completed' } }),
-          backgroundAgent('c')
-        ]
-      }
-    })
-    expect(runningBackgroundAgentCount(useAcpStore.getState(), 's1')).toBe(1)
-    expect(reloadChatBlockedReason(useAcpStore.getState(), 's1')).toBeNull()
+  it('leaves the reload to its confirm, but blocks a switch, after the turn ends', () => {
+    useAcpStore.setState({ toolCalls: { s1: [backgroundAgent('a')] } })
+    expect(blocked()).toBeNull()
+    expect(switchBlockedReason(useAcpStore.getState(), 's1')).toBe(
+      'background subagents are still running — switching would stop them'
+    )
   })
 
-  it('counts a native subagent session that still runs after the reply stops', () => {
-    useAcpStore.setState({
-      toolCalls: {
-        s1: [
-          {
-            toolCallId: 'termul-subagent:child-1',
-            status: 'in_progress',
-            seq: 5,
-            rawInput: { description: 'Review the host', prompt: 'p' },
-            subagentLifecycle: { state: 'running', agentId: 'child-1' }
-          },
-          {
-            toolCallId: 'termul-subagent:child-2',
-            status: 'completed',
-            seq: 6,
-            rawInput: { description: 'Review the store', prompt: 'p' },
-            subagentLifecycle: { state: 'completed', agentId: 'child-2', endedAt: 9 }
-          }
-        ]
-      }
-    })
-    expect(runningBackgroundAgentCount(useAcpStore.getState(), 's1')).toBe(1)
-  })
-
-  it('counts a known running agent from an earlier turn', () => {
+  it('reloads a held-turn chat as a plain busy reply once its background agents ended', () => {
     useAcpStore.setState((s) => ({
-      messages: { s1: [{ ...s.messages.s1[0], seq: 10 }] },
+      sessions: { ...s.sessions, s1: session('s1', { busy: true }) },
       toolCalls: {
-        s1: [
-          backgroundAgent('a', { subagentLifecycle: { background: true, state: 'running' } }),
-          {
-            toolCallId: 'termul-subagent:child-1',
-            status: 'in_progress',
-            seq: 4,
-            rawInput: { description: 'Review the host', prompt: 'p' },
-            subagentLifecycle: { state: 'running', agentId: 'child-1' }
-          }
-        ]
+        s1: [backgroundAgent('a', { state: endedState('completed') })]
       }
     }))
-    expect(runningBackgroundAgentCount(useAcpStore.getState(), 's1')).toBe(2)
-  })
-
-  it('ignores a background launch from an earlier turn when the host never reported running', () => {
-    useAcpStore.setState((s) => ({
-      messages: { s1: [{ ...s.messages.s1[0], seq: 10 }] },
-      toolCalls: { s1: [backgroundAgent('a')] }
-    }))
-    expect(runningBackgroundAgentCount(useAcpStore.getState(), 's1')).toBe(0)
+    expect(blocked()).toBe('Wait until this reply finishes.')
   })
 })

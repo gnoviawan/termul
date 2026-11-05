@@ -83,6 +83,9 @@ export const WS_EVENT_TYPES = [
   // contiguous; the title itself reaches the UI through the
   // `session_info_update` that follows it, so clients have no handler for it.
   'local_title_generated',
+  // Live-only, never persisted: the agent started or stopped working in the
+  // session outside a prompt turn (reliable tier).
+  'agent_working',
   // Top-level frame `{ type: 'gap', sid }` (no `seq`): LOSSY events of `sid`
   // were dropped for this connection because it could not keep up. The client
   // installs an atomic snapshot of the session.
@@ -119,6 +122,8 @@ export type WsEventType = (typeof WS_EVENT_TYPES)[number]
 export const WS_REQUEST_TYPES = [
   'send_prompt',
   'cancel_prompt',
+  // Stop one subagent of a chat (`session/cancel` for its child session).
+  'stop_subagent',
   'set_config_option',
   'set_mode',
   'set_model',
@@ -187,6 +192,13 @@ export const WS_REQUEST_TYPES = [
   // MCP catalog (spine AD-1): `{ query?, cursor?, limit? }` → one
   // `McpCatalogPage` of the host's converted registry snapshot. A read.
   'search_mcp_catalog',
+  'get_mcp_catalog_status',
+  'set_mcp_catalog_sync',
+  'describe_mcp_install',
+  'plan_mcp_install',
+  'commit_mcp_install',
+  'cancel_mcp_install',
+  'get_mcp_catalog_icon',
   // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web client
   // installs a catalog agent through `install_acp_agent` (the host downloads +
   // verifies sha256 + extracts + atomically activates). The request is
@@ -237,7 +249,7 @@ export const WS_REQUEST_TYPES = [
   // seq of the newest turn end it showed, and the log epoch it belongs to) →
   // `{ sessionId, seq, logEpoch }`, the host's shared last-read marker as it
   // stands. Idempotent and monotonic: an older seq, or one from another log
-  // epoch, is a no-op. Every `chat_reads` watcher hears when the marker moves.
+  // epoch, is a no-op. The chat's `chat_activity` record follows the marker.
   // Unknown session → `not_found`.
   'mark_chat_read',
   // Watches `{ watch, scope? }` (`projects`, `chat_history`, `agents`; `fs`
@@ -255,14 +267,34 @@ export const WS_REQUEST_TYPES = [
   // `projects` watcher).
   'set_default_project',
   // Claude Accounts (ADR-0004): list `{}` → `ClaudeAccountsSnapshot`; choose
-  // the Default `{ accountId }` or a Project Account `{ projectId, accountId |
-  // null }` → `{}`. Add, sign-in, rename and remove stay host-local.
+  // the Default `{ accountId }` → `{}` or a Project Account `{ projectId,
+  // accountId | null, expectedAccountId? }` → `{ applied }`, where
+  // `expectedAccountId` makes the choice a compare-and-set.
   'list_claude_accounts',
   // `{ force? }` → `{ usage: ClaudeAccountUsage[] }`; reads are cached 5 min
   // on the host (a forced read still reuses one younger than 60 s).
   'list_claude_usage',
   'set_default_claude_account',
   'set_project_claude_account',
+  // `{ enabled }` → `{}`: host-wide automatic switching at a usage limit.
+  'set_claude_auto_switch',
+  // `{ name }` → the new signed-out `ClaudeAccount`.
+  'add_claude_account',
+  // `{ accountId, name }` → `{}`.
+  'rename_claude_account',
+  // `{ accountId }` → `{ movedProjectIds }`, the Projects that moved to the
+  // Default Account; `[]` when the Account was already gone. The built-in
+  // Account is refused.
+  'remove_claude_account',
+  // Link sign-in: `start` `{ accountId }` → `{ url }` (the Claude sign-in
+  // link; replaces a running sign-in of the Account). `finish` `{ accountId,
+  // code }` → `{}` once the CLI stored the login; `claude_login_code_incomplete`
+  // and `claude_login_busy` keep the sign-in running, any other error ended it.
+  // `cancel` `{ accountId }` →
+  // `{ cancelled }` stops a browser or link sign-in.
+  'start_claude_link_login',
+  'finish_claude_link_login',
+  'cancel_claude_login',
   // The canvas gateway's renderer leg (spine AD-21, AD-29). `canvas_mount`
   // / `canvas_unmount` `{ projectId, mountSeq }` tell the host this connection
   // holds (or no longer holds) a project's canvas; the host then forwards
@@ -286,10 +318,11 @@ export type WsCommandKind = 'create' | 'command' | 'idempotent' | 'read'
  * How a settled command is answered on a same-id resend: `payload` replays the
  * stored reply, `entity` rebuilds it from the entity stamped with the
  * `commandId` (`send_prompt`: its `turnId` is its `commandId`), `receipt-only`
- * never stores a payload (credential-bearing kinds). `null` for `idempotent`
- * and `read`. Mirrors the Rust `Replay`.
+ * never stores a payload (credential-bearing kinds), `never` keeps the command
+ * out of the ledger (one-shot kinds whose reply carries secrets). `null` for
+ * `idempotent` and `read`. Mirrors the Rust `Replay`.
  */
-export type WsCommandReplay = 'payload' | 'entity' | 'receipt-only'
+export type WsCommandReplay = 'payload' | 'entity' | 'receipt-only' | 'never'
 
 /**
  * The command class of every `/ws` request type — mirrors the Rust
@@ -302,6 +335,7 @@ export const WS_COMMAND_CLASSES: Readonly<
 > = {
   send_prompt: ['command', 'entity'],
   cancel_prompt: ['idempotent', null],
+  stop_subagent: ['idempotent', null],
   set_config_option: ['idempotent', null],
   set_mode: ['idempotent', null],
   set_model: ['idempotent', null],
@@ -321,6 +355,13 @@ export const WS_COMMAND_CLASSES: Readonly<
   list_claude_usage: ['read', null],
   set_default_claude_account: ['idempotent', null],
   set_project_claude_account: ['idempotent', null],
+  set_claude_auto_switch: ['idempotent', null],
+  add_claude_account: ['command', 'payload'],
+  rename_claude_account: ['idempotent', null],
+  remove_claude_account: ['idempotent', null],
+  start_claude_link_login: ['idempotent', null],
+  finish_claude_link_login: ['command', 'receipt-only'],
+  cancel_claude_login: ['idempotent', null],
   kill_agent: ['idempotent', null],
   list_agents: ['read', null],
   authenticate: ['read', null],
@@ -341,6 +382,13 @@ export const WS_COMMAND_CLASSES: Readonly<
   set_catalog_opt_in: ['idempotent', null],
   fetch_acp_registry_snapshot: ['read', null],
   search_mcp_catalog: ['read', null],
+  get_mcp_catalog_status: ['read', null],
+  set_mcp_catalog_sync: ['idempotent', null],
+  describe_mcp_install: ['read', null],
+  plan_mcp_install: ['idempotent', null],
+  commit_mcp_install: ['command', 'never'],
+  cancel_mcp_install: ['idempotent', null],
+  get_mcp_catalog_icon: ['read', null],
   install_acp_agent: ['command', 'payload'],
   acp_deliver_auth_redirect: ['command', 'receipt-only'],
   store_read: ['read', null],
@@ -442,6 +490,11 @@ export interface WsAgentSummary {
    * as "unknown/none".
    */
   ownsSession?: string[]
+  /**
+   * Owned sessions the agent works in outside a prompt turn now (the state
+   * the `agent_working` event reports live). Older servers omit it.
+   */
+  workingSessions?: string[]
 }
 
 // ============================================================================
@@ -634,7 +687,13 @@ export const WS_ERROR_CODES = {
   // The Claude Account a request needs is not signed in: choosing it for a
   // Project or as the default (nothing changed), or starting a managed Claude
   // agent on it. The message names the Account and where to sign in.
-  CLAUDE_ACCOUNT_SIGNED_OUT: 'claude_account_signed_out'
+  CLAUDE_ACCOUNT_SIGNED_OUT: 'claude_account_signed_out',
+  // `finish_claude_link_login` got a code the Claude CLI calls incomplete.
+  // The sign-in still waits for the whole code.
+  CLAUDE_LOGIN_CODE_INCOMPLETE: 'claude_login_code_incomplete',
+  // `finish_claude_link_login` got a code while the Claude CLI still checks an
+  // earlier one. The sign-in goes on; its first code gets the verdict.
+  CLAUDE_LOGIN_BUSY: 'claude_login_busy'
 } as const
 
 /** Union of all WS error code strings. */
@@ -709,6 +768,7 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   agent_switch: WS_RELAY_TIERS.RELIABLE,
   // Durable host record that owns a seq — reliable so no seq goes missing.
   local_title_generated: WS_RELAY_TIERS.RELIABLE,
+  agent_working: WS_RELAY_TIERS.RELIABLE,
   // Frames about delivery itself: a gap must reach the client in order, and a
   // heartbeat is never queued, so neither may be a lossy event.
   gap: WS_RELAY_TIERS.RELIABLE,
@@ -773,6 +833,12 @@ export interface SessionSnapshotEvent {
   /** Identity of the log incarnation the cursor belongs to. */
   logEpoch: string
   events: WsEvent[]
+  /** The session's still-pending approvals (see `SessionSubscribeReply`). */
+  pendingPermissions?: unknown[]
+  /** The session's still-pending questions (see `SessionSubscribeReply`). */
+  pendingQuestions?: unknown[]
+  /** The session's still-pending elicitations, always present (see `SessionSubscribeReply`). */
+  pendingElicitations?: unknown[]
 }
 
 /**
@@ -787,6 +853,26 @@ export interface SessionSubscribeReply {
   replayed: number
   logEpoch: string
   headSeq: number
+  /**
+   * The session's still-pending approvals at registration: the original
+   * `permission_request` payloads, in queue order. A `permission_request` is
+   * not in the durable log, so this list (not the replay) is authoritative for
+   * every request at or below `headSeq`. Absent when the host keeps no
+   * approval tickets.
+   */
+  pendingPermissions?: unknown[]
+  /**
+   * The session's still-pending questions (`question_request` payloads),
+   * authoritative like `pendingPermissions`. Absent when the host keeps no
+   * question tickets.
+   */
+  pendingQuestions?: unknown[]
+  /**
+   * The session's still-pending elicitations (`elicitation_request`
+   * payloads), authoritative like `pendingPermissions`. Always present
+   * (possibly empty): every relay keeps elicitation tickets.
+   */
+  pendingElicitations?: unknown[]
 }
 
 /**
@@ -994,8 +1080,8 @@ export type WsCanvasReplyPayload =
 export const WS_WATCH_FRAME_TYPE = 'watch'
 
 /**
- * The watches a connection can hold. `projects`, `chat_history`, `agents` and
- * `chat_reads` have the empty scope; `fs` and `terminals` are scoped to a
+ * The watches a connection can hold. `projects`, `chat_history`, `agents`
+ * and `chat_activity` have the empty scope; `fs` and `terminals` are scoped to a
  * project id, `store` to a store key.
  */
 export const WS_WATCH_NAMES = [
@@ -1005,7 +1091,7 @@ export const WS_WATCH_NAMES = [
   'fs',
   'store',
   'terminals',
-  'chat_reads'
+  'chat_activity'
 ] as const
 
 /** One of {@link WS_WATCH_NAMES}. */
@@ -1080,9 +1166,21 @@ export interface AgentsWatchDelta {
     // The host's browser-open shim captured an agent's auth URL; the payload is
     // `{ agentId, url }`. Not part of the roster state: a missed delta is lost.
     | 'browser_open_request'
+    // The agent asked the user to sign in at a URL (a device code); the
+    // payload is `{ agentId, requestId, url, message }`, answered through
+    // `respond_elicitation`. `agent_sign_in_resolved` (`{ agentId,
+    // requestId }`) withdraws it. Not roster state: a missed delta is lost.
+    | 'agent_sign_in_request'
+    | 'agent_sign_in_resolved'
     // One browser policy scope changed; the payload is `{ scope, projectId?,
     // revision }` and clients re-read that scope. Not roster state either.
     | 'browser_policy_changed'
+    // One automation changed; the payload is `{ project_id, automation_id }`
+    // and clients re-read it. Not roster state either.
+    | 'automation_changed'
+    // The host dropped `automation_changed` deltas it could not forward in
+    // time; the payload is `{ missed }` and clients re-read every automation.
+    | 'automation_resync'
   payload: unknown
 }
 
@@ -1099,16 +1197,33 @@ export interface ChatReadMark {
 }
 
 /**
- * `chat_reads` watch state: the last-read marker of every chat a surface has
- * read, and the log epoch of each (absent from a host that predates it).
+ * What every chat list shows for one agent chat, owned by the host and the
+ * same for every surface whether or not it subscribed to the session.
+ * `busy`: a prompt turn is open or the agent works outside one. `needsYou`: a
+ * permission, question or elicitation waits for an answer. `unread`: the
+ * newest turn end the host saw (`turnEnd`) is past the shared last-read
+ * marker. `projectId`: the project the session was created in, so a surface
+ * counts a chat it never opened under its project; null for a session the
+ * host has no persisted record of (absent from a host that predates it).
  */
-export interface ChatReadsWatchState {
-  marks: Record<string, number>
-  logEpochs?: Record<string, string>
+export interface ChatActivityRecord {
+  busy: boolean
+  needsYou: boolean
+  unread: boolean
+  turnEnd: { seq: number; logEpoch: string } | null
+  projectId?: string | null
 }
 
-/** A `chat_reads` delta: one session's marker as it stands after it moved. */
-export type ChatReadsWatchDelta = ChatReadMark
+/** `chat_activity` watch state: every chat with something to show or a turn end to remember. */
+export interface ChatActivityWatchState {
+  sessions: Record<string, ChatActivityRecord>
+}
+
+/**
+ * A `chat_activity` delta: one session's record as it stands. Every flag false
+ * and no `turnEnd` means the chat has nothing to show.
+ */
+export type ChatActivityWatchDelta = ChatActivityRecord & { sessionId: string }
 
 /** `fs` watch state: the canonical root being watched. A new state means: refresh the trees. */
 export interface FsWatchState {

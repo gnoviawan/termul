@@ -120,8 +120,8 @@ export function useGitChangedFiles(
     loggedUnavailableFor.current = cwd
     void logFrontendError({
       level: 'info',
-      message: `ChatChangedFilesPanel: git status unavailable for ${cwd}; showing agent tool-call edits`,
-      source: 'ChatChangedFilesPanel'
+      message: `useGitChangedFiles: git status unavailable for ${cwd}; showing agent tool-call edits`,
+      source: 'useGitChangedFiles'
     })
   }, [result.state, cwd])
 

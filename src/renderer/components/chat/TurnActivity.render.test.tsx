@@ -53,11 +53,11 @@ function renderSettledTurn(items: TimelineItem[]): void {
       <TurnActivity
         items={items}
         active={false}
+        parentTurn="ended"
         durationMs={5000}
         attentionRequired={false}
         hasFinalResponse
         enter={enter}
-        onOpenSubagent={vi.fn()}
       />
     </TooltipProvider>
   )
@@ -67,6 +67,73 @@ function renderSettledTurn(items: TimelineItem[]): void {
 function precedes(a: Node, b: Node): boolean {
   return Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
 }
+
+function renderActiveTurn(items: TimelineItem[]): void {
+  render(
+    <TooltipProvider>
+      <TurnActivity
+        items={items}
+        active
+        parentTurn="active"
+        durationMs={null}
+        attentionRequired={false}
+        hasFinalResponse={false}
+        enter={enter}
+      />
+    </TooltipProvider>
+  )
+}
+
+describe('TurnActivity long turns', () => {
+  const steps = (count: number): TimelineItem[] =>
+    Array.from({ length: count }, (_, i) => narration(`n${i}`, `Step ${i}`))
+
+  it('renders only the latest 40 steps and loads earlier ones on request', () => {
+    renderActiveTurn(steps(95))
+    expect(screen.queryByText('Step 54')).toBeNull()
+    expect(screen.getByText('Step 55')).toBeTruthy()
+    expect(screen.getByText('Step 94')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 55 earlier steps' }))
+    expect(screen.queryByText('Step 4')).toBeNull()
+    expect(screen.getByText('Step 5')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 5 earlier steps' }))
+    expect(screen.getByText('Step 0')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /earlier step/ })).toBeNull()
+  })
+
+  it('keeps the earlier steps a user opened when the chat remounts', () => {
+    const items = Array.from({ length: 60 }, (_, i) => narration(`remount${i}`, `Remount ${i}`))
+    const ui = (): React.JSX.Element => (
+      <TooltipProvider>
+        <TurnActivity
+          items={items}
+          active
+          parentTurn="active"
+          durationMs={null}
+          attentionRequired={false}
+          hasFinalResponse={false}
+          enter={enter}
+        />
+      </TooltipProvider>
+    )
+    const first = render(ui())
+    fireEvent.click(screen.getByRole('button', { name: 'Show 20 earlier steps' }))
+    expect(screen.getByText('Remount 0')).toBeTruthy()
+    first.unmount()
+
+    render(ui())
+    expect(screen.getByText('Remount 0')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /earlier step/ })).toBeNull()
+  })
+
+  it('shows a short turn whole', () => {
+    renderActiveTurn(steps(40))
+    expect(screen.getByText('Step 0')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /earlier step/ })).toBeNull()
+  })
+})
 
 describe('TurnActivity work runs', () => {
   it('folds every thought and tool call between two narration messages into one row', () => {
@@ -120,11 +187,11 @@ describe('TurnActivity work runs', () => {
         <TurnActivity
           items={items}
           active
+          parentTurn="active"
           durationMs={null}
           attentionRequired={false}
           hasFinalResponse={false}
           enter={enter}
-          onOpenSubagent={vi.fn()}
         />
       </TooltipProvider>
     )

@@ -1,6 +1,7 @@
 import * as RadioGroup from '@radix-ui/react-radio-group'
 import { forwardRef } from 'react'
 import { Check } from '@/components/icons'
+import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import type { ProjectColor } from '@/types/project'
@@ -35,7 +36,7 @@ export const ColorSwatchGroup = forwardRef<HTMLDivElement, ColorSwatchGroupProps
             title={label(color)}
             className={cn(
               'group flex size-6 items-center justify-center rounded-full ring-offset-2 ring-offset-card transition-opacity duration-150 ease-out hover:opacity-80',
-              'focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring',
+              FOCUS_RING_CLASS,
               'data-[state=checked]:ring-2 data-[state=checked]:ring-current data-[state=checked]:hover:opacity-100',
               getColorClasses(color).bg,
               getColorClasses(color).text

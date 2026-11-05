@@ -11,6 +11,7 @@ import {
   ArrowUp02Icon,
   BellIcon,
   BotIcon,
+  BracesIcon,
   BrainIcon,
   Bug01Icon,
   Calendar01Icon,
@@ -27,12 +28,16 @@ import {
   ChevronsRightIcon,
   ChevronUpIcon,
   CircleArrowUp02Icon,
+  CircleCheckIcon,
+  CircleDashedIcon,
   CircleDotIcon,
   CircleIcon,
+  CircleMinusIcon,
   ClipboardIcon,
   ClipboardPasteIcon,
   Clock01Icon,
   CodeIcon,
+  Comment01Icon,
   CopyIcon,
   CopyXIcon,
   CpuIcon,
@@ -60,7 +65,11 @@ import {
   FolderTreeIcon,
   GitBranchIcon,
   GitCommitHorizontalIcon,
+  GithubIcon,
   GitMergeIcon,
+  GitPullRequestClosedIcon,
+  GitPullRequestDraftIcon,
+  GitPullRequestIcon,
   Globe02Icon,
   Grid3X3Icon,
   GripVerticalIcon,
@@ -69,6 +78,7 @@ import {
   HelpCircleIcon,
   HistoryIcon,
   Home01Icon,
+  HourglassIcon,
   Image02Icon,
   InformationCircleIcon,
   KeyboardIcon,
@@ -108,6 +118,7 @@ import {
   RefreshCcwIcon,
   RefreshCwIcon,
   RegexIcon,
+  RepeatIcon,
   ReplaceAllIcon,
   ReplaceIcon,
   RotateCcwIcon,
@@ -123,6 +134,7 @@ import {
   SlidersHorizontalIcon,
   SparklesIcon,
   SquareTerminalIcon,
+  StarIcon,
   Tag01Icon,
   TerminalIcon,
   TriangleAlertIcon,
@@ -134,6 +146,7 @@ import {
   WholeWordIcon,
   Wifi01Icon,
   WifiOff01Icon,
+  WorkflowSquare03Icon,
   Wrench01Icon,
   XIcon as XIconData,
   ZapIcon,
@@ -218,6 +231,7 @@ export const ArrowUp = hugeIcon('ArrowUp', ArrowUp02Icon)
 export const ArrowUpCircle = hugeIcon('ArrowUpCircle', CircleArrowUp02Icon)
 export const Bell = hugeIcon('Bell', BellIcon)
 export const Bot = hugeIcon('Bot', BotIcon)
+export const Braces = hugeIcon('Braces', BracesIcon)
 export const Brain = hugeIcon('Brain', BrainIcon)
 export const Bug = hugeIcon('Bug', Bug01Icon)
 export const Calendar = hugeIcon('Calendar', Calendar01Icon)
@@ -272,6 +286,7 @@ export const GripVertical = hugeIcon('GripVertical', GripVerticalIcon)
 export const Hash = hugeIcon('Hash', HashIcon)
 export const HelpCircle = hugeIcon('HelpCircle', HelpCircleIcon)
 export const History = hugeIcon('History', HistoryIcon)
+export const Hourglass = hugeIcon('Hourglass', HourglassIcon)
 export const ImageIcon = hugeIcon('ImageIcon', Image02Icon)
 export const KeySquare = hugeIcon('KeySquare', KeySquareIcon)
 export const KeyRound = hugeIcon('KeyRound', KeyRoundIcon)
@@ -304,6 +319,7 @@ export const Pin = hugeIcon('Pin', PinIcon)
 export const RefreshCcw = hugeIcon('RefreshCcw', RefreshCcwIcon)
 export const RefreshCw = hugeIcon('RefreshCw', RefreshCwIcon)
 export const Regex = hugeIcon('Regex', RegexIcon)
+export const Repeat = hugeIcon('Repeat', RepeatIcon)
 export const Replace = hugeIcon('Replace', ReplaceIcon)
 export const ReplaceAll = hugeIcon('ReplaceAll', ReplaceAllIcon)
 export const RotateCcw = hugeIcon('RotateCcw', RotateCcwIcon)
@@ -311,6 +327,7 @@ export const Scissors = hugeIcon('Scissors', ScissorsIcon)
 export const Server = hugeIcon('Server', ServerIcon)
 export const ShieldAlert = hugeIcon('ShieldAlert', ShieldAlertIcon)
 export const ShieldCheck = hugeIcon('ShieldCheck', ShieldCheckIcon)
+export const Star = hugeIcon('Star', StarIcon)
 export const Shuffle = hugeIcon('Shuffle', ShuffleIcon)
 export const Skull = hugeIcon('Skull', SkullIcon)
 export const Sparkles = hugeIcon('Sparkles', SparklesIcon)
@@ -325,6 +342,7 @@ export const WifiOff = hugeIcon('WifiOff', WifiOff01Icon)
 export const Wrench = hugeIcon('Wrench', Wrench01Icon)
 export const XCircle = hugeIcon('XCircle', CancelCircleIcon)
 export const Zap = hugeIcon('Zap', ZapIcon)
+export const Workflow = hugeIcon('Workflow', WorkflowSquare03Icon)
 
 // The stop button fills this square, so this glyph stays in the app.
 export const Square = forwardRef<SVGSVGElement, TermulIconProps>(function Square(
@@ -366,3 +384,12 @@ export const PaperclipIcon = Paperclip
 export const Settings2 = Settings
 export const SlidersHorizontal = Sliders
 export const XIcon = X
+
+export const CircleCheck = hugeIcon('CircleCheck', CircleCheckIcon)
+export const CircleDashed = hugeIcon('CircleDashed', CircleDashedIcon)
+export const CircleMinus = hugeIcon('CircleMinus', CircleMinusIcon)
+export const Comment = hugeIcon('Comment', Comment01Icon)
+export const Github = hugeIcon('Github', GithubIcon)
+export const GitPullRequest = hugeIcon('GitPullRequest', GitPullRequestIcon)
+export const GitPullRequestClosed = hugeIcon('GitPullRequestClosed', GitPullRequestClosedIcon)
+export const GitPullRequestDraft = hugeIcon('GitPullRequestDraft', GitPullRequestDraftIcon)

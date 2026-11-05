@@ -1,4 +1,5 @@
 import { ExternalLink, RefreshCw, RotateCcw } from '@/components/icons'
+import { rowId } from '@/components/settings/row-id'
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { SettingsNotice } from '@/components/settings/SettingsNotice'
@@ -11,7 +12,6 @@ import { confirmInstallAndRestart } from '@/lib/confirm-install-update'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { supportsSignedChannelUpdate, type UpdateChannel } from '@/lib/tauri-updater-api'
 import type { UpdaterErrorSource } from '@/stores/updater-store'
-import { rowId } from './categories'
 
 interface UpdatesSectionProps {
   isAurUpdater: boolean

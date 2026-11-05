@@ -9,6 +9,7 @@ import { navigateToChatSession } from '@/lib/router-navigate'
 import {
   AGENT_BROWSER_SPLIT_SIZES,
   agentChatTabId,
+  automationsTabId,
   canvasTabId,
   closeTabInWorkspace,
   diffTabId,
@@ -17,6 +18,7 @@ import {
   findPaneContainingTab,
   getAllLeafPanes,
   gitHistoryTabId,
+  githubItemTabId,
   gitTabId,
   makeBrowserTabId,
   resolveActivePaneId,
@@ -36,9 +38,11 @@ type TabsSliceState = Pick<
   | 'insertAgentChatTab'
   | 'addGitTab'
   | 'addGitHistoryTab'
+  | 'addGithubItemTab'
   | 'addDiffTab'
   | 'addCommitDiffTab'
   | 'addCanvasTab'
+  | 'addAutomationsTab'
   | 'remapAgentChatSession'
   | 'removeTab'
   | 'renameEditorTab'
@@ -339,6 +343,12 @@ export const createTabsSlice: StateCreator<WorkspaceState, [], [], TabsSliceStat
     get().addTabToPane(paneId, tab)
   },
 
+  // GitHub item tab: one per (cwd, repo slot, number). A repeat open focuses it.
+  addGithubItemTab: (item, targetPaneId?: string): void => {
+    const id = githubItemTabId(item.cwd, item.repo, item.number)
+    focusOrAddTab({ get, set }, id, () => ({ type: 'github-item', id, ...item }), targetPaneId)
+  },
+
   // Diff tab (CAP-9): the id hashes the canonical (cwd, path, side) identity, so
   // two opens with different path forms collapse onto one tab, focused in
   // whichever pane holds it (the addGitTab pattern). The tab stores the cwd and
@@ -410,6 +420,22 @@ export const createTabsSlice: StateCreator<WorkspaceState, [], [], TabsSliceStat
 
     const tab: WorkspaceTab = { type: 'canvas', id, projectId, docPath }
     get().addTabToPane(paneId, tab)
+  },
+
+  addAutomationsTab: (projectId: string, targetPaneId?: string): void => {
+    // Mid-switch the project store already names the next project while this
+    // tree is still the one being left; its tab must not land here.
+    const { activeProjectId } = get()
+    if (projectId !== activeProjectId) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'workspace-store.addAutomationsTab',
+        message: `ignored an Automations tab for ${projectId} while ${activeProjectId || 'no project'} is on screen`
+      })
+      return
+    }
+    const id = automationsTabId(projectId)
+    focusOrAddTab({ get, set }, id, () => ({ type: 'automations', id, projectId }), targetPaneId)
   },
 
   remapAgentChatSession: (fromSessionId, toSessionId, targetPaneId?: string): void => {

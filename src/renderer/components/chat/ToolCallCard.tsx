@@ -1,9 +1,9 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import robotIconRaw from '@/assets/agent-icons/robot-01.svg?raw'
 import {
   AlertCircle,
+  Bot,
   Brain,
   ChevronRight,
   ExternalLink,
@@ -35,42 +35,13 @@ import { type ToolIconName, toolIconName } from './tool-call-format'
 import {
   describeToolCall,
   firstString,
-  isSubagentCall,
-  isSubagentRunning,
   isToolCallRunning,
   READABLE_TEXT_KEYS,
   readableOutput,
   toolCallPath
 } from './tool-call-summary'
 
-/** Common prop shape shared by lucide icons and the bundled RobotIcon. */
 type ToolIconComponent = React.ComponentType<{ size?: number | string; className?: string }>
-
-/** Inner markup of the bundled robot SVG (drops the outer <svg> wrapper). */
-const ROBOT_INNER = robotIconRaw.replace(/^[\s\S]*?<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '')
-
-/** Robot glyph for subagent/Task calls, matching the lucide icon prop shape. */
-function RobotIcon({
-  size = 24,
-  className
-}: {
-  size?: number | string
-  className?: string
-}): React.JSX.Element {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      width={size}
-      height={size}
-      fill="none"
-      className={className}
-      aria-hidden="true"
-      // biome-ignore lint/security/noDangerouslySetInnerHtml: bundled static asset
-      dangerouslySetInnerHTML={{ __html: ROBOT_INNER }}
-    />
-  )
-}
 
 const ICONS: Record<ToolIconName, ToolIconComponent> = {
   read: FileText,
@@ -82,7 +53,7 @@ const ICONS: Record<ToolIconName, ToolIconComponent> = {
   think: Brain,
   fetch: Globe,
   switch: Shuffle,
-  agent: RobotIcon,
+  agent: Bot,
   tool: Wrench
 }
 
@@ -131,7 +102,7 @@ function diffContent(item: ToolCallContent): DiffContent {
   return { path: d.path, oldText: d.oldText ?? null, newText: d.newText }
 }
 
-/** Render one `ToolCallContent` item; shared with `SubagentDetailsDialog`. */
+/** Render one `ToolCallContent` item. */
 export function renderContentItem(
   item: ToolCallContent,
   key: number,
@@ -209,11 +180,6 @@ interface ToolCallCardProps {
   toolCall: ToolCall
   /** Filesystem roots used to resolve an "Open file" action on file tool calls. */
   filePathContext?: FilePathResolutionContext
-  /** The parent agent turn is still running. */
-  parentTurnActive?: boolean
-  /** Open the delegation details dialog. The chat LIST owns the dialog so it
-   *  survives virtualized row removal — the card only reports the request. */
-  onOpenSubagent: (toolCall: ToolCall) => void
 }
 
 /** Kinds whose `rawInput` carries a file path worth offering to open in the editor. */
@@ -233,9 +199,7 @@ function toolCallFilePath(toolCall: ToolCall): string | undefined {
 
 function ToolCallCardComponent({
   toolCall,
-  filePathContext,
-  parentTurnActive = false,
-  onOpenSubagent
+  filePathContext
 }: ToolCallCardProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   const Icon = ICONS[toolIconName(toolCall)]
@@ -254,10 +218,9 @@ function ToolCallCardComponent({
   const resultText = hasContent ? '' : readableOutput(toolCall.rawOutput)
   const status = toolCall.status
   const failed = status === 'failed'
-  const isSubagent = isSubagentCall(toolCall)
   // Diffs render as inline blocks. Anything else the call carries (text,
   // terminal output) stays behind the collapsible row.
-  const inlineDiff = hasDiff && !isSubagent
+  const inlineDiff = hasDiff
   const detailItems = inlineDiff ? content.filter((item) => item.type !== 'diff') : content
   const hasDetail =
     detailItems.length > 0 || (!inlineDiff && resultText.length > 0) || terminalOutput.length > 0
@@ -267,12 +230,8 @@ function ToolCallCardComponent({
   // cards never show a bogus duration.
   const [open, setOpen] = useState(false)
   const [endedAt, setEndedAt] = useState<number | null>(null)
-  const running = isSubagent
-    ? isSubagentRunning(toolCall, parentTurnActive)
-    : isToolCallRunning(toolCall)
-  // A background subagent completes its launch call early, so a subagent card
-  // settles when the agent stops running, not when its tool call completes.
-  const settled = isSubagent ? !running : status === 'completed' || status === 'failed'
+  const running = isToolCallRunning(toolCall)
+  const settled = status === 'completed' || status === 'failed'
   const prevSettled = useRef(settled)
   useEffect(() => {
     if (prevSettled.current === settled) return
@@ -401,34 +360,14 @@ function ToolCallCardComponent({
       >
         <div>
           <div className={cn('flex items-center gap-2 px-1 text-xs', CHAT_ROW_MIN_H)}>
-            {isSubagent ? (
-              <button
-                type="button"
-                onClick={() => {
-                  onOpenSubagent(toolCall)
-                  void logFrontendError({
-                    level: 'info',
-                    source: 'ToolCallCard.subagentDetails',
-                    message: 'Opened delegation details; child activity unavailable'
-                  })
-                }}
-                aria-haspopup="dialog"
-                data-press-feedback="off"
-                className={cn(
-                  'flex min-w-0 flex-1 items-center gap-2 text-left text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                  CHAT_ROW_MIN_H
-                )}
-              >
-                {rowSummary}
-              </button>
-            ) : hasDetail ? (
+            {hasDetail ? (
               <button
                 type="button"
                 onClick={() => setOpen((v) => !v)}
                 aria-expanded={open}
                 data-press-feedback="off"
                 className={cn(
-                  'flex min-w-0 flex-1 items-center gap-2 text-left text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                  'flex min-w-0 flex-1 items-center gap-2 text-left text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring',
                   CHAT_ROW_MIN_H
                 )}
               >
@@ -445,7 +384,7 @@ function ToolCallCardComponent({
               </span>
             )}
             {failed && <AlertCircle size={12} className="shrink-0 text-destructive" />}
-            {hasDetail && !isSubagent && (
+            {hasDetail && (
               <motion.span
                 aria-hidden="true"
                 className="shrink-0 text-muted-foreground"
@@ -461,7 +400,7 @@ function ToolCallCardComponent({
               </IconActionButton>
             ) : null}
           </div>
-          {hasDetail && !isSubagent && (
+          {hasDetail && (
             <CollapseExpandMotion open={open} motion="chat">
               <div className="ml-4 flex flex-col gap-1.5 border-l border-border/50 px-2 pb-2 pt-1.5">
                 {detailItems.length > 0 ? (

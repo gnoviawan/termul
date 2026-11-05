@@ -66,6 +66,9 @@ pub struct ClaudeAccountsSnapshot {
     // JSON key stays `projectAccounts`.
     #[serde(rename = "projectAccounts")]
     pub project_profiles: BTreeMap<String, String>,
+    /// A chat at its Account's limit continues on the signed-in Account with
+    /// the most room.
+    pub auto_switch: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,6 +104,13 @@ struct StoreFile {
     // JSON key stays `projectAccounts`.
     #[serde(default, rename = "projectAccounts")]
     project_profiles: BTreeMap<String, String>,
+    /// Files written before the setting existed read as on.
+    #[serde(default = "auto_switch_default")]
+    auto_switch: bool,
+}
+
+const fn auto_switch_default() -> bool {
+    true
 }
 
 impl StoreFile {
@@ -114,6 +124,7 @@ impl StoreFile {
             }],
             default_account_id: BUILTIN_ACCOUNT_ID.to_string(),
             project_profiles: BTreeMap::new(),
+            auto_switch: auto_switch_default(),
         }
     }
 
@@ -134,6 +145,13 @@ impl StoreFile {
 
     fn has_account(&self, id: &str) -> bool {
         self.entries.iter().any(|a| a.id == id)
+    }
+
+    /// The Account a Project uses: its own choice, else the default.
+    fn project_account(&self, project_id: &str) -> &str {
+        self.project_profiles
+            .get(project_id)
+            .unwrap_or(&self.default_account_id)
     }
 }
 
@@ -193,6 +211,7 @@ impl ClaudeAccountStore {
                 .collect(),
             default_account_id: file.default_account_id,
             project_profiles: file.project_profiles,
+            auto_switch: file.auto_switch,
         })
     }
 
@@ -304,24 +323,44 @@ impl ClaudeAccountStore {
         Ok(())
     }
 
+    pub fn set_auto_switch(&self, enabled: bool) -> Result<(), String> {
+        let _guard = self.lock.lock();
+        let mut file = self.load()?;
+        file.auto_switch = enabled;
+        self.save(&file)?;
+        log::info!("[claude-accounts] automatic switching set to {enabled}");
+        Ok(())
+    }
+
     /// Choose the Account of a Project. `None` returns it to the Default
-    /// Account.
+    /// Account. With `expected`, the choice applies only while the Project
+    /// still uses that Account, so clients that react to the same limit
+    /// converge on one switch. Returns whether the choice applied.
     pub fn set_project_account(
         &self,
         project_id: &str,
         account_id: Option<&str>,
-    ) -> Result<(), String> {
+        expected: Option<&str>,
+    ) -> Result<bool, String> {
         let project_id = project_id.trim();
         if project_id.is_empty() {
             return Err("A project id is required".to_string());
         }
         let _guard = self.lock.lock();
         let mut file = self.load()?;
+        if let Some(id) = account_id {
+            if !file.has_account(id) {
+                return Err(unknown_account(id));
+            }
+        }
+        if expected.is_some_and(|expected| file.project_account(project_id) != expected) {
+            log::info!(
+                "[claude-accounts] project profile unchanged: the project no longer uses the expected profile"
+            );
+            return Ok(false);
+        }
         match account_id {
             Some(id) => {
-                if !file.has_account(id) {
-                    return Err(unknown_account(id));
-                }
                 file.project_profiles
                     .insert(project_id.to_string(), id.to_string());
             }
@@ -331,7 +370,7 @@ impl ClaudeAccountStore {
         }
         self.save(&file)?;
         log::info!("[claude-accounts] project profile updated");
-        Ok(())
+        Ok(true)
     }
 
     /// The Account a spawn for `project_id` uses. A damaged store falls back
@@ -347,9 +386,10 @@ impl ClaudeAccountStore {
             }
         };
         let id = project_id
-            .and_then(|project| file.project_profiles.get(project.trim()))
-            .unwrap_or(&file.default_account_id)
-            .clone();
+            .map_or(file.default_account_id.as_str(), |project| {
+                file.project_account(project.trim())
+            })
+            .to_string();
         let name = file
             .entries
             .iter()

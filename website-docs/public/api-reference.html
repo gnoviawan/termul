@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Termul server API reference</title>
+    <style>
+      #missing {
+        display: none;
+        max-width: 40rem;
+        margin: 4rem auto;
+        padding: 0 1rem;
+        font-family: system-ui, sans-serif;
+        line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="missing">
+      <h1>API reference not published yet</h1>
+      <p>
+        The OpenAPI spec is attached to each Termul release as <code>openapi.yaml</code>, and the
+        latest stable release does not include it yet. A running <code>termul-server</code> serves
+        the same spec at <code>/openapi.json</code> (with your bearer token), and
+        <code>termul-server openapi</code> prints it.
+      </p>
+    </div>
+    <script
+      src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.76.4/dist/browser/standalone.js"
+      integrity="sha384-hwB9WroDTpZaI38gr+u9CXA6ksz5gUYgD2GxXazKl/agT1L2GWUiRFWGJYNiFu4Q"
+      crossorigin="anonymous"
+    ></script>
+    <script>
+      // The deploy copies openapi.yaml from the latest stable release. Before a
+      // release ships one, the site's SPA fallback answers this URL with HTML.
+      fetch('/openapi.yaml')
+        .then((response) => (response.ok ? response.text() : ''))
+        .catch(() => '')
+        .then((spec) => {
+          if (spec.startsWith('openapi:')) {
+            Scalar.createApiReference('#app', { content: spec })
+          } else {
+            document.getElementById('missing').style.display = 'block'
+          }
+        })
+    </script>
+  </body>
+</html>

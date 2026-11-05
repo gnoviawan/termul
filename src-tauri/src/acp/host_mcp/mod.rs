@@ -20,6 +20,7 @@
 //! Desktop + standalone parity: no `tauri-plugin-mcp-bridge` / `AppHandle` —
 //! pure `rmcp` + tokio, works on both binaries.
 
+pub mod automation_tools;
 pub mod bridge;
 pub mod canvas;
 pub mod canvas_budget;
@@ -30,6 +31,8 @@ pub mod child;
 pub mod parent;
 pub mod presence;
 
+#[cfg(test)]
+mod automation_tools_tests;
 #[cfg(test)]
 mod gateway_harness;
 
@@ -71,25 +74,33 @@ pub const ENV_AGENT_ID: &str = "TERMUL_PLAN_AGENT_ID";
 /// Server `instructions` returned in the child's MCP `initialize` result.
 /// Agents that connect the injected `termul` server surface this guidance in
 /// model context, so it doubles as the advertisement for the chat renderer's
-/// markdown affordances: inline images (`![alt](path)`) and file references
-/// that open in Termul's built-in editor (`[label](path)` and bare paths).
-/// Keep it static and surface-honest — where a URL form is unreadable the
-/// renderer's existing fallbacks apply (alt chip / plain text).
+/// markdown affordances.
 pub const TERMUL_CHAT_INSTRUCTIONS: &str = "Termul renders your markdown replies in a rich chat UI. \
-Embed images inline with `![alt](path)` — https URLs render everywhere; paths relative to the \
-session working directory, absolute paths, and `file://` URLs render in the desktop app and \
-fall back to alt text elsewhere (use this for generated charts, screenshots, diagrams). \
+Embed images and videos inline with `![alt](path)`, for generated charts, screenshots, diagrams, \
+and screen recordings: paths relative to the session working directory, absolute paths, \
+`file://` URLs, and https URLs render in the desktop app and on the web. A markdown link to an \
+image or video file also shows it inline. \
 Reference files as markdown links `[label](path)`: Termul renders them as buttons that open \
 the file in its built-in editor — absolute and cwd-relative paths inside the session workspace \
 roots work, a `:line` suffix (or `#L<line>` on the link target) positions the cursor, and \
 bare multi-segment file paths in prose become open-in-editor links too.";
 
+/// Offer to schedule repeatable work. Automation runs never see it: their
+/// sessions get no host MCP server.
+pub const AUTOMATION_SUGGESTION_INSTRUCTIONS: &str = "Repeatable work: when the user's request \
+names a cadence (every day, every morning, every week, daily, weekly, remind me, each time X \
+happens) or repeats a request made earlier in this chat, first finish the task, then ask once \
+per chat with the `ask_user` tool: \"This looks repeatable. Want me to turn it into a scheduled \
+background automation?\" with the options \"Yes, schedule it\" and \"Not now\". On yes, read \
+`automation_guide` and build it with the automation tools. After either answer, do not ask \
+again in this chat. Skip the question when the user is already asking for an automation.";
+
 /// The full `instructions` of the child's `initialize` result: the chat
-/// guidance, then the design canvas guide.
+/// guidance, the repeatable-work offer, then the design canvas guide.
 #[must_use]
 pub fn session_instructions() -> String {
     format!(
-        "{TERMUL_CHAT_INSTRUCTIONS}\n\n{}",
+        "{TERMUL_CHAT_INSTRUCTIONS}\n\n{AUTOMATION_SUGGESTION_INSTRUCTIONS}\n\n{}",
         canvas_tools::instructions()
     )
 }
@@ -155,6 +166,9 @@ pub enum FrameKind {
     /// A figcraft control-protocol call from the canvas `Bridge` backend,
     /// routed to the renderer that holds the session's project canvas.
     Canvas,
+    /// An `automation_*` tool call, answered by the host automation service
+    /// for the session's project.
+    Automation,
 }
 
 /// One option the agent offers in an `ask_user` question.
@@ -350,6 +364,12 @@ pub struct FrameRequest {
     /// The agent tool a `Canvas` frame serves, for the gateway's logs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canvas_tool: Option<String>,
+    /// The tool an `Automation` frame serves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation_tool: Option<automation_tools::AutomationTool>,
+    /// An `Automation` frame's tool arguments, parsed by the parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation_input: Option<serde_json::Value>,
 }
 
 /// Parent reply frame (one per connection). `result` carries the browser

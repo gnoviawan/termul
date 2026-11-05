@@ -57,8 +57,7 @@ export function useFileWatcher(): void {
           return
         }
 
-        // Skip if we just saved this file (within 2 seconds)
-        if (Date.now() - fileState.lastModified < 2000) {
+        if (fileState.kind === 'text' && Date.now() - fileState.lastModified < 2000) {
           return
         }
 

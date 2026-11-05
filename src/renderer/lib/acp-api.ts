@@ -16,6 +16,12 @@
  */
 
 import type { ClaudeRateLimit } from '@shared/types/claude-accounts.types'
+import type {
+  Subagent,
+  SubagentControl,
+  SubagentId,
+  SubagentStopOutcome
+} from '@shared/types/subagent'
 import {
   type AgentCapabilities,
   isProviderErrorCode,
@@ -31,8 +37,10 @@ import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { type CommandRun, runCommand } from '@/lib/command-engine'
 import { keyDigest } from '@/lib/command-journal'
 import { waitUntilVisible } from '@/lib/command-visibility'
+import { hasConversationWire } from '@/lib/conversation-envelope'
 import { invokeIpc } from '@/lib/ipc/tauri'
 import { logFrontendError } from '@/lib/log-api'
+import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpOAuth } from '@/lib/web-server-api'
 
@@ -206,34 +214,19 @@ export interface ToolCall {
    * live calls derive counts from `content` instead. */
   diffStat?: { added: number; removed: number }
   /** True for a restored durable file-change summary (payload `toolCalls`):
-   * feeds the Changed files panel but never renders as a timeline card. */
+   * feeds the changed-files list but never renders as a timeline card. */
   restoredSummary?: boolean
-  /** Subagent usage scalars lifted from `_meta.claudeCode.toolResponse` at ingest
-   * (the next update replaces `_meta`, so the store keeps just these). */
-  subagentUsage?: { totalTokens?: number; totalDurationMs?: number; totalToolUseCount?: number }
-  /** Lifecycle of a subagent dispatch, kept apart from the tool-call status:
-   * a background launch completes its tool call long before the agent ends. */
-  subagentLifecycle?: SubagentLifecycle
+  /** The host's canonical record when this call dispatches a subagent, lifted
+   * from `_meta["termul/subagent"]` at ingest. Absent on later events = unchanged. */
+  subagent?: Subagent
+  /** Subagents this call steers (`_meta["termul/subagentControl"]`). */
+  subagentControl?: SubagentControl
   /** Subagent dispatch that made this call (`_meta.claudeCode.parentToolUseId`).
    * The timeline shows such a call inside its subagent, not in the main turn. */
   parentToolCallId?: string
   /** Latest text the subagent wrote (bounded tail), kept on its dispatch call. */
   subagentText?: string
   [k: string]: unknown
-}
-
-export type SubagentLifecycleState = 'running' | 'completed' | 'failed' | 'cancelled'
-
-export interface SubagentLifecycle {
-  /** The dispatch returned at launch; the agent continues after its tool call completes. */
-  background?: boolean
-  /** Latest known agent state. Absent when only the launch is known. */
-  state?: SubagentLifecycleState
-  /** Host clock (epoch ms) when the agent reached a terminal state. */
-  endedAt?: number
-  agentId?: string
-  /** File that receives the background agent's output, when the agent names one. */
-  outputFile?: string
 }
 
 export interface ToolCallUpdate {
@@ -247,8 +240,9 @@ export interface ToolCallUpdate {
   rawOutput?: unknown
   /** See {@link ToolCall.diffStat} — carried by durable recovery records. */
   diffStat?: { added: number; removed: number }
-  /** See {@link ToolCall.subagentLifecycle} — derived at ingest. */
-  subagentLifecycle?: SubagentLifecycle
+  /** See {@link ToolCall.subagent} — lifted at ingest. */
+  subagent?: Subagent
+  subagentControl?: SubagentControl
   [k: string]: unknown
 }
 
@@ -412,7 +406,21 @@ export interface AuthMethod {
   type?: 'agent' | 'terminal' | 'env_var'
   args?: string[]
   env?: Record<string, string>
+  /**
+   * The agent reads a key the user types from `authenticate` (it advertised
+   * `_meta["api-key"]` for a provider whose key shape the host knows).
+   * Signing in without one makes the agent read its own environment.
+   */
+  takesApiKey?: boolean
 }
+
+/**
+ * What a sign-in hands the agent beyond the method id. A key is held only
+ * for the call: never logged, persisted or remembered.
+ */
+export type AuthenticateInput =
+  | { gateway: { baseUrl: string; apiKey?: string } }
+  | { apiKey: string }
 
 export interface AgentSpawnedEvent {
   agentId: AgentId
@@ -442,6 +450,28 @@ export interface AgentSpawnedEvent {
 export interface BrowserOpenRequestEvent {
   agentId: AgentId
   url: string
+}
+
+/**
+ * `acp:agent_sign_in_request` payload: the agent asked the user to sign in
+ * at `url`, following `message` (it carries a device code). Agent-level (no
+ * session id). Answered through `respondElicitation` by `requestId`.
+ */
+export interface AgentSignInRequestEvent {
+  agentId: AgentId
+  requestId: string
+  url: string
+  message: string
+}
+
+/**
+ * `acp:agent_sign_in_resolved` payload: the host no longer holds sign-in
+ * prompt `requestId` (the sign-in completed, was answered, or `authenticate`
+ * ended), so every client drops its dialog.
+ */
+export interface AgentSignInResolvedEvent {
+  agentId: AgentId
+  requestId: string
 }
 
 /**
@@ -526,6 +556,8 @@ export interface PermissionRequestEvent {
   requestId: string
   toolCall: ToolCallUpdate
   options: PermissionOption[]
+  /** The client turn id of the turn that raised it (absent for a turnless prompt). */
+  turnId?: string
 }
 
 /** One selectable option of an `AskUserQuestionEvent` (issue #411). */
@@ -676,6 +708,12 @@ export interface AgentDisconnectedEvent {
   agentId: AgentId
   reason: AgentExitReason
 }
+/** The agent started or stopped working in a session outside a prompt turn. */
+export interface AgentWorkingEvent {
+  agentId: AgentId
+  sessionId: SessionId
+  working: boolean
+}
 export interface SessionClosedEvent {
   agentId: AgentId
   sessionId: SessionId
@@ -775,7 +813,10 @@ export const ACP_EVENTS = {
   sessionInfoUpdate: 'acp:session_info_update',
   agentSwitch: 'acp:agent_switch',
   usageUpdate: 'acp:usage_update',
+  agentWorking: 'acp:agent_working',
   browserOpenRequest: 'acp:browser_open_request',
+  agentSignInRequest: 'acp:agent_sign_in_request',
+  agentSignInResolved: 'acp:agent_sign_in_resolved',
   browserAgentTab: 'acp:browser_agent_tab',
   browserTicketClosed: 'acp:browser_ticket_closed',
   browserStopChanged: 'acp:browser_stop_changed',
@@ -805,6 +846,11 @@ export interface BrowserAgentTabEvent {
   tabId: string
   url?: string
   sessionId: string
+}
+
+/** The host registry dropped an agent tab (`acp:browser_tab_closed`). */
+export interface BrowserTabClosedEvent {
+  tabId: string
 }
 
 // --- Command wrappers ------------------------------------------------------
@@ -1279,11 +1325,22 @@ export async function acpSendPromptBlocks(
   turnId?: string,
   displayContent?: ContentBlock[]
 ): Promise<PromptDispatchResult> {
-  return getAcpTransport().sendPromptBlocks(agentId, sessionId, content, turnId, displayContent)
+  const display =
+    displayContent ?? (hasConversationWire(content) ? wireBlocksToDisplay(content) : undefined)
+  return getAcpTransport().sendPromptBlocks(agentId, sessionId, content, turnId, display)
 }
 
 export async function acpCancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void> {
   await getAcpTransport().cancelPrompt(agentId, sessionId)
+}
+
+/** Stop one subagent of chat `rootSessionId` (desktop and web share the `/ws` request). */
+export async function acpStopSubagent(
+  agentId: AgentId,
+  rootSessionId: SessionId,
+  subagentId: SubagentId
+): Promise<SubagentStopOutcome> {
+  return getAcpTransport().stopSubagent(agentId, rootSessionId, subagentId)
 }
 
 export async function acpSetConfigOption(
@@ -1344,14 +1401,14 @@ export async function acpAnswerQuestion(
 export async function acpAuthenticate(
   agentId: AgentId,
   methodId: string,
-  gateway?: { baseUrl: string; apiKey?: string }
+  input?: AuthenticateInput
 ): Promise<void> {
-  // `fresh`: the request may carry a gateway key the id cannot name, so a
-  // later try is never mistaken for a resend of an earlier one.
+  // `fresh`: the request may carry a key the id cannot name, so a later try
+  // is never mistaken for a resend of an earlier one.
   await ledgered(
     'authenticate_agent',
     `${agentId}|${methodId}`,
-    (call) => getAcpTransport().authenticate(agentId, methodId, gateway, call),
+    (call) => getAcpTransport().authenticate(agentId, methodId, input, call),
     { fresh: true, acceptedWithoutResult: () => undefined }
   )
 }
@@ -1451,6 +1508,7 @@ export const acpApi = {
   sendPrompt: acpSendPrompt,
   sendPromptBlocks: acpSendPromptBlocks,
   cancelPrompt: acpCancelPrompt,
+  stopSubagent: acpStopSubagent,
   setConfigOption: acpSetConfigOption,
   setMode: acpSetMode,
   setModel: acpSetModel,

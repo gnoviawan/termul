@@ -170,6 +170,7 @@ beforeEach(async () => {
   host.agentAccount[OLD_AGENT] = 'personal'
   host.setProjectAccount.mockImplementation(async (_projectId: string, accountId: string) => {
     host.projectAccount = accountId
+    return true
   })
   _resetAcpTransportForTests(null)
   _resetInFlightHistoryOpensForTesting()

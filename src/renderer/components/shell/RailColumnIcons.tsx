@@ -1,5 +1,5 @@
 import { toast } from 'sonner'
-import { FolderTree, GitBranch, MessageSquare } from '@/components/icons'
+import { FolderTree, GitBranch, Github, MessageSquare } from '@/components/icons'
 import { RailButton } from '@/components/shell/rail-button'
 import { useColumnWorkingCopy } from '@/components/shell/use-column-working-copy'
 import { CountBadge } from '@/components/ui/count-badge'
@@ -18,7 +18,7 @@ import type { Project } from '@/types/project'
 const NEED_PROJECT = 'Open a project first'
 
 /**
- * Collapsed Rail's Column tab icons (CAP-2): Chats, Explorer and Changes.
+ * Collapsed Rail's Column tab icons (CAP-2): Chats, Explorer, Changes and GitHub.
  * Each selects the project's Column tab and shows a hidden Side panel; the
  * pressed one follows the project's selected tab while the panel is visible.
  * With the SSH workspace open the tab is never written (the click only shows
@@ -106,6 +106,17 @@ export function RailColumnIcons({
         }
       >
         <GitBranch size={16} />
+      </RailButton>
+
+      <RailButton
+        label="GitHub"
+        hint={hasProject ? undefined : NEED_PROJECT}
+        aria-label="GitHub"
+        disabled={!hasProject}
+        pressed={pressed('github')}
+        onClick={() => select('github')}
+      >
+        <Github size={16} />
       </RailButton>
     </>
   )

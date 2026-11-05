@@ -119,7 +119,7 @@ pub fn same_origin_base() -> CanvasBundleBase {
 /// What the renderer needs to mount a project's canvas: it builds the iframe
 /// URL `<baseUrl>/canvas/<canvasId>/<canvasToken>/?embed=kiosk&ho=..&ms=<mountSeq>`
 /// itself. No `Debug`: the token must never reach a log line.
-#[derive(Clone, Serialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CanvasOpenInfo {
     pub canvas_id: String,
@@ -132,15 +132,17 @@ pub struct CanvasOpenInfo {
     pub mount_seq: u64,
     /// Canvases this open unloaded to stay under `canvas.max_mounted` (AD-26),
     /// each saved first. The renderer shows them as unloaded.
+    #[schemars(description = r#"Canvases this open unloaded to stay under the `canvas.max_mounted` limit, each saved first. Show them as unloaded."#)]
     pub evicted: Vec<Eviction>,
     /// [`CanvasBundleBase::fallback_fonts`].
+    #[schemars(description = r#"Font URLs, relative to the bundle page, for `host.fallbackFonts`. Only the desktop app serves any; elsewhere the list is empty."#)]
     pub fallback_fonts: Vec<String>,
 }
 
 /// What a renderer's open carries besides the document: the one shape both
 /// transports accept, `canvas_open`'s `request` argument and the rest of
 /// `POST /canvas/open`'s body. Every setting is optional; the host clamps it.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenRequest {
     /// The opening window or tab; it gets the lease.

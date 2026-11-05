@@ -1,6 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ConnectionStatusIndicator } from '@/components/ConnectionStatusIndicator'
 import { findVisibleQuestionFocusTarget } from '@/components/chat/use-approval-dock'
 import {
   Camera,
@@ -8,13 +7,15 @@ import {
   FileCode,
   FolderGit2,
   FolderTree,
+  Github,
   History,
   MessageSquare,
   Plus,
   Search,
   Settings,
   TerminalSquare,
-  type TermulIcon
+  type TermulIcon,
+  Workflow
 } from '@/components/icons'
 import { ProjectIcon } from '@/components/ProjectIcon'
 import { TermulMark } from '@/components/TermulMark'
@@ -47,6 +48,7 @@ import { useActiveProject } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useWorktreePick } from '@/stores/shell-layout-store'
 import { MobileDrawerSectionList } from './MobileDrawerSectionList'
+import { MobileGithubSection } from './MobileGithubSection'
 import { MobileRecentsList } from './MobileRecentsList'
 
 /** Id of the shell header's `h1`: where a navigation hands focus. Without it the opener wins. */
@@ -79,25 +81,43 @@ const resolveNavigationFocus = (): HTMLElement | null => {
   return document.getElementById(SHELL_TITLE_ID)
 }
 
-/** The drawer's section nav rows, Claude-app style, at the top of the drawer. */
-const SECTION_NAV: ReadonlyArray<{ section: MobileSection; label: string; Icon: TermulIcon }> = [
+/** The drawer's section tabs: four equal icon tabs, each labelled for screen readers. */
+const SECTION_NAV: ReadonlyArray<{
+  section: MobileSection
+  label: string
+  Icon: TermulIcon
+}> = [
   { section: 'chats', label: 'Chats', Icon: MessageSquare },
   { section: 'terminals', label: 'Terminals', Icon: TerminalSquare },
-  { section: 'editors', label: 'Editors', Icon: FileCode }
+  { section: 'editors', label: 'Editors', Icon: FileCode },
+  { section: 'github', label: 'GitHub', Icon: Github }
 ]
+
+/** The footer's icon buttons share the row's width evenly (never under 44px), so the row has no dead gap. */
+const FOOTER_ICON_CLASS = 'h-11 min-w-11 flex-1 rounded-lg'
 
 /**
  * The footer's primary pill (New chat / New terminal / Browse files): a
- * compact 36px pill, its ::after hit-slop keeping the tappable area at 44px.
+ * compact 36px pill at the row's end, its ::after hit-slop keeping the
+ * tappable area at 44px. On a narrow drawer (or enlarged text) it is what
+ * gives way: it shrinks and truncates its label, the icons keep 44px.
  */
 const FOOTER_PILL_CLASS =
-  "relative min-w-0 gap-1.5 rounded-full px-3.5 text-sm after:absolute after:-inset-1 after:content-['']"
+  "relative ml-1 min-w-0 gap-1.5 rounded-full px-3.5 text-sm after:absolute after:-inset-1 after:content-['']"
 
-/** The drawer's list heading for each section. */
+/** The list's accessible name per section; on screen the selected section tab marks the list. */
 const SECTION_HEADINGS: Record<MobileSection, string> = {
   chats: 'Recents',
   terminals: 'Terminals',
-  editors: 'Editors'
+  editors: 'Editors',
+  github: 'Issues and pull requests'
+}
+
+interface FooterAction {
+  label: string
+  Icon: TermulIcon
+  disabled: boolean
+  onClick: () => void
 }
 
 interface MobileShellDrawerProps {
@@ -126,6 +146,8 @@ interface MobileShellDrawerProps {
   onCloseEditorTab?: (filePath: string) => boolean
   /** Opens a git history tab in the active pane (desktop entry mirrors this). */
   onOpenGitHistory?: () => void
+  /** Opens the active project's Automations tab. */
+  onOpenAutomations?: () => void
   /** Opens the project sheet (web only). */
   onOpenProjects: () => void
   /** Opens the Files sheet: the Editors section's Browse files (web only). */
@@ -202,9 +224,9 @@ function DrawerProjectRow({
  * (Chats with the attention badge, Terminals, Editors; a tap switches the list
  * without closing), project row, search, then one scrolling list for the chosen
  * section (Chats: Recents, open chats merged into history; Terminals; Editors;
- * the active tab's section is preselected on open) and a pinned footer
- * (Settings, Snapshots, Git history, connection status, and the section's
- * primary pill: New chat, New terminal or Browse files). It owns where focus
+ * the active tab's section is preselected on open) and a pinned footer row
+ * (Settings, Snapshots, Git history and Automations spread evenly, then the
+ * section's primary pill: New chat, New terminal or Browse files). It owns where focus
  * lands when it opens and closes; the shell owns the open state and records
  * the opener.
  */
@@ -222,6 +244,7 @@ export function MobileShellDrawer({
   onRenameTerminal,
   onCloseEditorTab,
   onOpenGitHistory,
+  onOpenAutomations,
   onOpenProjects,
   onOpenFiles
 }: MobileShellDrawerProps): React.JSX.Element {
@@ -275,6 +298,40 @@ export function MobileShellDrawer({
     cancelFocusReturnRef.current?.()
     cancelFocusReturnRef.current = returnFocusAfterConfirm(restoreFocus)
   }
+
+  // The section's primary pill at the footer's end; the GitHub section has none.
+  const primaryAction: FooterAction | null =
+    listSection === 'chats'
+      ? {
+          label: 'New chat',
+          Icon: Plus,
+          disabled: !canNewChat,
+          onClick: () => {
+            closeForHandoff()
+            onNewChat()
+          }
+        }
+      : listSection === 'terminals'
+        ? {
+            label: 'New terminal',
+            Icon: Plus,
+            disabled: !onNewTerminal,
+            onClick: () => {
+              closeForNavigation()
+              onNewTerminal?.()
+            }
+          }
+        : listSection === 'editors'
+          ? {
+              label: 'Browse files',
+              Icon: FolderTree,
+              disabled: !onOpenFiles,
+              onClick: () => {
+                closeForHandoff()
+                onOpenFiles?.()
+              }
+            }
+          : null
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -335,7 +392,7 @@ export function MobileShellDrawer({
             )}
           </div>
           <SheetDescription className="sr-only">
-            Browse and open chats, terminals and editors
+            Browse and open chats, terminals, editors and GitHub issues
           </SheetDescription>
         </SheetHeader>
 
@@ -356,30 +413,32 @@ export function MobileShellDrawer({
                   }
                   onClick={() => setListSection(item)}
                   className={cn(
-                    'flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full px-2 text-sm outline-none transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                    'flex min-h-11 min-w-0 flex-1 items-center justify-center rounded-full outline-none transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring',
                     isCurrent
-                      ? 'bg-background font-medium text-foreground shadow-sm'
+                      ? 'bg-background text-foreground shadow-sm'
                       : 'text-muted-foreground hover:text-foreground'
                   )}
                 >
-                  <Icon size={16} aria-hidden="true" className="shrink-0" />
-                  <span className="min-w-0 truncate">{label}</span>
-                  {badge > 0 && (
-                    <CountBadge
-                      count={badge}
-                      max={9}
-                      data-testid="drawer-attention-badge"
-                      className="h-4 min-w-4 shrink-0 text-3xs"
-                    />
-                  )}
+                  <span className="relative flex">
+                    <Icon size={18} aria-hidden="true" />
+                    {badge > 0 && (
+                      <CountBadge
+                        count={badge}
+                        max={9}
+                        data-testid="drawer-attention-badge"
+                        className="absolute -right-2.5 -top-2 h-4 min-w-4 text-3xs"
+                      />
+                    )}
+                  </span>
+                  <span className="sr-only">{label}</span>
                 </button>
               )
             })}
           </div>
         </nav>
 
-        <div className="flex shrink-0 flex-col gap-2 px-2 pb-2">
-          {listSection === 'chats' && (
+        {listSection === 'chats' && (
+          <div className="shrink-0 px-2 pb-2">
             <div className="relative">
               <label htmlFor={searchId} className="sr-only">
                 Search chats
@@ -396,15 +455,15 @@ export function MobileShellDrawer({
                 className={`min-h-11 w-full rounded-full bg-secondary py-1 pl-8 pr-3 text-base text-foreground placeholder:text-muted-foreground ${FOCUS_RING_CLASS}`}
               />
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <h2
-            id={listHeadingId}
-            tabIndex={-1}
-            className="px-4 pb-1 pt-2 text-sm font-medium text-muted-foreground outline-none"
-          >
+        {/* A column, so a section's empty message can take the free height and centre in it. */}
+        <div
+          ref={scrollRef}
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
+        >
+          <h2 id={listHeadingId} tabIndex={-1} className="sr-only">
             {SECTION_HEADINGS[listSection]}
           </h2>
           {listSection === 'chats' ? (
@@ -416,53 +475,56 @@ export function MobileShellDrawer({
               onNavigate={closeForNavigation}
             />
           ) : (
-            <MobileDrawerSectionList
-              section={listSection}
-              headingId={listHeadingId}
-              activeTabId={activeTabId}
-              onNavigate={closeForNavigation}
-              onCloseTerminal={onCloseTerminal}
-              onRenameTerminal={onRenameTerminal}
-              onCloseEditorTab={onCloseEditorTab}
-              onConfirmOpened={onConfirmOpened}
-            />
+            <>
+              <MobileDrawerSectionList
+                section={listSection}
+                headingId={listHeadingId}
+                activeTabId={activeTabId}
+                onNavigate={closeForNavigation}
+                onCloseTerminal={onCloseTerminal}
+                onRenameTerminal={onRenameTerminal}
+                onCloseEditorTab={onCloseEditorTab}
+                onConfirmOpened={onConfirmOpened}
+              />
+              {listSection === 'github' && <MobileGithubSection onNavigate={closeForNavigation} />}
+            </>
           )}
         </div>
 
-        <div className="shrink-0 border-t border-border/60 px-2 pt-2.5 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-          <div className="flex min-w-0 items-center gap-1">
+        <div className="shrink-0 border-t border-border/60 px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          <div className="flex min-w-0 items-center">
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="size-11 shrink-0"
+              className={FOOTER_ICON_CLASS}
               aria-label="Settings"
               onClick={() => {
                 closeForHandoff()
                 useSettingsModalStore.getState().openApp()
               }}
             >
-              <Settings size={16} />
+              <Settings size={18} />
             </Button>
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="size-11 shrink-0"
+              className={FOOTER_ICON_CLASS}
               aria-label="Snapshots"
               onClick={() => {
                 closeForNavigation()
                 navigate('/snapshots')
               }}
             >
-              <Camera size={16} />
+              <Camera size={18} />
             </Button>
             {!isTauriContext() && onOpenGitHistory && (
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="size-11 shrink-0"
+                className={FOOTER_ICON_CLASS}
                 aria-label="Git history"
                 disabled={!activeProject?.path}
                 onClick={() => {
@@ -470,59 +532,36 @@ export function MobileShellDrawer({
                   onOpenGitHistory()
                 }}
               >
-                <History size={16} />
+                <History size={18} />
               </Button>
             )}
-            <div className="ml-auto flex min-w-0 shrink items-center">
-              {listSection === 'chats' && (
-                <Button
-                  type="button"
-                  size="sm"
-                  className={FOOTER_PILL_CLASS}
-                  disabled={!canNewChat}
-                  onClick={() => {
-                    closeForHandoff()
-                    onNewChat()
-                  }}
-                >
-                  <Plus size={14} />
-                  New chat
-                </Button>
-              )}
-              {listSection === 'terminals' && (
-                <Button
-                  type="button"
-                  size="sm"
-                  className={FOOTER_PILL_CLASS}
-                  disabled={!onNewTerminal}
-                  onClick={() => {
-                    closeForNavigation()
-                    onNewTerminal?.()
-                  }}
-                >
-                  <Plus size={14} />
-                  New terminal
-                </Button>
-              )}
-              {listSection === 'editors' && (
-                <Button
-                  type="button"
-                  size="sm"
-                  className={FOOTER_PILL_CLASS}
-                  disabled={!onOpenFiles}
-                  onClick={() => {
-                    closeForHandoff()
-                    onOpenFiles?.()
-                  }}
-                >
-                  <FolderTree size={14} />
-                  Browse files
-                </Button>
-              )}
-            </div>
-          </div>
-          <div className="px-3 pb-1">
-            <ConnectionStatusIndicator showLabel />
+            {onOpenAutomations && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className={FOOTER_ICON_CLASS}
+                aria-label="Automations"
+                onClick={() => {
+                  closeForNavigation()
+                  onOpenAutomations()
+                }}
+              >
+                <Workflow size={18} />
+              </Button>
+            )}
+            {primaryAction && (
+              <Button
+                type="button"
+                size="sm"
+                className={FOOTER_PILL_CLASS}
+                disabled={primaryAction.disabled}
+                onClick={primaryAction.onClick}
+              >
+                <primaryAction.Icon size={14} />
+                <span className="truncate">{primaryAction.label}</span>
+              </Button>
+            )}
           </div>
         </div>
       </SheetContent>

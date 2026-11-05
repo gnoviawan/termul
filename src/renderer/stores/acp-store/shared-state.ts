@@ -5,7 +5,6 @@
  * Package-internal: index.ts re-exports only the public names.
  */
 
-import { type PersistedComposerOptions, PersistenceKeys } from '@shared/types/persistence.types'
 import type { WsAgentSummary } from '@shared/types/web-protocol.types'
 import { sessionModelSnapshot } from '@/components/chat/chat-input-bar-config'
 import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
@@ -20,7 +19,6 @@ import {
   isClaudeAccountSignedOutError,
   isDefiniteSpawnRejection
 } from '@/lib/agents/acp-spawn-errors'
-import { persistenceApi } from '@/lib/api'
 import { __resetCommandEngineForTesting } from '@/lib/command-engine'
 import { __clearCommandJournalForTesting } from '@/lib/command-journal'
 import { projectForCwd, resolveAgentSpawnEnv } from '@/lib/env-parser'
@@ -35,8 +33,15 @@ import {
   isDetachedReuseKey,
   parseReuseKey
 } from '../acp-reuse-keys'
+import { _resetComposerSessionsForTesting } from './composer-options'
 import { ephemeralSessionIds } from './ephemeral-ids'
-import { isReusableStatus, SWITCH_SPLICE_ID_PREFIX, type SwitchMarkerFacts } from './helpers'
+import {
+  isReusableStatus,
+  keepCreatedAt,
+  SWITCH_SPLICE_ID_PREFIX,
+  type SwitchMarkerFacts
+} from './helpers'
+import { _resetRegistryMcpFingerprintsForTesting } from './registry-mcp-fingerprints'
 import type { AcpSession, AcpState, ChatMessage, CommitMessageCollector } from './types'
 
 export { ephemeralSessionIds }
@@ -204,8 +209,11 @@ export function persistSession(
   const reuseKey = Object.keys(state.configToLiveAgent).find(
     (k) => state.configToLiveAgent[k] === session.agentId
   )
-  const agentConfigId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
   const existingEntry = state.sessionIndex.find((e) => e.id === sessionId)
+  // Once the agent leaves the live map (idle reap, kill, close) the
+  // chat still ran with the same config: keep the row's attribution so the
+  // list keeps its agent icon instead of falling back to Bot.
+  const agentConfigId = reuseKey ? configIdFromReuseKey(reuseKey) : existingEntry?.agentConfigId
   // Keep a placeholder stable once assigned: reuse the existing index title
   // (including a prior `Untitled Chat N`) instead of regenerating one on every
   // persist. `rebaseUntitledCounter` keeps fresh numbers from colliding.
@@ -223,7 +231,7 @@ export function persistSession(
     title: session.title ?? deriveTitle(liveMessages, fallbackTitle),
     cwd: session.cwd,
     projectId: session.projectId,
-    createdAt: session.createdAt,
+    createdAt: keepCreatedAt(existingEntry?.createdAt, session.createdAt),
     lastActivityAt: Date.now(),
     messageCount: ownMessages.length,
     lastSeq: ownMessages.reduce(
@@ -395,6 +403,7 @@ function spawnSignature(
 export function _resetDefiniteSpawnRejectionsForTesting(): void {
   definiteSpawnRejections.clear()
   liveAgentSignatures.clear()
+  _resetRegistryMcpFingerprintsForTesting()
   credentialEpochs.clear()
 }
 
@@ -408,63 +417,7 @@ export function _resetInFlightPreparedForTesting(): void {
   pendingWarmAgents.clear()
 }
 
-/**
- * Persist composer selections (model/mode/config) per agent-config-id via
- * `persistenceApi` (debounced). Called from the store setters so running-chatbox
- * selection changes are captured regardless of which surface triggered them.
- * Merges the patch into the existing record (not a full overwrite) so a
- * single-field change (e.g. config) doesn't wipe the persisted model. Skips
- * ephemeral/warm-pool sessions so agent defaults don't overwrite the user's
- * real last selection. Best-effort — a persistence failure logs a warn and
- * does not throw (the selection still applied to the live session).
- *
- * ## Concurrency: per-key serialization
- *
- * Each call does read-merge-write. Without serialization, two concurrent
- * calls (e.g. setModel + setMode firing in the same tick) can both read the
- * same prior record, then the second write overwrites the first's field. The
- * `composerOptionQueues` map chains promises per key so each patch reads the
- * latest in-flight record immediately before writing.
- */
-export const composerOptionQueues = new Map<string, Promise<void>>()
-
-export function persistComposerOptions(
-  configId: string,
-  patch: PersistedComposerOptions,
-  sessionId?: SessionId
-): void {
-  if (sessionId && ephemeralSessionIds.has(sessionId)) return
-  const key = PersistenceKeys.lastComposerOptions(configId)
-  const prev = composerOptionQueues.get(key) ?? Promise.resolve()
-  const next = prev.then(async () => {
-    const result = await persistenceApi.read<PersistedComposerOptions>(key)
-    const existing = result.success ? (result.data ?? {}) : {}
-    const merged: PersistedComposerOptions = { ...existing, ...patch }
-    // Deep-merge configValues so a single config change doesn't wipe
-    // sibling config values persisted from a prior selection.
-    if (existing.configValues && patch.configValues) {
-      merged.configValues = { ...existing.configValues, ...patch.configValues }
-    }
-    // Drop undefined values so the record stays compact and absent fields
-    // mean "use agent default" (not "explicitly unset to undefined").
-    for (const k of Object.keys(merged) as (keyof PersistedComposerOptions)[]) {
-      if (merged[k] === undefined) delete merged[k]
-    }
-    await persistenceApi.writeDebounced(key, merged)
-  })
-  composerOptionQueues.set(key, next)
-  next.catch((err) => {
-    void logFrontendError({
-      level: 'warn',
-      source: 'acp-store.persistComposerOptions',
-      message: `persist failed for ${configId}: ${err instanceof Error ? err.message : String(err)}`
-    })
-  })
-  // Clean up the queue entry once settled to avoid unbounded growth.
-  next.finally(() => {
-    if (composerOptionQueues.get(key) === next) composerOptionQueues.delete(key)
-  })
-}
+export { composerOptionQueues, persistComposerOptions } from './composer-options'
 
 /**
  * Session ids created via `createSession({ ephemeral: true })` (warm-pool seeds)
@@ -560,6 +513,7 @@ export function rejectBugReportCollector(sessionId: SessionId, reason: string): 
 /** Test-only: clear the ephemeral-session tracking set between tests. */
 export function _resetEphemeralSessionIdsForTesting(): void {
   ephemeralSessionIds.clear()
+  _resetComposerSessionsForTesting()
   commitMessageCollectors.clear()
   bugReportCollectors.clear()
 }
@@ -604,6 +558,25 @@ export const activeWirePromptTurns = new Map<SessionId, string>()
  * `activeWirePromptTurns` delete so it stays bounded.
  */
 export const echoedWirePromptTurns = new Map<SessionId, string>()
+
+/**
+ * Queue resends for sessions whose prompt the host rejected as busy while this
+ * client saw no turn running: another client's reopen holds the host's turn
+ * gate, and no turn end will reach this client to flush the queue. Cleared on
+ * the session's next dispatched prompt.
+ */
+export const busyQueueRetries = new Map<
+  SessionId,
+  { attempts: number; timer: ReturnType<typeof setTimeout> | null }
+>()
+
+/** Test-only: cancel pending busy-queue resends. */
+export function _resetBusyQueueRetriesForTesting(): void {
+  for (const retry of busyQueueRetries.values()) {
+    if (retry.timer) clearTimeout(retry.timer)
+  }
+  busyQueueRetries.clear()
+}
 
 const ENDED_PROMPT_TURN_LIMIT = 256
 const endedPromptTurnIds = new Set<string>()
@@ -707,7 +680,7 @@ export async function adoptHostOwnedAgent(
   configId: string,
   cwd: string,
   options?: { allowDesktop?: boolean; isCurrent?: () => boolean; projectId?: string | null }
-): Promise<{ adopted: AgentId | null; listingTrusted: boolean }> {
+): Promise<{ adopted: AgentId | null; listingTrusted: boolean; working?: boolean }> {
   const trimmedCwd = cwd.trim()
   if ((!options?.allowDesktop && isTauriContext()) || trimmedCwd.length === 0) {
     return { adopted: null, listingTrusted: false }
@@ -765,7 +738,11 @@ export async function adoptHostOwnedAgent(
         ? { ...s.configToLiveAgent, [reuseKey]: match.id }
         : s.configToLiveAgent
   }))
-  return { adopted: match.id, listingTrusted: true }
+  return {
+    adopted: match.id,
+    listingTrusted: true,
+    working: match.workingSessions?.includes(sessionId) === true
+  }
 }
 
 export type EnsureLiveAgentOptions = {

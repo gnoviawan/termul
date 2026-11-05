@@ -31,11 +31,13 @@ use crate::web::git_api;
 use crate::web::git_diff_stat_api;
 use crate::web::git_history_api;
 use crate::web::git_hunk_api;
+use crate::web::github_api;
 use crate::web::install_api;
 use crate::web::log_api;
 use crate::web::mcp_oauth_api;
 use crate::web::mcp_probe_api;
 use crate::web::mcp_servers_api;
+use crate::web::openapi;
 use crate::web::host_allow::{self, HostAllowList};
 use crate::web::origin::{self, OriginPolicy};
 use crate::web::project_icon_api;
@@ -43,6 +45,7 @@ use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
 use crate::web::route_deadline;
 use crate::web::search_api;
+use crate::web::server_config_file::ServerAdminContext;
 use crate::web::sink::WsRelaySink;
 use crate::web::skills_api;
 use crate::web::store::WebStore;
@@ -54,10 +57,13 @@ use crate::web::ws::{ws_upgrade, AppState, HistoryMode};
 use super::assets;
 
 mod gate;
-mod host_routes;
+pub(crate) mod host_routes;
+pub(crate) mod server_config;
 
 use gate::maybe_gate_api;
+pub(crate) use gate::requires_token;
 use host_routes::{agent_idle_window, health_check, set_agent_idle_window};
+use server_config::{server_config_get, server_config_post};
 
 /// The desktop host pieces a local (in-process) relay connection needs: what
 /// `lib.rs` already built for the Tauri app, shared with every carrier.
@@ -108,6 +114,9 @@ impl AppState {
             )),
             oauth_base_url: "http://127.0.0.1".to_string(),
             web_auth: None,
+            // The desktop's in-process channel state never carries the
+            // standalone server's reconfigure context (gh-1105).
+            server_admin: None,
             connections: ConnectionRuntime::default(),
         }
     }
@@ -150,6 +159,11 @@ impl AppState {
 ///
 /// `host_allow` names the `Host` values this listener serves beyond IP
 /// literals and `localhost`; it is checked before anything else.
+///
+/// `server_admin` is `Some` only on the standalone `termul-server`
+/// (gh-1105): it registers the `/server/config` reconfigure routes and turns
+/// the `/health` `setupRequired` flag into a real probe. `None` (the desktop
+/// shared-live host and the in-process channel state) keeps both off.
 #[allow(clippy::too_many_arguments)]
 pub fn router(
     acp: Arc<AcpManager>,
@@ -171,9 +185,12 @@ pub fn router(
     allowed_origins: OriginPolicy,
     host_allow: HostAllowList,
     connections: ConnectionRuntime,
+    server_admin: Option<ServerAdminContext>,
 ) -> Router {
     let r = Router::new()
         .route("/health", get(health_check))
+        // This API's own OpenAPI 3.1 description (`web::openapi`).
+        .route("/openapi.json", get(openapi::serve_json))
         .route(
             "/host/agent-idle-window",
             get(agent_idle_window).post(set_agent_idle_window),
@@ -230,6 +247,7 @@ pub fn router(
         .route("/fs/ls", get(fs_api::ls))
         .route("/fs/browse", get(fs_api::browse))
         .route("/fs/read", get(fs_api::read))
+        .route("/fs/raw", get(fs_api::raw))
         .route("/fs/info", get(fs_api::info))
         .route("/fs/delete", post(fs_api::delete))
         .route("/fs/rename", post(fs_api::rename))
@@ -268,6 +286,20 @@ pub fn router(
         .route("/git/branch-list", get(git_api::branch_list))
         .route("/git/branch-switch", post(git_api::branch_switch))
         .route("/git/diff-stat", post(git_diff_stat_api::get_diff_stat))
+        // GitHub issues & PRs (spec-github-integration); twins of the
+        // desktop `github_*` commands over the shared `GithubService`.
+        .route("/github/context", post(github_api::context))
+        .route("/github/items", post(github_api::list_items))
+        .route("/github/item", post(github_api::get_item))
+        .route("/github/checks", post(github_api::get_checks))
+        .route("/github/check-log", post(github_api::get_check_log))
+        .route("/github/merge", post(github_api::merge))
+        .route("/github/comment", post(github_api::comment))
+        .route("/github/checkout-pr", post(github_api::checkout_pr))
+        .route("/github/repo-meta", post(github_api::repo_meta))
+        .route("/github/create-label", post(github_api::create_label))
+        .route("/github/edit-item", post(github_api::edit_item))
+        .route("/github/item-state", post(github_api::set_item_state))
         // Project icon resolution (spec-project-icon). Mirrors the desktop
         // `project_icon_resolve` command — same shared resolver, read-route
         // posture (boundary check, no write guard).
@@ -308,6 +340,13 @@ pub fn router(
         // MCP catalog search (spine AD-1), a read open to every connected
         // client; see `web/mcp_catalog_api.rs`.
         .route("/mcp-catalog/search", get(mcp_catalog_api::search))
+        .route("/mcp-catalog/install/form", mcp_catalog_api::install_route(mcp_catalog_api::describe_install))
+        .route("/mcp-catalog/install/plan", mcp_catalog_api::install_route(mcp_catalog_api::plan_install))
+        .route("/mcp-catalog/install/commit", mcp_catalog_api::install_route(mcp_catalog_api::commit_install))
+        .route("/mcp-catalog/install/cancel", mcp_catalog_api::install_route(mcp_catalog_api::cancel_install))
+        .route("/mcp-catalog/status", get(mcp_catalog_api::status))
+        .route("/mcp-catalog/sync", post(mcp_catalog_api::set_sync))
+        .route("/mcp-catalog/icon/{*name}", get(mcp_catalog_api::icon))
         // ACP install web route (CAP-6 / Story 9: verified-atomic install).
         // Mirrors the desktop `#[tauri::command] acp_install_agent` handler;
         // see `web/install_api.rs`. Registered AHEAD of the static fallback so
@@ -358,6 +397,16 @@ pub fn router(
                 },
             },
         ))
+        .merge(crate::web::automation_api::automation_router(
+            crate::web::automation_api::AutomationRouteState {
+                service: crate::automation::service::installed(),
+                token_gated: web_auth.is_some(),
+                write_flags: crate::web::capabilities::WriteFlags {
+                    allow_remote_writes,
+                    shared_live_writes_denied,
+                },
+            },
+        ))
         // Canvas web routes: open/close/persistence (IpcBody) and the
         // same-origin /canvas/<id>/* bundle. Merged BEFORE the static fallback
         // so the SPA mount cannot shadow them. The API routes are bearer-gated
@@ -377,6 +426,16 @@ pub fn router(
                 },
             },
         ));
+    // gh-1105: normal-mode reconfigure — the standalone `termul-server`
+    // registers `GET|POST /server/config` only. The desktop shared-live host
+    // builds `AppState` with `server_admin: None`, so the route is never
+    // registered there (the handlers still 404 defensively on `None`).
+    if server_admin.is_some() {
+        // Keep the path string inline on this line — the drift-fence test
+        // (`every_registered_route_is_public_or_gated`) scans this file's
+        // source for route-registration literals.
+        r = r.route("/server/config", get(server_config_get).post(server_config_post));
+    }
     // Static fallback: disk ServeDir in dev (dist-web/ on disk) or the embedded
     // bundle in release. `/health` + `/ws` are registered above so the static
     // mount cannot shadow them (Story 1.3 AC1).
@@ -419,6 +478,7 @@ pub fn router(
         )),
         oauth_base_url,
         web_auth,
+        server_admin,
         connections,
     };
     // Origin check is the outer layer so `/ws` and `/terminal/ws` (public to
@@ -433,6 +493,9 @@ pub fn router(
 }
 
 /// Same as [`router`], but with an injectable static-root for unit tests.
+/// `server_admin` mirrors [`router`]'s last parameter: `Some` registers the
+/// `/server/config` reconfigure routes (standalone), `None` keeps them absent
+/// (desktop-style state).
 #[allow(clippy::too_many_arguments)]
 pub fn router_with_static(
     acp: Arc<AcpManager>,
@@ -444,6 +507,7 @@ pub fn router_with_static(
     shared_live_writes_denied: bool,
     web_auth: Option<Arc<WebAuth>>,
     allowed_origins: OriginPolicy,
+    server_admin: Option<ServerAdminContext>,
 ) -> Router {
     let r = Router::new()
         .route("/health", get(health_check))
@@ -465,6 +529,7 @@ pub fn router_with_static(
         .route("/fs/ls", get(fs_api::ls))
         .route("/fs/browse", get(fs_api::browse))
         .route("/fs/read", get(fs_api::read))
+        .route("/fs/raw", get(fs_api::raw))
         .route("/fs/info", get(fs_api::info))
         .route("/fs/delete", post(fs_api::delete))
         .route("/fs/rename", post(fs_api::rename))
@@ -499,6 +564,20 @@ pub fn router_with_static(
         .route("/git/branch-list", get(git_api::branch_list))
         .route("/git/branch-switch", post(git_api::branch_switch))
         .route("/git/diff-stat", post(git_diff_stat_api::get_diff_stat))
+        // GitHub issues & PRs (spec-github-integration); twins of the
+        // desktop `github_*` commands over the shared `GithubService`.
+        .route("/github/context", post(github_api::context))
+        .route("/github/items", post(github_api::list_items))
+        .route("/github/item", post(github_api::get_item))
+        .route("/github/checks", post(github_api::get_checks))
+        .route("/github/check-log", post(github_api::get_check_log))
+        .route("/github/merge", post(github_api::merge))
+        .route("/github/comment", post(github_api::comment))
+        .route("/github/checkout-pr", post(github_api::checkout_pr))
+        .route("/github/repo-meta", post(github_api::repo_meta))
+        .route("/github/create-label", post(github_api::create_label))
+        .route("/github/edit-item", post(github_api::edit_item))
+        .route("/github/item-state", post(github_api::set_item_state))
         .route("/project/icon", post(project_icon_api::resolve_icon))
         .route("/search/rg-info", get(search_api::rg_info))
         .route("/search/content", post(search_api::content))
@@ -514,6 +593,13 @@ pub fn router_with_static(
         .route("/acp/catalog", get(catalog_api::list))
         .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
         .route("/mcp-catalog/search", get(mcp_catalog_api::search))
+        .route("/mcp-catalog/install/form", mcp_catalog_api::install_route(mcp_catalog_api::describe_install))
+        .route("/mcp-catalog/install/plan", mcp_catalog_api::install_route(mcp_catalog_api::plan_install))
+        .route("/mcp-catalog/install/commit", mcp_catalog_api::install_route(mcp_catalog_api::commit_install))
+        .route("/mcp-catalog/install/cancel", mcp_catalog_api::install_route(mcp_catalog_api::cancel_install))
+        .route("/mcp-catalog/status", get(mcp_catalog_api::status))
+        .route("/mcp-catalog/sync", post(mcp_catalog_api::set_sync))
+        .route("/mcp-catalog/icon/{*name}", get(mcp_catalog_api::icon))
         .route("/acp/install", post(install_api::install))
         .route("/worktree/list", post(worktree_api::list))
         .route("/worktree/create", post(worktree_api::create))
@@ -538,10 +624,20 @@ pub fn router_with_static(
         );
     // Canvas routes parity (test/dev variant): the boundary is wired so
     // open's doc-path validation behavior matches production.
-    let r = r
+    let mut r = r
         .merge(crate::web::browser_policy_api::browser_policy_router(
             crate::web::browser_policy_api::PolicyRouteState {
                 service: crate::acp::browser_policy::installed(),
+                token_gated: web_auth.is_some(),
+                write_flags: crate::web::capabilities::WriteFlags {
+                    allow_remote_writes,
+                    shared_live_writes_denied,
+                },
+            },
+        ))
+        .merge(crate::web::automation_api::automation_router(
+            crate::web::automation_api::AutomationRouteState {
+                service: crate::automation::service::installed(),
                 token_gated: web_auth.is_some(),
                 write_flags: crate::web::capabilities::WriteFlags {
                     allow_remote_writes,
@@ -559,8 +655,13 @@ pub fn router_with_static(
                     shared_live_writes_denied,
                 },
             },
-        ))
-        .fallback_service(assets::static_service_from(static_dir));
+        ));
+    // Parity with `router`: the standalone `/server/config` reconfigure routes
+    // register only when a `ServerAdminContext` is present (gh-1105).
+    if server_admin.is_some() {
+        r = r.route("/server/config", get(server_config_get).post(server_config_post));
+    }
+    let r = r.fallback_service(assets::static_service_from(static_dir));
     // PWA parity with `router`: mark the unversioned shell/PWA files no-cache
     // so the disk-served bundle doesn't stall SW updates (same layer).
     let r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
@@ -596,6 +697,7 @@ pub fn router_with_static(
             )),
             oauth_base_url: "http://127.0.0.1".to_string(),
             web_auth,
+            server_admin,
             connections: ConnectionRuntime::default(),
         }
     })

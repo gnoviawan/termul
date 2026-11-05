@@ -37,7 +37,6 @@ import { serializeSelectionContexts } from '@/lib/composer/selection-context'
 import { logFrontendError } from '@/lib/log-api'
 import { sanitizeDisplayText } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { useProjectStore } from '@/stores/project-store'
 import {
   agentChatTabId,
@@ -94,7 +93,13 @@ import {
   selectLaunchRecoverySessions,
   takeDroppedLaunchPlaceholders
 } from '../live-turn'
+import { recordRegistryMcpServers } from '../registry-mcp-fingerprints'
 import { liveSiblingCount, reloadInFlight } from '../reload-guard'
+import {
+  reopenedChatSelection,
+  resolveReopenControls,
+  restoreReopenedChatSelection
+} from '../session-controls'
 import {
   adoptHostOwnedAgent,
   beginSessionReopen,
@@ -118,6 +123,7 @@ import {
   terminalAssistCollectors
 } from '../shared-state'
 import { cancelRunningSubagents } from '../subagent-lifecycle'
+import { withSubagentIngest } from '../subagent-transcript'
 import {
   type AcpState,
   ChatLaunchCancelledError,
@@ -127,7 +133,13 @@ import {
   type TurnEndSetter
 } from '../types'
 import { authenticatedAgents, evictAgentForTransport, withAuthRetry } from './agent'
-import { flushNextQueuedPrompt, runPromptTurn } from './prompt'
+import {
+  agentWorkingReportSeq,
+  flushNextQueuedPrompt,
+  forgetAgentWorkingReports,
+  latestAgentWorkingReport,
+  runPromptTurn
+} from './prompt'
 import { loadFreshSourcePayload } from './switch-seam'
 import {
   dropSessionBookkeeping,
@@ -157,6 +169,11 @@ function installableTranscript(
   return projectTranscript(payload, options)
 }
 
+/** Restored tool calls with their subagent records lifted, as live ingest does. */
+function restoredTimelineCalls(payload: SessionPayload): ToolCall[] {
+  return restoredToolCalls(payload).map(withSubagentIngest)
+}
+
 /**
  * The projection half of {@link installableTranscript}. A switch splice reads
  * its source sessions with this and records their watermarks only once the
@@ -171,7 +188,7 @@ function projectTranscript(
       // A tail window can cut through a switch turn — boundary rows only
       // carry meaning for the turn partition, never render standalone.
       messages: normalizeUserMessages(payload.messages).filter((m) => m.handoffBoundary !== true),
-      toolCalls: restoredToolCalls(payload),
+      toolCalls: restoredTimelineCalls(payload),
       switches: restoredSwitches(payload)
     }
   }
@@ -182,7 +199,7 @@ function projectTranscript(
       : normalizeUserMessages(visible)
   return {
     messages,
-    toolCalls: dropHiddenToolCalls(restoredToolCalls(payload), messages, hidden),
+    toolCalls: dropHiddenToolCalls(restoredTimelineCalls(payload), messages, hidden),
     switches: restoredSwitches(payload)
   }
 }
@@ -410,6 +427,10 @@ export function evictClosedSessionTranscript(
   if (get().sessions[sessionId]?.status !== 'closed') return
   if (isAgentChatTabOpen(sessionId)) return
   set((s) => dropSessionTranscriptState(s, sessionId))
+}
+
+export function historyOpenInFlight(sessionId: SessionId): Promise<void> | undefined {
+  return inFlightHistoryOpens.get(sessionId)?.promise
 }
 
 export function _resetInFlightHistoryOpensForTesting(): void {
@@ -772,9 +793,27 @@ async function openHistorySessionInner(
     return true
   }
 
-  // Preserve controls already held by a cached closed session. Persisted
-  // history does not contain them, and optional reopen fields may be omitted.
-  const existingControls = captureReopenControlBaseline(get().sessions, id)
+  const controls = resolveReopenControls(
+    id,
+    captureReopenControlBaseline(get().sessions, id),
+    payload
+  )
+  // Q2: the chat comes back on its own last model and values, not the
+  // agent-wide last pick (restoreReopenedChatSelection marks it so the
+  // agent-wide reapply skips it).
+  const ownSelection = reopenedChatSelection(controls)
+  // Awaited before the open settles: prompts typed meanwhile stay queued and
+  // flush on the chat's own model and values, not the agent's defaults.
+  const restoreOwnSelection = async (): Promise<void> => {
+    if (!ownSelection || !isCurrentSessionReopen(id, reopenGeneration)) return
+    await restoreReopenedChatSelection(get, id, ownSelection).catch((err: unknown) => {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.reopenSelection',
+        message: `Could not restore the last model on reopened session ${id}: ${err instanceof Error ? err.message : String(err)}`
+      })
+    })
+  }
 
   // Register the session record + local transcript BEFORE any agent work, so
   // the pane shows the conversation instantly; the (possibly ~30s cold-spawn)
@@ -817,9 +856,7 @@ async function openHistorySessionInner(
         // connected to keep it running (dead turn).
         activeTurn: turnLive,
         openTurnId: turnLive ? openTurn : null,
-        modes: existingControls?.modes ?? null,
-        models: existingControls?.models ?? null,
-        configOptions: existingControls?.configOptions ?? [],
+        ...controls,
         ...restoredTurnError,
         createdAt: meta.createdAt,
         replaying: null,
@@ -949,6 +986,9 @@ async function openHistorySessionInner(
   // this gate exists to close. Desktop stays exempt: its host listing does
   // not model the same-process owner, so an empty result proves nothing.
   let ownerListingTrusted = false
+  // `agent_working` reports newer than this belong to the reopen's live agent
+  // and win over the listing (see `latestAgentWorkingReport`).
+  const reportSeqBeforeListing = agentWorkingReportSeq()
   // Guard both fields: `ensureLiveAgent` trims `cwd` (throws on undefined),
   // and a missing/empty cwd can't map to a live agent anyway — fall through
   // to read-only 'local' instead of throwing (spec: do not throw).
@@ -958,7 +998,7 @@ async function openHistorySessionInner(
     // spawning — otherwise every reload spawns a duplicate agent and resumes
     // on it while the original keeps running. A live turn also adopts on
     // desktop (#882): spawning would race the owner the guard is protecting.
-    const { adopted, listingTrusted } = await adoptHostOwnedAgent(
+    const { adopted, listingTrusted, working } = await adoptHostOwnedAgent(
       set,
       id,
       meta.agentConfigId,
@@ -975,6 +1015,17 @@ async function openHistorySessionInner(
       liveAgentId = adopted
       turnOwnerConnected = true
     }
+    // The owner's listing says whether it works in this chat outside a prompt
+    // turn now; later changes arrive as `agent_working` events. A report from
+    // the owner during the listing round trip is newer than the listing.
+    const report = adopted ? latestAgentWorkingReport(id, adopted) : undefined
+    const reportIsNewer = report !== undefined && report.seq > reportSeqBeforeListing
+    const agentWorking = reportIsNewer ? report.working : Boolean(working)
+    set((s) => {
+      const session = s.sessions[id]
+      if (!session || Boolean(session.agentWorking) === agentWorking) return {}
+      return { sessions: { ...s.sessions, [id]: { ...session, agentWorking } } }
+    })
   }
   if (
     !options?.forceNewAgent &&
@@ -1142,6 +1193,9 @@ async function openHistorySessionInner(
   // `session/load` route to this session, and (for 'load') open the replay
   // window BEFORE the IPC is sent — replayed chunks stream in while the load
   // request is still in flight and must be accepted, not dropped.
+  const lateWorkingReport = latestAgentWorkingReport(id, liveAgentId)
+  const newerWorkingReport =
+    lateWorkingReport && lateWorkingReport.seq > reportSeqBeforeListing ? lateWorkingReport : null
   set((s) => {
     const session = s.sessions[id]
     if (!session) return {}
@@ -1151,6 +1205,9 @@ async function openHistorySessionInner(
         [id]: {
           ...session,
           agentId: liveAgentId,
+          // A report from the live agent that `_onAgentWorking` dropped while
+          // the chat still pointed at its persisted agent applies now.
+          agentWorking: newerWorkingReport ? newerWorkingReport.working : session.agentWorking,
           replaying:
             strategy === 'load'
               ? ('pending' as const)
@@ -1209,6 +1266,7 @@ async function openHistorySessionInner(
         }
       })
       scheduleReplayEnd(set, id, reopenGeneration)
+      await restoreOwnSelection()
     } catch (err) {
       // Deleted or superseded mid-load: do not restore transcript or surface a
       // resume error on the newer session incarnation.
@@ -1248,6 +1306,7 @@ async function openHistorySessionInner(
       mergeReopenOutcomeIfUnchanged(set, id, reopenGeneration, reopenBaseline, outcome)
       set((s) => ({ sessions: withSessionActive(s.sessions, id, keepRestoredError) }))
       scheduleReplayEnd(set, id, reopenGeneration)
+      await restoreOwnSelection()
       return
     } catch (err) {
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
@@ -1304,6 +1363,7 @@ async function openHistorySessionInner(
         }
       })
       scheduleReplayEnd(set, id, reopenGeneration)
+      await restoreOwnSelection()
     } catch (err) {
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
@@ -1588,6 +1648,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         })
       )
       const sessionId = outcome.sessionId
+      if (mcpServers === undefined) recordRegistryMcpServers(sessionId, sessionMcpServers)
       // AD-5/AD-6: a RESEND answered by the host's entity lookup (`lookup`) is a
       // receipt for a session an earlier, reply-lost attempt created. It carries
       // no modes/models/options, so it resolves the COMMAND only: the entity is
@@ -1634,6 +1695,9 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
               status: existing?.status === 'closed' ? 'closed' : 'active',
               title: existing?.title ?? null,
               activeTurn: existing?.activeTurn ?? false,
+              // An `agent_working` report can land between `session_created`
+              // and this reply; the rebuilt record keeps it.
+              agentWorking: latestAgentWorkingReport(sessionId, agentId)?.working ?? false,
               mcpServerCount: sessionMcpServers.length,
               openTurnId: existing?.openTurnId ?? null,
               ...addAdvertisedOptionsKeepingCurrent(
@@ -2071,6 +2135,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
 
   deleteHistorySession: async (id) => {
     invalidateSessionReopen(id)
+    forgetAgentWorkingReports(id)
     inFlightHistoryOpens.delete(id)
     inFlightDiscoveredOpens.delete(id)
     invalidateRestorePreload(set, id)
@@ -2127,8 +2192,6 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       // otherwise) so deleting a chat — e.g. an open failed launch — fully
       // discards it instead of leaving a locked-composer pane behind.
       useWorkspaceStore.getState().removeTab(agentChatTabId(id))
-      // A deleted chat can never be viewed again, so its Done flag goes with it.
-      useAgentChatUnreadStore.getState().clearUnread(id)
       // Reclaim any app-owned temp files staged for this session.
       void deleteSessionTempFiles(id)
     } catch {
@@ -2533,7 +2596,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     // cancel, so the flush below cannot restore the running state.
     flushCoalescedSync()
     set((s) => {
-      const toolCalls = cancelRunningSubagents(s.toolCalls, [e.sessionId], endedAt)
+      const toolCalls = cancelRunningSubagents(s, [e.sessionId], endedAt)
       return toolCalls === s.toolCalls ? {} : { toolCalls }
     })
     if (reloadInFlight.has(e.sessionId)) {

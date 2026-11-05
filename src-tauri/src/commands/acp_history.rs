@@ -221,6 +221,7 @@ pub async fn acp_history_delete(
     match &host.0 {
         Some(persistence) => match persistence.delete_session(&session_id).await {
             Ok(()) => {
+                ws_relay.inner().forget_chat_activity(&session_id);
                 crate::web::watch::publish_chat_history(ws_relay.inner(), &[session_id.as_str()]);
                 log::info!("[acp-history] delete success session_id={}", log_session_id);
                 Ok(IpcResult::success(true))
@@ -236,6 +237,7 @@ pub async fn acp_history_delete(
                     "[acp-history] delete not_found session_id={} (already absent)",
                     log_session_id
                 );
+                ws_relay.inner().forget_chat_activity(&session_id);
                 crate::web::watch::publish_chat_history(ws_relay.inner(), &[session_id.as_str()]);
                 Ok(IpcResult::success(false))
             }

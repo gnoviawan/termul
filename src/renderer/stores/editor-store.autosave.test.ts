@@ -28,6 +28,7 @@ function seedOpenFile(): void {
         {
           filePath: path,
           content: 'original',
+          kind: 'text',
           originalContent: 'original',
           isDirty: false,
           language: 'typescript',

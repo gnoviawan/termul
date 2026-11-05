@@ -17,7 +17,6 @@ import {
 import { useAgentChatStatusSignals } from '@/components/workspace/tabs/agent-chat-status'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { cn } from '@/lib/utils'
-import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
 import { type ChatCardData, modelLineOf } from './chat-cards'
 import type { ChatCardActions } from './use-chat-card-actions'
@@ -41,8 +40,8 @@ export interface ChatCardProps {
 /**
  * One chat in the Side panel Chats list: the title and the single status slot
  * on line 1, the agent icon, model and branch on line 2. The status
- * comes from the same signals and unread store as the chat tab, so the two
- * always agree.
+ * comes from the same host-owned signals as the chat tab, so the two always
+ * agree.
  */
 export function ChatCard({
   card,
@@ -54,7 +53,6 @@ export function ChatCard({
   const { entry, branch } = card
   const { startChatDrag } = usePaneDnd()
   const signals = useAgentChatStatusSignals(entry.id)
-  const unread = useAgentChatUnreadStore((s) => Boolean(s.unread[entry.id]))
   // A pane's only tab cannot be split off that same pane, so the menu item
   // would do nothing: disable it and say why.
   const soleTabOfActivePane = useWorkspaceStore((s) => {
@@ -68,7 +66,7 @@ export function ChatCard({
     ? 'needs-you'
     : signals.turnBusy
       ? 'running'
-      : signals.realChat && unread
+      : signals.unread
         ? 'done'
         : 'idle'
   const statusWord = STATUS_WORD[liveState]
@@ -101,7 +99,7 @@ export function ChatCard({
             title={entry.title}
             aria-label={statusWord ? `${entry.title}, ${statusWord}` : entry.title}
             aria-current={isActive ? 'true' : undefined}
-            className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg py-1.5 pl-2.5 pr-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg py-1.5 pl-2.5 pr-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
           >
             {/* Line 1 names the chat, line 2 is its metadata. */}
             <span className="flex min-w-0 items-center gap-2">
@@ -156,7 +154,7 @@ export function ChatCard({
               'relative inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground',
               "after:absolute after:-inset-1.5 after:content-['']",
               'transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground',
-              'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+              'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring',
               'pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 focus-visible:opacity-100',
               !hasCwd && 'cursor-not-allowed'
             )}

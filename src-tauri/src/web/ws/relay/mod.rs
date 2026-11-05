@@ -213,7 +213,9 @@ pub(super) async fn run_relay<S>(
         subscriptions,
     );
     let env = HandlerEnv::new(&state, out_tx.clone(), &conn);
-    let cleanup = cleanup.with_canvas_holder(state.acp.canvas_router(), env.connection_id.to_string());
+    let cleanup = cleanup
+        .with_canvas_holder(state.acp.canvas_router(), env.connection_id.to_string())
+        .with_install_plans(env.connection_id.to_string());
 
     // The executor lives here, not in the read loop: after the tasks are
     // aborted its in-flight handlers are aborted AND awaited, so none can
@@ -250,6 +252,9 @@ pub(super) struct ConnectionCleanup {
     /// The canvas router and this connection's holder id: the mounts it
     /// holds are released with the rest of the cleanup.
     canvas_holder: Option<(Arc<crate::acp::host_mcp::canvas::CanvasRouter>, String)>,
+    /// This connection's id: the MCP install plans it made are dropped
+    /// with the rest of the cleanup.
+    plan_owner: Option<String>,
     state: Arc<std::sync::atomic::AtomicU8>,
 }
 
@@ -263,6 +268,7 @@ impl ConnectionCleanup {
             subscriptions,
             watch_conn: None,
             canvas_holder: None,
+            plan_owner: None,
             state: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         }
     }
@@ -281,9 +287,18 @@ impl ConnectionCleanup {
         self
     }
 
-    /// Drop this connection's per-project fs watch, watch-hub subscriptions
-    /// and canvas mounts (sync; safe from `Drop` outside a runtime).
+    pub(super) fn with_install_plans(mut self, connection_id: String) -> Self {
+        self.plan_owner = Some(connection_id);
+        self
+    }
+
+    /// Drop this connection's per-project fs watch, watch-hub subscriptions,
+    /// canvas mounts and install plans (sync; safe from `Drop` outside a
+    /// runtime).
     fn release_watches(&self) {
+        if let Some(connection_id) = &self.plan_owner {
+            crate::mcp_catalog::McpCatalogService::forget_connection_plans(connection_id);
+        }
         if let Some(conn) = &self.watch_conn {
             self.relay.fs_watches().unsubscribe_all(conn);
             self.relay.watches().unsubscribe_all(conn);

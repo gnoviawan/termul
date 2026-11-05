@@ -24,11 +24,13 @@ import { EditorTab } from './EditorTab'
 import { NewTabMenu } from './NewTabMenu'
 import type { TabBulkMenuProps } from './tab-context-menu'
 import { AgentChatTabInline } from './tabs/agent-chat-tab'
+import { AutomationsTabInline } from './tabs/automations-tab'
 import { BrowserTabInline } from './tabs/browser-tab'
 import { CanvasTabInline } from './tabs/canvas-tab'
 import { CommitDiffTabInline, DiffTabInline } from './tabs/diff-tab'
 import { GitHistoryTabInline } from './tabs/git-history-tab'
 import { GitTabInline } from './tabs/git-tab'
+import { GithubItemTabInline } from './tabs/github-item-tab'
 import { TabPaneProvider } from './tabs/tab-chrome'
 import { computeTabPosition, TabListItem } from './tabs/tab-list-item'
 import { TerminalTabInline } from './tabs/terminal-tab'
@@ -486,6 +488,24 @@ export function WorkspaceTabBar({
                           onDragLeave={handleTabDragLeave}
                           onDrop={(e) => handleTabDrop(tab.id, e)}
                         />
+                      ) : tab.type === 'github-item' ? (
+                        <GithubItemTabInline
+                          tab={tab}
+                          isActive={tab.id === activeTabId}
+                          isDragging={dragging}
+                          isDropTarget={isTarget}
+                          dropPosition={position}
+                          bulkMenu={buildBulkMenuProps(tab)}
+                          onSelect={() => {
+                            setActiveTab(paneId, tab.id)
+                            setActivePane(paneId)
+                          }}
+                          onClose={() => closeTab(tab)}
+                          onDragStart={(e) => handleTabDragStart(tab.id, e)}
+                          onDragOver={(e) => handleTabDragOver(tab.id, e)}
+                          onDragLeave={handleTabDragLeave}
+                          onDrop={(e) => handleTabDrop(tab.id, e)}
+                        />
                       ) : tab.type === 'commit-diff' ? (
                         <CommitDiffTabInline
                           tab={tab}
@@ -550,6 +570,23 @@ export function WorkspaceTabBar({
                               docPath: string
                             }
                           }
+                          isActive={tab.id === activeTabId}
+                          isDragging={dragging}
+                          isDropTarget={isTarget}
+                          dropPosition={position}
+                          bulkMenu={buildBulkMenuProps(tab)}
+                          onSelect={() => {
+                            setActiveTab(paneId, tab.id)
+                            setActivePane(paneId)
+                          }}
+                          onClose={() => closeTab(tab)}
+                          onDragStart={(e) => handleTabDragStart(tab.id, e)}
+                          onDragOver={(e) => handleTabDragOver(tab.id, e)}
+                          onDragLeave={handleTabDragLeave}
+                          onDrop={(e) => handleTabDrop(tab.id, e)}
+                        />
+                      ) : tab.type === 'automations' ? (
+                        <AutomationsTabInline
                           isActive={tab.id === activeTabId}
                           isDragging={dragging}
                           isDropTarget={isTarget}

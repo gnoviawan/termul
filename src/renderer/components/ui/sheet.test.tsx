@@ -80,7 +80,7 @@ describe('Sheet built-in close', () => {
         'opacity-70',
         'hover:opacity-100',
         'focus:ring-2',
-        'focus:ring-ring'
+        'focus:ring-focus-ring'
       ])
     )
   })

@@ -211,6 +211,173 @@ fn test_main_webview_rejects_external_urls() {
     ));
 }
 
+const CANVAS_PORT: u16 = 64451;
+
+fn canvas_frame(url: &str, canvas_port: Option<u16>) -> Option<CanvasFrameNavigation> {
+    canvas_frame_navigation(&url.parse().unwrap(), canvas_port)
+}
+
+#[test]
+fn canvas_bundle_on_the_live_listener_is_a_canvas_frame_navigation() {
+    // Issue #1490: the iframe URL CanvasShell sets. Before the fix the guard
+    // had no canvas exception and rejected it in release builds.
+    let iframe = format!(
+        "http://127.0.0.1:{CANVAS_PORT}/canvas/cv0123/tok-abc/?embed=kiosk&ho=tauri%3A%2F%2Flocalhost&ms=2"
+    );
+    assert_eq!(
+        canvas_frame(&iframe, Some(CANVAS_PORT)),
+        Some(CanvasFrameNavigation::Bundle { port: CANVAS_PORT })
+    );
+    // The bare token path the listener redirects to its trailing-slash form.
+    assert_eq!(
+        canvas_frame(
+            &format!("http://127.0.0.1:{CANVAS_PORT}/canvas/cv0123/tok-abc"),
+            Some(CANVAS_PORT)
+        ),
+        Some(CanvasFrameNavigation::Bundle { port: CANVAS_PORT })
+    );
+    assert_eq!(
+        canvas_frame("about:blank", None),
+        Some(CanvasFrameNavigation::InitialDocument)
+    );
+}
+
+#[test]
+fn canvas_frame_exception_rejects_everything_but_the_bundle_listener() {
+    let port = Some(CANVAS_PORT);
+    let rejected = [
+        // Another loopback port (an agent's dev server, a stale listener).
+        "http://127.0.0.1:5180/canvas/cv0123/tok-abc/".to_string(),
+        // The listener port, but outside /canvas/.
+        format!("http://127.0.0.1:{CANVAS_PORT}/"),
+        format!("http://127.0.0.1:{CANVAS_PORT}/canvasx/cv0123/tok-abc/"),
+        format!("http://127.0.0.1:{CANVAS_PORT}/api/canvas/cv0123/"),
+        format!("http://127.0.0.1:{CANVAS_PORT}/canvas"),
+        // A path that only normalizes back out of /canvas/.
+        format!("http://127.0.0.1:{CANVAS_PORT}/canvas/../evil"),
+        // Other hosts and schemes on the listener port.
+        format!("http://localhost:{CANVAS_PORT}/canvas/cv0123/tok-abc/"),
+        format!("http://[::1]:{CANVAS_PORT}/canvas/cv0123/tok-abc/"),
+        format!("http://example.com:{CANVAS_PORT}/canvas/cv0123/tok-abc/"),
+        format!("https://127.0.0.1:{CANVAS_PORT}/canvas/cv0123/tok-abc/"),
+        format!("http://user:pass@127.0.0.1:{CANVAS_PORT}/canvas/cv0123/tok-abc/"),
+        format!("ws://127.0.0.1:{CANVAS_PORT}/canvas/cv0123/tok-abc/"),
+        // Other about: documents.
+        "about:srcdoc".to_string(),
+        "about:config".to_string(),
+        "data:text/html,<script>alert(1)</script>".to_string(),
+        "https://example.com/canvas/".to_string(),
+    ];
+    for url in &rejected {
+        assert_eq!(canvas_frame(url, port), None, "{url} must not be admitted");
+    }
+    // While the listener is down or rebinding no loopback URL is admitted.
+    assert_eq!(
+        canvas_frame(
+            &format!("http://127.0.0.1:{CANVAS_PORT}/canvas/cv0123/tok-abc/"),
+            None
+        ),
+        None
+    );
+}
+
+#[test]
+fn main_webview_navigation_admits_the_canvas_frame_and_keeps_the_406_policy() {
+    let port = Some(CANVAS_PORT);
+    let bundle = format!("http://127.0.0.1:{CANVAS_PORT}/canvas/cv0123/tok-abc/?embed=kiosk")
+        .parse::<tauri::Url>()
+        .unwrap();
+    let other_port = "http://127.0.0.1:5180/canvas/cv0123/tok-abc/"
+        .parse::<tauri::Url>()
+        .unwrap();
+    if cfg!(dev) {
+        // Dev already trusts every loopback page (the Vite dev server).
+        assert_eq!(
+            main_webview_navigation(&bundle, port),
+            MainNavigation::Allowed
+        );
+        assert_eq!(
+            main_webview_navigation(&other_port, port),
+            MainNavigation::Allowed
+        );
+    } else {
+        assert_eq!(
+            main_webview_navigation(&bundle, port),
+            MainNavigation::CanvasFrame(CanvasFrameNavigation::Bundle { port: CANVAS_PORT })
+        );
+        assert_eq!(
+            main_webview_navigation(&other_port, port),
+            MainNavigation::Blocked
+        );
+        assert_eq!(
+            main_webview_navigation(&bundle, None),
+            MainNavigation::Blocked
+        );
+    }
+    assert_eq!(
+        main_webview_navigation(&"about:blank".parse().unwrap(), port),
+        MainNavigation::CanvasFrame(CanvasFrameNavigation::InitialDocument)
+    );
+    assert_eq!(
+        main_webview_navigation(&"tauri://localhost".parse().unwrap(), port),
+        MainNavigation::Allowed
+    );
+    // The #406 invariant holds with the canvas listener up.
+    for external in [
+        "https://example.com",
+        "http://example.com/canvas/cv0123/tok-abc/",
+        "data:text/html,<script>alert(1)</script>",
+    ] {
+        assert_eq!(
+            main_webview_navigation(&external.parse().unwrap(), port),
+            MainNavigation::Blocked,
+            "{external}"
+        );
+    }
+}
+
+fn csp_directive(csp: &str, name: &str) -> String {
+    csp.split(';')
+        .map(str::trim)
+        .find(|directive| directive.split_whitespace().next() == Some(name))
+        .unwrap_or_else(|| panic!("{name} directive present in {csp}"))
+        .to_string()
+}
+
+#[test]
+fn csp_admits_https_and_blob_media_but_not_https_scripts_or_fetches() {
+    let conf_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json");
+    let conf = std::fs::read_to_string(conf_path).expect("tauri.conf.json readable");
+    let conf: serde_json::Value = serde_json::from_str(&conf).expect("tauri.conf.json is JSON");
+    let csp = conf["app"]["security"]["csp"]
+        .as_str()
+        .expect("app.security.csp is a string");
+
+    for name in ["img-src", "media-src"] {
+        let sources: Vec<String> = csp_directive(csp, name)
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        assert!(
+            sources.contains(&"https:".to_string()),
+            "{name} allows https: {csp}"
+        );
+        assert!(
+            sources.contains(&"blob:".to_string()),
+            "{name} allows blob: {csp}"
+        );
+    }
+    for name in ["script-src", "connect-src"] {
+        let directive = csp_directive(csp, name);
+        assert!(
+            !directive
+                .split_whitespace()
+                .any(|source| source == "https:"),
+            "{name} must not admit every https origin: {directive}"
+        );
+    }
+}
+
 /// Config-drift fence for the canvas embed: the desktop main webview iframes
 /// the figcraft bundle listener at `http://127.0.0.1:<dynamic port>`, so the
 /// CSP MUST keep a loopback-scoped `frame-src` (iframe load) and

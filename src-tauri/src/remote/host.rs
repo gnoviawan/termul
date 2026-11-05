@@ -403,6 +403,10 @@ impl RemoteServerState {
             // `--state-dir` is standalone-only (onboard-generated launches);
             // the desktop host keeps env-based state dir resolution.
             state_dir: None,
+            // Desktop shared-live is always fully configured — these
+            // provenance flags only drive the standalone setup-mode gate.
+            explicit_config: true,
+            host_explicit: true,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -443,6 +447,10 @@ impl RemoteServerState {
             // Bearer gate: `Some` whenever the host advertises a tunnel or
             // binds beyond loopback (AD-3); `None` only for loopback-only.
             web_auth.clone(),
+            // The desktop shared-live host never exposes the standalone
+            // `/server/config` reconfigure routes or a `setupRequired`
+            // health flag (gh-1105) — `server_admin` stays `None`.
+            None,
         )
         .await
         .map_err(|e| format!("Failed to start remote server: {}", e))?;

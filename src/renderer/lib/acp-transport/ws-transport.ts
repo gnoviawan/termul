@@ -10,10 +10,26 @@
 
 import type { AcpCatalog } from '@shared/types/acp-catalog.types'
 import type {
+  ClaudeAccount,
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
-import type { McpCatalogPage, McpCatalogSearchRequest } from '@shared/types/mcp-catalog.types'
+import type {
+  McpCatalogIconPayload,
+  McpCatalogPage,
+  McpCatalogSearchRequest,
+  McpCatalogStatus
+} from '@shared/types/mcp-catalog.types'
+import type {
+  McpInstallCancelRequest,
+  McpInstallCommitRequest,
+  McpInstallCommitResult,
+  McpInstallFormReply,
+  McpInstallFormRequest,
+  McpInstallPlanReply,
+  McpInstallPlanRequest
+} from '@shared/types/mcp-install.types'
+import type { SubagentId, SubagentStopOutcome } from '@shared/types/subagent'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AcpAuthenticateReply,
@@ -47,6 +63,7 @@ import type {
   AcpRegistrySnapshot,
   AgentConfig,
   AgentId,
+  AuthenticateInput,
   ContentBlock,
   InstallAcpRegistryBinaryOutcome,
   InstallAcpRegistryBinaryRequest,
@@ -80,6 +97,12 @@ import { judgeEvent, SyncGate } from './cursor'
 import { toWsEventType } from './event-names'
 import { HOST_GOING_AWAY_CLOSE_CODE, HostOfflineMonitor } from './host-offline'
 import { HOST_SILENCE_LIMIT_MS, HostLiveness } from './liveness'
+import {
+  PendingPromptCoverage,
+  type PendingPromptsHandler,
+  pendingPromptCounts,
+  readPendingPrompts
+} from './pending-permissions'
 import {
   type AcpConnectionState,
   type AcpTransport,
@@ -294,6 +317,10 @@ export class WsAcpTransport implements AcpTransport {
   private eventTail: Promise<void> = Promise.resolve()
   private recoveryGenerationProvider?: (sessionId: SessionId) => number
   private reconnectPriorityProvider?: () => SessionId[]
+  /** Installs the host's pending prompts a subscribe/snapshot reply carries. */
+  private pendingPromptsHandler?: PendingPromptsHandler
+  /** Per session and kind, the head below which those lists settle replayed requests. */
+  private readonly pendingCoverage = new PendingPromptCoverage()
   private readonly wsUrl: string
   private readonly webSocketCtor: typeof WebSocket
   /**
@@ -331,7 +358,7 @@ export class WsAcpTransport implements AcpTransport {
    * after a token fix) so normal reconnect behavior resumes immediately.
    */
   private tokenHalted = false
-  /** Fires after 60 s of stable connection to reset the backoff attempt counter. */
+  /** Fires after `RECONNECT_STABLE_MS` of stable connection to reset the backoff attempt counter. */
   private stableTimer: ReturnType<typeof setTimeout> | null = null
   /** Epoch-ms of the last reconnect attempt start (rate-limits wake expedites). */
   private lastReconnectAttemptAt = 0
@@ -418,6 +445,59 @@ export class WsAcpTransport implements AcpTransport {
     this.reconnectPriorityProvider = provider
   }
 
+  setPendingPromptsHandler(handler: PendingPromptsHandler): void {
+    this.pendingPromptsHandler = handler
+  }
+
+  /**
+   * Issue #1595: a `permission_request` is not in the durable log, so neither a
+   * snapshot nor a replay from a cursor past it brings it back after a
+   * reconnect. A question or elicitation is in the log, but the history
+   * watermark drops its replay and nothing marks it answered. The reply's
+   * pending lists are the host's truth for all three: hand them to the store
+   * and let them settle every request of a listed kind at or below the head.
+   */
+  private installPendingPrompts(sessionId: string, reply: { headSeq?: number } | undefined): void {
+    const prompts = readPendingPrompts(sessionId, reply)
+    this.pendingCoverage.note(sessionId, reply?.headSeq, prompts)
+    if (!prompts.permissions && !prompts.questions && !prompts.elicitations) return
+    const restored = pendingPromptCounts(prompts)
+    if (restored) {
+      void logFrontendError({
+        level: 'info',
+        source: 'WsAcpTransport.pendingPrompts',
+        message: `Session ${sessionId} restores pending requests from the host: ${restored}`
+      })
+    }
+    this.pendingPromptsHandler?.(sessionId, prompts)
+  }
+
+  /**
+   * The recovery path's install of a reply's pending prompts, gated like the
+   * transcript install: a close/delete/reopen during the round-trip makes the
+   * reply stale, and it must not restore prompts into the replaced session.
+   * A stale reply also covers no replay (the next subscribe records its own).
+   */
+  private installRecoveredPendingPrompts(
+    sessionId: SessionId,
+    reply: { headSeq?: number } | undefined,
+    reopenGeneration: number | undefined
+  ): void {
+    if (
+      reopenGeneration !== undefined &&
+      this.recoveryGenerationProvider?.(sessionId) !== reopenGeneration
+    ) {
+      this.pendingCoverage.forget(sessionId)
+      void logFrontendError({
+        level: 'info',
+        source: 'WsAcpTransport.pendingPrompts',
+        message: `Session ${sessionId} was reopened during recovery; its stale pending requests are not restored`
+      })
+      return
+    }
+    this.installPendingPrompts(sessionId, reply)
+  }
+
   getSessionCursor(sessionId: SessionId): SessionCursor | null {
     const lastSeq = this.lastSeq.get(sessionId)
     if (lastSeq === undefined) return null
@@ -452,6 +532,7 @@ export class WsAcpTransport implements AcpTransport {
     this.lastSeq.delete(sessionId)
     this.logEpochs.delete(sessionId)
     this.headSeqs.delete(sessionId)
+    this.pendingCoverage.forget(sessionId)
   }
 
   async connect(): Promise<void> {
@@ -579,6 +660,8 @@ export class WsAcpTransport implements AcpTransport {
       return
     }
     let reply: SessionSubscribeReply | undefined
+    // A close/delete/reopen during the round-trip makes the reply's approvals stale.
+    const reopenGeneration = this.recoveryGenerationProvider?.(sessionId)
     try {
       reply = await this.request<SessionSubscribeReply>('subscribe', payload, timeoutMs)
     } catch (err) {
@@ -588,6 +671,7 @@ export class WsAcpTransport implements AcpTransport {
       }
       throw err
     }
+    this.installRecoveredPendingPrompts(sessionId, reply, reopenGeneration)
     const replyEpoch = reply?.logEpoch
     if (!replyEpoch) return
     if (epoch && epoch !== replyEpoch && this.lastSeq.has(sessionId)) {
@@ -642,6 +726,7 @@ export class WsAcpTransport implements AcpTransport {
         else this.logEpochs.delete(sessionId)
         this.seenTurnIds.delete(sessionId)
         await this.recoveryHandler?.(recovery, reopenGeneration)
+        this.installRecoveredPendingPrompts(sessionId, recovery, reopenGeneration)
         // handle_recover_session_snapshot server-side re-registers the
         // subscription for continued live delivery — no separate subscribe
         // call needed here.
@@ -655,6 +740,7 @@ export class WsAcpTransport implements AcpTransport {
         )
         if (typeof reply?.headSeq === 'number') this.headSeqs.set(sessionId, reply.headSeq)
         if (reply?.logEpoch) this.logEpochs.set(sessionId, reply.logEpoch)
+        this.installRecoveredPendingPrompts(sessionId, reply, reopenGeneration)
         await this.recoveryHandler?.({ sessionId, degraded: true }, reopenGeneration)
       }
       completed = true
@@ -706,13 +792,15 @@ export class WsAcpTransport implements AcpTransport {
    * durable log, so a snapshot never carries it even when its seq is below the
    * snapshot's head: one that arrived during the sync and was not applied before
    * it is still delivered (without a seq, which the store would read as covered
-   * by the snapshot) so the user can answer it.
+   * by the snapshot) so the user can answer it — unless the reply's pending
+   * list already settled it.
    */
   private applyHeldEvent(sessionId: string, evt: WsEvent, floorSeq: number): void {
     const last = this.lastSeq.get(sessionId) ?? 0
     const head = this.headSeqs.get(sessionId) ?? last
     if (
       evt.type === 'permission_request' &&
+      !this.pendingCoverage.covers(sessionId, evt) &&
       evt.seq > floorSeq &&
       judgeEvent(last, head, evt.seq) === 'duplicate'
     ) {
@@ -806,6 +894,34 @@ export class WsAcpTransport implements AcpTransport {
   /** `search_mcp_catalog`: one page of the host's MCP catalog (see {@link AcpTransport.searchMcpCatalog}). */
   async searchMcpCatalog(request: McpCatalogSearchRequest): Promise<McpCatalogPage> {
     return this.request<McpCatalogPage>('search_mcp_catalog', request)
+  }
+
+  async getMcpCatalogStatus(): Promise<McpCatalogStatus> {
+    return this.request<McpCatalogStatus>('get_mcp_catalog_status', {})
+  }
+
+  async setMcpCatalogSync(enabled: boolean): Promise<McpCatalogStatus> {
+    return this.request<McpCatalogStatus>('set_mcp_catalog_sync', { enabled })
+  }
+
+  async describeMcpInstall(request: McpInstallFormRequest): Promise<McpInstallFormReply> {
+    return this.request<McpInstallFormReply>('describe_mcp_install', request)
+  }
+
+  async planMcpInstall(request: McpInstallPlanRequest): Promise<McpInstallPlanReply> {
+    return this.request<McpInstallPlanReply>('plan_mcp_install', request)
+  }
+
+  async commitMcpInstall(request: McpInstallCommitRequest): Promise<McpInstallCommitResult> {
+    return this.request<McpInstallCommitResult>('commit_mcp_install', request)
+  }
+
+  async cancelMcpInstall(request: McpInstallCancelRequest): Promise<Record<string, never>> {
+    return this.request<Record<string, never>>('cancel_mcp_install', request)
+  }
+
+  async getMcpCatalogIcon(name: string): Promise<McpCatalogIconPayload> {
+    return this.request<McpCatalogIconPayload>('get_mcp_catalog_icon', { name })
   }
 
   /** `set_catalog_opt_in`: persist the host catalog opt-in. */
@@ -960,8 +1076,68 @@ export class WsAcpTransport implements AcpTransport {
     await this.request('set_default_claude_account', { accountId })
   }
 
-  async setProjectClaudeAccount(projectId: string, accountId: string | null): Promise<void> {
-    await this.request('set_project_claude_account', { projectId, accountId })
+  async setProjectClaudeAccount(
+    projectId: string,
+    accountId: string | null,
+    expectedAccountId?: string
+  ): Promise<boolean> {
+    const reply = await this.request<{ applied?: boolean }>('set_project_claude_account', {
+      projectId,
+      accountId,
+      ...(expectedAccountId ? { expectedAccountId } : {})
+    })
+    return reply?.applied !== false
+  }
+
+  async setClaudeAutoSwitch(enabled: boolean): Promise<void> {
+    await this.request('set_claude_auto_switch', { enabled })
+  }
+
+  async addClaudeAccount(name: string, options?: CommandCallOptions): Promise<ClaudeAccount> {
+    return this.request<ClaudeAccount>('add_claude_account', { name }, undefined, options)
+  }
+
+  async renameClaudeAccount(accountId: string, name: string): Promise<void> {
+    await this.request('rename_claude_account', { accountId, name })
+  }
+
+  async removeClaudeAccount(accountId: string): Promise<string[]> {
+    const reply = await this.request<{ movedProjectIds?: unknown }>('remove_claude_account', {
+      accountId
+    })
+    if (!Array.isArray(reply.movedProjectIds)) {
+      throw new AcpTransportError(
+        'protocol',
+        'malformed remove_claude_account reply (missing movedProjectIds)'
+      )
+    }
+    return reply.movedProjectIds.filter((id): id is string => typeof id === 'string')
+  }
+
+  async startClaudeLinkLogin(accountId: string): Promise<string> {
+    const reply = await this.request<{ url?: unknown }>('start_claude_link_login', { accountId })
+    if (typeof reply.url !== 'string') {
+      throw new AcpTransportError(
+        'protocol',
+        'malformed start_claude_link_login reply (missing url)'
+      )
+    }
+    return reply.url
+  }
+
+  async finishClaudeLinkLogin(
+    accountId: string,
+    code: string,
+    options?: CommandCallOptions
+  ): Promise<void> {
+    await this.request('finish_claude_link_login', { accountId, code }, undefined, options)
+  }
+
+  async cancelClaudeLogin(accountId: string): Promise<boolean> {
+    const reply = await this.request<{ cancelled?: boolean }>('cancel_claude_login', {
+      accountId
+    })
+    return reply.cancelled === true
   }
 
   async spawnAgent(
@@ -1278,6 +1454,19 @@ export class WsAcpTransport implements AcpTransport {
     await this.request('cancel_prompt', { agentId, sessionId })
   }
 
+  async stopSubagent(
+    agentId: AgentId,
+    rootSessionId: SessionId,
+    subagentId: SubagentId
+  ): Promise<SubagentStopOutcome> {
+    const reply = await this.request<{ outcome: SubagentStopOutcome }>('stop_subagent', {
+      agentId,
+      rootSessionId,
+      subagentId
+    })
+    return reply.outcome
+  }
+
   async deleteAgentSession(
     agentId: AgentId,
     sessionId: SessionId,
@@ -1354,7 +1543,7 @@ export class WsAcpTransport implements AcpTransport {
   async authenticate(
     agentId: AgentId,
     methodId: string,
-    gateway?: { baseUrl: string; apiKey?: string },
+    input?: AuthenticateInput,
     options?: CommandCallOptions
   ): Promise<void> {
     // Await the authenticated relay socket before sending — `connect()`
@@ -1368,7 +1557,7 @@ export class WsAcpTransport implements AcpTransport {
     // process (the provider owns the login UX, often opening its own
     // browser); Termul never invents a redirect URL or stores credentials.
     await this.connect()
-    await this.request('authenticate_agent', { agentId, methodId, gateway }, undefined, options)
+    await this.request('authenticate_agent', { agentId, methodId, ...input }, undefined, options)
   }
 
   /**
@@ -1680,8 +1869,8 @@ export class WsAcpTransport implements AcpTransport {
     // don't interfere. A pending timer, an in-flight `connect()` that hasn't
     // opened a socket yet, or a socket that is no longer OPEN in the
     // resubscribe phase (CLI-F3: the OS dropped it without `onclose`) are all
-    // safe to replace. The attempt counter is NOT reset here — only 60 s of
-    // stable connection resets it (no flap loop can defeat the backoff).
+    // safe to replace. The attempt counter is NOT reset here — only
+    // `RECONNECT_STABLE_MS` of stable connection resets it.
     if (this.reconnecting && !this.reconnectTimer && !this.connecting && this.isSocketLive()) return
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
@@ -1719,7 +1908,7 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   /**
-   * Arm the 60 s stability timer for the connection that just authenticated.
+   * Arm the stability timer for the connection that just authenticated.
    * Only when it fires (the connection survived that long) does the backoff
    * attempt counter reset — a connect that dies seconds later keeps climbing
    * the backoff ladder instead of hammering the host at the base delay.
@@ -1826,7 +2015,7 @@ export class WsAcpTransport implements AcpTransport {
     if (this.tokenHalted || this.protocolHalted || this.hostOffline) return
     if (this.disposed || this.reconnectTimer) return
     // Exponential backoff with ±25 % jitter. The attempt counter is reset only
-    // by `stableTimer` (60 s of stable connection), never merely on connect.
+    // by `stableTimer` (`RECONNECT_STABLE_MS` of stable connection), never merely on connect.
     const delay = jitteredBackoffMs(this.reconnectAttempt)
     this.reconnectAttempt += 1
     // Story 5.3 (AC3): fire the reconnect listener BEFORE setting the timer so
@@ -1850,7 +2039,7 @@ export class WsAcpTransport implements AcpTransport {
   /**
    * Wake/online/visibility/focus signal during a pending backoff: run the
    * reconnect attempt now instead of waiting out the delay. Does NOT reset the
-   * attempt counter (the 60 s stability rule owns that) and is rate-limited so
+   * attempt counter (the stability rule owns that) and is rate-limited so
    * a burst of focus events cannot turn into a connect storm. Returns whether
    * a backoff was pending.
    */
@@ -1945,7 +2134,7 @@ export class WsAcpTransport implements AcpTransport {
       // session was either re-subscribed or handed to its own retry so the
       // overlay stays visible for the full reconnect window (drop → backoff →
       // reopen → resubscribe). The attempt counter is NOT reset here: only
-      // `stableTimer` resets it after 60 s of stable connection.
+      // `stableTimer` resets it after `RECONNECT_STABLE_MS` of stable connection.
       this.reconnecting = false
       // Story 10: the reconnect cycle is fully recovered — socket open,
       // authed, and every required session re-subscribed or retrying. Only NOW
@@ -2344,6 +2533,9 @@ export class WsAcpTransport implements AcpTransport {
         seen.add(turnId)
       }
     }
+    // A replayed approval the reply's pending list settled: the list already
+    // restored it if it is still pending, and an answered one stays gone.
+    if (this.pendingCoverage.covers(sid, evt)) return
     // Pass the envelope seq through so store handlers can seq-dedupe live
     // events against the authoritative fetched payload (CAP-3 replay
     // contract): events already covered by the payload are dropped.

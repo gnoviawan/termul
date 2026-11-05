@@ -3,9 +3,14 @@ import { commandToken, fileToken, SKILL_PAD_CHAR, skillToken } from '@/lib/skill
 import {
   activeMentionToken,
   buildMentionSections,
+  type DirListing,
   isMentionTrigger,
   MAX_FOLDER_RESULTS,
   type MentionMatch,
+  type MentionMenuInput,
+  type MentionPanel,
+  mentionPanelHeader,
+  relativeDir,
   spliceMentionToken
 } from './mention-menu-model'
 
@@ -120,131 +125,264 @@ describe('spliceMentionToken', () => {
   })
 })
 
+const ROOT = '/root/termul'
+
 const match = (relPath: string, ignored = false): MentionMatch => ({
   relPath,
-  absPath: `/root/${relPath}`,
-  name: relPath.split(/[\\/]/).pop() ?? relPath,
+  absPath: `${ROOT}/${relPath}`,
+  name: relPath.split('/').pop() ?? relPath,
   ignored
-})
-
-describe('buildMentionSections', () => {
-  it('shows only a Recents section when the filter is empty', () => {
-    const sections = buildMentionSections({
-      matches: [match('src/a.ts')],
-      recents: [match('src/recent.ts'), match('README.md')],
-      filter: ''
-    })
-    expect(sections).toHaveLength(1)
-    expect(sections[0].id).toBe('recents')
-    expect(sections[0].heading).toBe('Recent')
-    expect(sections[0].items).toHaveLength(2)
-  })
-
-  it('returns no sections when the filter is empty and there are no recents', () => {
-    expect(buildMentionSections({ matches: [match('src/a.ts')], recents: [], filter: '' })).toEqual(
-      []
-    )
-  })
-
-  it('shows only a Files section when the filter is non-empty', () => {
-    const sections = buildMentionSections({
-      matches: [match('src/auth.ts'), match('lib/auth.ts')],
-      recents: [match('src/recent.ts')],
-      filter: 'auth'
-    })
-    expect(sections).toHaveLength(1)
-    expect(sections[0].id).toBe('files')
-    expect(sections[0].heading).toBe('Files')
-    expect(sections[0].items).toHaveLength(2)
-  })
-
-  it('returns no sections when the filter is non-empty and there are no matches', () => {
-    expect(
-      buildMentionSections({ matches: [], recents: [match('src/r.ts')], filter: 'zzz' })
-    ).toEqual([])
-  })
-
-  it('deduplicates matches by absolute path', () => {
-    const sections = buildMentionSections({
-      matches: [match('src/auth.ts'), match('src/auth.ts')],
-      recents: [],
-      filter: 'a'
-    })
-    expect(sections[0].items).toHaveLength(1)
-  })
-
-  it('carries name, relPath, ignored, and the match payload on each item', () => {
-    const sections = buildMentionSections({
-      matches: [match('node_modules/pkg/index.js', true)],
-      recents: [],
-      filter: 'index'
-    })
-    const item = sections[0].items[0]
-    expect(item.label).toBe('index.js')
-    expect(item.description).toBe('node_modules/pkg/index.js')
-    expect(item.ignored).toBe(true)
-    expect(item.key).toBe('/root/node_modules/pkg/index.js')
-    expect(item.payload.absPath).toBe('/root/node_modules/pkg/index.js')
-  })
 })
 
 const dirMatch = (relPath: string, ignored = false): MentionMatch => ({
   relPath,
-  absPath: `/root/${relPath}/`,
-  name: relPath.split(/[\\/]/).pop() ?? relPath,
+  absPath: `${ROOT}/${relPath}/`,
+  name: relPath.split('/').pop() ?? relPath,
   ignored,
   kind: 'dir'
 })
 
-describe('buildMentionSections — folders (gh-896)', () => {
-  it('lists Files then Folders for a non-empty query', () => {
-    const sections = buildMentionSections({
-      matches: [dirMatch('src/components'), match('src/components.ts')],
-      recents: [],
-      filter: 'components'
+const ROOT_PANEL: MentionPanel = { kind: 'root' }
+const explorer = (dir: string): MentionPanel => ({ kind: 'explorer', dir })
+
+function sections(input: Partial<MentionMenuInput>) {
+  return buildMentionSections({
+    panel: ROOT_PANEL,
+    root: ROOT,
+    filter: '',
+    matches: [],
+    recents: [],
+    conversations: [],
+    ...input
+  })
+}
+
+const conversation = (sessionId: string, title: string, agentName: string | null = 'Claude') => ({
+  sessionId,
+  title,
+  agentName,
+  lastActivityAt: 0,
+  running: false
+})
+
+function shown(input: Partial<MentionMenuInput>) {
+  return sections(input).map((s) => ({
+    id: s.id,
+    heading: s.heading,
+    notice: s.notice,
+    rows: s.items.map((i) => `${i.row.kind}:${i.label}`)
+  }))
+}
+
+describe('buildMentionSections: root panel', () => {
+  it('shows the Conversations and Explorer categories on a bare @, even with recents', () => {
+    const [section] = sections({
+      recents: [match('README.md')],
+      conversations: [conversation('a', 'One'), conversation('b', 'Two')]
     })
-    expect(sections.map((s) => s.id)).toEqual(['files', 'folders'])
-    expect(sections[1].heading).toBe('Folders')
-    expect(sections[1].items[0].kind).toBe('dir')
-    expect(sections[0].items[0].kind).toBe('file')
+    expect(section.items).toEqual([
+      {
+        key: 'category:conversations',
+        label: 'Conversations',
+        description: '2 in this project',
+        ignored: false,
+        row: { kind: 'category', target: 'conversations' }
+      },
+      {
+        key: 'category:explorer',
+        label: 'Explorer',
+        description: 'Files and folders in termul/',
+        ignored: false,
+        row: { kind: 'category', target: 'explorer' }
+      }
+    ])
   })
 
-  it('shows only a Folders section when only folders match', () => {
-    const sections = buildMentionSections({
-      matches: [dirMatch('src/components')],
-      recents: [],
-      filter: 'comp'
-    })
-    expect(sections.map((s) => s.id)).toEqual(['folders'])
+  it('lists Files then Folders for a query, folder rows drilling', () => {
+    expect(
+      shown({ filter: 'comp', matches: [dirMatch('src/components'), match('src/comp.ts')] })
+    ).toEqual([
+      { id: 'files', heading: 'Files', notice: undefined, rows: ['file:comp.ts'] },
+      { id: 'folders', heading: 'Folders', notice: undefined, rows: ['dir:components'] }
+    ])
   })
 
-  it('keeps a folder and a same-named file as distinct rows', () => {
-    const sections = buildMentionSections({
-      matches: [match('src/search'), dirMatch('src/search')],
-      recents: [],
-      filter: 'search'
-    })
-    expect(sections.flatMap((s) => s.items)).toHaveLength(2)
+  it('lists matching conversations (at most 5) above Files and Folders for a query', () => {
+    const conversations = Array.from({ length: 7 }, (_, i) => conversation(`c${i}`, `comp ${i}`))
+    expect(
+      shown({
+        filter: 'comp',
+        conversations: [conversation('x', 'unrelated'), ...conversations],
+        matches: [match('src/comp.ts')]
+      })
+    ).toEqual([
+      {
+        id: 'conversations',
+        heading: 'Conversations',
+        notice: undefined,
+        rows: [0, 1, 2, 3, 4].map((i) => `conversation:comp ${i}`)
+      },
+      { id: 'files', heading: 'Files', notice: undefined, rows: ['file:comp.ts'] }
+    ])
+  })
+
+  it('returns no sections when a query matches nothing', () => {
+    expect(sections({ filter: 'zzz', recents: [match('a.ts')] })).toEqual([])
+  })
+
+  it('dedupes matches by absolute path and keeps a same-named folder and file apart', () => {
+    expect(
+      shown({
+        filter: 'search',
+        matches: [match('src/search'), match('src/search'), dirMatch('src/search')]
+      }).flatMap((s) => s.rows)
+    ).toEqual(['file:search', 'dir:search'])
   })
 
   it('caps the Folders section at MAX_FOLDER_RESULTS', () => {
     const matches = Array.from({ length: MAX_FOLDER_RESULTS + 10 }, (_, i) => dirMatch(`d/f${i}`))
-    const sections = buildMentionSections({ matches, recents: [], filter: 'f' })
-    expect(sections[0].items).toHaveLength(MAX_FOLDER_RESULTS)
+    expect(sections({ filter: 'f', matches })[0].items).toHaveLength(MAX_FOLDER_RESULTS)
   })
 
-  it('mixes folders into Recents', () => {
-    const sections = buildMentionSections({
-      matches: [],
-      recents: [dirMatch('src/components'), match('README.md')],
-      filter: ''
+  it('carries the relative path and ignored flag on search rows', () => {
+    const item = sections({
+      filter: 'index',
+      matches: [match('node_modules/pkg/index.js', true)]
+    })[0].items[0]
+    expect(item).toMatchObject({
+      key: `${ROOT}/node_modules/pkg/index.js`,
+      label: 'index.js',
+      description: 'node_modules/pkg/index.js',
+      ignored: true
     })
-    expect(sections).toHaveLength(1)
-    expect(sections[0].items.map((i) => i.kind)).toEqual(['dir', 'file'])
+  })
+})
+
+describe('buildMentionSections: explorer panel', () => {
+  const listing = (entries: MentionMatch[]): DirListing => ({ status: 'ready', entries })
+
+  it('puts Recent above the root listing, folders drilling and ignored rows dimmed', () => {
+    const result = sections({
+      panel: explorer(ROOT),
+      recents: [match('AGENTS.md')],
+      listing: listing([dirMatch('src'), dirMatch('node_modules', true), match('README.md')])
+    })
+    expect(result.map((s) => [s.id, s.heading])).toEqual([
+      ['recents', 'Recent'],
+      ['listing', 'termul/']
+    ])
+    expect(result[1].items.map((i) => [i.row.kind, i.label, i.ignored])).toEqual([
+      ['dir', 'src', false],
+      ['dir', 'node_modules', true],
+      ['file', 'README.md', false]
+    ])
   })
 
-  it('treats a match without kind as a file', () => {
-    const sections = buildMentionSections({ matches: [match('a.ts')], recents: [], filter: 'a' })
-    expect(sections[0].items[0].kind).toBe('file')
+  it('offers "Use this folder" only below the root', () => {
+    expect(shown({ panel: explorer(ROOT), listing: listing([]) })[0].rows).not.toContain(
+      'use-folder:Use this folder'
+    )
+    const [useFolder] = sections({
+      panel: explorer(`${ROOT}/src/renderer`),
+      listing: listing([match('src/renderer/App.tsx')])
+    })
+    expect(useFolder.items).toEqual([
+      {
+        key: `use:${ROOT}/src/renderer/`,
+        label: 'Use this folder',
+        description: 'src/renderer/',
+        ignored: false,
+        row: {
+          kind: 'use-folder',
+          match: {
+            relPath: 'src/renderer',
+            absPath: `${ROOT}/src/renderer/`,
+            name: 'renderer',
+            ignored: false,
+            kind: 'dir'
+          }
+        }
+      }
+    ])
+  })
+
+  it('shows a notice while loading, on failure, and for an empty folder', () => {
+    const notice = (l: DirListing) =>
+      shown({ panel: explorer(`${ROOT}/src`), listing: l }).find((s) => s.id === 'listing')?.notice
+    expect(notice({ status: 'loading' })).toBe('Loading…')
+    expect(notice({ status: 'error' })).toBe("Couldn't list this folder")
+    expect(notice(listing([]))).toBe('This folder is empty')
+    expect(notice(listing([match('src/a.ts')]))).toBeUndefined()
+  })
+
+  it('lists the first 200 entries and says how many more a search would find', () => {
+    const entries = Array.from({ length: 250 }, (_, i) => match(`f${i}.ts`))
+    const result = shown({ panel: explorer(ROOT), listing: listing(entries) })
+    expect(result.map((s) => [s.id, s.rows.length, s.notice])).toEqual([
+      ['listing', 200, undefined],
+      ['listing-hidden', 0, '50 more not shown. Type a name to search.']
+    ])
+    expect(result[0].rows.at(-1)).toBe('file:f199.ts')
+    expect(
+      shown({ panel: explorer(ROOT), listing: listing(entries.slice(0, 200)) }).map((s) => s.id)
+    ).toEqual(['listing'])
+  })
+
+  it('searches globally when a query is typed in the explorer', () => {
+    expect(
+      shown({ panel: explorer(`${ROOT}/src`), filter: 'a', matches: [match('lib/a.ts')] })
+    ).toEqual([{ id: 'files', heading: 'Files', notice: undefined, rows: ['file:a.ts'] }])
+  })
+})
+
+describe('buildMentionSections: conversations panel', () => {
+  const conversations = [
+    conversation('a', 'Fix web reconnect'),
+    conversation('b', 'GPUIX parity', 'Gemini'),
+    conversation('c', 'Status pill tabs', null)
+  ]
+
+  it('lists every conversation with no query and never searches files', () => {
+    expect(
+      shown({ panel: { kind: 'conversations' }, conversations, matches: [match('a.ts')] })
+    ).toEqual([
+      {
+        id: 'conversations',
+        heading: undefined,
+        notice: undefined,
+        rows: [
+          'conversation:Fix web reconnect',
+          'conversation:GPUIX parity',
+          'conversation:Status pill tabs'
+        ]
+      }
+    ])
+  })
+
+  it('filters by title or agent name', () => {
+    const rows = (filter: string) =>
+      shown({ panel: { kind: 'conversations' }, conversations, filter }).flatMap((s) => s.rows)
+    expect(rows('pill')).toEqual(['conversation:Status pill tabs'])
+    expect(rows('gemini')).toEqual(['conversation:GPUIX parity'])
+    expect(rows('zzz')).toEqual([])
+  })
+})
+
+describe('mentionPanelHeader / relativeDir', () => {
+  it('has no header at the root and a crumb below the explorer root', () => {
+    expect(mentionPanelHeader(ROOT_PANEL, ROOT)).toBeNull()
+    expect(mentionPanelHeader({ kind: 'conversations' }, ROOT)).toEqual({
+      title: 'Conversations',
+      crumb: ''
+    })
+    expect(mentionPanelHeader(explorer(ROOT), ROOT)).toEqual({ title: 'Explorer', crumb: '' })
+    expect(mentionPanelHeader(explorer(`${ROOT}/src/lib`), ROOT)).toEqual({
+      title: 'Explorer',
+      crumb: 'src/lib/'
+    })
+  })
+
+  it('does not treat a sibling with a shared prefix as inside the root', () => {
+    expect(relativeDir(ROOT, `${ROOT}-other/src`)).toBe('')
   })
 })

@@ -1,3 +1,4 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,7 +9,8 @@ import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { selectionContextToken } from '@/lib/composer/selection-context'
-import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
+import { parseConversationEnvelope } from '@/lib/conversation-envelope'
+import { commandToken, conversationToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { useProjectStore } from '@/stores/project-store'
 import { ChatInputBar } from './ChatInputBar'
 import {
@@ -64,12 +66,15 @@ const {
   mockAgentConfigs,
   mockSwitching,
   mockSessionAgentId,
+  mockLaunchConfigId,
   mockArmAgentSwitch,
   mockSetSwitchPendingOption,
   mockAgentOptionsCache,
   mockCancelAgentSwitch,
   mockCancelPrompt,
   mockSaveAgentConfig,
+  mockSessionIndex,
+  mockMessages,
   batchCb,
   doneCb
 } = vi.hoisted(() => {
@@ -155,12 +160,15 @@ const {
     // Override-able store session agent id (defaults to the live agent; the
     // empty-row test clears it).
     mockSessionAgentId: { current: 'agent-1' as string },
-    mockArmAgentSwitch: vi.fn(async () => true),
+    mockLaunchConfigId: { current: undefined as string | undefined },
+    mockArmAgentSwitch: vi.fn(async (_sessionId: string, _toConfigId: string) => true),
     mockSetSwitchPendingOption: vi.fn(async () => {}),
     mockAgentOptionsCache: { current: {} as Record<string, unknown> },
     mockCancelAgentSwitch: vi.fn(),
     mockCancelPrompt: vi.fn(async () => {}),
-    mockSaveAgentConfig: vi.fn(async () => {})
+    mockSaveAgentConfig: vi.fn(async () => {}),
+    mockSessionIndex: { current: [] as Array<Record<string, unknown>> },
+    mockMessages: { current: {} as Record<string, unknown[]> }
   }
 })
 
@@ -227,7 +235,12 @@ vi.mock('@/stores/acp-store', () => {
     respondPermission: mockRespondPermission,
     agentConfigs: mockAgentConfigs.current,
     saveAgentConfig: mockSaveAgentConfig,
-    armAgentSwitch: mockArmAgentSwitch,
+    // Like the store: a successful arm records the switch target on the chat.
+    armAgentSwitch: async (sessionId: string, toConfigId: string) => {
+      const armed = await mockArmAgentSwitch(sessionId, toConfigId)
+      if (armed) mockSwitching.current = { toConfigId, status: 'pending' }
+      return armed
+    },
     setSwitchPendingOption: mockSetSwitchPendingOption,
     agentOptionsCache: mockAgentOptionsCache.current,
     prepareChat: vi.fn(),
@@ -236,11 +249,14 @@ vi.mock('@/stores/acp-store', () => {
     sessions: {
       'session-1': {
         agentId: mockSessionAgentId.current,
+        launchConfigId: mockLaunchConfigId.current,
         switching: mockSwitching.current
       }
     },
     configToLiveAgent: { 'acp-registry:cursor\0/work': 'agent-1' },
-    sessionIndex: []
+    sessionIndex: mockSessionIndex.current,
+    messages: mockMessages.current,
+    toolCalls: {}
   })
   const listeners = new Set<() => void>()
   const useAcpStore = (selector: (s: Record<string, unknown>) => unknown) => selector(state())
@@ -331,6 +347,38 @@ vi.mock('@/hooks/use-resolved-supported-acp-agents', async () => {
       mockResolvedAgents.current ?? actual.buildSupportedAcpAgents(configs, 'linux-x86_64')
   }
 })
+
+const { mockTransport } = vi.hoisted(() => ({
+  mockTransport: {
+    current: { historyMode: () => 'live_only' } as {
+      historyMode: () => string
+      getSessionPayloadTail?: (id: string, limit: number) => Promise<unknown>
+    }
+  }
+}))
+
+vi.mock('@/lib/acp-transport', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/acp-transport')>()),
+  getAcpTransport: () => mockTransport.current
+}))
+
+const { mockLogFrontendError, mockWriteTempFile, mockRegisterTempFiles } = vi.hoisted(() => ({
+  mockLogFrontendError: vi.fn(),
+  mockWriteTempFile: vi.fn(async (_bytes: Uint8Array, name: string) => `/tmp/${name}`),
+  mockRegisterTempFiles: vi.fn()
+}))
+vi.mock('@/lib/composer-attachments-io', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/composer-attachments-io')>()),
+  writeBytesToTempFile: mockWriteTempFile
+}))
+vi.mock('@/lib/attachment-temp-cleanup', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/attachment-temp-cleanup')>()),
+  registerSessionTempFiles: mockRegisterTempFiles
+}))
+vi.mock('@/lib/log-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/log-api')>()),
+  logFrontendError: mockLogFrontendError
+}))
 
 vi.mock('@/lib/acp-api', () => ({
   acpApi: {
@@ -702,6 +750,7 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     mockSwitching.current = null
     mockResolvedAgents.current = null
     mockSessionAgentId.current = 'agent-1'
+    mockLaunchConfigId.current = undefined
     mockAgentOptionsCache.current = {}
   })
 
@@ -812,6 +861,39 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     if (cursorPathSig) expect(modelChip.innerHTML).not.toContain(cursorPathSig)
   })
 
+  it('a launch placeholder shows its launching agent glyph before the agent spawns', async () => {
+    // A launcher hand-off into a new worktree paints the chat on a placeholder
+    // whose agent has not spawned yet, so there is no live agent to resolve.
+    mockSessionAgentId.current = ''
+    mockLaunchConfigId.current = 'acp-registry:claude-acp'
+    const s = {
+      ...session(),
+      agentId: '',
+      models: { currentModelId: 'm1', availableModels: [{ modelId: 'm1', name: 'Model One' }] }
+    }
+    renderInputBar({ session: s })
+
+    const modelChip = await screen.findByRole('button', { name: /Model One/ })
+    const claudePathSig = (findBundledIconByKey('acp:claude-acp')?.svg ?? '').match(
+      /d="([^"]{20,60})/
+    )?.[1]
+    expect(claudePathSig).toBeTruthy()
+    expect(modelChip.innerHTML).toContain(claudePathSig)
+  })
+
+  it('a launch placeholder with no cached options still shows the agent pill', async () => {
+    mockSessionAgentId.current = ''
+    mockLaunchConfigId.current = 'acp-registry:claude-acp'
+    renderInputBar({ session: { ...session(), agentId: '', modes: null, models: null } })
+
+    const trigger = await screen.findByTestId('agent-model-selector-trigger')
+    const claudePathSig = (findBundledIconByKey('acp:claude-acp')?.svg ?? '').match(
+      /d="([^"]{20,60})/
+    )?.[1]
+    expect(claudePathSig).toBeTruthy()
+    expect(trigger.innerHTML).toContain(claudePathSig)
+  })
+
   it('disables the agent switch control for a closed session (chips disabled pattern)', async () => {
     renderInputBar({ disabled: true })
     const trigger = await screen.findByRole('button', {
@@ -833,7 +915,7 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     await waitFor(() => {
       expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
         'data-placeholder',
-        'Ask anything… (/ for commands, @ for files)'
+        'Ask anything… (/ for commands, @ for files and chats)'
       )
     })
   })
@@ -993,7 +1075,7 @@ describe('ChatInputBar placeholder', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
         'data-placeholder',
-        'Ask anything… (/ for commands, @ for files)'
+        'Ask anything… (/ for commands, @ for files and chats)'
       )
     })
   })
@@ -2123,6 +2205,15 @@ describe('ChatInputBar mobile dock', () => {
     expect(composerCard()).not.toHaveClass('outline-none')
   })
 
+  it.each([
+    ['mobile', true],
+    ['desktop', false]
+  ])('draws no focus edge around the composer card on %s', (_shell, mobile) => {
+    mobileRef.current = mobile
+    render(bar())
+    expect(composerCard().className).not.toMatch(/focus-within:|has-\[/)
+  })
+
   it('collapses the queue by default on mobile and keeps it expanded on desktop', () => {
     const props = { queue, onRemoveQueued: vi.fn(), onSendQueuedNow: vi.fn() }
     const mobile = render(bar(props))
@@ -2337,5 +2428,307 @@ describe('ChatInputBar selection contexts', () => {
     await waitFor(() =>
       expect(screen.getByRole('note', { name: 'Context 1: when ready' })).toBeInTheDocument()
     )
+  })
+})
+
+describe('ChatInputBar conversation mentions', () => {
+  const chat = (id: string, title: string) => ({
+    id,
+    agentId: 'agent-2',
+    title,
+    cwd: '/work',
+    projectId: 'p1',
+    createdAt: 0,
+    lastActivityAt: 5,
+    messageCount: 2,
+    status: 'idle'
+  })
+
+  beforeEach(() => {
+    mockSessionIndex.current = [chat('chat-2', 'Fix web reconnect'), chat('gone', 'Old chat')]
+    mockMessages.current = {
+      'chat-2': [
+        {
+          id: 'u1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'why does it drop?' }],
+          timestamp: 1,
+          seq: 1
+        },
+        {
+          id: 'a1',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'Backoff resets too early.' }],
+          timestamp: 2,
+          seq: 2
+        }
+      ]
+    }
+  })
+
+  afterEach(() => {
+    mockSessionIndex.current = []
+    mockMessages.current = {}
+    mockTransport.current = { historyMode: () => 'live_only' }
+    mockIsTauri.mockReturnValue(false)
+  })
+
+  function deferTranscriptRead(): () => Promise<void> {
+    let finish!: (payload: null) => void
+    mockTransport.current = {
+      historyMode: () => 'server',
+      getSessionPayloadTail: () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    }
+    return () => act(async () => finish(null))
+  }
+
+  it('keeps the composer read-only while the mentioned chat transcript loads', async () => {
+    const finishRead = deferTranscriptRead()
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+    const token = conversationToken('Old chat', 'gone')
+    setComposerValue(`see ${token} `)
+    const editor = document.querySelector('[data-composer-editor="true"]') as HTMLElement
+    expect(editor).toHaveAttribute('contenteditable', 'true')
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'false'))
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeDisabled()
+    expect(onSendBlocks).not.toHaveBeenCalled()
+
+    await finishRead()
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+    expect(editor).toHaveAttribute('contenteditable', 'true')
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
+    expect(getComposerValue()).toBe('')
+  })
+
+  it('closes the @ menu while the mentioned chat transcript loads', async () => {
+    const finishRead = deferTranscriptRead()
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+    setComposerValue(`see ${conversationToken('Old chat', 'gone')} @`)
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(screen.queryByRole('listbox')).not.toBeInTheDocument())
+
+    await finishRead()
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+  })
+
+  it('closes the / menu while the mentioned chat transcript loads', async () => {
+    const finishRead = deferTranscriptRead()
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+    setComposerValue(`see ${conversationToken('Old chat', 'gone')} /`)
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(screen.queryByRole('listbox')).not.toBeInTheDocument())
+
+    await finishRead()
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+  })
+
+  it('registers only the sent screenshots for cleanup when one finishes reading mid-send', async () => {
+    mockIsTauri.mockReturnValue(true)
+    const finishRead = deferTranscriptRead()
+    let finishLateWrite!: () => void
+    mockWriteTempFile.mockImplementationOnce(async (_bytes, name) => `/tmp/${name}`)
+    mockWriteTempFile.mockImplementationOnce(
+      (_bytes, name) =>
+        new Promise((resolve) => {
+          finishLateWrite = () => resolve(`/tmp/${name}`)
+        })
+    )
+    const drop = (name: string) => {
+      // jsdom's File has no arrayBuffer().
+      const file = Object.assign(new File(['png'], name, { type: 'image/png' }), {
+        arrayBuffer: async () => new ArrayBuffer(3)
+      })
+      const dataTransfer = { files: [file], items: [] } as unknown as DataTransfer
+      fireEvent.drop(screen.getByRole('textbox'), { dataTransfer })
+    }
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+    drop('sent.png')
+    await screen.findByRole('button', { name: 'sent.png' })
+    drop('late.png')
+    setComposerValue(`see ${conversationToken('Old chat', 'gone')} `)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(finishLateWrite).toBeTypeOf('function'))
+    await act(async () => finishLateWrite())
+    await screen.findByRole('button', { name: 'late.png' })
+    await finishRead()
+
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+    expect(mockRegisterTempFiles).toHaveBeenLastCalledWith('session-1', ['/tmp/sent.png'])
+    expect(screen.getByRole('button', { name: 'late.png' })).toBeInTheDocument()
+  })
+
+  it('sends to the submitting chat and keeps the next chat draft when the tab remaps mid-read', async () => {
+    const finishRead = deferTranscriptRead()
+    persistenceStore.set(PersistenceKeys.chatDraft('p1', 'session-2'), 'draft for the next chat')
+    const sendFromFirst = vi.fn()
+    const sendFromSecond = vi.fn()
+    const props = (id: string, onSendBlocks: typeof sendFromFirst) => ({
+      session: { ...session(), id },
+      busy: false,
+      disabled: false,
+      onSend: vi.fn(),
+      onSendBlocks,
+      onCancel: vi.fn(),
+      commands: [],
+      configOptions: [],
+      modes: session().modes,
+      onSetConfig: mockSetConfig,
+      onSetMode: mockSetMode,
+      onSetModel: mockSetModel
+    })
+    const { rerender } = render(
+      <TooltipProvider>
+        <ChatInputBar {...props('session-1', sendFromFirst)} />
+      </TooltipProvider>
+    )
+    const token = conversationToken('Old chat', 'gone')
+    setComposerValue(`see ${token} `)
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    rerender(
+      <TooltipProvider>
+        <ChatInputBar {...props('session-2', sendFromSecond)} />
+      </TooltipProvider>
+    )
+    await waitFor(() => expect(getComposerValue()).toBe('draft for the next chat'))
+
+    await finishRead()
+    await waitFor(() => expect(sendFromFirst).toHaveBeenCalledTimes(1))
+    expect(sendFromSecond).not.toHaveBeenCalled()
+    expect(getComposerValue()).toBe('draft for the next chat')
+  })
+
+  it('pills a picked chat and sends its transcript on the wire while the bubble keeps the pill', async () => {
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+
+    setComposerValue('compare @')
+    fireEvent.click(await screen.findByRole('option', { name: /^Conversations/ }))
+    fireEvent.click(await screen.findByRole('option', { name: /Fix web reconnect/ }))
+
+    const token = conversationToken('Fix web reconnect', 'chat-2')
+    await waitFor(() => expect(getComposerValue()).toBe(`compare ${token} `))
+    expect(document.querySelector('[data-conversation-pill]')).toHaveTextContent(
+      'Fix web reconnect'
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+    expect(onSendBlocks).toHaveBeenCalledWith(
+      [
+        { type: 'text', text: 'compare (conversation: Fix web reconnect [termul-chat:chat-2])' },
+        {
+          type: 'text',
+          text:
+            '<termul-conversation id="chat-2" title="Fix web reconnect">\n' +
+            'Transcript of the Termul chat "Fix web reconnect" with an agent, attached by the user as context.\n\n' +
+            'User: why does it drop?\n' +
+            'Agent: Backoff resets too early.\n' +
+            '</termul-conversation>'
+        }
+      ],
+      [{ type: 'text', text: `compare ${token} ` }]
+    )
+  })
+
+  it('caps a long chat title in the transcript block and keeps it whole in the pill', async () => {
+    const title = 'Long '.padEnd(2000, 't')
+    const capped = `${title.slice(0, 1500)}…`
+    mockMessages.current = { long: mockMessages.current['chat-2'] ?? [] }
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+    const token = conversationToken(title, 'long')
+    setComposerValue(`see ${token} `)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+    expect(onSendBlocks).toHaveBeenCalledWith(
+      [
+        { type: 'text', text: `see (conversation: ${title} [termul-chat:long])` },
+        {
+          type: 'text',
+          text:
+            `<termul-conversation id="long" title="${capped}">\n` +
+            `Transcript of the Termul chat "${capped}" with an agent, attached by the user as context.\n\n` +
+            'User: why does it drop?\n' +
+            'Agent: Backoff resets too early.\n' +
+            '</termul-conversation>'
+        }
+      ],
+      [{ type: 'text', text: `see ${token} ` }]
+    )
+  })
+
+  it('omits the transcripts past the per-send context limit and keeps their pills', async () => {
+    const longChat = Array.from({ length: 12 }, (_, i) => [
+      { id: `u${i}`, role: 'user', blocks: [{ type: 'text', text: 'q'.repeat(1500) }], seq: 2 * i },
+      {
+        id: `a${i}`,
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'a'.repeat(1500) }],
+        seq: 2 * i + 1
+      }
+    ]).flat()
+    mockMessages.current = { big1: longChat, big2: longChat, big3: longChat }
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+    const display = `compare ${['big1', 'big2', 'big3'].map((id) => conversationToken(`Chat ${id}`, id)).join(' ')} `
+    setComposerValue(display)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+    const [wire, displayBlocks] = onSendBlocks.mock.calls[0] as [Array<{ text: string }>, unknown]
+    expect(wire[0]).toEqual({
+      type: 'text',
+      text:
+        'compare (conversation: Chat big1 [termul-chat:big1]) (conversation: Chat big2 [termul-chat:big2]) ' +
+        '(conversation: Chat big3, transcript omitted: context limit [termul-chat:big3])'
+    })
+    expect(wire.slice(1).map((b) => parseConversationEnvelope(b.text)?.sessionId)).toEqual([
+      'big1',
+      'big2'
+    ])
+    expect(displayBlocks).toEqual([{ type: 'text', text: display }])
+    expect(mockLogFrontendError).toHaveBeenCalledWith({
+      level: 'warn',
+      source: 'conversationTranscript',
+      message: 'Omitted 1 of 3 mentioned chat transcripts: over the 30000-character context limit'
+    })
+  })
+
+  it('says the transcript is unavailable when the chat has no readable history', async () => {
+    const onSendBlocks = vi.fn()
+    const onSend = vi.fn()
+    renderInputBar({ onSendBlocks, onSend })
+    const token = conversationToken('Old chat', 'gone')
+    setComposerValue(`see ${token} `)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+    expect(onSendBlocks).toHaveBeenCalledWith(
+      [
+        {
+          type: 'text',
+          text: 'see (conversation: Old chat, transcript unavailable [termul-chat:gone])'
+        }
+      ],
+      [{ type: 'text', text: `see ${token} ` }]
+    )
+    expect(onSend).not.toHaveBeenCalled()
   })
 })

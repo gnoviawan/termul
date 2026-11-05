@@ -58,6 +58,10 @@ vi.mock('../tauri-backup-api', () => ({
   setAppVersion: vi.fn()
 }))
 
+vi.mock('../log-api', () => ({
+  logFrontendError: vi.fn(async () => {})
+}))
+
 vi.mock('../tauri-rollback-api', () => ({
   keepPreviousVersion: vi.fn(),
   setCurrentVersion: vi.fn()
@@ -66,6 +70,7 @@ vi.mock('../tauri-rollback-api', () => ({
 import { getVersion } from '@tauri-apps/api/app'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check } from '@tauri-apps/plugin-updater'
+import { logFrontendError } from '../log-api'
 import { createBackup, setAppVersion } from '../tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from '../tauri-rollback-api'
 import {
@@ -77,6 +82,7 @@ import {
   getUpdaterState,
   installAndRestart,
   isUpdateAvailable,
+  isUpdateDownloaded,
   mapTauriUpdateToInfo,
   registerUpdateEventHandlers,
   setAutoUpdateEnabled,
@@ -476,6 +482,68 @@ describe('tauri-updater-api', () => {
       }
     })
 
+    it('reports no progress until the pre-update backup finishes (#1431)', async () => {
+      const update = createMockUpdate('2.0.4')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+
+      let finishBackup: (() => void) | undefined
+      vi.mocked(createBackup).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishBackup = () =>
+              resolve({
+                success: true,
+                data: {
+                  id: 'backup-2',
+                  timestamp: '2026-03-01T00:00:00.000Z',
+                  version: '0.2.3',
+                  size: 1,
+                  fileCount: 1,
+                  path: '/mock/backups/backup-2'
+                }
+              })
+          })
+      )
+
+      const progressEvents: number[] = []
+      const download = downloadUpdate((progress) => {
+        progressEvents.push(progress.percent)
+      })
+      await vi.waitFor(() => expect(finishBackup).toBeDefined())
+
+      expect(progressEvents).toEqual([])
+      expect(update.download).not.toHaveBeenCalled()
+
+      finishBackup?.()
+      await download
+
+      expect(progressEvents).toEqual([0])
+    })
+
+    it('caps the package download with a timeout so a stalled transfer fails (#1431)', async () => {
+      const update = createMockUpdate('2.0.5')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+      vi.mocked(update.download).mockRejectedValue('error sending request: operation timed out')
+
+      const result = await downloadUpdate()
+
+      expect(update.download).toHaveBeenCalledWith(expect.any(Function), {
+        timeout: 30 * 60 * 1000
+      })
+      expect(result).toEqual({
+        success: false,
+        error: 'error sending request: operation timed out',
+        code: 'DOWNLOAD_FAILED'
+      })
+      expect(logFrontendError).toHaveBeenCalledWith({
+        level: 'error',
+        source: 'tauri-updater-api',
+        message: '[updater] download failed: error sending request: operation timed out'
+      })
+    })
+
     it('returns DOWNLOAD_FAILED when download throws', async () => {
       const update = createMockUpdate('2.0.2')
       vi.mocked(check).mockResolvedValue(update as never)
@@ -608,6 +676,56 @@ describe('tauri-updater-api', () => {
         vi.mocked(relaunch).mock.invocationCallOrder[0]
       )
       expect(result).toEqual({ success: true, data: undefined })
+    })
+  })
+
+  // N2: the store asks this after a re-check so a same-version re-check keeps
+  // the update ready to install instead of resetting it.
+  describe('isUpdateDownloaded', () => {
+    it('is false before anything is downloaded', async () => {
+      vi.mocked(check).mockResolvedValue(createMockUpdate('2.1.0') as never)
+      await checkForUpdates()
+
+      expect(isUpdateDownloaded('2.1.0')).toBe(false)
+    })
+
+    it('stays true across a re-check of the same version', async () => {
+      const update = createMockUpdate('2.1.0')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+      vi.mocked(update.download).mockImplementation(async () => {})
+      await downloadUpdate()
+
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+
+      expect(isUpdateDownloaded('2.1.0')).toBe(true)
+    })
+
+    it('is false for a newer version that replaced the downloaded one', async () => {
+      const update = createMockUpdate('2.1.0')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+      vi.mocked(update.download).mockImplementation(async () => {})
+      await downloadUpdate()
+
+      vi.mocked(check).mockResolvedValue(createMockUpdate('2.2.0') as never)
+      await checkForUpdates()
+
+      expect(isUpdateDownloaded('2.2.0')).toBe(false)
+      expect(isUpdateDownloaded('2.1.0')).toBe(false)
+    })
+
+    it('is false once the pending update is cleared', async () => {
+      const update = createMockUpdate('2.1.0')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+      vi.mocked(update.download).mockImplementation(async () => {})
+      await downloadUpdate()
+
+      await clearPendingUpdate()
+
+      expect(isUpdateDownloaded('2.1.0')).toBe(false)
     })
   })
 

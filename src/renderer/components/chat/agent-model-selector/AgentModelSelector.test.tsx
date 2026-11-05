@@ -4,14 +4,21 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
+import { MODEL_PICKER_V2_KEY } from '@/lib/model-picker-flag'
 import {
   armMobileOverlayBackStack,
   pressSystemBack,
   waitForSentinelDepth
 } from '@/lib/test-utils/overlay-back-stack'
+import { subagentToolCall } from '@/lib/test-utils/subagent'
+import { agentReuseKey } from '@/stores/acp-reuse-keys'
+import { prepareChatKey } from '@/stores/acp-store/helpers'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
-import { AgentModelSelector } from './AgentModelSelector'
+import { AgentModelSelector, type PhoneSelectorControls } from './AgentModelSelector'
+import { createFavoritesStore, memoryFavoritesAdapter } from './favorite-models'
 import { SelectorFooter } from './SelectorFooter'
+import type { SelectorSource } from './selector-source'
+import { AUTO_LOAD_SETTLE_MS } from './use-model-catalog'
 
 // jsdom omits `document.elementFromPoint`; Radix/floating-ui call it while
 // positioning the popover. Same stub as ChatInputBar.test.tsx.
@@ -26,9 +33,12 @@ if (typeof document.elementFromPoint !== 'function') {
 const {
   mockArmAgentSwitch,
   mockSetSwitchPendingOption,
+  mockPickModel,
   mockCancelAgentSwitch,
   mockCancelPrompt,
   mockPrepareChat,
+  mockCancelPreparedChat,
+  mockAuthenticateAgent,
   mockSaveAgentConfig,
   mockInstallAcpAgent,
   mockToastSuccess,
@@ -38,12 +48,15 @@ const {
   subscribeListeners,
   acpStateRef
 } = vi.hoisted(() => ({
-  mockArmAgentSwitch: vi.fn(async () => true),
+  mockArmAgentSwitch: vi.fn(async (_sessionId: string, _toConfigId: string) => true),
   mockSetSwitchPendingOption: vi.fn(async () => {}),
   mockCancelAgentSwitch: vi.fn(),
+  mockPickModel: vi.fn(async (_sessionId: string, _modelId: string, _values?: unknown) => {}),
   mockCancelPrompt: vi.fn(async () => {}),
   mockPrepareChat: vi.fn(),
-  mockSaveAgentConfig: vi.fn(async () => {}),
+  mockCancelPreparedChat: vi.fn(),
+  mockAuthenticateAgent: vi.fn(async () => {}),
+  mockSaveAgentConfig: vi.fn(async (_config: StoredAgentConfig) => {}),
   mockInstallAcpAgent: vi.fn(async () => ({ command: 'opencode', args: ['acp'] })),
   mockToastSuccess: vi.fn(),
   mockToastError: vi.fn(),
@@ -58,11 +71,30 @@ const {
 
 vi.mock('sonner', () => ({ toast: { success: mockToastSuccess, error: mockToastError } }))
 
-vi.mock('@/stores/acp-store', () => {
+vi.mock('@/stores/acp-store', async () => {
+  const { agentReuseKey } =
+    await vi.importActual<typeof import('@/stores/acp-reuse-keys')>('@/stores/acp-reuse-keys')
   const state = () => ({
     ...acpStateRef.current,
-    armAgentSwitch: mockArmAgentSwitch,
+    authenticateAgent: mockAuthenticateAgent,
+    cancelPreparedChat: mockCancelPreparedChat,
+    // Like the store: a successful arm records the switch target on the chat.
+    armAgentSwitch: async (sessionId: string, toConfigId: string) => {
+      const armed = await mockArmAgentSwitch(sessionId, toConfigId)
+      if (armed) {
+        const sessions = (acpStateRef.current.sessions ?? {}) as Record<string, object>
+        acpStateRef.current = {
+          ...acpStateRef.current,
+          sessions: {
+            ...sessions,
+            [sessionId]: { ...sessions[sessionId], switching: { toConfigId } }
+          }
+        }
+      }
+      return armed
+    },
     setSwitchPendingOption: mockSetSwitchPendingOption,
+    pickModel: mockPickModel,
     cancelAgentSwitch: mockCancelAgentSwitch,
     cancelPrompt: mockCancelPrompt,
     prepareChat: mockPrepareChat,
@@ -76,7 +108,7 @@ vi.mock('@/stores/acp-store', () => {
       subscribeListeners.current.delete(listener)
     }
   }
-  return { useAcpStore }
+  return { useAcpStore, agentReuseKey }
 })
 
 vi.mock('@/stores/acp-store/model-catalog', () => ({ readModelCatalog: async () => null }))
@@ -101,6 +133,14 @@ vi.mock('@/lib/api', async (importActual) => {
   const actual = await importActual<typeof import('@/lib/api')>()
   return { ...actual, persistenceApi: mockPersistenceApi }
 })
+
+const { mockLogFrontendError } = vi.hoisted(() => ({
+  mockLogFrontendError: vi.fn(async () => {})
+}))
+vi.mock('@/lib/log-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/log-api')>()),
+  logFrontendError: mockLogFrontendError
+}))
 
 vi.mock('@/hooks/use-mobile-web-shell', () => ({ useMobileWebShell: () => mockIsMobile.current }))
 
@@ -182,6 +222,10 @@ const CLAUDE_MODELS = {
   updatedAt: 1
 }
 
+const BACKGROUND_LAUNCH = {
+  'session-1': [subagentToolCall({ background: true }, { toolCallId: 'bg-1', status: 'completed' })]
+}
+
 function seed(
   entries: readonly SupportedAcpAgentEntry[] = [],
   session: Record<string, unknown> = {}
@@ -204,7 +248,7 @@ function seed(
     pendingPermissions: {},
     pendingQuestions: {},
     launchingSessionIds: {},
-    pendingBrowserOpen: {},
+    pendingSignIn: {},
     preparedSessions: {},
     preparingChatKeys: {},
     prepareChatErrors: {},
@@ -222,10 +266,10 @@ function option(
   return { id, name, category, type: 'select', currentValue, options }
 }
 
-function renderSelector(
+function selector(
   overrides: Partial<Parameters<typeof AgentModelSelector>[0]> = {}
-): ReturnType<typeof render> {
-  return render(
+): React.JSX.Element {
+  return (
     <AgentModelSelector
       sessionId="session-1"
       disabled={false}
@@ -250,9 +294,14 @@ function renderSelector(
       onSetConfig={vi.fn()}
       onSetModel={vi.fn()}
       {...overrides}
-    />,
-    { wrapper: TooltipProvider }
+    />
   )
+}
+
+function renderSelector(
+  overrides: Partial<Parameters<typeof AgentModelSelector>[0]> = {}
+): ReturnType<typeof render> {
+  return render(selector(overrides), { wrapper: TooltipProvider })
 }
 
 function open(): void {
@@ -737,12 +786,28 @@ describe('AgentModelSelector panel', () => {
     expect(screen.getByRole('dialog')).toHaveClass('max-h-[85dvh]')
   })
 
-  it('renders in a bottom sheet on mobile web', () => {
+  it('renders the Select model bottom sheet on mobile web', () => {
     mockIsMobile.current = true
     renderSelector()
     open()
-    expect(screen.getByRole('dialog')).toHaveTextContent('Model and agent')
-    expect(screen.getByRole('button', { name: 'Sonnet 5.5' })).toHaveClass('min-h-11')
+
+    const sheet = screen.getByRole('dialog', { name: 'Select model' })
+    expect(within(sheet).getByRole('button', { name: 'Opus 5.5' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(within(sheet).getByRole('button', { name: 'Sonnet 5.5' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
+  })
+
+  it('opens the mobile sheet with focus on the sheet, so no keyboard comes up', () => {
+    mockIsMobile.current = true
+    renderSelector()
+    open()
+
+    expect(screen.getByRole('dialog')).toHaveFocus()
   })
 
   it('renders without a crash against a partial store state', () => {
@@ -779,6 +844,94 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
     })
   })
 
+  it("arms a model picked on another tab with that model's saved values", async () => {
+    seed([readyEntry(CLAUDE)])
+    acpStateRef.current.agentOptionsCache = { [CLAUDE.id]: CLAUDE_MODELS }
+    mockPersistenceApi.read.mockImplementation(async (key: string) =>
+      key === `agents/composer-options/${CLAUDE.id}`
+        ? {
+            success: true,
+            data: { modelId: 'opus', modelValues: { haiku: { effort: 'low' } } }
+          }
+        : { success: false }
+    )
+    try {
+      renderSelector()
+      open()
+      fireEvent.click(screen.getByRole('tab', { name: 'Claude Agent' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Claude Haiku' }))
+
+      await waitFor(() => {
+        expect(mockSetSwitchPendingOption).toHaveBeenCalledWith('session-1', {
+          modelId: 'haiku',
+          configValues: { effort: 'low' }
+        })
+      })
+    } finally {
+      mockPersistenceApi.read.mockImplementation(async () => ({ success: false }))
+    }
+  })
+
+  it("arms another agent's favorite with its snapshot", async () => {
+    seed([readyEntry(CLAUDE)])
+    acpStateRef.current.agentOptionsCache = { [CLAUDE.id]: CLAUDE_MODELS }
+    const favoritesStore = createFavoritesStore(memoryFavoritesAdapter())
+    await favoritesStore.set(
+      { configId: CLAUDE.id, modelId: 'haiku', options: { effort: 'max' } },
+      true
+    )
+    renderSelector({ v2PanelProps: { favoritesStore } })
+    open()
+
+    const favorites = await screen.findByRole('group', { name: 'Favorites' })
+    fireEvent.click(within(favorites).getByRole('button', { name: /Claude Haiku · Max/ }))
+
+    await waitFor(() => {
+      expect(mockSetSwitchPendingOption).toHaveBeenCalledWith('session-1', {
+        modelId: 'haiku',
+        configValues: { effort: 'max' }
+      })
+    })
+  })
+
+  it("with a switch armed, a model of the chat's own agent drops the switch and picks it with its values", async () => {
+    seed([readyEntry(CURSOR), readyEntry(CLAUDE)], {
+      switching: { toConfigId: CLAUDE.id },
+      models: {
+        currentModelId: 'c1',
+        availableModels: [
+          { modelId: 'c1', name: 'Cursor One' },
+          { modelId: 'c2', name: 'Cursor Two' }
+        ]
+      },
+      configOptions: []
+    })
+    const cursorModels = {
+      currentModelId: 'c1',
+      availableModels: [
+        { modelId: 'c1', name: 'Cursor One' },
+        { modelId: 'c2', name: 'Cursor Two' }
+      ]
+    }
+    acpStateRef.current.agentOptionsCache = {
+      [CLAUDE.id]: CLAUDE_MODELS,
+      [CURSOR.id]: { models: cursorModels, modes: null, configOptions: [], updatedAt: 1 }
+    }
+    const favoritesStore = createFavoritesStore(memoryFavoritesAdapter())
+    await favoritesStore.set(
+      { configId: CURSOR.id, modelId: 'c2', options: { effort: 'low' } },
+      true
+    )
+    renderSelector({ v2PanelProps: { favoritesStore } })
+    open()
+
+    const favorites = await screen.findByRole('group', { name: 'Favorites' })
+    fireEvent.click(within(favorites).getByRole('button', { name: /Cursor Two · Low/ }))
+
+    expect(mockCancelAgentSwitch).toHaveBeenCalledWith('session-1')
+    expect(mockPickModel).toHaveBeenCalledWith('session-1', 'c2', { effort: 'low' })
+  })
+
   it('does not save a model pick when the store rejects the arm', async () => {
     mockArmAgentSwitch.mockResolvedValueOnce(false)
     seed([readyEntry(CLAUDE)])
@@ -804,6 +957,34 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
         silent: true
       })
     })
+  })
+
+  it('v2: arrowing across agent tabs starts only the agent it stops on', async () => {
+    const others = ['gemini', 'codex', 'amp'].map((id) =>
+      readyEntry({ ...CLAUDE, id: `custom-${id}`, configId: `acp-registry:${id}`, name: id })
+    )
+    localStorage.setItem(MODEL_PICKER_V2_KEY, '1')
+    try {
+      seed(others)
+      renderSelector()
+      open()
+      // Let the saved-list reads settle, so an open tab may start its agent at once.
+      await act(async () => {})
+      const tabs = screen.getAllByRole('tab')
+      expect(tabs).toHaveLength(4)
+      tabs[0]?.focus()
+      for (const tab of tabs.slice(0, -1)) fireEvent.keyDown(tab, { key: 'ArrowRight' })
+      expect(tabs[3]).toHaveAttribute('aria-selected', 'true')
+
+      await waitFor(() => expect(mockPrepareChat).toHaveBeenCalled())
+      await new Promise((resolve) => setTimeout(resolve, AUTO_LOAD_SETTLE_MS))
+      // V2 tabs run A to Z, so the last tab is whichever name sorts last.
+      const last = others.find((e) => e.config?.name === tabs[3]?.getAttribute('aria-label'))
+      expect(last).toBeDefined()
+      expect(mockPrepareChat.mock.calls.map(([configId]) => configId)).toEqual([last?.config?.id])
+    } finally {
+      localStorage.removeItem(MODEL_PICKER_V2_KEY)
+    }
   })
 
   it('busy turn: Cancel turn and switch runs cancel → wait → arm with the model', async () => {
@@ -858,10 +1039,20 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
   it.each([
     ['queued prompts', { promptQueues: { 'session-1': [{ id: 'q1' }] } }, {}],
     ['a launching chat', { launchingSessionIds: { 'session-1': true } }, {}],
-    ['a pending browser sign-in', { pendingBrowserOpen: { 'agent-1': 'https://x' } }, {}],
+    [
+      'a pending browser sign-in',
+      { pendingSignIn: { 'agent-1': { kind: 'browser', url: 'https://x' } } },
+      {}
+    ],
     [
       'an active turn with a queued prompt',
       { promptQueues: { 'session-1': [{ id: 'q1' }] } },
+      { activeTurn: true, openTurnId: 'turn-1' }
+    ],
+    ['a background subagent after the turn', { toolCalls: BACKGROUND_LAUNCH }, {}],
+    [
+      'an active turn with a background subagent',
+      { toolCalls: BACKGROUND_LAUNCH },
       { activeTurn: true, openTurnId: 'turn-1' }
     ]
   ])('wait-only busy (%s): only Wait, no cancel-then-switch', (_name, state, session) => {
@@ -934,6 +1125,865 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
   })
 })
 
+function stableMarkup(html: string): string {
+  return html.replace(/:r[0-9a-z]+:/g, ':id:').replace(/radix-[:\w-]+/g, 'radix-id')
+}
+
+describe('desktop: signing in to another agent from its tab', () => {
+  const CODEX: StoredAgentConfig = {
+    id: 'custom-codex',
+    configId: 'acp-registry:codex-acp',
+    name: 'Codex',
+    command: 'codex-acp',
+    args: [],
+    env: {},
+    allowTerminal: false
+  }
+  const CODEX_KEY = prepareChatKey(CODEX.id, '/work', undefined)
+
+  /** codex-acp signed out: three sign-in methods, so the silent read failed on multi-auth. */
+  function seedSignedOutCodex(): void {
+    seed([readyEntry(CODEX)])
+    acpStateRef.current.configToLiveAgent = {
+      ...(acpStateRef.current.configToLiveAgent as Record<string, string>),
+      [agentReuseKey(CODEX.id, '/work', 'p1')]: 'agent-codex'
+    }
+    acpStateRef.current.agents = {
+      'agent-codex': {
+        id: 'agent-codex',
+        capabilities: {},
+        authMethods: [
+          { id: 'api-key', name: 'API key', type: 'agent' },
+          { id: 'chat-gpt', name: 'ChatGPT', type: 'agent' },
+          { id: 'chat-gpt-device-code', name: 'ChatGPT (device code)', type: 'agent' }
+        ]
+      }
+    }
+    acpStateRef.current.prepareChatErrors = {
+      [CODEX_KEY]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'This agent advertises multiple sign-in methods.'
+      }
+    }
+  }
+
+  it.each([
+    ['v1', '0'],
+    ['v2', '1']
+  ])('%s: offers its sign-in methods, signs in with ChatGPT, then reads its models again', async (_variant, flag) => {
+    localStorage.setItem(MODEL_PICKER_V2_KEY, flag)
+    try {
+      seedSignedOutCodex()
+      let finishSignIn: () => void = () => {}
+      mockAuthenticateAgent.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishSignIn = resolve
+          })
+      )
+      renderSelector()
+      open()
+      fireEvent.click(screen.getByRole('tab', { name: 'Codex' }))
+
+      expect(screen.getByText('Could not load Codex models.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'API key' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'ChatGPT (device code)' })).toBeEnabled()
+      fireEvent.click(screen.getByRole('button', { name: 'ChatGPT' }))
+
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-codex', 'chat-gpt')
+      expect(await screen.findByRole('button', { name: 'Signing in with ChatGPT…' })).toBeDisabled()
+      expect(screen.queryByRole('button', { name: 'API key' })).toBeNull()
+      expect(mockPrepareChat).not.toHaveBeenCalled()
+
+      await act(async () => finishSignIn())
+      expect(mockCancelPreparedChat).toHaveBeenCalledWith(CODEX_KEY)
+      expect(mockPrepareChat).toHaveBeenCalledWith(CODEX.id, '/work', undefined, 'p1', {
+        silent: true
+      })
+    } finally {
+      localStorage.removeItem(MODEL_PICKER_V2_KEY)
+    }
+  })
+
+  it('keeps the methods and reads nothing again when the sign-in fails', async () => {
+    localStorage.setItem(MODEL_PICKER_V2_KEY, '1')
+    try {
+      seedSignedOutCodex()
+      mockAuthenticateAgent.mockRejectedValueOnce(new Error('Sign-in was cancelled'))
+      renderSelector()
+      open()
+      fireEvent.click(screen.getByRole('tab', { name: 'Codex' }))
+      fireEvent.click(screen.getByRole('button', { name: 'API key' }))
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('Sign-in was cancelled'))
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-codex', 'api-key')
+      expect(screen.getByRole('button', { name: 'ChatGPT' })).toBeEnabled()
+      expect(mockPrepareChat).not.toHaveBeenCalled()
+    } finally {
+      localStorage.removeItem(MODEL_PICKER_V2_KEY)
+    }
+  })
+
+  it('signs in with a typed API key, then reads its models again, and never logs the key', async () => {
+    const apiKey = 'sk-termul-test-not-real'
+    localStorage.setItem(MODEL_PICKER_V2_KEY, '1')
+    try {
+      seedSignedOutCodex()
+      const agent = (acpStateRef.current.agents as Record<string, { authMethods: unknown[] }>)[
+        'agent-codex'
+      ]
+      agent.authMethods = [
+        { id: 'api-key', name: 'API key', type: 'agent', takesApiKey: true },
+        { id: 'chat-gpt', name: 'ChatGPT', type: 'agent' }
+      ]
+      renderSelector()
+      open()
+      fireEvent.click(screen.getByRole('tab', { name: 'Codex' }))
+
+      const input = screen.getByLabelText('Key for API key')
+      expect(input).toHaveAttribute('type', 'password')
+      fireEvent.change(input, { target: { value: apiKey } })
+      fireEvent.click(screen.getByRole('button', { name: 'API key' }))
+
+      await waitFor(() =>
+        expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-codex', 'api-key', { apiKey })
+      )
+      await waitFor(() => expect(mockCancelPreparedChat).toHaveBeenCalledWith(CODEX_KEY))
+      expect(mockPrepareChat).toHaveBeenCalledWith(CODEX.id, '/work', undefined, 'p1', {
+        silent: true
+      })
+      expect(mockLogFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'agentSignIn.authenticate' })
+      )
+      expect(JSON.stringify(mockLogFrontendError.mock.calls)).not.toContain(apiKey)
+    } finally {
+      localStorage.removeItem(MODEL_PICKER_V2_KEY)
+    }
+  })
+})
+
+describe('AgentModelSelector desktop markup', () => {
+  it.each([
+    ['v1', '0'],
+    ['v2', '1']
+  ])('keeps the desktop pill and %s popover markup unchanged', (_variant, flag) => {
+    localStorage.setItem(MODEL_PICKER_V2_KEY, flag)
+    try {
+      renderSelector({
+        genericOptions: [
+          { id: 'web_search', name: 'Web search', type: 'boolean', currentValue: true },
+          option('agent', 'Agent', 'other', 'default', [
+            { value: 'default', name: 'Default' },
+            { value: 'review', name: 'Review' }
+          ])
+        ]
+      })
+      expect(
+        stableMarkup(screen.getByTestId('agent-model-selector-trigger').outerHTML)
+      ).toMatchSnapshot()
+      open()
+      expect(
+        stableMarkup(screen.getByTestId('agent-model-selector-panel').outerHTML)
+      ).toMatchSnapshot()
+    } finally {
+      localStorage.setItem(MODEL_PICKER_V2_KEY, '0')
+    }
+  })
+})
+
+describe('phone Select model sheet', () => {
+  const MODES = {
+    currentModeId: 'default',
+    availableModes: [
+      { id: 'default', name: 'Manual' },
+      { id: 'plan', name: 'Plan', description: 'Plan before editing' }
+    ]
+  }
+  const USAGE = {
+    used: 50_000,
+    size: 200_000,
+    baselineUsed: 10_000,
+    updatedAt: 1,
+    source: 'reported' as const
+  }
+
+  beforeEach(() => {
+    mockIsMobile.current = true
+  })
+
+  function sheet(): HTMLElement {
+    return screen.getByRole('dialog', { name: 'Select model' })
+  }
+
+  function phone(overrides: Partial<PhoneSelectorControls>): PhoneSelectorControls {
+    return {
+      modes: null,
+      onSetMode: vi.fn(),
+      compact: {
+        onCompact: undefined,
+        signals: { connected: true, activeTurn: false, compaction: null }
+      },
+      ...overrides
+    }
+  }
+
+  it('lists the models with their descriptions and checks the chosen one', () => {
+    const onSetConfig = vi.fn()
+    renderSelector({
+      onSetConfig,
+      modelOption: {
+        ...option('model', 'Model', 'model', 'opus', []),
+        options: [
+          { value: 'opus', name: 'Opus 5.5', description: 'For complex work' },
+          { value: 'haiku', name: 'Haiku 5.5', description: 'Fastest for quick answers' }
+        ]
+      }
+    })
+    open()
+
+    const haiku = within(sheet()).getByRole('button', { name: 'Haiku 5.5' })
+    expect(haiku).toHaveAccessibleDescription('Fastest for quick answers')
+    expect(haiku).toHaveAttribute('aria-pressed', 'false')
+    expect(within(sheet()).getByRole('button', { name: 'Opus 5.5' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(within(sheet()).queryByRole('searchbox')).toBeNull()
+
+    fireEvent.click(haiku)
+    expect(onSetConfig).toHaveBeenCalledWith('model', 'haiku')
+    expect(sheet()).toBeInTheDocument()
+  })
+
+  it('shows a search field when several agents are set up, to find a model across them', () => {
+    seed([readyEntry(CLAUDE)])
+    acpStateRef.current.agentOptionsCache = { [CLAUDE.id]: CLAUDE_MODELS }
+    renderSelector()
+    open()
+
+    const search = within(sheet()).getByRole('searchbox', { name: 'Search models and agents' })
+    expect(search).not.toHaveFocus()
+    fireEvent.change(search, { target: { value: 'Haiku' } })
+    expect(within(sheet()).getByRole('button', { name: /Claude Haiku/ })).toBeInTheDocument()
+  })
+
+  it('shows a search field for one agent with more than 12 models', () => {
+    const many = Array.from({ length: 13 }, (_, i) => ({ value: `m${i}`, name: `Model ${i}` }))
+    renderSelector({ modelOption: option('model', 'Model', 'model', 'm0', many) })
+    open()
+
+    const search = within(sheet()).getByRole('searchbox', { name: 'Search models and agents' })
+    expect(search).not.toHaveFocus()
+    fireEvent.change(search, { target: { value: 'Model 12' } })
+    expect(within(sheet()).getByRole('button', { name: 'Model 12' })).toBeInTheDocument()
+    expect(within(sheet()).queryByRole('button', { name: 'Model 3' })).toBeNull()
+  })
+
+  it('puts starred models in a Favorites group first', async () => {
+    const favoritesStore = createFavoritesStore(memoryFavoritesAdapter())
+    renderSelector({ v2PanelProps: { favoritesStore } })
+    open()
+    expect(within(sheet()).queryByRole('group', { name: 'Favorites' })).toBeNull()
+
+    const sonnetStar = within(sheet())
+      .getAllByRole('button', { name: 'Add to favorites' })
+      .at(1) as HTMLElement
+    fireEvent.click(sonnetStar)
+
+    const favorites = await within(sheet()).findByRole('group', { name: 'Favorites' })
+    expect(within(favorites).getByRole('button', { name: 'Sonnet 5.5' })).toBeInTheDocument()
+  })
+
+  it('a starred model keeps its effort and Fast, and picking it sends them with the model', async () => {
+    const favoritesStore = createFavoritesStore(memoryFavoritesAdapter())
+    const onSetModel = vi.fn()
+    renderSelector({ v2PanelProps: { favoritesStore }, onSetModel })
+    open()
+
+    const opusStar = within(sheet())
+      .getAllByRole('button', { name: 'Add to favorites' })
+      .at(0) as HTMLElement
+    fireEvent.click(opusStar)
+    const favorites = await within(sheet()).findByRole('group', { name: 'Favorites' })
+    fireEvent.click(within(favorites).getByRole('button', { name: 'Opus 5.5 · High' }))
+
+    expect(onSetModel).toHaveBeenCalledWith('opus', { reasoning: 'high', fast_mode: 'off' })
+  })
+
+  it('a star never snapshots permission mode', async () => {
+    const favoritesStore = createFavoritesStore(memoryFavoritesAdapter())
+    renderSelector({
+      v2PanelProps: { favoritesStore },
+      genericOptions: [
+        option('permission', 'Permission', 'mode', 'bypass', [
+          { value: 'default', name: 'Default' },
+          { value: 'bypass', name: 'Bypass' }
+        ])
+      ]
+    })
+    open()
+
+    fireEvent.click(
+      within(sheet()).getAllByRole('button', { name: 'Add to favorites' }).at(0) as HTMLElement
+    )
+
+    await waitFor(() =>
+      expect(favoritesStore.list().map((f) => f.options)).toEqual([
+        { reasoning: 'high', fast_mode: 'off' }
+      ])
+    )
+  })
+
+  /** A ready registry agent with no stored config: the chat cannot arm it. */
+  /** Ready on the host (npx), but its config is not stored: the chat cannot arm it yet. */
+  const GEMINI: StoredAgentConfig = {
+    id: 'acp-registry:gemini',
+    configId: 'acp-registry:gemini',
+    name: 'Gemini CLI',
+    command: 'npx',
+    args: ['@google/gemini-cli', '--experimental-acp'],
+    env: {},
+    allowTerminal: false,
+    templateId: 'gemini'
+  }
+  const GEMINI_NOT_SET_UP: SupportedAcpAgentEntry = {
+    ...readyEntry(GEMINI),
+    id: 'gemini',
+    agent: { id: 'gemini', name: 'Gemini CLI', version: '', description: '', distribution: {} }
+  }
+
+  function seedProviders(): void {
+    seed([readyEntry(CLAUDE), GEMINI_NOT_SET_UP, installEntry()])
+    acpStateRef.current.agentConfigs = [CURSOR, CLAUDE]
+    acpStateRef.current.agentOptionsCache = { [CLAUDE.id]: CLAUDE_MODELS }
+  }
+
+  const GEMINI_KEY = prepareChatKey(GEMINI.id, '/work', undefined)
+  const GEMINI_MODELS = {
+    ...CLAUDE_MODELS,
+    models: {
+      currentModelId: 'pro',
+      availableModels: [
+        { modelId: 'pro', name: 'Gemini Pro' },
+        { modelId: 'flash', name: 'Gemini Flash' }
+      ]
+    }
+  }
+
+  /** The store keeps what `saveAgentConfig` saves, as the real one does. */
+  function storeSavedConfigs(): void {
+    mockSaveAgentConfig.mockImplementation(async (config: StoredAgentConfig) => {
+      const configs = acpStateRef.current.agentConfigs as StoredAgentConfig[]
+      acpStateRef.current = { ...acpStateRef.current, agentConfigs: [...configs, config] }
+    })
+  }
+
+  function patchStore(patch: Record<string, unknown>): void {
+    acpStateRef.current = { ...acpStateRef.current, ...patch }
+  }
+
+  const overlayIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
+
+  function openProviders(): HTMLElement {
+    open()
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Provider Cursor 4 available' }))
+    return screen.getByRole('dialog', { name: 'Providers' })
+  }
+
+  it('lists the providers grouped by what a tap does, with the ready ones model counts', () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+
+    const ready = within(providers).getByRole('group', { name: 'Ready' })
+    const [claude, cursor] = within(ready).getAllByRole('button')
+    expect(claude).toHaveAccessibleName('Claude Agent')
+    expect(claude).toHaveAccessibleDescription('2 models')
+    expect(cursor).toHaveAccessibleName('Cursor')
+    expect(cursor).toHaveAccessibleDescription('2 models')
+    expect(within(ready).getByRole('button', { name: 'Cursor' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    const setup = within(providers).getByRole('group', { name: 'Needs setup' })
+    expect(within(setup).getByRole('button', { name: 'Gemini CLI Not set up' })).toBeEnabled()
+    const install = within(providers).getByRole('group', { name: 'Install' })
+    expect(within(install).getByRole('button', { name: 'OpenCode Install' })).toBeEnabled()
+  })
+
+  it('filters the providers by name', () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+    const search = within(providers).getByRole('searchbox', { name: 'Search providers' })
+
+    fireEvent.change(search, { target: { value: 'open' } })
+    expect(within(providers).getAllByRole('button', { name: /Install|models/ })).toHaveLength(1)
+    expect(within(providers).getByRole('button', { name: 'OpenCode Install' })).toBeInTheDocument()
+
+    fireEvent.change(search, { target: { value: 'zzz' } })
+    expect(within(providers).getByText('No providers match.')).toBeInTheDocument()
+  })
+
+  it('picks a ready provider, comes back to its models and arms it with the model picked', async () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+
+    fireEvent.click(within(providers).getByRole('button', { name: 'Claude Agent' }))
+
+    expect(
+      within(sheet()).getByRole('button', { name: 'Provider Claude Agent 4 available' })
+    ).toBeInTheDocument()
+    expect(
+      within(sheet()).getByText('Switches to Claude Agent on the next send')
+    ).toBeInTheDocument()
+    expect(within(sheet()).queryByRole('button', { name: /^Effort/ })).toBeNull()
+    await waitFor(() =>
+      expect(
+        within(sheet()).getByRole('button', { name: 'Provider Claude Agent 4 available' })
+      ).toHaveFocus()
+    )
+
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Claude Haiku' }))
+    await waitFor(() => expect(mockArmAgentSwitch).toHaveBeenCalledWith('session-1', CLAUDE.id))
+    expect(sheet()).toBeInTheDocument()
+  })
+
+  it('opens the install view of an agent that needs installing, and Escape goes back one level', async () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+    const ids = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
+
+    fireEvent.click(within(providers).getByRole('button', { name: 'OpenCode Install' }))
+    const installView = screen.getByRole('dialog', { name: 'OpenCode' })
+    expect(within(installView).getByText('OpenCode is not installed')).toBeInTheDocument()
+    expect(ids()).toEqual([
+      expect.stringMatching(/^agent-model-selector:.+:subview:1$/),
+      expect.stringMatching(/^agent-model-selector:.+:subview:2$/)
+    ])
+
+    fireEvent.keyDown(installView, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: 'Providers' })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('dialog', { name: 'Providers' })).getByRole('button', {
+          name: 'OpenCode Install'
+        })
+      ).toHaveFocus()
+    )
+
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Providers' }), { key: 'Escape' })
+    expect(sheet()).toBeInTheDocument()
+    fireEvent.keyDown(sheet(), { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('selects the picked provider in the launcher and comes back to the model list', () => {
+    const selectAgent = vi.fn()
+    const source: SelectorSource = {
+      kind: 'draft',
+      key: 'launcher-test',
+      agentConfigs: [CURSOR, CLAUDE],
+      entries: [readyEntry(CURSOR), readyEntry(CLAUDE)],
+      currentConfigId: CURSOR.id,
+      armedConfigId: null,
+      blocked: false,
+      turnBusy: false,
+      installingConfigId: null,
+      install: vi.fn(),
+      workspace: { cwd: '/work', projectId: 'p1' },
+      liveCatalog: null,
+      pickCurrentModel: vi.fn(),
+      pickOtherModel: vi.fn(),
+      cancelThenSwitch: vi.fn(async () => {}),
+      selectAgent,
+      modelStatus: null,
+      updateAgentIds: null
+    }
+    renderSelector({ draft: { source, agentName: 'Cursor' } })
+    open()
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Provider Cursor 2 available' }))
+
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Providers' })).getByRole('button', {
+        name: 'Claude Agent'
+      })
+    )
+
+    expect(selectAgent).toHaveBeenCalledWith(expect.objectContaining({ configId: CLAUDE.id }))
+    expect(sheet()).toBeInTheDocument()
+  })
+
+  it('starts an agent once its install finishes, then goes back to its models', () => {
+    seedProviders()
+    const { rerender } = renderSelector()
+    const providers = openProviders()
+    fireEvent.click(within(providers).getByRole('button', { name: 'OpenCode Install' }))
+    expect(screen.getByRole('dialog', { name: 'OpenCode' })).toBeInTheDocument()
+
+    const OPENCODE: StoredAgentConfig = {
+      ...CURSOR,
+      id: 'acp-registry:opencode',
+      configId: 'acp-registry:opencode',
+      name: 'OpenCode',
+      templateId: 'opencode'
+    }
+    seed([readyEntry(CLAUDE), GEMINI_NOT_SET_UP, readyEntry(OPENCODE)])
+    patchStore({ agentConfigs: [CURSOR, CLAUDE, OPENCODE] })
+    rerender(selector())
+
+    const setup = screen.getByRole('dialog', { name: 'OpenCode' })
+    expect(within(setup).getByRole('heading', { name: 'Starting OpenCode' })).toBeInTheDocument()
+    expect(mockPrepareChat).toHaveBeenCalledWith(OPENCODE.id, '/work', undefined, 'p1', {
+      silent: true
+    })
+    expect(overlayIds()).toHaveLength(2)
+
+    patchStore({ agentOptionsCache: { [CLAUDE.id]: CLAUDE_MODELS, [OPENCODE.id]: GEMINI_MODELS } })
+    rerender(selector())
+
+    expect(
+      within(sheet()).getByRole('button', { name: 'Provider OpenCode 4 available' })
+    ).toBeInTheDocument()
+    expect(useOverlayStackStore.getState().stack).toEqual([])
+  })
+
+  it('sets up a Needs setup provider in the sheet, signs in, then arms the model picked', async () => {
+    seedProviders()
+    storeSavedConfigs()
+    const { rerender } = renderSelector()
+    const providers = openProviders()
+
+    fireEvent.click(within(providers).getByRole('button', { name: 'Gemini CLI Not set up' }))
+    const setup = screen.getByRole('dialog', { name: 'Gemini CLI' })
+    expect(within(setup).getByRole('heading', { name: 'Set up Gemini CLI' })).toBeInTheDocument()
+    expect(within(setup).getByText('Runs with npx on this server.')).toBeInTheDocument()
+    expect(overlayIds()).toEqual([
+      expect.stringMatching(/^agent-model-selector:.+:subview:1$/),
+      expect.stringMatching(/^agent-model-selector:.+:subview:2$/)
+    ])
+
+    fireEvent.click(within(setup).getByRole('button', { name: 'Set up Gemini CLI' }))
+    await waitFor(() => expect(mockSaveAgentConfig).toHaveBeenCalledWith(GEMINI))
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith(GEMINI.id, '/work', undefined, 'p1', {
+        silent: true
+      })
+    )
+    expect(within(setup).getByRole('heading', { name: 'Starting Gemini CLI' })).toBeInTheDocument()
+
+    patchStore({
+      prepareChatErrors: {
+        [GEMINI_KEY]: {
+          category: 'auth',
+          label: 'Authentication required',
+          detail: 'Gemini needs you to sign in.'
+        }
+      },
+      configToLiveAgent: {
+        ...(acpStateRef.current.configToLiveAgent as Record<string, string>),
+        [agentReuseKey(GEMINI.id, '/work', 'p1')]: 'agent-gemini'
+      },
+      agents: {
+        'agent-gemini': {
+          authMethods: [
+            {
+              id: 'gemini-api-key',
+              name: 'Use a Gemini API key',
+              type: 'env_var',
+              description: 'Set GEMINI_API_KEY on the server.'
+            },
+            { id: 'oauth-personal', name: 'Log in with Google', type: 'agent' }
+          ]
+        }
+      }
+    })
+    rerender(selector())
+
+    expect(
+      within(setup).getByRole('heading', { name: 'Sign in to Gemini CLI' })
+    ).toBeInTheDocument()
+    expect(within(setup).getByText('Gemini needs you to sign in.')).toBeInTheDocument()
+    expect(within(setup).getByText('Set GEMINI_API_KEY on the server.')).toBeInTheDocument()
+    expect(
+      within(setup).getByText(
+        'Gemini CLI opens its sign-in page. Come back here when you are done.'
+      )
+    ).toBeInTheDocument()
+    fireEvent.click(within(setup).getByRole('button', { name: 'Log in with Google' }))
+
+    await waitFor(() =>
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-gemini', 'oauth-personal')
+    )
+    await waitFor(() => expect(mockCancelPreparedChat).toHaveBeenCalledWith(GEMINI_KEY))
+    expect(mockPrepareChat).toHaveBeenLastCalledWith(GEMINI.id, '/work', undefined, 'p1', {
+      silent: true
+    })
+
+    patchStore({
+      prepareChatErrors: {},
+      agentOptionsCache: { [CLAUDE.id]: CLAUDE_MODELS, [GEMINI.id]: GEMINI_MODELS }
+    })
+    rerender(selector())
+
+    expect(
+      within(sheet()).getByRole('button', { name: 'Provider Gemini CLI 4 available' })
+    ).toBeInTheDocument()
+    expect(overlayIds()).toEqual([])
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Gemini Flash' }))
+    await waitFor(() => expect(mockArmAgentSwitch).toHaveBeenCalledWith('session-1', GEMINI.id))
+    await waitFor(() =>
+      expect(mockSetSwitchPendingOption).toHaveBeenCalledWith('session-1', { modelId: 'flash' })
+    )
+  })
+
+  it('signs in to a ready provider whose models ask for credentials, from its setup screen', async () => {
+    seedProviders()
+    patchStore({
+      agentOptionsCache: {},
+      prepareChatErrors: {
+        [prepareChatKey(CLAUDE.id, '/work', undefined)]: {
+          category: 'auth',
+          label: 'Authentication required',
+          detail: 'Run /login.'
+        }
+      },
+      configToLiveAgent: {
+        ...(acpStateRef.current.configToLiveAgent as Record<string, string>),
+        [agentReuseKey(CLAUDE.id, '/work', 'p1')]: 'agent-claude'
+      },
+      agents: {
+        'agent-claude': { authMethods: [{ id: 'claude-login', name: 'Log in', type: 'agent' }] }
+      }
+    })
+    const { rerender } = renderSelector()
+    const providers = openProviders()
+    fireEvent.click(within(providers).getByRole('button', { name: 'Claude Agent' }))
+    expect(within(sheet()).getByText('Could not load Claude Agent models.')).toBeInTheDocument()
+
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Sign in to Claude Agent' }))
+    const setup = screen.getByRole('dialog', { name: 'Claude Agent' })
+    expect(
+      within(setup).getByRole('heading', { name: 'Sign in to Claude Agent' })
+    ).toBeInTheDocument()
+    fireEvent.click(within(setup).getByRole('button', { name: 'Log in' }))
+    await waitFor(() =>
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-claude', 'claude-login')
+    )
+
+    patchStore({ prepareChatErrors: {}, agentOptionsCache: { [CLAUDE.id]: CLAUDE_MODELS } })
+    rerender(selector())
+    expect(within(sheet()).getByRole('button', { name: 'Claude Haiku' })).toBeInTheDocument()
+    expect(overlayIds()).toEqual([])
+  })
+
+  it('Escape on the setup screen goes back to Providers without setting anything up', async () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+
+    fireEvent.click(within(providers).getByRole('button', { name: 'Gemini CLI Not set up' }))
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Gemini CLI' }), { key: 'Escape' })
+
+    const back = screen.getByRole('dialog', { name: 'Providers' })
+    await waitFor(() =>
+      expect(within(back).getByRole('button', { name: 'Gemini CLI Not set up' })).toHaveFocus()
+    )
+    expect(overlayIds()).toEqual([expect.stringMatching(/^agent-model-selector:.+:subview:1$/)])
+    expect(mockSaveAgentConfig).not.toHaveBeenCalled()
+    expect(mockPrepareChat).not.toHaveBeenCalled()
+  })
+
+  it('shows a failed save in the sheet, and Try again saves again', async () => {
+    seedProviders()
+    mockSaveAgentConfig.mockRejectedValueOnce(new Error('The server store is read-only.'))
+    renderSelector()
+    const providers = openProviders()
+    fireEvent.click(within(providers).getByRole('button', { name: 'Gemini CLI Not set up' }))
+    const setup = screen.getByRole('dialog', { name: 'Gemini CLI' })
+
+    fireEvent.click(within(setup).getByRole('button', { name: 'Set up Gemini CLI' }))
+
+    expect(await within(setup).findByRole('heading', { name: 'Setup failed' })).toBeInTheDocument()
+    expect(within(setup).getByText('The server store is read-only.')).toBeInTheDocument()
+    fireEvent.click(within(setup).getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(mockSaveAgentConfig).toHaveBeenCalledTimes(2))
+  })
+
+  it('shows an agent that fails to start in the sheet, and Try again starts it again', async () => {
+    seedProviders()
+    storeSavedConfigs()
+    const { rerender } = renderSelector()
+    const providers = openProviders()
+    fireEvent.click(within(providers).getByRole('button', { name: 'Gemini CLI Not set up' }))
+    const setup = screen.getByRole('dialog', { name: 'Gemini CLI' })
+    fireEvent.click(within(setup).getByRole('button', { name: 'Set up Gemini CLI' }))
+    await waitFor(() => expect(mockPrepareChat).toHaveBeenCalledTimes(1))
+
+    patchStore({
+      prepareChatErrors: {
+        [GEMINI_KEY]: {
+          category: 'spawn',
+          label: 'Agent unavailable',
+          detail: 'npx was not found.'
+        }
+      }
+    })
+    rerender(selector())
+
+    expect(within(setup).getByRole('heading', { name: 'Agent unavailable' })).toBeInTheDocument()
+    expect(within(setup).getByText('npx was not found.')).toBeInTheDocument()
+    fireEvent.click(within(setup).getByRole('button', { name: 'Try again' }))
+    expect(mockCancelPreparedChat).toHaveBeenCalledWith(GEMINI_KEY)
+    expect(mockPrepareChat).toHaveBeenCalledTimes(2)
+    expect(mockSaveAgentConfig).toHaveBeenCalledTimes(1)
+  })
+
+  it('installs from the install view', async () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+
+    fireEvent.click(within(providers).getByRole('button', { name: 'OpenCode Install' }))
+    fireEvent.click(screen.getByTestId('agent-install-acp-registry:opencode'))
+
+    await waitFor(() => expect(mockInstallAcpAgent).toHaveBeenCalledWith('opencode'))
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('OpenCode installed'))
+  })
+
+  it('opens Effort as a sub-view, sets the pick and comes back to the sheet', async () => {
+    const onSetConfig = vi.fn()
+    renderSelector({ onSetConfig })
+    open()
+
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Effort High' }))
+    const effort = screen.getByRole('dialog', { name: 'Effort' })
+    expect(within(effort).getByRole('radio', { name: 'High' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+
+    fireEvent.click(within(effort).getByRole('radio', { name: 'Low' }))
+
+    expect(onSetConfig).toHaveBeenCalledWith('reasoning', 'low')
+    expect(within(sheet()).getByRole('button', { name: 'Effort Low' })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(within(sheet()).getByRole('button', { name: 'Effort Low' })).toHaveFocus()
+    )
+  })
+
+  it('leaves a sub-view whose option the agent drops, so the next Escape closes the sheet', () => {
+    const { rerender } = renderSelector()
+    open()
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Effort High' }))
+    expect(screen.getByRole('dialog', { name: 'Effort' })).toBeInTheDocument()
+
+    rerender(selector({ thoughtLevel: null }))
+    expect(within(sheet()).queryByRole('button', { name: /^Effort/ })).toBeNull()
+
+    fireEvent.keyDown(sheet(), { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('Escape leaves a sub-view before it closes the sheet', () => {
+    renderSelector()
+    open()
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Effort High' }))
+
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Effort' }), { key: 'Escape' })
+    expect(sheet()).toBeInTheDocument()
+
+    fireEvent.keyDown(sheet(), { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('sets the mode from the sheet and shows a non-default mode on the pill', () => {
+    const onSetMode = vi.fn()
+    renderSelector({ phone: phone({ modes: MODES, onSetMode }) })
+    const pill = screen.getByTestId('agent-model-selector-trigger')
+    expect(pill).toHaveAccessibleName('Opus 5.5. High. Switch agent. Currently Cursor')
+    open()
+
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Mode Manual' }))
+    const modes = screen.getByRole('dialog', { name: 'Mode' })
+    const plan = within(modes).getByRole('radio', { name: 'Plan' })
+    expect(plan).toHaveAccessibleDescription('Plan before editing')
+    fireEvent.click(plan)
+
+    expect(onSetMode).toHaveBeenCalledWith('plan')
+    expect(within(sheet()).getByRole('button', { name: 'Mode Plan' })).toBeInTheDocument()
+    expect(pill).toHaveAccessibleName('Opus 5.5. High. Plan mode. Switch agent. Currently Cursor')
+  })
+
+  it('toggles Fast and the agent options from the sheet', () => {
+    const onSetConfig = vi.fn()
+    renderSelector({
+      onSetConfig,
+      genericOptions: [
+        { id: 'web_search', name: 'Web search', type: 'boolean', currentValue: false },
+        option('agent', 'Agent', 'other', 'default', [
+          { value: 'default', name: 'Default' },
+          { value: 'review', name: 'Review' }
+        ])
+      ]
+    })
+    open()
+
+    expect(
+      within(sheet())
+        .getAllByRole('switch')
+        .map((toggle) => toggle.getAttribute('aria-checked'))
+    ).toEqual(['false', 'false'])
+    fireEvent.click(within(sheet()).getByRole('switch', { name: 'Fast' }))
+    expect(onSetConfig).toHaveBeenCalledWith('fast_mode', 'on')
+    fireEvent.click(within(sheet()).getByRole('switch', { name: 'Web search' }))
+    expect(onSetConfig).toHaveBeenCalledWith('web_search', true)
+
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Agent Default' }))
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Agent' })).getByRole('radio', { name: 'Review' })
+    )
+    expect(onSetConfig).toHaveBeenCalledWith('agent', 'review')
+  })
+
+  it('shows the context used with a Compact action', () => {
+    const onCompact = vi.fn()
+    renderSelector({
+      usage: USAGE,
+      messages: [{ role: 'user' }],
+      phone: phone({
+        compact: { onCompact, signals: { connected: true, activeTurn: false, compaction: null } }
+      })
+    })
+    open()
+
+    expect(within(sheet()).getByText('Context')).toBeInTheDocument()
+    expect(within(sheet()).getByText('25%')).toBeInTheDocument()
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Compact' }))
+    expect(onCompact).toHaveBeenCalledTimes(1)
+    expect(within(sheet()).getByRole('button', { name: 'Compacting…' })).toBeDisabled()
+  })
+
+  it('keeps Compact off while a turn runs', () => {
+    renderSelector({
+      usage: USAGE,
+      messages: [{ role: 'user' }],
+      phone: phone({
+        compact: {
+          onCompact: vi.fn(),
+          signals: { connected: true, activeTurn: true, compaction: null }
+        }
+      })
+    })
+    open()
+
+    expect(within(sheet()).getByRole('button', { name: 'Compact' })).toBeDisabled()
+  })
+})
+
 describe('AgentModelSelector on the mobile overlay back stack', () => {
   let detach: () => void
   const stackIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
@@ -951,7 +2001,7 @@ describe('AgentModelSelector on the mobile overlay back stack', () => {
   it('system back closes the sheet and consumes its history entry', async () => {
     renderSelector()
     open()
-    expect(screen.getByRole('dialog')).toHaveTextContent('Model and agent')
+    expect(screen.getByRole('dialog', { name: 'Select model' })).toBeInTheDocument()
     await waitForSentinelDepth(1)
     expect(stackIds()).toHaveLength(1)
 

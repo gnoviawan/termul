@@ -15,6 +15,15 @@ const SAMPLE_TABS: Record<WorkspaceTab['type'], WorkspaceTab> = {
   git: { type: 'git', id: 'git-1', cwd: '/repo' },
   'agent-chat': { type: 'agent-chat', id: 'chat-s1', sessionId: 's1' },
   'git-history': { type: 'git-history', id: 'gh-1', cwd: '/repo' },
+  'github-item': {
+    type: 'github-item',
+    id: 'github-item-/repo-origin-1',
+    cwd: '/repo',
+    repo: 'origin',
+    kind: 'issue',
+    number: 1,
+    title: 'Bug'
+  },
   diff: { type: 'diff', id: 'diff:abc', cwd: '/repo', path: 'src/a.ts', staged: false },
   'commit-diff': {
     type: 'commit-diff',
@@ -23,7 +32,8 @@ const SAMPLE_TABS: Record<WorkspaceTab['type'], WorkspaceTab> = {
     commit: 'e44b917'.padEnd(40, '0'),
     path: 'src/a.ts'
   },
-  canvas: { type: 'canvas', id: 'canvas-1', projectId: 'p', docPath: '/d.figcraft' }
+  canvas: { type: 'canvas', id: 'canvas-1', projectId: 'p', docPath: '/d.figcraft' },
+  automations: { type: 'automations', id: 'automations-p', projectId: 'p' }
 }
 
 const kinds = Object.keys(WORKSPACE_TAB_KIND_TRAITS) as WorkspaceTab['type'][]

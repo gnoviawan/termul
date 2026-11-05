@@ -36,7 +36,7 @@ use crate::web::worktree_api::{path_string, resolve_project_path};
 use crate::web::ws::AppState;
 
 /// `POST /worktree/rename-branch { worktreePath, oldBranch, newBranch }` body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeRenameBranchRequest {
     pub worktree_path: String,

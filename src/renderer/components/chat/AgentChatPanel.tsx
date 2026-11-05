@@ -5,7 +5,9 @@ import {
   emptyPendingLauncherOptions,
   overlayPendingLauncherOptions
 } from '@/components/agents/pending-launcher-options'
+import { ChatAutomationSuggestion } from '@/components/automations/ChatAutomationSuggestion'
 import { BrowserAgentIndicator } from '@/components/browser/BrowserAgentStop'
+import { armModelPick } from '@/components/chat/agent-model-selector/use-agent-switch'
 import { MODEL_CATEGORY } from '@/components/chat/chat-input-bar-config'
 import { SkillFilesProvider } from '@/components/chat/skill-file-links'
 import { TermulMark } from '@/components/TermulMark'
@@ -37,6 +39,7 @@ import {
   useAcpStore,
   usePromptQueue
 } from '@/stores/acp-store'
+import type { OptionValues } from '@/stores/acp-store/composer-options'
 import { isResumeFailureError } from '@/stores/acp-store/helpers'
 import { isLaunchPlaceholderSessionId } from '@/stores/acp-store/live-turn'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
@@ -44,16 +47,17 @@ import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
 import { useSessionDrivesBrowser } from '@/stores/browser-control-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useGitSheetStore } from '@/stores/git-sheet-store'
+import { hydrateGithubChatLinks } from '@/stores/github-chat-links-store'
 import { useProjectStore } from '@/stores/project-store'
-import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
+import { isAgentDeadError, sessionTurnBusy } from '@/stores/prompt-queue-orchestration'
 import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { AskUserQuestion } from './AskUserQuestion'
 import { BrowserConsentCard } from './BrowserConsentCard'
-import { ChatChangedFilesPanel } from './ChatChangedFilesPanel'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
+import { ChatStatusPill } from './ChatStatusPill'
 import { CHAT_GUTTER_X } from './chat-layout'
 import { ChatStarters } from './chat-start'
 import { buildTimeline, consolidateThoughtGroups, spliceReloadMarker } from './chat-timeline'
@@ -66,7 +70,7 @@ import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
 import { PromptReconcileNotice } from './PromptReconcileNotice'
 import { ReloadChatConfirmDialog } from './ReloadChatConfirmDialog'
-import { SubagentPill } from './SubagentPill'
+import { SubagentSurfaceProvider } from './SubagentSurface'
 import { useApprovalDock } from './use-approval-dock'
 import { AUTO_RESUME_FAILED_REASON, useIdleStopAutoResume } from './use-idle-stop-auto-resume'
 
@@ -145,6 +149,12 @@ export function AgentChatPanel({
   // excluded from worktree symlinks, so resolve against the main project root
   // — not session.cwd which may be a worktree path with no .agents/skills/.
   const skillsProjectRoot = session ? getProjectRootPath(session.projectId) : undefined
+  // A chat started from a GitHub item may be read-only (CAP-6): load the
+  // project's chat links before the user can send, so its guard applies.
+  const sessionProjectId = session?.projectId
+  useEffect(() => {
+    if (sessionProjectId) void hydrateGithubChatLinks(sessionProjectId)
+  }, [sessionProjectId])
   const { skills: availableSkills } = useAgentSkills(skillsProjectRoot)
   const switching = session?.switching ?? null
   const switchToConfigId = switching?.toConfigId ?? null
@@ -179,10 +189,6 @@ export function AgentChatPanel({
   )
   const commands = useAcpStore((s) =>
     promptSessionId ? (s.commands[promptSessionId] ?? EMPTY_COMMANDS) : EMPTY_COMMANDS
-  )
-  const hasFileChanges = useMemo(
-    () => toolCalls.some((t) => t.kind === 'edit' || t.kind === 'delete' || t.kind === 'move'),
-    [toolCalls]
   )
   const plan = useAcpStore((s) => s.plans[sessionId] ?? EMPTY_PLAN)
   // The oldest pending permission for THIS session (resolve one to reveal the next).
@@ -249,7 +255,7 @@ export function AgentChatPanel({
   const promptQueue = usePromptQueue(sessionId)
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
   const setMode = useAcpStore((s) => s.setMode)
-  const setModel = useAcpStore((s) => s.setModel)
+  const pickModel = useAcpStore((s) => s.pickModel)
   const setSwitchPendingOption = useAcpStore((s) => s.setSwitchPendingOption)
   // Story 5.3 (AC3): WS transport-level reconnect flag (separate from the
   // session-level `isClosed && isOpeningHistory` banner). Desktop Tauri never
@@ -476,8 +482,44 @@ export function AgentChatPanel({
     }
   }, [session, armedOptions, switchMcpServerCount])
 
+  // A model pick, from any surface: the model, then its values (a favorite's
+  // snapshot, else the ones saved for that model).
+  const handleSetModel = useCallback(
+    async (modelId: string, values?: OptionValues) => {
+      if (switchToConfigId) {
+        // Mirror the launcher's dual-write: when the target's model resolves
+        // via a config option (not the native models state), record it in
+        // configValues too so the pick applies through whichever surface the
+        // new session advertises.
+        const modelConfigOption = armedOptions?.configOptions.find(
+          (o) => o.category === MODEL_CATEGORY
+        )
+        await armModelPick(sessionId, switchToConfigId, {
+          modelId,
+          modelConfigId: modelConfigOption?.id ?? null,
+          values
+        })
+        return
+      }
+      try {
+        await pickModel(sessionId, modelId, values)
+      } catch (err) {
+        toast.error('Could not switch model. Try again.')
+        throw err
+      }
+    },
+    [armedOptions, pickModel, sessionId, switchToConfigId]
+  )
+
   const handleSetConfig = useCallback(
     async (configId: string, valueId: string | boolean) => {
+      const modelConfigOption = composerSession?.configOptions.find(
+        (o) => o.category === MODEL_CATEGORY
+      )
+      if (typeof valueId === 'string' && configId === modelConfigOption?.id) {
+        await handleSetModel(valueId)
+        return
+      }
       if (switchToConfigId) {
         await setSwitchPendingOption(sessionId, {
           configValues: { [configId]: typeof valueId === 'boolean' ? String(valueId) : valueId }
@@ -491,7 +533,14 @@ export function AgentChatPanel({
         throw err
       }
     },
-    [setConfigOption, setSwitchPendingOption, sessionId, switchToConfigId]
+    [
+      composerSession,
+      handleSetModel,
+      setConfigOption,
+      setSwitchPendingOption,
+      sessionId,
+      switchToConfigId
+    ]
   )
 
   const handleSetMode = useCallback(
@@ -508,34 +557,6 @@ export function AgentChatPanel({
       }
     },
     [setMode, setSwitchPendingOption, sessionId, switchToConfigId]
-  )
-
-  const handleSetModel = useCallback(
-    async (modelId: string) => {
-      if (switchToConfigId) {
-        // Mirror the launcher's dual-write: when the target's model resolves
-        // via a config option (not the native models state), record it in
-        // configValues too so the pick applies through whichever surface the
-        // new session advertises.
-        const modelConfigOption = armedOptions?.configOptions.find(
-          (o) => o.category === MODEL_CATEGORY
-        )
-        await setSwitchPendingOption(
-          sessionId,
-          modelConfigOption
-            ? { modelId, configValues: { [modelConfigOption.id]: modelId } }
-            : { modelId }
-        )
-        return
-      }
-      try {
-        await setModel(sessionId, modelId)
-      } catch (err) {
-        toast.error('Could not switch model. Try again.')
-        throw err
-      }
-    },
-    [armedOptions, setModel, setSwitchPendingOption, sessionId, switchToConfigId]
   )
 
   // Most recent user turn — drives the regenerate/retry affordances. We keep
@@ -653,8 +674,7 @@ export function AgentChatPanel({
   // Desktop + web parity: the open-in-editor chain is transport-agnostic —
   // where `/fs/info` is loopback-guarded on remote peers, resolution falls
   // back to the deliberately unguarded `/fs/read` open path (the same one
-  // ChatChangedFilesPanel uses). Local-image reads stay Tauri-only inside
-  // `TermulMarkdownImage` (alt-chip fallback).
+  // the changed-files list in ChatStatusPill uses).
   const projects = useProjectStore((state) => state.projects)
   const filePathContext = useMemo(
     () => ({
@@ -696,7 +716,9 @@ export function AgentChatPanel({
   }, [messages, toolCalls, agentSwitches, session?.worktreeProgressId, reloadMark, sessionId])
   // Keep the bottom cue visible for the complete turn, including while thought,
   // tool, and agent-message surfaces stream their own local progress.
-  const showRunningIndicator = Boolean(session?.activeTurn)
+  // Agent work outside a prompt turn (a turn Claude Code started itself after a
+  // background task finished) shows the same cue, Stop and queue as a turn.
+  const showRunningIndicator = sessionTurnBusy(session ?? undefined)
   // Same rule as ChatMessageList's empty state.
   const isEmptyChat = timeline.length === 0 && !showRunningIndicator
 
@@ -706,7 +728,7 @@ export function AgentChatPanel({
   // view (T2.2).
   const rootRef = useRef<HTMLDivElement>(null)
 
-  // Mobile dock around approvals: compact the plan / changed-files bars while
+  // Mobile dock around approvals: compact the plan bar while
   // the keyboard is up with an approval pending, and return focus to the
   // composer card when a prompt that held focus resolves. The ids mirror the
   // render gates below (a closed session renders no prompt). Above the early
@@ -721,7 +743,7 @@ export function AgentChatPanel({
     elicitationId: approvalsLive ? (pendingElicitation?.requestId ?? null) : null
   })
   const openGitSheet = useGitSheetStore((s) => s.openGitSheet)
-  // The mobile dock (prompts, or the changed-files bar plus the composer)
+  // The mobile dock (prompts, or the composer)
   // reports its top edge so the toast stack clears it. The wrapper is a plain
   // box on the mobile shell and `display: contents` on desktop, so desktop
   // layout (the starters' `flex-1`) is unchanged. The hook is also above the
@@ -791,12 +813,12 @@ export function AgentChatPanel({
   // Failed launches keep the Retry affordance even without a user prompt in
   // the transcript (the retry relaunches without re-sending).
   const isFailedLaunch = session.status === 'error' && Boolean(session.launchConfigId)
-  const canOfferRetry = (canRetryLastUserTurn || isFailedLaunch) && !session.activeTurn
+  const canOfferRetry = (canRetryLastUserTurn || isFailedLaunch) && !sessionTurnBusy(session)
   // The error notice's "Resume chat" for a stopped chat whose resume failed
   // reopens without re-sending, so it needs no user turn in the transcript.
   const isClosedResumeFailure =
     isClosed && !discoveredReopenContext && isResumeFailureError(session.lastError)
-  const canOfferNoticeRetry = (canOfferRetry || isClosedResumeFailure) && !session.activeTurn
+  const canOfferNoticeRetry = (canOfferRetry || isClosedResumeFailure) && !sessionTurnBusy(session)
   const retryDiscoveredReopen = discoveredReopenContext
     ? () => {
         void openDiscoveredSession(
@@ -820,7 +842,7 @@ export function AgentChatPanel({
     if (pane) workspace.showAgentLauncher(pane.id)
   }
 
-  return (
+  const chat = (
     // biome-ignore lint/a11y/noStaticElementInteractions: onFocus / onBlur only observe bubbled focus to track approval prompts; the root is not itself interactive
     <div
       ref={rootRef}
@@ -862,7 +884,7 @@ export function AgentChatPanel({
             <button
               type="button"
               onClick={retryDiscoveredReopen}
-              className="inline-flex min-h-11 items-center rounded-md border border-destructive/40 px-3 text-xs font-medium transition-colors hover:bg-destructive/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
+              className="inline-flex min-h-11 items-center rounded-md border border-destructive/40 px-3 text-xs font-medium transition-colors hover:bg-destructive/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
             >
               Retry restore
             </button>
@@ -886,7 +908,7 @@ export function AgentChatPanel({
                 }
                 resumeStoppedChat()
               }}
-              className="inline-flex min-h-11 items-center rounded-md border border-warning/40 px-3 text-xs font-medium transition-colors hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
+              className="inline-flex min-h-11 items-center rounded-md border border-warning/40 px-3 text-xs font-medium transition-colors hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
             >
               {codexSignedOut ? 'Sign in' : 'Resume chat'}
             </button>
@@ -941,11 +963,15 @@ export function AgentChatPanel({
         {/* Top-right status slot: floats over the transcript (clear of the
             scrollbar gutter) so status items take no layout height. */}
         <div className="pointer-events-none absolute right-4 top-3.5 z-20 flex items-center gap-1.5">
-          <SubagentPill
+          <ChatStatusPill
+            sessionId={session.id}
+            cwd={session.cwd}
             toolCalls={toolCalls}
             messages={messages}
             turnActive={session.activeTurn}
-            filePathContext={filePathContext}
+            onOpenGitChanges={
+              isMobileShell ? (opener) => openGitSheet(session.cwd, opener) : undefined
+            }
             hidden={(isMobileShell && osk.isOskOpen) || showTransportOverlay}
             isVisible={isVisible}
           />
@@ -985,8 +1011,11 @@ export function AgentChatPanel({
           </div>
         </div>
       )}
+      {!isClosed && (
+        <ChatAutomationSuggestion sessionId={sessionId} projectId={session.projectId} />
+      )}
       {/* Any pending agent prompt morphs the composer into the question
-          dialog — the composer, changed-files strip, and queued prompts all
+          dialog — the composer and queued prompts all
           hide until the prompt resolves. */}
       {!isClosed && (pendingElicitation || pendingQuestion) ? (
         <div ref={dockRef} data-chat-dock="true" className={dockClassName}>
@@ -1018,9 +1047,6 @@ export function AgentChatPanel({
         </div>
       ) : (
         <div ref={dockRef} data-chat-dock="true" className={dockClassName}>
-          {/* Above the changed-files panel: that panel's negative bottom margin
-              tucks it under the composer, so anything between the two is
-              painted over and loses its clicks. */}
           {!isClosed && (
             <div className={CHAT_GUTTER_X}>
               <div className="mx-auto w-full max-w-3xl">
@@ -1028,19 +1054,10 @@ export function AgentChatPanel({
               </div>
             </div>
           )}
-          <ChatChangedFilesPanel
-            cwd={session.cwd}
-            toolCalls={toolCalls}
-            turnActive={session.activeTurn}
-            forceCollapsed={compactDock}
-            onOpenGitChanges={
-              isMobileShell ? (opener) => openGitSheet(session.cwd, opener) : undefined
-            }
-          />
           <ChatInputBar
             session={composerSession ?? session}
             projectRoot={skillsProjectRoot}
-            busy={session.activeTurn}
+            busy={sessionTurnBusy(session)}
             disabled={isClosed && !isResumableStop}
             controlsDisabled={isClosed}
             onDraftStart={isResumableStop ? startAutoResume : undefined}
@@ -1062,7 +1079,6 @@ export function AgentChatPanel({
             seedText={seed?.text}
             seedNonce={seed?.nonce}
             selectionContextInsert={contextInsert}
-            compactTop={hasFileChanges}
             isVisible={isVisible}
           />
           {/* Empty chat: starters under the composer. With the hero above
@@ -1076,5 +1092,19 @@ export function AgentChatPanel({
         </div>
       )}
     </div>
+  )
+
+  return (
+    <SubagentSurfaceProvider
+      sessionId={session.id}
+      agentId={session.agentId}
+      toolCalls={toolCalls}
+      messages={messages}
+      turnActive={session.activeTurn}
+      filePathContext={filePathContext}
+      isVisible={isVisible}
+    >
+      {chat}
+    </SubagentSurfaceProvider>
   )
 }

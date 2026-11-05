@@ -4,6 +4,7 @@
  */
 
 import type { BugReportContext, BugReportSubmitRequest } from '@shared/types/bug-report.types'
+import type { McpInstallCommitResult } from '@shared/types/mcp-install.types'
 import type { PendingLauncherOptions } from '@/components/agents/pending-launcher-options'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type {
@@ -13,15 +14,20 @@ import type {
   AgentDisconnectedEvent,
   AgentErrorEvent,
   AgentId,
+  AgentSignInRequestEvent,
+  AgentSignInResolvedEvent,
   AgentSpawnedEvent,
   AgentSwitchEvent,
+  AgentWorkingEvent,
   AskUserQuestionEvent,
+  AuthenticateInput,
   AuthMethod,
   AvailableCommand,
   acpApi,
   BrowserAgentTabEvent,
   BrowserOpenRequestEvent,
   BrowserStopChangedEvent,
+  BrowserTabClosedEvent,
   BrowserTicketClosedEvent,
   CommandsUpdateEvent,
   ConfigOptionsUpdateEvent,
@@ -63,13 +69,28 @@ import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import type { BrowserConsentOptionId, BrowserConsentTicket } from '@/lib/browser-consent-api'
 import type { CommandState } from '@/lib/command-engine'
-import type { LogPoint } from '@/stores/agent-chat-unread-store'
+import type { LogPoint } from '@/lib/log-point'
 import type { QueuedPrompt } from '../prompt-queue-orchestration'
 
 /** A prompt command's state while the chat waits to confirm it (AD-6). */
 export type PromptCommandState = CommandState
 
 export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
+
+/** A sign-in step an agent is waiting on the user for. */
+export type AgentSignInPrompt =
+  /**
+   * The host's browser-open shim captured the URL the agent tried to open
+   * (spec-acp-terminal-auth). The user signs in on their own device and
+   * pastes the failed localhost redirect back.
+   */
+  | { kind: 'browser'; url: string }
+  /**
+   * The agent asked the user to visit `url` and follow `message`, which
+   * carries a device code (Codex "ChatGPT (device code)"). The host holds the
+   * request until the user accepts or cancels it.
+   */
+  | { kind: 'elicitation'; requestId: string; url: string; message: string }
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
 
 /** Live OpenCode 2 status for the active turn. `null` fields are cleared. */
@@ -124,6 +145,20 @@ export interface ChatMessage {
    * A different id starts a new bubble.
    */
   messageId?: string
+  /**
+   * CAP-6: the read-only guard this user turn was sent with (a GitHub Ask or
+   * Review chat). Folded off the display blocks; the send path re-applies the
+   * latest one to the next turn, so a guarded chat stays guarded on every
+   * device that loads it.
+   */
+  readOnlyGuard?: string
+  /**
+   * Set on the optimistic user bubble this device appends when its user sends.
+   * A replayed history turn or another device's live echo never has it, so
+   * per-device reactions to a send (the repeated-ask card) key on it rather
+   * than on `timestamp`, which replay and echoes stamp with `Date.now()`.
+   */
+  sentHere?: true
 }
 
 /**
@@ -172,6 +207,13 @@ export interface AcpSession {
   opencodeNotice?: OpenCodeSessionNotice
   /** True while a prompt turn is in flight (UI spinners, cancel). */
   activeTurn: boolean
+  /**
+   * True while the agent works in this session outside a prompt turn (the
+   * host's `agent_working` event): Claude Code running a turn of its own after
+   * a background task finished, or any agent streaming with no prompt open.
+   * The chat shows busy and queues what the user sends. Ephemeral.
+   */
+  agentWorking?: boolean
   /** Project-scoped MCP attachments active for this session when known. */
   mcpServerCount?: number
   /**
@@ -232,11 +274,11 @@ export interface AcpSession {
    */
   discovered?: boolean
   /**
-   * Agent config id recorded when a chat launch fails (`finalizeChatLaunch`
-   * catch). Present only on failed-launch placeholder sessions; consumed by
-   * `retryFailedLaunch` to re-run prepare against the same config. Cleared by
-   * replacement: a successful retry swaps the placeholder for the real
-   * session record, which never carries this field.
+   * Agent config a launch placeholder is starting (`createLaunchPlaceholder`).
+   * Present only on placeholder sessions: the composer reads it for the
+   * agent's name and icon before the agent spawns, and `retryFailedLaunch`
+   * re-runs prepare against it once the launch fails. Cleared by
+   * replacement: the real session record never carries this field.
    */
   launchConfigId?: string
   /**
@@ -357,6 +399,12 @@ export interface BugReportDraftInput {
   diagnostics: BugReportContext
 }
 
+/** How an option set reaches the agent's saved composer record. */
+export interface OptionSetOptions {
+  /** False for a restore or reapply: only user picks update the saved record. Defaults to true. */
+  persist?: boolean
+}
+
 export interface AcpState {
   // Agent registry
   agents: Record<
@@ -383,21 +431,20 @@ export interface AcpState {
   >
   agentStatus: Record<AgentId, AgentStatus>
   /**
-   * Headless ACP auth (spec-acp-terminal-auth): the URL an agent tried to
-   * open via the host's browser-open shim, keyed by agentId. Set by the
-   * `acp:browser_open_request` event; drives the BrowserAuthDialog in the
-   * launcher. Cleared on auth success, agent kill, transport eviction, and
-   * disconnect — a stale URL must never outlive the flow that produced it.
+   * The sign-in step an agent is waiting on the user for, keyed by agentId;
+   * drives the global sign-in dialog. Cleared on auth success, agent kill,
+   * transport eviction, and disconnect: a stale prompt must never outlive
+   * the flow that produced it.
    */
-  pendingBrowserOpen: Record<AgentId, string>
+  pendingSignIn: Record<AgentId, AgentSignInPrompt>
   /**
-   * The `pendingBrowserOpen` URL the user's own sign-in asked for: the host
+   * The browser `pendingSignIn` URL the user's own sign-in asked for: the host
    * may open the system browser for it without a click. Set only for the
    * first capture of an `authenticate` flight for that agent; a different
    * later capture in the same flight revokes it. The shim shadows
    * `open`/`xdg-open` for the agent and its children, so any other capture
    * (a prompt-injected `open https://evil`) stays show-and-click. Cleared
-   * with `pendingBrowserOpen`.
+   * with `pendingSignIn`.
    */
   autoOpenBrowserUrl: Record<AgentId, string>
   /**
@@ -573,11 +620,16 @@ export interface AcpState {
   ) => Promise<AgentId>
   killAgent: (agentId: AgentId) => Promise<void>
   /**
-   * Headless ACP auth (spec-acp-terminal-auth): dismiss the BrowserAuthDialog
-   * for an agent — drops its captured browser-open URL. The agent may re-emit
-   * `browser_open_request` if it retries the open.
+   * Drop an agent's sign-in prompt locally (dialog dismissed, auth settled).
+   * The agent may re-emit `browser_open_request` if it retries the open.
    */
-  clearPendingBrowserOpen: (agentId: AgentId) => void
+  clearPendingSignIn: (agentId: AgentId) => void
+  /**
+   * Answer an `elicitation` sign-in prompt: `accept` once the user opened
+   * the URL (the prompt stays up until the host resolves it), `cancel` when
+   * they dismissed it (the agent abandons the sign-in).
+   */
+  respondAgentSignIn: (agentId: AgentId, action: 'accept' | 'cancel') => Promise<void>
   /**
    * Headless ACP auth (spec-acp-terminal-auth): the user pasted back the
    * loopback redirect and the host's replay succeeded — the agent IS
@@ -598,7 +650,7 @@ export interface AcpState {
   authenticateAgent: (
     agentId: AgentId,
     methodId: string,
-    gateway?: { baseUrl: string; apiKey?: string }
+    input?: AuthenticateInput
   ) => Promise<void>
   createSession: (
     agentId: AgentId,
@@ -678,6 +730,8 @@ export interface AcpState {
    * `session/new` finishes. Painted from options cache (+ pending overlays).
    */
   createLaunchPlaceholder: (args: {
+    /** Agent config being launched, stamped as the placeholder's `launchConfigId`. */
+    configId: string
     cwd: string
     projectId: string
     models?: SessionModelState | null
@@ -736,7 +790,14 @@ export interface AcpState {
           configValues: Record<string, string>
         }
       | null
-      | undefined
+      | undefined,
+    opts?: {
+      /**
+       * A restore (a reopened chat's own selection), not a pick: the saved
+       * record is left alone, and a change made while it runs wins.
+       */
+      restore?: boolean
+    }
   ) => Promise<void>
   /** Set the agent the warm-session pool targets (reactive driver for retarget + refill gate). */
   setSelectedAgentConfigId: (configId: string | null) => void
@@ -822,6 +883,10 @@ export interface AcpState {
    * writes, no partial prefix left behind to duplicate on retry.
    */
   importMcpServers: (servers: StoredMcpServer[]) => Promise<void>
+  saveCatalogInstall: (
+    result: McpInstallCommitResult,
+    projectId: string
+  ) => Promise<StoredMcpServer>
   setMcpServerEnabled: (id: string, enabled: boolean) => Promise<void>
   deleteMcpServer: (id: string) => Promise<void>
   /**
@@ -926,10 +991,21 @@ export interface AcpState {
   setConfigOption: (
     sessionId: SessionId,
     configId: string,
-    valueId: string | boolean
+    valueId: string | boolean,
+    opts?: OptionSetOptions
   ) => Promise<void>
   setMode: (sessionId: SessionId, modeId: string) => Promise<void>
-  setModel: (sessionId: SessionId, modelId: string) => Promise<void>
+  setModel: (sessionId: SessionId, modelId: string, opts?: OptionSetOptions) => Promise<void>
+  /**
+   * Pick a model in the composer, then restore its option values: `values`
+   * (a favorite's snapshot), else the values saved for that model. A value the
+   * session does not advertise is skipped with a warn log.
+   */
+  pickModel: (
+    sessionId: SessionId,
+    modelId: string,
+    values?: Record<string, string>
+  ) => Promise<void>
 
   // Actions — permission
   respondPermission: (requestId: string, optionId?: string) => Promise<void>
@@ -964,6 +1040,8 @@ export interface AcpState {
   _onQuestionCancelled: (e: QuestionCancelledEvent) => void
   _onElicitationRequest: (e: ElicitationRequestEvent, eventSeq?: number) => void
   _onPromptComplete: (e: PromptCompleteEvent, eventSeq?: number) => void
+  /** The agent started or stopped working outside a prompt turn. */
+  _onAgentWorking: (e: AgentWorkingEvent) => void
   _onAgentError: (e: AgentErrorEvent) => void
   /** Story 1.9 FR26: typed crash event → `status: 'error'` + manual restart. */
   _onAgentCrashed: (e: AgentCrashedEvent) => void
@@ -974,11 +1052,17 @@ export interface AcpState {
    * tried to open so the launcher can show the BrowserAuthDialog.
    */
   _onBrowserOpenRequest: (e: BrowserOpenRequestEvent) => void
+  /** The agent asked the user to sign in at a URL (a device code). */
+  _onAgentSignInRequest: (e: AgentSignInRequestEvent) => void
+  /** The host settled a sign-in prompt (completed, answered, auth ended). */
+  _onAgentSignInResolved: (e: AgentSignInResolvedEvent) => void
   /**
    * Agent browser automation (`browser` tool): host asks the renderer to
    * open/close a visible agent-controlled browser tab.
    */
-  _onBrowserAgentTab: (e: BrowserAgentTabEvent) => void
+  _onBrowserAgentTab: (e: BrowserAgentTabEvent, eventSeq?: number) => void
+  /** `acp:browser_tab_closed`: the host registry dropped an agent tab. */
+  _onBrowserTabClosed: (e: BrowserTabClosedEvent) => void
   /** A browser consent ticket arrived on the permission contract. */
   _onBrowserConsentTicket: (ticket: BrowserConsentTicket) => void
   /** `acp:browser_ticket_closed`: the ticket was settled somewhere. */

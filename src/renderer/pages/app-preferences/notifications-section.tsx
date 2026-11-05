@@ -1,8 +1,6 @@
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
-import { SettingsRow, settingsDescriptionId } from '@/components/settings/SettingsRow'
-import { Switch } from '@/components/ui/switch'
-import { rowId } from './categories'
+import { SettingsSwitchRow } from '@/components/settings/SettingsSwitchRow'
 
 interface NotificationsSectionProps {
   notifyOnTerminalIdle: boolean
@@ -11,37 +9,6 @@ interface NotificationsSectionProps {
   handleNotifyOnTerminalIdleToggle: (enabled: boolean) => void
   handleNotifyOnAgentChatTurnFinishedToggle: (enabled: boolean) => void
   handleNotifyOnAgentChatNeedsYouToggle: (enabled: boolean) => void
-}
-
-function SwitchRow({
-  id,
-  label,
-  description,
-  checked,
-  onToggle
-}: {
-  id: string
-  label: string
-  description: string
-  checked: boolean
-  onToggle: (enabled: boolean) => void
-}): React.JSX.Element {
-  return (
-    <SettingsRow
-      id={rowId(id)}
-      htmlFor={id}
-      label={label}
-      description={description}
-      layout="inline"
-    >
-      <Switch
-        id={id}
-        aria-describedby={settingsDescriptionId(id)}
-        checked={checked}
-        onCheckedChange={onToggle}
-      />
-    </SettingsRow>
-  )
 }
 
 export function NotificationsSection({
@@ -56,7 +23,7 @@ export function NotificationsSection({
     <SettingsSection id="notifications">
       <SettingsGroup title="Terminal">
         <SettingsCard>
-          <SwitchRow
+          <SettingsSwitchRow
             id="notify-terminal-idle"
             label="Notify when a terminal agent finishes"
             description="A long-running terminal tab goes quiet."
@@ -67,14 +34,14 @@ export function NotificationsSection({
       </SettingsGroup>
       <SettingsGroup title="Agent chat">
         <SettingsCard>
-          <SwitchRow
+          <SettingsSwitchRow
             id="notify-turn-finished"
             label="Notify when an agent chat turn finishes"
             description="A chat turn ends and nothing is queued."
             checked={notifyOnAgentChatTurnFinished}
             onToggle={handleNotifyOnAgentChatTurnFinishedToggle}
           />
-          <SwitchRow
+          <SettingsSwitchRow
             id="notify-needs-you"
             label="Notify when an agent chat needs you"
             description="An agent waits for your approval or an answer."

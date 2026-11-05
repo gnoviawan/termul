@@ -74,6 +74,7 @@ fn host_with(root: &Path, relay: WsRelaySink) -> AppState {
         allow_remote_writes: false,
         shared_live_writes_denied: false,
         connections: Default::default(),
+        server_admin: None,
     }
 }
 

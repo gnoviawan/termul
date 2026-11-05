@@ -19,7 +19,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::acp::atomic_file;
-use crate::acp::session_payload::CommandList;
+use crate::acp::session_payload::{CommandList, ControlsFold};
 use crate::path_validation::strip_verbatim_prefix;
 pub const SESSION_SCHEMA_VERSION: u32 = 1;
 const INDEX_FILE: &str = "sessions.json";
@@ -53,10 +53,12 @@ const WRITER_CAPACITY: usize = 1024;
 const TAIL_DEEPEN_MAX_LINES: usize = 16_384;
 const STALE_TEMP_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
+mod controls;
 mod diff_stat;
 mod jsonl;
 mod model;
 mod normalize;
+mod session_cache;
 mod sweep;
 mod types;
 mod worktree_branch;
@@ -147,11 +149,15 @@ struct Inner {
     unsalvageable_log_stamps: Mutex<HashMap<String, LogStamps>>,
     /// Newest `availableCommands` per session (`None`: the log holds no list),
     /// so a tail payload whose window starts after the session's
-    /// `commands_update` still carries it. Appends replace an entry in append
-    /// order; a tail payload seeds a missing one from the log. Only
-    /// `delete_session` removes one: a seed racing an append can then never
-    /// fill a hole with the older list.
-    last_commands: Mutex<HashMap<String, Option<CommandList>>>,
+    /// `commands_update` still carries it. The writer replaces an entry as it
+    /// writes each list; a tail payload seeds a missing one from the log.
+    /// Only a log rewrite (salvage) or a catalog insert or remove of the id
+    /// removes one, and that rejects the session's scans already in flight
+    /// (see `session_cache`): a seed racing an append can then never fill a
+    /// hole with the older list.
+    last_commands: session_cache::SessionCache<Option<CommandList>>,
+    /// The session-controls twin of `last_commands` (see `controls`).
+    last_controls: controls::ControlsCache,
     /// Test gate: the writer awaits this before executing each command so a
     /// close can be queued behind appends that have not been written yet.
     #[cfg(test)]
@@ -161,6 +167,9 @@ struct Inner {
     /// queue deterministically.
     #[cfg(test)]
     writer_gate_hook: Mutex<Option<Arc<ReplayTestHook>>>,
+    /// Test seam: runs as the writer applies an append to the caches.
+    #[cfg(test)]
+    cache_apply_hook: Mutex<Option<session_cache::CacheScanTestCallback>>,
 }
 
 pub struct SessionPersistence {
@@ -169,6 +178,10 @@ pub struct SessionPersistence {
     replay_hook: Mutex<Option<Arc<ReplayTestHook>>>,
     #[cfg(test)]
     salvage_hook: Mutex<Option<Arc<ReplayTestHook>>>,
+    #[cfg(test)]
+    cache_scan_hook: Mutex<Option<session_cache::CacheScanTestCallback>>,
+    #[cfg(test)]
+    locked_scan_hook: Mutex<Option<session_cache::CacheScanTestCallback>>,
 }
 
 #[cfg(test)]
@@ -339,16 +352,23 @@ impl SessionPersistence {
                 process_shutdown: AtomicBool::new(false),
                 seq_authority: Mutex::new(None),
                 unsalvageable_log_stamps: Mutex::new(HashMap::new()),
-                last_commands: Mutex::new(HashMap::new()),
+                last_commands: session_cache::SessionCache::default(),
+                last_controls: controls::ControlsCache::default(),
                 #[cfg(test)]
                 writer_gate_hook: Mutex::new(None),
                 #[cfg(test)]
                 writer_gate: Mutex::new(None),
+                #[cfg(test)]
+                cache_apply_hook: Mutex::new(None),
             }),
             #[cfg(test)]
             replay_hook: Mutex::new(None),
             #[cfg(test)]
             salvage_hook: Mutex::new(None),
+            #[cfg(test)]
+            cache_scan_hook: Mutex::new(None),
+            #[cfg(test)]
+            locked_scan_hook: Mutex::new(None),
         });
         service.recover().await?;
         Ok(service)
@@ -691,13 +711,10 @@ impl SessionPersistence {
         record.payload = normalize_durable_payload(&record.type_, &record.payload);
         let session_id = record.session_id.clone();
         let runtime = self.runtime(&session_id)?;
-        let commands = (record.type_ == "commands_update").then(|| CommandList::of_record(&record));
+        // The writer updates `last_commands` / `last_controls` once the record
+        // is on disk (see `session_cache::AppendedLogDerived`).
         let _order = runtime.send_lock.lock();
-        Self::deliver(&runtime, &session_id, WriterCommand::Append(record))?;
-        if let Some(commands) = commands {
-            self.inner.last_commands.lock().insert(session_id, commands);
-        }
-        Ok(())
+        Self::deliver(&runtime, &session_id, WriterCommand::Append(record))
     }
 
     /// Hold this session's send lock across a critical section that both
@@ -1213,12 +1230,15 @@ impl SessionPersistence {
             }
         }
         self.inner.sessions.lock().remove(session_id);
-        self.inner.last_commands.lock().remove(session_id);
         let dir = self.session_dir(&metadata.storage_key)?;
         // Drop the catalog entry BEFORE touching the dir: a read-path
         // salvage serializes its rewrite on the catalog lock, so once the
         // entry is gone no in-flight or future salvage can stage a rewrite
         // that would resurrect the deleted dir via `create_dir_all`.
+        // The remove also drops the session's cached commands and controls,
+        // atomically with the entry: a new registration of the id can never
+        // read them, and a scan of this log can no longer seed them (see
+        // `session_cache`).
         self.remove_catalog_entry(session_id);
         fs::remove_dir_all(&dir)?;
         self.persist_index().await?;
@@ -1423,7 +1443,7 @@ impl SessionPersistence {
             // — they still participate in boundary detection via `universe`.
             let oldest_tail_seq = universe
                 .iter()
-                .filter(|r| !is_tool_event(&r.type_))
+                .filter(|r| !is_tool_log_record(&r.type_, &r.payload))
                 .map(|r| r.seq)
                 .min()
                 .unwrap_or(0);
@@ -1432,7 +1452,7 @@ impl SessionPersistence {
             // no seq (a corrupt edge) are always retained — the renderer
             // tolerates them.
             let mut records = universe.clone();
-            records.retain(|r| !is_tool_event(&r.type_) || r.seq >= oldest_tail_seq);
+            records.retain(|r| !is_tool_log_record(&r.type_, &r.payload) || r.seq >= oldest_tail_seq);
             // Find the first fold-relevant record the fold will process.
             // Only a `message_chunk` can open mid-run; any other type starts
             // deterministically regardless of preceding state.
@@ -1485,7 +1505,7 @@ impl SessionPersistence {
                 let records = self.replay_after(session_id, 0)?;
                 let tool_records = records
                     .iter()
-                    .filter(|record| is_tool_event(&record.type_))
+                    .filter(|record| is_tool_log_record(&record.type_, &record.payload))
                     .cloned()
                     .collect();
                 return Ok(TailReplay {
@@ -1590,7 +1610,33 @@ impl SessionPersistence {
             hook.wait();
         }
         let dir = self.session_dir(&current.storage_key)?;
-        let Some(counts) = salvage_session_dir(&dir, session_id)? else {
+        let healed = self.rewrite_seq_intruders(&dir, session_id, &mut current);
+        // Forget after the rewrite attempt whatever its outcome: a failure
+        // can follow a rewrite (a second file, the metadata write), so no
+        // value folded from the old logs may outlive it. An append queued
+        // meanwhile is not lost: the writer, blocked on the entry lock until
+        // now, applies it to the caches only after writing it.
+        self.forget_log_derived(session_id);
+        if healed.is_err() {
+            log::warn!(
+                "[acp-history] salvage rewrite failed; dropped cached commands and controls \
+                 session_id={}",
+                crate::logging::redact_session_id(session_id)
+            );
+        }
+        healed
+    }
+
+    /// The locked half of [`Self::salvage_seq_intruders`]: quarantine and
+    /// rewrite, then recount and persist the metadata. The caller holds the
+    /// catalog and entry locks.
+    fn rewrite_seq_intruders(
+        &self,
+        dir: &Path,
+        session_id: &str,
+        current: &mut SessionMetadata,
+    ) -> Result<bool> {
+        let Some(counts) = salvage_session_dir(dir, session_id)? else {
             return Ok(false);
         };
         // The recount is exact: no append could have landed mid-heal —
@@ -1602,7 +1648,7 @@ impl SessionPersistence {
         // The rewrite removed lines from the prefix a sweep checkpoint vouches
         // for; the next host start rescans and restamps.
         current.sweep_checkpoint = None;
-        self.persist_metadata(&current)?;
+        self.persist_metadata(current)?;
         log::warn!(
             "[acp-history] salvaged seq-intruder records session_id={} \
              intruder_lines={} message_count={} tool_count={} last_seq={}",
@@ -1658,11 +1704,21 @@ impl SessionPersistence {
         let records = self.replay_after_async(session_id.to_string(), 0).await?;
         let payload = crate::acp::session_payload::materialize_session_payload(&metadata, &records);
         log::info!(
-            "[acp-history] session_payload session_id={} messages={} tool_summaries={}",
+            "[acp-history] session_payload session_id={} messages={} tool_summaries={} subagents={}",
             crate::logging::redact_session_id(session_id),
             payload.messages.len(),
-            payload.tool_calls.len()
+            payload.tool_calls.len(),
+            payload
+                .tool_calls
+                .iter()
+                .filter(|call| {
+                    call.meta.as_ref().is_some_and(|meta| {
+                        meta.get(crate::acp::subagents::SUBAGENT_META_KEY).is_some()
+                    })
+                })
+                .count()
         );
+        controls::log_payload_controls(session_id, payload.controls.as_ref());
         Ok(payload)
     }
 
@@ -1700,6 +1756,7 @@ impl SessionPersistence {
         // summaries must still cover the whole session.
         payload.tool_calls = crate::acp::session_payload::fold_tool_call_summaries(&tool_records);
         payload.commands = self.last_commands_async(session_id).await?;
+        payload.controls = self.last_controls_async(session_id).await?;
         // If the tail fold produced fewer than `limit` messages AND the
         // session has more on disk (metadata.message_count > tail len), the
         // heuristic under-read (the 4× line ratio wasn't enough). Fall back
@@ -1753,6 +1810,7 @@ impl SessionPersistence {
             payload.messages.len(),
             payload.tool_calls.len()
         );
+        controls::log_payload_controls(session_id, payload.controls.as_ref());
         Ok(payload)
     }
 
@@ -1763,22 +1821,7 @@ impl SessionPersistence {
         self: &Arc<Self>,
         session_id: &str,
     ) -> Result<Option<CommandList>> {
-        if let Some(known) = self.inner.last_commands.lock().get(session_id) {
-            return Ok(known.clone());
-        }
-        let metadata = self.metadata(session_id)?;
-        let path = self.session_dir(&metadata.storage_key)?.join(MESSAGES_FILE);
-        let id = session_id.to_string();
-        let found = tokio::task::spawn_blocking(move || newest_command_list(&path, &id))
-            .await
-            .map_err(|error| SessionPersistenceError::PersistenceUnhealthy(error.to_string()))??;
-        Ok(self
-            .inner
-            .last_commands
-            .lock()
-            .entry(session_id.to_string())
-            .or_insert(found)
-            .clone())
+        self.read_through::<Option<CommandList>>(session_id).await
     }
 
     /// Completed client turn ids reconstructed from durable prompt-complete
@@ -2184,7 +2227,10 @@ impl SessionPersistence {
         self.insert_catalog_entry(metadata.session_id.clone(), Arc::new(Mutex::new(metadata)));
     }
 
-    /// The single catalog insert: keeps the `commandId` index in step.
+    /// The single catalog insert: keeps the `commandId` index and the
+    /// log-derived caches in step. The caches are rebound under the catalog
+    /// lock, so no reader finds the new entry while values cached for the
+    /// one it replaces are still served (see `session_cache`).
     fn insert_catalog_entry(&self, session_id: String, metadata: Arc<Mutex<SessionMetadata>>) {
         if let Some(command_id) = metadata.lock().command_id.clone() {
             self.inner
@@ -2192,16 +2238,26 @@ impl SessionPersistence {
                 .lock()
                 .insert(command_id, session_id.clone());
         }
-        self.inner.catalog.lock().insert(session_id, metadata);
+        let mut catalog = self.inner.catalog.lock();
+        self.register_log_derived(&session_id, &metadata);
+        catalog.insert(session_id, metadata);
     }
 
-    /// The single catalog remove: drops the session's `commandId` index entry.
+    /// The single catalog remove: drops the session's `commandId` index entry
+    /// and, under the catalog lock, its log-derived cache values.
     fn remove_catalog_entry(&self, session_id: &str) {
         self.inner
             .unsalvageable_log_stamps
             .lock()
             .remove(session_id);
-        let removed = self.inner.catalog.lock().remove(session_id);
+        let removed = {
+            let mut catalog = self.inner.catalog.lock();
+            let removed = catalog.remove(session_id);
+            if removed.is_some() {
+                self.unregister_log_derived(session_id);
+            }
+            removed
+        };
         if let Some(command_id) = removed.and_then(|metadata| metadata.lock().command_id.clone()) {
             let mut index = self.inner.command_index.lock();
             if index.get(&command_id).is_some_and(|sid| sid == session_id) {

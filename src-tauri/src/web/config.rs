@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use crate::web::auth::WebAuthToken;
 use crate::web::origin::OriginPolicy;
+use crate::web::server_config_file;
 
 /// Non-empty, trimmed value of a path-like environment variable.
 /// Whitespace-only and unset values are ignored so resolution falls
@@ -511,6 +512,29 @@ pub struct ServerConfig {
     /// operator's `XDG_STATE_HOME`/`HOME`), and the generated web auth token
     /// would land somewhere other than the advertised path.
     pub state_dir: Option<PathBuf>,
+    /// gh-1105: `true` when the operator supplied ANY of the onboarding
+    /// fields via argv/env: `--host`, `--port`, `--sessions-dir`,
+    /// `--projects-file`, `--allow-remote-writes`, or the env equivalents
+    /// (`$TERMUL_SESSIONS_DIR`, `$TERMUL_PROJECTS_FILE`,
+    /// `$TERMUL_SERVER_ALLOW_REMOTE_WRITES` — `--host`/`--port` have no env
+    /// equivalents). An explicit argv/env config means the operator already
+    /// onboarded outside the wizard: [`Self::setup_required`] never enters
+    /// setup mode — these values form a complete config on their own.
+    /// `--state-dir` deliberately does NOT count (it only names where the
+    /// config file lives), and neither do the unrelated tunable/auth/static
+    /// flags. The `server-config.json` merge does not set this flag either:
+    /// the file makes the server onboarded through `is_onboarded`, not
+    /// through argv provenance. Programmatic constructions that carry real
+    /// answers ([`crate::onboard::OnboardAnswers::to_server_config`]) set it
+    /// `true`; the desktop shared-live host leaves it `false` (it never
+    /// consults [`Self::setup_required`]).
+    pub explicit_config: bool,
+    /// `true` when `--host` was passed explicitly (there is no host env
+    /// var). The setup-mode router binds `0.0.0.0` unless the operator
+    /// pinned a host, so this is recorded separately from the merged
+    /// [`Self::host`] — a `server-config.json` host always wins the VALUE
+    /// while this flag only records that argv carried one.
+    pub host_explicit: bool,
 }
 
 impl ServerConfig {
@@ -581,7 +605,44 @@ impl ServerConfig {
         std::env::temp_dir().join("termul")
     }
 
+    /// Whether this boot must serve the minimal web-onboarding setup mode
+    /// instead of the normal app (gh-1105): no completed
+    /// `server-config.json` in the resolved state dir AND no explicit
+    /// argv/env config (`explicit_config`). A file that exists but fails to
+    /// parse counts as "not onboarded" — the error is logged (tracing is
+    /// live by the time `server_main` calls this, after `init_tracing`) and
+    /// setup mode lets the operator recover rather than locking them out.
+    /// Explicit argv/env always wins: with it, normal mode runs on the
+    /// flag/env values even when the file is absent or corrupt.
+    #[must_use]
+    pub fn setup_required(&self) -> bool {
+        let state_dir = self.service_account_state_dir();
+        let onboarded = match server_config_file::load(&state_dir) {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(error) => {
+                tracing::error!(
+                    target: "termul::server_config",
+                    "server config file '{}' is unreadable or corrupt: {error}; \
+                     treating the server as not configured",
+                    server_config_file::server_config_path(&state_dir).display(),
+                );
+                false
+            }
+        };
+        !onboarded && !self.explicit_config
+    }
+
     /// Parse `--host` / `--port` CLI args (defaults: `127.0.0.1:8080`).
+    ///
+    /// After argv/env/default resolution, a parseable
+    /// `<state_dir>/server-config.json` is merged in last: for every field
+    /// the file carries (host, port, sessions dir, projects file,
+    /// allow-remote-writes) the FILE WINS over argv/env — the precedence
+    /// that makes an argv-pinned install web-reconfigurable. A missing or
+    /// corrupt file leaves argv/env values standing (a corrupt file is
+    /// reported by [`Self::setup_required`], which runs after tracing is
+    /// initialized).
     ///
     /// Returns `Err(ParseCliError::Help)` for `-h`/`--help`.
     pub fn from_args<I, S>(args: I) -> Result<Self, ParseCliError>
@@ -636,12 +697,23 @@ impl ServerConfig {
         // the env var is consulted only when the flag is absent.
         let mut allowed_origins_cli: Option<OriginPolicy> = None;
 
+        // gh-1105 provenance: which onboarding fields argv supplied. These
+        // record argv/env ONLY — a `server-config.json` merge below never
+        // sets them (the file IS the onboarding record; explicit argv means
+        // "no setup needed", not "this value wins").
+        let mut host_explicit = false;
+        let mut port_explicit = false;
+        let mut sessions_dir_explicit = false;
+        let mut projects_file_explicit = false;
+        let mut allow_remote_writes_explicit = false;
+
         let mut iter = args.into_iter().peekable();
         while let Some(arg) = iter.next() {
             let arg = arg.as_ref();
             match arg {
                 "-h" | "--help" => return Err(ParseCliError::Help),
                 "--host" => {
+                    host_explicit = true;
                     let value = iter
                         .next()
                         .ok_or_else(|| ParseCliError::Message("missing value for --host".into()))?;
@@ -654,6 +726,7 @@ impl ServerConfig {
                     host = value.to_string();
                 }
                 "--port" => {
+                    port_explicit = true;
                     let value = iter
                         .next()
                         .ok_or_else(|| ParseCliError::Message("missing value for --port".into()))?;
@@ -758,6 +831,7 @@ impl ServerConfig {
                     project_root = Some(validated);
                 }
                 "--sessions-dir" => {
+                    sessions_dir_explicit = true;
                     let value = iter.next().ok_or_else(|| {
                         ParseCliError::Message("missing value for --sessions-dir".into())
                     })?;
@@ -809,6 +883,7 @@ impl ServerConfig {
                     // Bare flag (no value). CLI wins over the env var; the
                     // env is read below only when the flag is absent.
                     allow_remote_writes = true;
+                    allow_remote_writes_explicit = true;
                 }
                 "--web-auth-token" => {
                     let value = iter.next().ok_or_else(|| {
@@ -833,6 +908,7 @@ impl ServerConfig {
                     });
                 }
                 "--projects-file" => {
+                    projects_file_explicit = true;
                     let value = iter.next().ok_or_else(|| {
                         ParseCliError::Message("missing value for --projects-file".into())
                     })?;
@@ -877,6 +953,14 @@ impl ServerConfig {
             },
         };
 
+        // gh-1105: the three onboarding env vars are read once here so the
+        // same trimmed values feed the resolution chains below AND the
+        // `explicit_config` provenance flag (`--host`/`--port` have no env
+        // equivalents — argv only).
+        let sessions_dir_env = trimmed_env_path("TERMUL_SESSIONS_DIR");
+        let projects_file_env = trimmed_env_path("TERMUL_PROJECTS_FILE");
+        let remote_writes_env = std::env::var("TERMUL_SERVER_ALLOW_REMOTE_WRITES").ok();
+
         // Story 4.1 / issue #839 / #879: resolve the projects registry file.
         // `--projects-file` wins, then `$TERMUL_PROJECTS_FILE`, then
         // `<--state-dir>/projects.json` when `--state-dir` was passed, and
@@ -892,7 +976,7 @@ impl ServerConfig {
         // `None` survives only when no state dir is discoverable — the
         // binary then serves an in-memory registry (`server_main` warns).
         let projects_file = projects_file
-            .or_else(|| trimmed_env_path("TERMUL_PROJECTS_FILE"))
+            .or(projects_file_env.clone())
             .or_else(|| state_dir.as_ref().map(|dir| dir.join("projects.json")))
             .or_else(default_projects_file);
 
@@ -914,8 +998,8 @@ impl ServerConfig {
         // (including a typo) stays `false` — lenient, no fatal startup.
         if !allow_remote_writes {
             allow_remote_writes = matches!(
-                std::env::var("TERMUL_SERVER_ALLOW_REMOTE_WRITES")
-                    .ok()
+                remote_writes_env
+                    .as_deref()
                     .map(|v| v.trim().to_ascii_lowercase())
                     .as_deref(),
                 Some("true") | Some("1")
@@ -944,7 +1028,7 @@ impl ServerConfig {
         // explicitly (that flag wins) and appends the same `--state-dir` it
         // printed, so the launched server stays on the wizard's paths.
         let sessions_dir = sessions_dir
-            .or_else(|| trimmed_env_path("TERMUL_SESSIONS_DIR"))
+            .or(sessions_dir_env.clone())
             .or_else(|| state_dir.as_ref().map(|dir| dir.join("sessions")))
             .or_else(default_sessions_dir)
             .ok_or_else(|| {
@@ -953,12 +1037,6 @@ impl ServerConfig {
                         .into(),
                 )
             })?;
-        if sessions_dir.exists() && !sessions_dir.is_dir() {
-            return Err(ParseCliError::Message(format!(
-                "sessions directory '{}' is not a directory",
-                sessions_dir.display()
-            )));
-        }
 
         if let Some(requested) = receipt_retention_over_cap {
             deprecation_warnings.push(format!(
@@ -991,7 +1069,24 @@ impl ServerConfig {
             .or_else(|| positive_env::<u64>(PARTITION_BYTE_BUDGET_ENV, &mut deprecation_warnings))
             .unwrap_or(DEFAULT_PARTITION_BYTE_BUDGET);
 
-        Ok(Self {
+        // gh-1105: ANY onboarding field supplied by argv/env makes the whole
+        // config explicit — the operator already answered onboarding outside
+        // the wizard, so `setup_required` must not bounce this boot into
+        // setup mode. `--state-dir` deliberately does not count (it only
+        // names where the config file lives), and neither do the unrelated
+        // tunable/auth/static flags.
+        let explicit_config = host_explicit
+            || port_explicit
+            || sessions_dir_explicit
+            || sessions_dir_env.is_some()
+            || projects_file_explicit
+            || projects_file_env.is_some()
+            || allow_remote_writes_explicit
+            || remote_writes_env
+                .as_deref()
+                .is_some_and(|v| !v.trim().is_empty());
+
+        let mut config = Self {
             host,
             port,
             event_log_capacity,
@@ -1012,7 +1107,68 @@ impl ServerConfig {
             allow_remote_writes,
             web_auth_token,
             allowed_origins,
-        })
+            explicit_config,
+            host_explicit,
+        };
+
+        // gh-1105: merge the persisted onboarding file AFTER argv/env/default
+        // resolution — for every field the file carries, the FILE WINS. That
+        // precedence is what makes an argv-pinned install (a systemd unit's
+        // `ExecStart`) web-reconfigurable: stale args lose once the file
+        // exists. Fields the file does not model (tunables, state dir, auth
+        // token, store/acp-catalog paths, seed root) keep the values resolved
+        // above, and update channel/interval merge separately through
+        // `server_config_file::resolve_update_settings`. `Ok(None)` = never
+        // onboarded (argv/env stand); `Err` = corrupt — ignored here so
+        // argv/env stand, while `setup_required` (called after tracing is
+        // initialized) logs the error and recovers into setup mode.
+        let service_state_dir = config.service_account_state_dir();
+        if let Ok(Some(file)) = server_config_file::load(&service_state_dir) {
+            let mut overridden: Vec<&'static str> = Vec::new();
+            if config.host != file.host {
+                overridden.push("host");
+            }
+            if config.port != file.port {
+                overridden.push("port");
+            }
+            if config.sessions_dir.as_deref() != Some(file.sessions_dir.as_path()) {
+                overridden.push("sessions-dir");
+            }
+            if config.projects_file.as_deref() != Some(file.projects_file.as_path()) {
+                overridden.push("projects-file");
+            }
+            if config.allow_remote_writes != file.allow_remote_writes {
+                overridden.push("allow-remote-writes");
+            }
+            if !overridden.is_empty() {
+                // Queued for `server_main` to emit once tracing is live —
+                // stale argv otherwise looks like it still applies.
+                config.deprecation_warnings.push(format!(
+                    "{} overrides the configured {} (the config file wins over argv/env)",
+                    server_config_file::server_config_path(&service_state_dir).display(),
+                    overridden.join(", "),
+                ));
+            }
+            config.host = file.host;
+            config.port = file.port;
+            config.sessions_dir = Some(file.sessions_dir);
+            config.projects_file = Some(file.projects_file);
+            config.allow_remote_writes = file.allow_remote_writes;
+        }
+
+        // The not-a-directory guard applies to the FINAL sessions dir —
+        // argv/env-derived or file-carried alike.
+        match config.sessions_dir.as_deref() {
+            Some(dir) if dir.exists() && !dir.is_dir() => {
+                return Err(ParseCliError::Message(format!(
+                    "sessions directory '{}' is not a directory",
+                    dir.display()
+                )));
+            }
+            _ => {}
+        }
+
+        Ok(config)
     }
 }
 

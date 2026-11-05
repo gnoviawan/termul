@@ -2,6 +2,7 @@
 //! install, agent `authenticate`, and auth-redirect delivery.
 
 use super::*;
+use crate::acp::manager::{ApiKey, AuthCredential, GatewayAuthInput};
 
 // --- Story 1.8 ACP command handlers -----------------------------------------
 //
@@ -46,11 +47,15 @@ pub(super) async fn handle_spawn_agent(
     if let Err(e) = crate::acp::config::validate_spawn_config(&mut parsed.config) {
         return acp_err_to_reply(id, e);
     }
+    let config = parsed.config.clone();
     match acp
         .spawn_with_command_id(parsed.config, command_id, parsed.project_id)
         .await
     {
-        Ok(outcome) => ok_with_payload(id, &outcome),
+        Ok(outcome) => {
+            crate::automation::service::record_spawned_agent(&config);
+            ok_with_payload(id, &outcome)
+        }
         Err(e) => acp_err_to_reply(id, e),
     }
 }
@@ -310,14 +315,29 @@ pub(super) async fn handle_install_acp_agent(
 /// from the WS connection `authenticate` token gate — this is the agent
 /// method, not the relay handshake. Calls `AcpManager::authenticate`. The provider owns
 /// the login UX (often opens its own browser); Termul never invents a
-/// redirect URL or stores credentials.
-#[derive(Debug, Deserialize)]
+/// redirect URL or stores credentials. `gateway` and `apiKey` are the two
+/// things a sign-in can carry; at most one may be sent.
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct AuthenticateAgentPayload {
     agent_id: crate::acp::AgentId,
     method_id: String,
     #[serde(default)]
-    gateway: Option<crate::acp::manager::GatewayAuthInput>,
+    gateway: Option<GatewayAuthInput>,
+    #[serde(default)]
+    api_key: Option<String>,
+}
+
+fn parse_auth_credential(
+    gateway: Option<GatewayAuthInput>,
+    api_key: Option<String>,
+) -> Result<Option<AuthCredential>, String> {
+    match (gateway, api_key) {
+        (Some(_), Some(_)) => Err("send a gateway or an API key, not both".to_string()),
+        (Some(gateway), None) => Ok(Some(AuthCredential::Gateway(gateway))),
+        (None, Some(key)) => ApiKey::parse(&key).map(|key| Some(AuthCredential::ApiKey(key))),
+        (None, None) => Ok(None),
+    }
 }
 
 pub(super) async fn handle_authenticate_agent(
@@ -335,18 +355,32 @@ pub(super) async fn handle_authenticate_agent(
             )
         }
     };
+    let credential = match parse_auth_credential(parsed.gateway, parsed.api_key) {
+        Ok(credential) => credential,
+        Err(reason) => {
+            warn!(
+                target: "termul::web::ws",
+                agent = %parsed.agent_id,
+                method = %parsed.method_id,
+                %reason,
+                "authenticate_agent: refused the sign-in input"
+            );
+            return WsReply::err_with_code(id, "VALIDATION_ERROR", reason);
+        }
+    };
     debug!(
         target: "termul::web::ws",
         agent = %parsed.agent_id,
         method = %parsed.method_id,
+        gateway = matches!(credential, Some(AuthCredential::Gateway(_))),
+        api_key = matches!(credential, Some(AuthCredential::ApiKey(_))),
         "authenticate_agent: invoking agent auth method"
     );
     // `AcpManager::authenticate` takes `method_id` by value, so keep a clone
     // for the failure log (the debug! above borrows before the move).
     let method_id = parsed.method_id.clone();
-    let gateway = parsed.gateway.clone();
     match acp
-        .authenticate(&parsed.agent_id, parsed.method_id, gateway)
+        .authenticate(&parsed.agent_id, parsed.method_id, credential)
         .await
     {
         Ok(()) => WsReply::ok(id, Some(json!({}))),
@@ -495,10 +529,14 @@ struct RespondElicitationPayload {
     content: Option<serde_json::Map<String, Value>>,
 }
 
+/// Forward an elicitation answer to its agent. Once the agent took it, or
+/// no longer holds the request, the relay drops its ticket so a later
+/// subscribe does not list the elicitation again.
 pub(super) async fn handle_respond_elicitation(
     id: String,
     payload: &Value,
     acp: &Arc<AcpManager>,
+    relay: &WsRelaySink,
 ) -> WsReply {
     let parsed: RespondElicitationPayload = match serde_json::from_value(payload.clone()) {
         Ok(parsed) => parsed,
@@ -510,19 +548,21 @@ pub(super) async fn handle_respond_elicitation(
             );
         }
     };
-    match acp
+    let result = acp
         .respond_elicitation(
             &parsed.agent_id,
-            parsed.request_id,
+            parsed.request_id.clone(),
             parsed.action,
             parsed.content,
         )
-        .await
-    {
-        Ok(()) => WsReply::ok(id, Some(json!({}))),
-        Err(error) if error.starts_with("unknown elicitation request") => {
-            WsReply::ok(id, Some(json!({})))
-        }
-        Err(error) => WsReply::err_with_code(id, "ELICITATION_FAILED", error),
+        .await;
+    match result {
+        Ok(()) => {}
+        Err(error) if error.starts_with("unknown elicitation request") => {}
+        Err(error) => return WsReply::err_with_code(id, "ELICITATION_FAILED", error),
     }
+    relay
+        .elicitations()
+        .settle(&parsed.request_id, &parsed.agent_id);
+    WsReply::ok(id, Some(json!({})))
 }

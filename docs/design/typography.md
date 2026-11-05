@@ -1,6 +1,8 @@
 # Typography
 
-`body` is `font-sans` (**Inter Variable**, then `sans-serif`). Code, the editor, and the terminal are `font-mono` (**Paper Mono**, then `monospace`). Both files are bundled. There is no font picker. A saved `terminalFontFamily` is ignored.
+`body` is `font-sans` (**Inter Variable**, then `sans-serif`). Code, the editor, and the terminal are `font-mono` (**Paper Mono**, then **Termul Symbols**, then `monospace`). All three faces are bundled. There is no font picker. A saved `terminalFontFamily` is ignored.
+
+Paper Mono ships 659 glyphs and has no Powerline or Nerd Font glyphs, so prompt icons (Powerlevel10k, Starship, Oh My Posh) fell through to `monospace` and rendered as tofu. **Termul Symbols** fills that gap: a Nerd Fonts Symbols-only subset scaled to Paper Mono's metrics (1000 upm, 606/1000 advance), so the terminal keeps one cell width per icon. It is declared only in `index.css`; never reference the symbol face from UI chrome.
 
 UI chrome stays at 14px (`text-sm`). Termul is a dense tool, so body copy is not 16px. Long-form markdown stays at `1rem`. Touch text fields stay at 16px.
 

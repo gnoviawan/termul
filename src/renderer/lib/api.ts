@@ -31,6 +31,7 @@ export * as tauriUpdaterApi from './tauri-updater-api'
 export * as tauriVersionSkipService from './tauri-version-skip'
 export { terminalApi } from './terminal-api'
 export { visibilityApi } from './visibility-api'
+export { webSetupApi } from './web-setup-api'
 export { windowApi } from './window-api'
 export { worktreeApi } from './worktree-api'
 

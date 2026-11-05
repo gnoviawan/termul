@@ -41,6 +41,7 @@ pub use profile::{
 pub use refusal::{PolicyRefusal, WireCode};
 pub use service::{BrowserPolicyService, CallerScope, EVENT_BROWSER_POLICY_CHANGED};
 pub use wire::{AppPolicyView, PolicyChanged, PreapprovalView, ProjectPolicyView};
+pub(crate) use wire::{AppOpWire, ProjectOpWire};
 
 static INSTALLED: OnceLock<Arc<BrowserPolicyService>> = OnceLock::new();
 

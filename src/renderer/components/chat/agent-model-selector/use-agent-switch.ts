@@ -8,8 +8,16 @@ import {
   type SupportedAcpAgentEntry
 } from '@/lib/agents/supported-acp-agents'
 import { logFrontendError } from '@/lib/log-api'
-import { useAcpStore } from '@/stores/acp-store'
-import { waitForTurnClear } from '@/stores/prompt-queue-orchestration'
+import { type AcpState, useAcpStore } from '@/stores/acp-store'
+import {
+  latestArmedPick,
+  nextPickSeq,
+  type OptionValues,
+  readComposerOptions,
+  savedModelValues
+} from '@/stores/acp-store/composer-options'
+import { sessionTurnBusy, waitForTurnClear } from '@/stores/prompt-queue-orchestration'
+import { runningBackgroundSubagents } from '../subagent-strip'
 
 const EMPTY_CONFIGS: readonly StoredAgentConfig[] = []
 
@@ -18,11 +26,51 @@ export interface SwitchModelPick {
   modelId: string
   /** The target's model config option id, when its list came from one. */
   modelConfigId: string | null
+  /** A favorite's option values; without them the model's saved values apply. */
+  values?: OptionValues
+}
+
+/** The pending options a model pick arms: the model, then its values. */
+async function pendingForModelPick(
+  configId: string,
+  pick: SwitchModelPick
+): Promise<{ modelId: string; configValues?: OptionValues }> {
+  const values = pick.values ?? savedModelValues(await readComposerOptions(configId), pick.modelId)
+  const configValues = pick.modelConfigId
+    ? { ...values, [pick.modelConfigId]: pick.modelId }
+    : values
+  return Object.keys(configValues).length > 0
+    ? { modelId: pick.modelId, configValues }
+    : { modelId: pick.modelId }
 }
 
 /**
- * The current agent config of a chat: the live reuse-key map first, then the
- * session index (a restored chat before its agent reconnects).
+ * Queue a model pick on a chat's armed switch to `configId`, with its values.
+ * Dropped when a newer pick, or a different switch target, landed while the
+ * saved record was read.
+ */
+export async function armModelPick(
+  sessionId: string,
+  configId: string,
+  pick: SwitchModelPick
+): Promise<void> {
+  const seq = nextPickSeq()
+  latestArmedPick.set(sessionId, seq)
+  try {
+    const pending = await pendingForModelPick(configId, pick)
+    if (latestArmedPick.get(sessionId) !== seq) return
+    const store = useAcpStore.getState()
+    if (store.sessions[sessionId]?.switching?.toConfigId !== configId) return
+    await store.setSwitchPendingOption(sessionId, pending)
+  } finally {
+    if (latestArmedPick.get(sessionId) === seq) latestArmedPick.delete(sessionId)
+  }
+}
+
+/**
+ * The current agent config of a chat: the live reuse-key map first, then a
+ * launch placeholder's config (before its agent spawns), then the session
+ * index (a restored chat before its agent reconnects).
  */
 export function useCurrentAgentConfigId(sessionId: string): string | null {
   return useAcpStore((s) => {
@@ -32,35 +80,44 @@ export function useCurrentAgentConfigId(sessionId: string): string | null {
         if (id === session.agentId) return key.split('\0')[0]
       }
     }
+    if (session?.launchConfigId) return session.launchConfigId
     return s.sessionIndex?.find((entry) => entry.id === sessionId)?.agentConfigId ?? null
   })
+}
+
+function hasBackgroundSubagents(state: AcpState, sessionId: string): boolean {
+  return (
+    runningBackgroundSubagents(state.toolCalls?.[sessionId], state.messages?.[sessionId]).length > 0
+  )
 }
 
 /**
  * The switch gate as the selector shows it. `blocked` mirrors the raw fields
  * the store's `switchBlockedReason` reads: an active or open turn, a replay,
- * a launching chat, queued prompts, a pending permission or question, and a
- * pending browser sign-in. `turnBusy` is the one state that cancel-then-switch
- * can clear: a live turn with nothing else blocking. Cancelling a turn while
- * prompts stay queued would let the next prompt start at once, so the arm
- * would fail after the user already cancelled.
+ * a launching chat, queued prompts, a pending permission or question, a
+ * pending browser sign-in, and running background subagents. `turnBusy` is
+ * the one state that cancel-then-switch can clear: a live turn with nothing
+ * else blocking. Cancelling a turn while prompts stay queued would let the
+ * next prompt start at once, and background subagents outlive the cancel, so
+ * either way the arm would fail after the user already cancelled.
  */
 export function useSwitchGate(sessionId: string): { blocked: boolean; turnBusy: boolean } {
   const blocked = useAcpStore((s) => {
     const session = s.sessions?.[sessionId]
     if (!session) return false
-    if (session.activeTurn || session.openTurnId || session.replaying) return true
+    if (sessionTurnBusy(session) || session.replaying) return true
     if (s.launchingSessionIds?.[sessionId]) return true
     if ((s.promptQueues?.[sessionId] ?? []).length > 0) return true
     if (Object.values(s.pendingPermissions ?? {}).some((p) => p.sessionId === sessionId)) {
       return true
     }
     if (Object.values(s.pendingQuestions ?? {}).some((q) => q.sessionId === sessionId)) return true
-    return Boolean(session.agentId && s.pendingBrowserOpen?.[session.agentId])
+    if (session.agentId && s.pendingSignIn?.[session.agentId]) return true
+    return hasBackgroundSubagents(s, sessionId)
   })
   const turnBusy = useAcpStore((s) => {
     const session = s.sessions?.[sessionId]
-    if (!session?.activeTurn && !session?.openTurnId) return false
+    if (!sessionTurnBusy(session)) return false
     if ((s.promptQueues?.[sessionId] ?? []).length > 0) return false
     if (Object.values(s.pendingPermissions ?? {}).some((p) => p.sessionId === sessionId)) {
       return false
@@ -69,7 +126,8 @@ export function useSwitchGate(sessionId: string): { blocked: boolean; turnBusy: 
       return false
     }
     if (s.launchingSessionIds?.[sessionId] || session.replaying) return false
-    return !(session.agentId && s.pendingBrowserOpen?.[session.agentId])
+    if (session.agentId && s.pendingSignIn?.[session.agentId]) return false
+    return !hasBackgroundSubagents(s, sessionId)
   })
   return { blocked, turnBusy }
 }
@@ -108,14 +166,7 @@ export function useAgentSwitch(sessionId: string): {
       const armed = await store.armAgentSwitch(sessionId, configId)
       if (!armed || !pick) return armed
       try {
-        await useAcpStore
-          .getState()
-          .setSwitchPendingOption(
-            sessionId,
-            pick.modelConfigId
-              ? { modelId: pick.modelId, configValues: { [pick.modelConfigId]: pick.modelId } }
-              : { modelId: pick.modelId }
-          )
+        await armModelPick(sessionId, configId, pick)
       } catch (err) {
         void logFrontendError({
           level: 'warn',

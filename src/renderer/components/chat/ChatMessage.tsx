@@ -1,13 +1,11 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo } from 'react'
 
 import { Attachment, AttachmentPreview, Attachments } from '@/components/ai-elements/attachments'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
-import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Message, MessageContent } from '@/components/ui/message'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { ContentBlock } from '@/lib/acp-api'
-import { readAttachmentBytes } from '@/lib/attachment-api'
 import {
   parseSelectionContextSegments,
   type SelectionContext,
@@ -18,6 +16,7 @@ import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import {
   isFolderTokenPath,
   parseCommandSegments,
+  parseConversationSegments,
   parseFileSegments,
   parseSkillSegments,
   type SkillSegment,
@@ -26,19 +25,11 @@ import {
 import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-fences'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
+import { ChatImageTile, ChatMedia, useChatImageViewer } from './ChatMedia'
+import { ConversationChip } from './ConversationChip'
 import { AgentProse } from './chat-agent-prose'
-import {
-  blockData,
-  blockDisplayName,
-  blockMimeType,
-  blockResource,
-  blockToAttachmentData,
-  blockUri,
-  fileUrlToPath,
-  guessMimeType,
-  isLocalFileUri,
-  uint8ToBase64
-} from './chat-attachments'
+import { blockDisplayName, blockResource, blockToAttachmentData } from './chat-attachments'
+import { chatMediaFromBlock } from './chat-media-source'
 import { type BubbleAlign, staggerChild } from './chat-motion'
 import { FileChip } from './FileChip'
 import {
@@ -54,7 +45,7 @@ import { CommandChipLink, SkillChipLink } from './skill-file-links'
 
 // The markdown renderer moved to `chat-agent-prose.tsx` to keep this file under
 // the ~800-line limit. Re-exported so existing importers keep their paths.
-export { AgentProse, TermulFilePathButton, TermulMarkdownImage } from './chat-agent-prose'
+export { AgentProse, TermulFilePathButton, TermulMarkdownMedia } from './chat-agent-prose'
 
 /** Concatenate the text of all text blocks. */
 function blocksToText(blocks: ContentBlock[]): string {
@@ -64,24 +55,6 @@ function blocksToText(blocks: ContentBlock[]): string {
     .join('')
 }
 
-/**
- * Render a user message's text, swapping inline skill, file, AND command
- * tokens for read-only `SkillChip`/`CommandChip`/`FileChip` pills. Skill
- * (`\uE000..\uE001`), command (`\uE004..\uE005`), and file (`\uE006..\uE007`)
- * tokens use distinct sentinel pairs, so each walk leaves the other tokens in
- * its text segments. We parse skill segments first, then walk each text
- * segment for command tokens, then each command text segment for file tokens
- * — all pill types render at their correct positions when inline together. A
- * command token renders as a `CommandChip` (terminal icon, muted `/name`),
- * the same chip as the composer's `CommandPill`. Skill chips and skill-backed
- * command chips open their `SKILL.md` on click (see `skill-file-links`).
- * Plain text (no tokens)
- * renders verbatim with `whitespace-pre-wrap` to preserve the original
- * spacing. `MessageActions` still receives the sanitized copy text (tokens →
- * readable text) while edit keeps the raw token text so the composer
- * re-seeds with chips inline. Selection contexts (`\uE008..\uE009`) are
- * split out first and render as numbered `SelectionContextChip`s.
- */
 function UserMessageText({ text }: { text: string }): React.JSX.Element {
   // Flatten: selection contexts → skill segments → command tokens → file tokens (innermost).
   type FlatSeg =
@@ -90,14 +63,24 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
     | { kind: 'file'; display: string; dir: boolean }
     | { kind: 'command'; name: string }
     | { kind: 'context'; context: SelectionContext; index: number }
+    | { kind: 'conversation'; title: string }
   const flat: FlatSeg[] = []
   let hasPills = false
   let contextCount = 0
+  const pushText = (segmentText: string): void => {
+    for (const cseg of parseConversationSegments(segmentText)) {
+      if (cseg.kind === 'conversation') {
+        flat.push({ kind: 'conversation', title: cseg.title })
+        hasPills = true
+      } else {
+        flat.push({ kind: 'text', text: cseg.text })
+      }
+    }
+  }
   const pushFileSegments = (segmentText: string): void => {
     const fileSegs = parseFileSegments(segmentText)
     if (fileSegs.length === 1 && fileSegs[0].kind === 'text') {
-      // No file tokens in this text segment — keep it as one text span.
-      flat.push({ kind: 'text', text: segmentText })
+      pushText(segmentText)
       return
     }
     for (const fseg of fileSegs) {
@@ -109,7 +92,7 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
         })
         hasPills = true
       } else {
-        flat.push({ kind: 'text', text: fseg.text })
+        pushText(fseg.text)
       }
     }
   }
@@ -158,6 +141,8 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
               <CommandChipLink key={`command-${i}`} name={seg.name} surface="bubble" />
             ) : seg.kind === 'file' ? (
               <FileChip key={`file-${i}`} name={seg.display} kind={seg.dir ? 'dir' : 'file'} />
+            ) : seg.kind === 'conversation' ? (
+              <ConversationChip key={`conversation-${i}`} title={seg.title} />
             ) : seg.kind === 'context' ? (
               <SelectionContextChip
                 key={`context-${i}`}
@@ -173,96 +158,23 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
   )
 }
 
-/** Non-text content blocks (image / resource / etc). */
-function mediaBlocks(blocks: ContentBlock[]): ContentBlock[] {
-  return blocks.filter((b) => b.type !== 'text')
-}
-
-const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i
-
-/** Whether a content block represents an image. */
-function blockIsImage(block: ContentBlock): boolean {
-  if (block.type === 'image') return true
-  if (blockMimeType(block)?.startsWith('image/')) return true
-  const ref = (block.name as string | undefined) ?? blockUri(block) ?? ''
-  return IMAGE_EXT_RE.test(ref)
-}
-
-/** A single media block rendered as an AI Elements grid attachment. */
-function MediaGridItem({ block, id }: { block: ContentBlock; id: string }): React.JSX.Element {
-  const initial = useMemo(() => blockToAttachmentData(block, id), [block, id])
-  const [data, setData] = useState(initial)
-  const name = blockDisplayName(block)
-  // Images preview in a lightbox; non-image file/embedded blocks render as a
-  // static icon card. Nothing opens a backing path — temp/file paths can live
-  // in sandboxed dirs the OS opener refuses, which would surface as an error.
-  const inlineImage = blockIsImage(block) && Boolean(data.url)
-
-  useEffect(() => {
-    // Inline image blocks and data/http URIs are already renderable; only
-    // file:// images need a Tauri read to become a preview data URL.
-    if (initial.url) return
-    const uri = blockUri(block) ?? ''
-    if (!isLocalFileUri(uri) || !blockIsImage(block)) return
-    let cancelled = false
-    void (async () => {
-      try {
-        const resolvedPath = fileUrlToPath(uri)
-        const bytes = await readAttachmentBytes(resolvedPath)
-        if (cancelled) return
-        const mime = guessMimeType(resolvedPath)
-        setData((prev) => ({ ...prev, url: `data:${mime};base64,${uint8ToBase64(bytes)}` }))
-      } catch {
-        // leave url empty — AttachmentPreview falls back to the image icon
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [initial.url, block])
-
-  const attachment = (
-    <Attachment data={data} title={name} className={inlineImage ? 'cursor-zoom-in' : undefined}>
+function FileCard({ block, id }: { block: ContentBlock; id: string }): React.JSX.Element {
+  const data = useMemo(() => blockToAttachmentData(block, id), [block, id])
+  return (
+    <Attachment data={data} title={blockDisplayName(block)}>
       <AttachmentPreview />
     </Attachment>
   )
-
-  if (inlineImage) {
-    return (
-      <ImageLightbox src={data.url ?? ''} alt={name}>
-        {attachment}
-      </ImageLightbox>
-    )
-  }
-
-  return attachment
 }
 
 const MAX_INLINE_RESOURCE_TEXT = 32 * 1024
-const MAX_INLINE_AUDIO_BYTES = 20 * 1024 * 1024
 
-/** Return only bounded inline audio sources; remote URLs must not auto-load. */
-function inlineAudioUrl(block: ContentBlock): string | null {
-  if (block.type !== 'audio' || !blockMimeType(block)?.startsWith('audio/')) return null
-  const data = blockData(block)
-  if (!data) return null
-  if (data.startsWith('blob:')) return data
-  if (data.startsWith('data:audio/')) {
-    return data.length <= MAX_INLINE_AUDIO_BYTES * 1.4 ? data : null
-  }
-  if (data.startsWith('data:')) return null
-  if (data.length > MAX_INLINE_AUDIO_BYTES * 1.4) return null
-  return `data:${blockMimeType(block)};base64,${data}`
-}
-
-function ResourceText({ block }: { block: ContentBlock }): React.JSX.Element | null {
-  const text = blockResource(block)?.text
-  if (typeof text !== 'string') return null
+function ResourceText({ text, name }: { text: string; name: string }): React.JSX.Element {
   const boundedText =
     text.length > MAX_INLINE_RESOURCE_TEXT ? `${text.slice(0, MAX_INLINE_RESOURCE_TEXT)}\n…` : text
   return (
     <pre
-      data-embedded-resource={blockDisplayName(block)}
+      data-embedded-resource={name}
       className="scroller-thin max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-border/40 bg-background/60 px-2 py-1.5 font-mono text-xs leading-relaxed text-foreground/90"
     >
       {boundedText}
@@ -270,47 +182,51 @@ function ResourceText({ block }: { block: ContentBlock }): React.JSX.Element | n
   )
 }
 
-function InlineAudio({ block }: { block: ContentBlock }): React.JSX.Element | null {
-  const src = inlineAudioUrl(block)
-  if (!src) return null
-  return (
-    // biome-ignore lint/a11y/useMediaCaption: ACP audio blocks do not provide caption tracks.
-    <audio
-      aria-label={`Play ${blockDisplayName(block)}`}
-      className="max-w-full"
-      controls
-      preload="metadata"
-      src={src}
-    />
-  )
-}
-
-/** Render media blocks with safe inline previews and bounded embedded text. */
 export function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element | null {
-  const media = mediaBlocks(blocks)
-  if (media.length === 0) return null
-  const resources = media.filter((block) => block.type === 'resource')
-  const attachments = media.filter(
-    (block) =>
-      (block.type !== 'audio' || !inlineAudioUrl(block)) &&
-      !(block.type === 'resource' && typeof blockResource(block)?.text === 'string')
+  const items = blocks
+    .filter((block) => block.type !== 'text')
+    .map((block, i) => ({
+      block,
+      id: `${block.type}-${i}`,
+      media: chatMediaFromBlock(block),
+      text: blockResource(block)?.text
+    }))
+  const images = items.flatMap(({ id, media }) =>
+    media?.kind === 'image' ? [{ key: id, media }] : []
   )
-  const audio = media.filter((block) => block.type === 'audio')
+  const viewer = useChatImageViewer(images)
+  if (items.length === 0) return null
+  const tiles = items.filter(
+    (item) => item.media?.kind === 'image' || (!item.media && typeof item.text !== 'string')
+  )
   return (
     <>
-      {attachments.length > 0 && (
+      {tiles.length > 0 && (
         <Attachments variant="grid" className="ml-0 w-fit py-0.5">
-          {attachments.map((block, i) => (
-            <MediaGridItem key={`${block.type}-${i}`} block={block} id={`${block.type}-${i}`} />
-          ))}
+          {tiles.map(({ block, id, media }) =>
+            media?.kind === 'image' ? (
+              <ChatImageTile
+                key={id}
+                entry={{ key: id, media }}
+                size="attachment"
+                viewer={viewer}
+                fallback={() => <FileCard block={block} id={id} />}
+              />
+            ) : (
+              <FileCard key={id} block={block} id={id} />
+            )
+          )}
         </Attachments>
       )}
-      {audio.map((block, i) => (
-        <InlineAudio key={`audio-${i}`} block={block} />
-      ))}
-      {resources.map((block, i) => (
-        <ResourceText key={`resource-${i}`} block={block} />
-      ))}
+      {images.length > 0 && viewer.lightbox}
+      {items.flatMap(({ id, media }) =>
+        media && media.kind !== 'image' ? [<ChatMedia key={id} media={media} />] : []
+      )}
+      {items.map(({ block, id, text }) =>
+        typeof text === 'string' ? (
+          <ResourceText key={id} text={text} name={blockDisplayName(block)} />
+        ) : null
+      )}
     </>
   )
 }
@@ -370,7 +286,7 @@ interface ChatMessageProps {
 
 /** The same inset focus ring as `ToolCallCard`, for a focusable message. */
 const MOBILE_ACTIONS_RING_CLASS =
-  'rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+  'rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring'
 
 /**
  * Classes for a message that owns mobile actions: the focus ring in every
@@ -420,7 +336,7 @@ function ChatMessageComponent({
 
   const isUser = message.role === 'user'
   const text = blocksToText(message.blocks)
-  const hasMedia = mediaBlocks(message.blocks).length > 0
+  const hasMedia = message.blocks.some((block) => block.type !== 'text')
   // Only messages that render `MessageActions` take part in the mobile actions
   // model: every user message, and an agent message only at its settled turn
   // tail. Messages inside `TurnActivity` never qualify.
@@ -563,6 +479,7 @@ function ChatMessageComponent({
                     streaming={streaming}
                     reduced={reduced}
                     filePathContext={filePathContext}
+                    linkScope={message.id}
                   />
                 )}
                 {streaming && proseText.length === 0 && (

@@ -7,6 +7,7 @@ import { useEffect, useRef } from 'react'
 import {
   CMD_PILL_NODE,
   CONTEXT_PILL_NODE,
+  CONVERSATION_PILL_NODE,
   docOffsetToDisplayOffset,
   docToDisplayText,
   FILE_PILL_NODE,
@@ -16,6 +17,7 @@ import { draftFromTokens } from '@/lib/composer/draft-from-tokens'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { CommandPill } from './CommandPillNode'
+import { ConversationPill } from './ConversationPillNode'
 import { FilePill } from './FilePillNode'
 import { SelectionContextPill } from './SelectionContextPillNode'
 import { SkillPill } from './SkillPillNode'
@@ -80,7 +82,13 @@ export interface ChatComposerEditorProps {
 const KEYMAP_KEY = new PluginKey('chatComposerKeymap')
 
 /** Atom pills that one Backspace removes whole (with the splicer's trailing space). */
-const ATOM_PILL_NODES = new Set([SKILL_PILL_NODE, CMD_PILL_NODE, FILE_PILL_NODE, CONTEXT_PILL_NODE])
+const ATOM_PILL_NODES = new Set([
+  SKILL_PILL_NODE,
+  CMD_PILL_NODE,
+  FILE_PILL_NODE,
+  CONTEXT_PILL_NODE,
+  CONVERSATION_PILL_NODE
+])
 
 /**
  * Factory: build a per-instance keymap extension that closes over a stable ref
@@ -177,6 +185,31 @@ function createComposerKeymap(
   })
 }
 
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(Math.max(value, min), max)
+
+/**
+ * `onMouseDown` for the host row that pads the editor. Chrome places no caret
+ * for a press outside a scrolled contenteditable, and on the phone the
+ * focusable card takes focus instead. A press on the row's own padding puts
+ * the caret at the visible text nearest the press, or at the end.
+ */
+export function focusComposerFromRowPress(
+  event: React.MouseEvent<HTMLElement>,
+  editor: Editor | null
+): void {
+  if (event.target !== event.currentTarget || !editor?.isEditable) return
+  event.preventDefault()
+  const visible = editor.view.dom.closest('[data-composer-scroll]')?.getBoundingClientRect()
+  const hit =
+    visible &&
+    editor.view.posAtCoords({
+      left: clamp(event.clientX, visible.left + 1, visible.right - 1),
+      top: clamp(event.clientY, visible.top + 1, visible.bottom - 1)
+    })
+  editor.commands.focus(hit ? hit.pos : 'end', { scrollIntoView: false })
+}
+
 /**
  * Tiptap rich-text editor wrapper for the modular chat composer. Replaces the
  * transparent-`<textarea>` + `SkillComposerOverlay` surface: the skill "pill"
@@ -253,6 +286,7 @@ export function ChatComposerEditor({
         CommandPill,
         FilePill,
         SelectionContextPill,
+        ConversationPill,
         createComposerKeymap(beforeKeyDownRef),
         Placeholder.configure({
           placeholder: () => placeholderRef.current,
@@ -302,14 +336,7 @@ export function ChatComposerEditor({
           onPasteAttachmentsRef.current?.(event as ClipboardEvent)
           if (event.defaultPrevented) return true
           const text = event.clipboardData?.getData('text/plain') ?? ''
-          // 2) ONLY parse pill nodes from the sentinel chars in `text/plain`.
-          // Never parse pills from HTML (SkillPill/CommandPill.parseHTML return
-          // []), so a malicious clipboard carrying `<span data-skill-pill>` or
-          // `<span data-command-pill>` cannot inject pill nodes. Plain-text
-          // paste (no sentinel) falls through to ProseMirror's default (text
-          // nodes). The skill `\uE000`, command `\uE004`, file `\uE006`, and
-          // selection-context `\uE008` sentinels trigger the pill-paste path.
-          if (!/[\uE000\uE004\uE006\uE008]/.test(text)) return false
+          if (!/[\uE000\uE004\uE006\uE008\uE00A]/.test(text)) return false
           event.preventDefault()
           try {
             const parsed = view.state.schema.nodeFromJSON(
@@ -472,6 +499,7 @@ export function ChatComposerEditor({
   return (
     <div className={cn('relative w-full overflow-hidden', disabled && 'opacity-60', className)}>
       <div
+        data-composer-scroll
         className="w-full overflow-y-auto overscroll-contain"
         style={
           {

@@ -159,7 +159,7 @@ export function PlanPanel({
                   hasInProgress ? `, ${inProgressLabel}` : ''
                 }`}
                 className={cn(
-                  'flex w-full items-center gap-1.5 px-3 py-2 text-left text-2xs font-semibold text-muted-foreground transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  'flex w-full items-center gap-1.5 px-3 py-2 text-left text-2xs font-semibold text-muted-foreground transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
                   CHAT_HIT_MIN_H
                 )}
               >

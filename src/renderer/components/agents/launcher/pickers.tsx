@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react'
+import { memo, useId, useMemo, useState } from 'react'
 import { SelectedCheck, SelectorModal, SelectorOptionLabel } from '@/components/chat/AgentHeader'
 import { ComposerPill } from '@/components/chat/ComposerPill'
 import {
@@ -19,7 +19,13 @@ import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { AuthMethod } from '@/lib/acp-api'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
-import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
+import {
+  agentBrandColor,
+  agentBrandProps,
+  brandGradientId,
+  findBundledIconByKey,
+  withBrandGradient
+} from '@/lib/agents/agent-icon-catalog'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 import {
   filterSupportedAcpAgents,
@@ -408,11 +414,14 @@ export function EntryStatusTag({
 export const EntryGlyph = memo(function EntryGlyph({
   config,
   templateId,
-  name
+  name,
+  colorClassName = 'text-foreground/80'
 }: {
   config: StoredAgentConfig | null
   templateId?: string
   name?: string
+  /** Colour of a glyph with no brand colour (a brand colour always wins). */
+  colorClassName?: string
 }): React.JSX.Element {
   const normalized = useMemo(() => {
     // Prefer a persisted custom icon (bundled or uploaded) over the catalog.
@@ -426,17 +435,24 @@ export const EntryGlyph = memo(function EntryGlyph({
     return icon ? sanitizeInlineAgentSvg(icon) : null
   }, [config?.icon, config?.templateId, templateId])
   const className = 'h-4 w-4 rounded-sm text-4xs'
+  const gradientId = brandGradientId(useId())
+  const brand = normalized ? agentBrandColor(config?.icon, config?.templateId ?? templateId) : null
+  const brandProps = brand ? agentBrandProps(brand, gradientId) : null
 
   if (normalized) {
     return (
       <span
         aria-hidden="true"
+        data-agent-brand={brand ? '' : undefined}
+        style={brandProps?.style}
         className={cn(
-          'inline-flex shrink-0 text-foreground/80 [&_svg]:h-full [&_svg]:w-full',
-          className
+          'inline-flex shrink-0 [&_svg]:h-full [&_svg]:w-full',
+          colorClassName,
+          className,
+          brandProps?.className
         )}
         // biome-ignore lint/security/noDangerouslySetInnerHtml: icon SVG is sanitized via sanitizeInlineAgentSvg (DOMPurify)
-        dangerouslySetInnerHTML={{ __html: normalized }}
+        dangerouslySetInnerHTML={{ __html: withBrandGradient(normalized, brand, gradientId) }}
       />
     )
   }
@@ -444,7 +460,8 @@ export const EntryGlyph = memo(function EntryGlyph({
     <span
       aria-hidden="true"
       className={cn(
-        'flex shrink-0 items-center justify-center bg-foreground/10 font-semibold uppercase text-foreground/80',
+        'flex shrink-0 items-center justify-center bg-foreground/10 font-semibold uppercase',
+        colorClassName,
         className
       )}
     >

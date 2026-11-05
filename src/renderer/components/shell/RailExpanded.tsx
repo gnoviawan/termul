@@ -1,10 +1,11 @@
-import { Edit2, Search } from '@/components/icons'
+import { Edit2, Search, Workflow } from '@/components/icons'
 import { ProjectSidebar } from '@/components/ProjectSidebar'
 import { RailFooter } from '@/components/shell/RailFooter'
 import { RailHeader } from '@/components/shell/RailHeader'
 import { RailRow } from '@/components/shell/RailRow'
 import { useShortcutLabel } from '@/components/shell/use-shortcut-label'
 import { useProjectActions } from '@/stores/project-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 
 interface RailExpandedProps {
@@ -28,7 +29,7 @@ const NEED_PROJECT = 'Open a project first'
 
 /**
  * Expanded Rail body, top to bottom: the header (top row part, ending in the
- * Rail toggle), Search, Canvas, the Projects section (with the SSH section on
+ * Rail toggle), Search, Canvas, Automations, the Projects section (with the SSH section on
  * desktop), and the icon-only footer. Fills the width its container gives it
  * and inherits the Rail's sidebar surface.
  */
@@ -70,6 +71,14 @@ export function RailExpanded({
           icon={<Edit2 size={16} />}
           disabled={!canOpenCanvas}
           onClick={onOpenCanvas}
+        />
+        <RailRow
+          label="Automations"
+          name="Open automations"
+          hint={activeProjectId ? undefined : NEED_PROJECT}
+          icon={<Workflow size={16} />}
+          disabled={!activeProjectId}
+          onClick={() => useWorkspaceStore.getState().addAutomationsTab(activeProjectId)}
         />
       </div>
 

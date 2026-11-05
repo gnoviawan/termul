@@ -78,12 +78,13 @@ async fn connection_cleanup_unregisters_once_after_writer_first_shutdown() {
         "session-cleanup".to_string(),
         json!([]),
     );
-    questions.register(
-        "question-cleanup".to_string(),
-        AgentId("agent-cleanup".to_string()),
-        "session-cleanup".to_string(),
-        json!([]),
-    );
+    questions.register_event(&json!({
+        "agentId": "agent-cleanup",
+        "sessionId": "session-cleanup",
+        "questionId": "question-cleanup",
+        "question": "Which plan?",
+        "options": [],
+    }));
     let subscribed = subscriptions_with("session-cleanup", client_id);
     assert_eq!(relay.session_subscriber_count("session-cleanup"), 1);
 
@@ -991,6 +992,7 @@ fn reopen_outcome_serializes_as_ws_reply_payload() {
         modes: None,
         models: None,
         config_options: Some(vec![]),
+        answered_by_host: false,
     };
     let reply = ok_with_payload("reopen-1".to_string(), &outcome);
     assert!(reply.ok);
@@ -1816,6 +1818,7 @@ fn resume_ok_payload_marks_replay_snapshot_null() {
         modes: None,
         models: None,
         config_options: None,
+        answered_by_host: false,
     };
     let reply = resume_ok_payload("r1".to_string(), &outcome);
     assert!(reply.ok);
@@ -1995,6 +1998,7 @@ pub(super) fn ws_test_app_state() -> AppState {
         acp_install: None,
         store: None,
         web_auth: None,
+        server_admin: None,
         allow_remote_writes: false,
         shared_live_writes_denied: false,
         pending_oauth_flows: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
@@ -2254,6 +2258,7 @@ fn spawn_outcome_serializes_full_payload_as_ws_reply() {
             r#type: "agent".to_string(),
             args: None,
             env: None,
+            api_key: None,
         }],
         host_auth_ready: true,
         stable_namespace: Some("config:cursor".to_string()),

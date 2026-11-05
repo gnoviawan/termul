@@ -38,12 +38,13 @@ fn ask(rdz: &PermissionRendezvous, id: &str, agent: &str, session: &str) {
 }
 
 fn ask_question(rdz: &QuestionRendezvous, id: &str, agent: &str, session: &str) {
-    rdz.register(
-        id.to_string(),
-        AgentId(agent.to_string()),
-        session.to_string(),
-        plan(),
-    );
+    rdz.register_event(&json!({
+        "agentId": agent,
+        "sessionId": session,
+        "questionId": id,
+        "question": "Which plan?",
+        "options": plan(),
+    }));
 }
 
 async fn answer(rdz: &PermissionRendezvous, id: &str) -> Result<RespondOutcome, RespondError> {

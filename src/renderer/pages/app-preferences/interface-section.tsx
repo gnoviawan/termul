@@ -1,4 +1,5 @@
 import { ColorSwatchGroup } from '@/components/settings/ColorSwatchGroup'
+import { rowId } from '@/components/settings/row-id'
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { SettingsRow, settingsDescriptionId } from '@/components/settings/SettingsRow'
@@ -6,7 +7,6 @@ import { SettingsStepper } from '@/components/settings/SettingsStepper'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import type { ProjectColor } from '@/types/project'
 import { UI_ZOOM_DEFAULT, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP } from '@/types/settings'
-import { rowId } from './categories'
 
 interface InterfaceSectionProps {
   uiZoomLevel: number

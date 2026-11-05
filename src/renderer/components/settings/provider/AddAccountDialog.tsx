@@ -16,6 +16,8 @@ import { Spinner } from '@/components/ui/spinner'
 import { claudeAccountsApi, isClaudeLoginCancelled } from '@/lib/claude-accounts-api'
 import { planLabel, primaryUsageWindow, usageWindowLabel } from '@/lib/claude-usage-format'
 import { cn } from '@/lib/utils'
+import { AccountGlyph } from './AccountGlyph'
+import { LinkSignInStep } from './LinkSignInStep'
 
 const MAX_NAME_CHARS = 40
 const NAME_SUGGESTIONS = ['Work', 'Personal', 'Team']
@@ -61,28 +63,6 @@ function Steps({ step }: { step: Step }): React.JSX.Element {
   )
 }
 
-function Glyph({
-  tone,
-  children
-}: {
-  tone: 'muted' | 'success' | 'warning'
-  children: React.ReactNode
-}) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        'flex size-8 shrink-0 items-center justify-center rounded-lg',
-        tone === 'muted' && 'bg-muted text-secondary-foreground',
-        tone === 'success' && 'bg-success/15 text-success',
-        tone === 'warning' && 'bg-warning/15 text-warning'
-      )}
-    >
-      {children}
-    </span>
-  )
-}
-
 interface AddAccountDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -98,8 +78,9 @@ interface AddAccountDialogProps {
 }
 
 /**
- * "Add account" as one dialog that stays open through the browser sign-in:
- * Name → Sign in → Done (or a failed step with Try again).
+ * "Add account" as one dialog that stays open through the sign-in:
+ * Name → Sign in → Done (or a failed step with Try again). The desktop app
+ * waits for the host's browser; a browser client shows the link sign-in.
  */
 export function AddAccountDialog({
   open,
@@ -111,6 +92,7 @@ export function AddAccountDialog({
   onSignedIn
 }: AddAccountDialogProps): React.JSX.Element {
   const inputId = useId()
+  const flow = claudeAccountsApi.signInFlow()
   const [step, setStep] = useState<Step>('name')
   const [name, setName] = useState('')
   const [account, setAccount] = useState<ClaudeAccount | null>(null)
@@ -130,13 +112,23 @@ export function AddAccountDialog({
   const signIn = async (target: ClaudeAccount): Promise<void> => {
     setStep('signing')
     setError(null)
+    if (flow === 'link') return
     try {
       await claudeAccountsApi.login(target.id)
+      await signedIn(target)
+    } catch (err) {
+      if (isClaudeLoginCancelled(err)) return
+      setError(errorText(err))
+      setStep('failed')
+    }
+  }
+
+  const signedIn = async (target: ClaudeAccount): Promise<void> => {
+    try {
       await onChanged()
       await onSignedIn(target)
       setStep('done')
     } catch (err) {
-      if (isClaudeLoginCancelled(err)) return
       setError(errorText(err))
       setStep('failed')
     }
@@ -163,7 +155,10 @@ export function AddAccountDialog({
   }
 
   const close = (): void => {
-    if (step === 'signing' && account) void claudeAccountsApi.cancelLogin(account.id)
+    // The link step stops its own sign-in when it closes.
+    if (step === 'signing' && account && flow === 'browser') {
+      void claudeAccountsApi.cancelLogin(account.id)
+    }
     onOpenChange(false)
   }
 
@@ -248,12 +243,20 @@ export function AddAccountDialog({
           </>
         )}
 
-        {step === 'signing' && account && (
+        {step === 'signing' && account && flow === 'link' && (
+          <LinkSignInStep
+            account={account}
+            onCancel={close}
+            onSignedIn={() => void signedIn(account)}
+          />
+        )}
+
+        {step === 'signing' && account && flow === 'browser' && (
           <>
             <DialogHeader className="flex-row items-start gap-3 space-y-0 text-left">
-              <Glyph tone="muted">
+              <AccountGlyph tone="muted">
                 <Globe size={15} />
-              </Glyph>
+              </AccountGlyph>
               <div className="flex flex-col gap-1">
                 <DialogTitle>Sign in to {account.name}</DialogTitle>
                 <DialogDescription>
@@ -284,9 +287,9 @@ export function AddAccountDialog({
         {step === 'done' && account && (
           <>
             <DialogHeader className="flex-row items-start gap-3 space-y-0 text-left">
-              <Glyph tone="success">
+              <AccountGlyph tone="success">
                 <Check size={15} />
-              </Glyph>
+              </AccountGlyph>
               <div className="flex flex-col gap-1">
                 <DialogTitle>{account.name} is ready</DialogTitle>
                 <DialogDescription>
@@ -325,9 +328,9 @@ export function AddAccountDialog({
         {step === 'failed' && account && (
           <>
             <DialogHeader className="flex-row items-start gap-3 space-y-0 text-left">
-              <Glyph tone="warning">
+              <AccountGlyph tone="warning">
                 <AlertCircle size={15} />
-              </Glyph>
+              </AccountGlyph>
               <div className="flex flex-col gap-1">
                 <DialogTitle>Sign-in did not finish</DialogTitle>
                 <DialogDescription>

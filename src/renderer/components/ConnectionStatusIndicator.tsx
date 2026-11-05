@@ -24,35 +24,13 @@ export const HOST_OFFLINE_RETRY_LABEL = 'Retry'
 export const HOST_OFFLINE_TOOLTIP = 'Host offline. Select to retry.'
 
 /**
- * The connected summary of the labelled (drawer footer) indicator: "Connected ·
- * host:port", naming the host this client talks to. An empty host (no
- * `window.location.host`) reads plain "Connected".
- */
-export function formatConnectedSummary(host: string): string {
-  const trimmed = host.trim()
-  return trimmed ? `Connected · ${trimmed}` : 'Connected'
-}
-
-interface ConnectionStatusIndicatorProps {
-  /**
-   * Render the summary as visible text beside a decorative lamp (the mobile
-   * drawer footer, where the tooltip is unreachable by touch). The status
-   * region's content is that text, so there is no `aria-label` and no tooltip
-   * button. Default false keeps the StatusBar render unchanged.
-   */
-  showLabel?: boolean
-}
-
-/**
  * Story 10 (F1): global connection-health indicator for the web client — a
  * StatusBar lamp showing the worst of the control (`/ws`) and terminal
  * (`/terminal/ws`) channels. Status tone (connection / warning /
  * destructive) plus pulse encode state. Hidden on Tauri desktop: both
  * channels are direct IPC there, so an indicator would be noise.
  */
-export function ConnectionStatusIndicator({
-  showLabel = false
-}: ConnectionStatusIndicatorProps): ReactNode {
+export function ConnectionStatusIndicator(): ReactNode {
   const controlChannel = useShownConnectionStore((state) => state.controlChannel)
   const terminalChannel = useShownConnectionStore((state) => state.terminalChannel)
 
@@ -71,37 +49,6 @@ export function ConnectionStatusIndicator({
     : degraded.length > 0
       ? degraded.join('; ')
       : 'Connected'
-
-  if (showLabel) {
-    // Degraded text is unchanged; only the connected reading names the host.
-    const labelSummary =
-      degraded.length > 0 ? summary : formatConnectedSummary(window.location.host)
-    return (
-      <span
-        role="status"
-        aria-live="polite"
-        className="inline-flex min-w-0 items-center gap-2 text-2xs text-muted-foreground"
-      >
-        <AgentConnectionLamp
-          connected={worst === 'connected'}
-          reconnecting={worst === 'connecting' || worst === 'reconnecting'}
-          hostOffline={hostOffline}
-          decorative
-          size={8}
-        />
-        <span className="min-w-0 break-words">{labelSummary}</span>
-        {hostOffline && (
-          <button
-            type="button"
-            onClick={retryHostOffline}
-            className="shrink-0 rounded-sm px-1 text-2xs font-medium text-foreground underline underline-offset-2 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {HOST_OFFLINE_RETRY_LABEL}
-          </button>
-        )}
-      </span>
-    )
-  }
 
   return (
     // role="status" announces state changes politely; the inner button is the

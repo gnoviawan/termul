@@ -76,12 +76,14 @@ impl<T> IpcResult<T> {
 }
 
 pub mod acp_history;
+pub mod automation;
 pub mod browser;
 pub mod browser_policy;
 pub mod canvas;
 pub mod command_editor;
 pub mod diagnostics;
 pub mod git;
+pub mod github;
 pub mod migrations;
 pub mod misc;
 pub mod notification;
@@ -96,12 +98,14 @@ pub mod workspace;
 pub mod worktree;
 
 pub use acp_history::*;
+pub use automation::*;
 pub use browser::*;
 pub use browser_policy::*;
 pub use canvas::*;
 pub use command_editor::*;
 pub use diagnostics::*;
 pub use git::*;
+pub use github::*;
 pub use migrations::*;
 pub use misc::*;
 pub use notification::*;

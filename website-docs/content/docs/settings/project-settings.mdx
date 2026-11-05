@@ -7,80 +7,69 @@ Project settings change one project only. Use them to rename a project, move it 
 
 ## Open project settings
 
-1. Right-click the project in the sidebar.
-2. Select **Settings**.
+Use one of these:
 
-You can also press `Ctrl+K` and choose **Project Settings**. That opens the settings of the project you have open.
+- Right-click the project in the sidebar and select **Settings**.
+- Select the gear icon next to the project in the sidebar.
+- Press `Ctrl+K` and choose **Project Settings**. That opens the settings of the project you have open.
 
-![Project Settings for acme-shop, open on the General tab](/screenshots/settings-project-general.png)
+When you open the settings from the sidebar, you don't have to switch to the project first. The window opens for the project you right-clicked, and Termul stays on the project you were working in.
+
+The **Project settings** window shows the project name at the top and lists its pages on the left, in two groups. **Project** has **General**, **Shell**, **Environment variables**, and **Worktree symlinks**. **Agents** has **Accounts** and **Browser**. To find a setting, type in **Search settings**.
+
+If you delete the project while its settings are open, the window closes.
 
 ## Save your changes
 
-Project settings are not saved until you save them. When you change something, a bar appears at the bottom of the window.
+Project settings are not saved until you save them. When you change something, a bar with **Unsaved changes** appears at the bottom of the window.
 
-- Select **Save Changes** to keep your changes.
-- Select **Discard** to drop them.
+- Select **Save changes** to keep your changes.
+- Select **Discard** to drop them. Every field goes back to its saved value.
 
-If you close the window with unsaved changes, Termul asks you to confirm. Select **Leave** to close without saving.
+If you close the window with unsaved changes, Termul asks you to confirm. Select **Leave** to close without saving. Your edits are dropped, so they don't come back the next time you open the window.
 
 ## General
 
-- **Project Name** is the name in the sidebar.
-- **Root Directory** is the project folder. Type a path or select **Browse**. Terminals that are already open stay in the old folder. New terminals open in the new one.
-- **Color & Appearance** is the color of the project in the sidebar.
+- **Name** is the name of the project in the sidebar.
+- **Root directory** is the project folder. Type a path or select **Browse**. Terminals that are already open stay in the old folder. New terminals open in the new one.
+- **Color** is the color that marks the project in the sidebar.
 
-## Environment Variables
+## Shell
+
+**Shell** is the shell that new terminals in this project start. **App default** uses the shell from the app settings. Pick another shell to replace it for this project only.
+
+## Environment variables
 
 Environment variables are names and values that programs read when they start, such as `NODE_ENV=development`. Terminals and agent chats that you start in this project after you save get these variables.
 
-![Environment Variables with one variable added and the Save Changes bar](/screenshots/settings-project-env.png)
-
 To add a variable:
 
-1. Select **Add Variable**.
-2. Type the name under **Key** and the value under **Value**.
-3. Select **Save Changes**.
+1. Select **Add variable**.
+2. Type the name in the **KEY** field and the value in the **value** field.
+3. Select **Save changes**.
 
 To remove a variable, select the **X** at the end of its row.
 
 To copy the variables from a `.env` file, select **Import from .env**. Termul reads the `.env` file in the project's root folder. A variable from the file replaces a variable with the same name. If some lines of the file are not valid, Termul imports the rest and lists the lines it skipped.
 
-## Shell Settings
-
-**Default Shell** is the shell that new terminals in this project start. It replaces the default shell from the app settings for this project only.
-
-## Worktree Symlinks
+## Worktree symlinks
 
 A worktree is a second working folder of the same git repository, often on another branch. See [Worktrees](/docs/git/worktrees). A new worktree does not have folders that git ignores, such as `node_modules`. Without them, you must install your dependencies again in each worktree.
 
-This tab lists folders that Termul links from the project folder into each new worktree. A linked folder is shared, so the worktree uses the same `node_modules` as the project.
-
-![The Worktree Symlinks tab with the Sync from .gitignore and Add Directory buttons](/screenshots/settings-project-symlinks.png)
+This page lists folders that Termul links from the project folder into each new worktree. A linked folder is shared, so the worktree uses the same `node_modules` as the project.
 
 - **Sync from .gitignore** adds every folder that your `.gitignore` file lists and that exists in the project. It works only in a git project.
-- **Add Directory** adds an empty row. Type a folder name, such as `node_modules`.
+- **Add directory** adds an empty row. Type a folder name, such as `node_modules`.
 - The **X** at the end of a row removes the folder from the list.
 
-When the list of a git project is empty, Termul fills it from `.gitignore` the first time you open project settings. Select **Save Changes** to keep that list.
+When the list of a git project is empty, Termul fills it from `.gitignore` the first time you open project settings. Select **Save changes** to keep that list.
 
 When you create a worktree, the **Symlink Directories** part of the new worktree window lists these folders. Clear a folder's checkbox to skip it for that worktree.
 
-## Provider
+## Accounts
 
-**Provider** picks the Claude account that agent chats in this project use. **Follow default** uses the default account from the app settings. Select **Manage accounts** to add or sign in to accounts. New Claude chats in the project use the account you pick. Chats that are already open switch when they start again. See [Agent setup](/docs/agent-setup).
+**Accounts** picks the Claude account that agent chats in this project use. **Follow default** uses the default account from the app settings. Select **Manage accounts** to add or sign in to accounts. If you have unsaved changes, save or discard them first. New Claude chats in the project use the account you pick. Chats that are already open switch when they start again. See [Agent setup](/docs/agent-setup).
 
 ## Browser
 
-The **Browser** tab sets what agents may do in the agent browser in this project: browsing logged out, the sites agents open without asking, and pre-approved actions. Unlike the other tabs, these changes save as you make them. See [Let an agent use the browser](/docs/browser/agent-browser#browser-rules).
-
-## Emergency Mode
-
-![The Emergency Mode tab with two switches and a branch prefix field](/screenshots/settings-project-emergency.png)
-
-Emergency Mode has three controls meant for fast worktree work:
-
-- **Skip Confirmation Dialogs** says it skips the "are you sure" questions during worktree work.
-- **Skip .gitignore Selection** says new worktrees use the folders from **Worktree Symlinks** without asking.
-- **Default Branch Prefix** is the start of new branch names, such as `feature/` or `hotfix/`.
-
-<Callout type="warn">In this version these three controls have no effect. Termul does not save them, and they reset when you close the window.</Callout>
+The **Browser** page sets what agents may do in the agent browser in this project: browsing logged out, the sites agents open without asking, and pre-approved actions. Unlike the other pages, these changes save as you make them. See [Let an agent use the browser](/docs/browser/agent-browser#browser-rules).

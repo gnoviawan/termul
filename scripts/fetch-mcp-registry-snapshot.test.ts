@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
@@ -7,7 +7,16 @@ import { describe, expect, it } from 'vitest'
 // @ts-expect-error The script is plain ESM so the release workflow runs it directly.
 import * as snapshotScript from './fetch-mcp-registry-snapshot.mjs'
 
-const { buildSnapshot, crawl, META_FILE, readBody, SNAPSHOT_FILE, verifySnapshot } = snapshotScript
+const {
+  buildSnapshot,
+  crawl,
+  DROPPED_SERVER_FIELDS,
+  ICON_FIELDS,
+  META_FILE,
+  readBody,
+  SNAPSHOT_FILE,
+  verifySnapshot
+} = snapshotScript
 
 const OFFICIAL = 'io.modelcontextprotocol.registry/official'
 
@@ -18,7 +27,10 @@ function row(name: string, version: string, status: string, isLatest: boolean) {
       name,
       version,
       description: 'd',
-      icons: [{ src: 'https://example.com/icon.png' }],
+      icons: [
+        { src: 'https://example.com/icon.png', sizes: ['64x64'], theme: 'light', extra: 1 },
+        { mimeType: 'image/png' }
+      ],
       _meta: { 'com.example/publisher': { stars: 1 } },
       remotes: [{ type: 'streamable-http', url: 'https://mcp.example.com/mcp' }]
     },
@@ -43,6 +55,7 @@ describe('buildSnapshot', () => {
             name: 'io.example/a',
             version: '1.1.0',
             description: 'd',
+            icons: [{ src: 'https://example.com/icon.png', sizes: ['64x64'], theme: 'light' }],
             remotes: [{ type: 'streamable-http', url: 'https://mcp.example.com/mcp' }]
           },
           _meta: {
@@ -54,6 +67,7 @@ describe('buildSnapshot', () => {
             name: 'io.example/b',
             version: '2.0.0',
             description: 'd',
+            icons: [{ src: 'https://example.com/icon.png', sizes: ['64x64'], theme: 'light' }],
             remotes: [{ type: 'streamable-http', url: 'https://mcp.example.com/mcp' }]
           },
           _meta: {
@@ -125,7 +139,7 @@ describe('readBody', () => {
 })
 
 describe('verifySnapshot', () => {
-  function write(servers: number, sha?: string) {
+  function write(servers: number, sha?: string, sample?: boolean) {
     const dir = mkdtempSync(join(tmpdir(), 'mcp-snapshot-'))
     const snapshot = {
       formatVersion: 1,
@@ -137,7 +151,10 @@ describe('verifySnapshot', () => {
     const gz = gzipSync(Buffer.from(JSON.stringify(snapshot)))
     const sha256 = sha ?? createHash('sha256').update(gz).digest('hex')
     writeFileSync(join(dir, SNAPSHOT_FILE), gz)
-    writeFileSync(join(dir, META_FILE), JSON.stringify({ sha256, fetchedAt: 'now', servers }))
+    writeFileSync(
+      join(dir, META_FILE),
+      JSON.stringify({ sha256, fetchedAt: 'now', servers, sample })
+    )
     return dir
   }
 
@@ -148,5 +165,26 @@ describe('verifySnapshot', () => {
   it('rejects a mismatched sha256 or a truncated crawl', () => {
     expect(() => verifySnapshot(write(3, 'f'.repeat(64)), 3)).toThrow(/does not match/)
     expect(() => verifySnapshot(write(3), 4)).toThrow(/minimum 4/)
+  })
+
+  it('rejects the --only sample even when it is large enough', () => {
+    expect(() => verifySnapshot(write(3, undefined, true), 3)).toThrow(/sample/)
+  })
+})
+
+describe('slimmed fields', () => {
+  const sync = readFileSync(
+    join(import.meta.dirname, '..', 'src-tauri', 'src', 'mcp_catalog', 'sync.rs'),
+    'utf8'
+  )
+  const rustList = (constant: string) =>
+    sync
+      .match(new RegExp(`const ${constant}: \\[&str; \\d+\\] = \\[([^\\]]*)\\]`))?.[1]
+      ?.match(/"[^"]+"/g)
+      ?.map((field) => JSON.parse(field))
+
+  it('match what host sync keeps, so cached rows look like snapshot rows', () => {
+    expect(rustList('DROPPED_SERVER_FIELDS')).toEqual([...DROPPED_SERVER_FIELDS])
+    expect(rustList('ICON_FIELDS')).toEqual(ICON_FIELDS)
   })
 })

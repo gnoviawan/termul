@@ -44,12 +44,20 @@ const GATED_PREFIXES: &[&str] = &[
     "/mcp-catalog/",
     "/fs/",
     "/git/",
+    "/github/",
     "/search/",
     "/skills",
     "/log/",
     "/shells",
     "/acp/",
     "/worktree/",
+    // The OpenAPI description of these routes.
+    "/openapi.json",
+    // Automations and their runs, agents and secrets.
+    "/api/automation",
+    // gh-1105: `/server/config` host-administration reconfigure routes —
+    // registered only on the standalone `termul-server` (`server_admin`).
+    "/server/",
     // The /canvas/ API routes require the token. The /canvas/<id>/* bundle
     // paths are exempt — see [`is_bundle_path`] (canvas-token authed
     // in the sub-router).
@@ -58,7 +66,7 @@ const GATED_PREFIXES: &[&str] = &[
 
 
 /// Whether `path` is a gated API route. Pure decision fn (unit-testable).
-pub(super) fn requires_token(path: &str) -> bool {
+pub(crate) fn requires_token(path: &str) -> bool {
     if PUBLIC_PATHS.contains(&path) {
         return false;
     }

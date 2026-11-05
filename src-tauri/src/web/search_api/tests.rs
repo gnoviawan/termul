@@ -77,6 +77,7 @@ fn test_state() -> AppState {
         )),
         oauth_base_url: "http://127.0.0.1".to_string(),
         connections: Default::default(),
+        server_admin: None,
     }
 }
 

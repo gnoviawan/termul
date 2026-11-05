@@ -56,12 +56,13 @@ beforeEach(() => {
 })
 
 describe('RailColumnIcons', () => {
-  it('renders Chats, Explorer and Changes in order with Chats selected by default', () => {
+  it('renders Chats, Explorer, Changes and GitHub in order with Chats selected by default', () => {
     renderIcons()
     expect(screen.getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
       'Chats',
       'Explorer',
-      'Changes'
+      'Changes',
+      'GitHub'
     ])
     expect(button('Chats')).toHaveAttribute('aria-pressed', 'true')
     expect(button('Explorer')).toHaveAttribute('aria-pressed', 'false')
@@ -78,6 +79,10 @@ describe('RailColumnIcons', () => {
 
     fireEvent.click(button('Changes'))
     expect(useShellLayoutStore.getState().lastColumnTabByProject.p1).toBe('changes')
+
+    fireEvent.click(button('GitHub'))
+    expect(useShellLayoutStore.getState().lastColumnTabByProject.p1).toBe('github')
+    expect(button('GitHub')).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('reflects the project last tab', () => {
@@ -117,7 +122,7 @@ describe('RailColumnIcons', () => {
 
   it('is disabled without a project', () => {
     renderIcons(null as unknown as undefined)
-    for (const name of ['Chats', 'Explorer', 'Changes']) {
+    for (const name of ['Chats', 'Explorer', 'Changes', 'GitHub']) {
       expect(button(name)).toBeDisabled()
     }
     fireEvent.click(button('Explorer'))

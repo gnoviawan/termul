@@ -18,6 +18,7 @@ function seed(overrides: Partial<EditorFileState> = {}): void {
         {
           filePath: FILE,
           content: 'disk version',
+          kind: 'text',
           originalContent: 'disk version',
           isDirty: false,
           language: 'markdown',

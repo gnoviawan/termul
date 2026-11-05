@@ -4,6 +4,7 @@ import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { useAcpStore } from '@/stores/acp-store'
+import type { OptionValues } from '@/stores/acp-store/composer-options'
 import { type AgentTab, catalogFromSessionState, type ModelCatalog } from './selector-model'
 import { type SwitchModelPick, useAgentSwitch } from './use-agent-switch'
 
@@ -45,7 +46,7 @@ export interface SelectorSource {
   /** The chat agent's own list while a switch is armed (chat only). */
   liveCatalog: ModelCatalog | null
   /** A model of the chat's own agent while a switch is armed (chat only). */
-  pickCurrentModel: (catalog: ModelCatalog | null, value: string) => void
+  pickCurrentModel: (catalog: ModelCatalog | null, value: string, values?: OptionValues) => void
   /** A model on another agent's tab: arm the switch, or select the agent. */
   pickOtherModel: (configId: string, pick: SwitchModelPick) => void
   cancelThenSwitch: (configId: string, pick: SwitchModelPick) => Promise<void>
@@ -81,15 +82,14 @@ export function useSessionSelectorSource(sessionId: string): SelectorSource {
       install: sw.install,
       workspace: { cwd, projectId },
       liveCatalog: catalogFromSessionState(liveModels, liveOptions),
-      pickCurrentModel: (catalog, value) => {
-        // Back to the chat's own agent: drop the armed switch, set the model.
+      pickCurrentModel: (_catalog, value, values) => {
+        // Back to the chat's own agent: drop the armed switch, set the model
+        // and its values.
         const store = useAcpStore.getState()
         store.cancelAgentSwitch(sessionId)
-        const set =
-          catalog?.source === 'config'
-            ? store.setConfigOption(sessionId, catalog.id, value)
-            : store.setModel(sessionId, value)
-        void set.catch(() => toast.error('Could not switch model. Try again.'))
+        void store
+          .pickModel(sessionId, value, values)
+          .catch(() => toast.error('Could not switch model. Try again.'))
       },
       pickOtherModel: (configId, pick) => {
         void sw.armWithModel(configId, pick)

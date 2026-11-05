@@ -143,6 +143,7 @@ pub(super) fn gate_test_state(token: Option<&str>) -> crate::web::ws::AppState {
         allow_remote_writes: false,
         shared_live_writes_denied: false,
         connections: Default::default(),
+        server_admin: None,
     }
 }
 

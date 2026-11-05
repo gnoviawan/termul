@@ -25,7 +25,7 @@ import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
  * unsupported attachment (chat and launcher), a failed clipboard read (key
  * bar), an empty required elicitation field, or a saved file (editor tab).
  * The fake agent (fake-longrun-agent.ts) supplies the dock content through
- * prompt markers: `[DOCK]` (changed-files bar), `[ASK:permission]` and
+ * prompt markers: `[DOCK]` (plan and changed files), `[ASK:permission]` and
  * `[ASK:elicitation]` (approvals).
  *
  * Not automated here (unit tests own them, see the spec's matrix): a missing
@@ -314,12 +314,6 @@ async function gapAbove(toast: Locator, topEdge: number): Promise<number> {
   return topEdge - (box.y + box.height)
 }
 
-/** Closes a toast through its own close button and waits until it is gone. */
-async function dismissToast(toast: Locator): Promise<void> {
-  await toast.locator('[data-close-button]').tap()
-  await expect(toast).toHaveCount(0)
-}
-
 /**
  * The toast ends at least MIN_CLEARANCE above the top edge (a number, or a read
  * repeated on every poll for an edge that is still moving).
@@ -481,54 +475,6 @@ test('an open approval grows the dock and the toast clears Allow and Reject', as
   }
 })
 
-test('the changed-files bar and its expansion push the dock top up and the toast follows', async ({
-  page
-}) => {
-  const project = await registerProject({
-    'src/auth.ts': "export const authMarker = 'e2e-auth-file'"
-  })
-  await launchChat(page, `[DOCK] ${LONG} changed files`, { project })
-  const dock = chatDock(page)
-  const bar = dock.getByRole('button', { name: 'Changed files 3 +17 −2', exact: true })
-  const git = dock.getByRole('button', { name: 'Open Git changes', exact: true })
-  // The bar and the composer are both inside the one wrapper.
-  await expect(bar).toBeVisible()
-  await expect(dock.locator('[data-chat-composer="true"]')).toHaveCount(1)
-  await expect(bar).toHaveAttribute('aria-expanded', 'false')
-  await expect.poll(() => clearanceError(dock)).toBe(0)
-  const collapsed = await publishedClearance(page)
-  if (collapsed === null) throw new Error('the chat dock published no clearance')
-
-  // The dock's top is the bar's top, so the collapsed bar already sits above the plain composer.
-  const barTop = (await boxOf(bar)).y
-  const cardTop = (await boxOf(composerCard(page))).y
-  expect(barTop).toBeLessThan(cardTop)
-  const toast = await raiseAttachToast(page)
-  await expectToastFollowsClearance(toast)
-  await expectToastClear(toast, async () => (await boxOf(bar)).y)
-  await expectReachableUnder(toast, git, 'the Git action')
-
-  // Expanding the bar adds rows: the dock top moves up and the variable follows
-  // in the same frame. A fresh toast then rests at the new, higher offset.
-  await dismissToast(toast)
-  await bar.tap()
-  await expect(bar).toHaveAttribute('aria-expanded', 'true')
-  await expect(page.getByRole('button', { name: /src\/auth\.ts/ })).toBeVisible()
-  await expect.poll(() => clearanceError(dock)).toBe(0)
-  const expanded = await publishedClearance(page)
-  expect(expanded).toBeGreaterThan(collapsed)
-  const toastAgain = await raiseAttachToast(page)
-  await expectToastFollowsClearance(toastAgain)
-  await expectToastClear(toastAgain, async () => (await boxOf(bar)).y)
-  await expectReachableUnder(toastAgain, git, 'the Git action')
-
-  // Collapsing it gives the height back.
-  await bar.tap()
-  await expect(bar).toHaveAttribute('aria-expanded', 'false')
-  await expect.poll(() => publishedClearance(page)).toBe(collapsed)
-  await expect.poll(() => clearanceError(dock)).toBe(0)
-})
-
 test('a queued prompt grows the dock and removing it gives the height back', async ({ page }) => {
   await launchChat(page, `${LONG} queue`)
   const dock = chatDock(page)
@@ -626,9 +572,9 @@ test('a chat hidden behind an editor tab releases the clearance and it returns w
   const dock = chatDock(page)
   await expect.poll(() => clearanceError(dock)).toBe(0)
 
-  // A changed-files row opens the file in an editor tab: the chat stays mounted
-  // but is no longer visible, so it stops reporting its dock.
-  await dock.getByRole('button', { name: 'Changed files 3 +17 −2', exact: true }).tap()
+  // A changed-files row (status pill sheet) opens the file in an editor tab:
+  // the chat stays mounted but is no longer visible, so it stops reporting its dock.
+  await page.getByRole('button', { name: 'Session status: 3 changed files', exact: true }).tap()
   await page.getByRole('button', { name: /src\/auth\.ts/ }).tap()
   await expect(page.getByText('e2e-auth-file')).toBeVisible()
   await expect.poll(() => publishedClearance(page)).toBeNull()

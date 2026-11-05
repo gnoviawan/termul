@@ -10,6 +10,7 @@ import {
 import {
   clearPendingUpdate,
   DEFAULT_UPDATE_CHANNEL,
+  isUpdateDownloaded,
   registerUpdateEventHandlers,
   type TauriUpdaterEventHandlers,
   checkForUpdates as tauriCheckForUpdates,
@@ -65,6 +66,8 @@ export interface UpdaterStoreState {
   skippedVersion: string | null
   isChecking: boolean
   isDownloading: boolean
+  /** True while a download runs the pre-update backup, before any package bytes. */
+  isPreparingDownload: boolean
   error: string | null
   /** Which step produced `error`, so the UI names the failure correctly. */
   errorSource: UpdaterErrorSource | null
@@ -109,6 +112,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
   skippedVersion: null,
   isChecking: false,
   isDownloading: false,
+  isPreparingDownload: false,
   error: null,
   errorSource: null,
   lastChecked: null,
@@ -172,12 +176,15 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         set({ skippedVersion: null })
       }
 
+      // A re-check that finds the version already downloaded keeps it ready to
+      // install; the facade keeps the downloaded package for the same version.
+      const alreadyDownloaded = isUpdateDownloaded(updateInfo.version)
       set({
         updateAvailable: true,
-        downloaded: false,
+        downloaded: alreadyDownloaded,
         version: updateInfo.version,
         releaseNotes: updateInfo.releaseNotes ?? null,
-        downloadProgress: 0,
+        downloadProgress: alreadyDownloaded ? 100 : 0,
         error: null,
         lastChecked: checkedAt,
         // The update mode, not the channel, decides the UI: a nightly whose
@@ -202,7 +209,13 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     // must not turn an opened release page into a staged update.
     const isManualAction = get().isManualUpdateMode
 
-    set({ isDownloading: true, error: null, errorSource: null, downloadProgress: 0 })
+    set({
+      isDownloading: true,
+      isPreparingDownload: true,
+      error: null,
+      errorSource: null,
+      downloadProgress: 0
+    })
 
     try {
       const result = await tauriDownloadUpdate((progress) => {
@@ -230,7 +243,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       const errorMessage = err instanceof Error ? err.message : 'Failed to download update'
       set({ error: errorMessage, errorSource: 'download' })
     } finally {
-      set({ isDownloading: false })
+      set({ isDownloading: false, isPreparingDownload: false })
     }
   },
 
@@ -349,7 +362,11 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         downloaded: false,
         version: null,
         downloadProgress: 0,
-        releaseNotes: null
+        releaseNotes: null,
+        // The manual flag described the previous channel's check, and
+        // clearPendingUpdate already reset it in the facade. The next check of
+        // this channel sets it again if that check falls back to manual.
+        isManualUpdateMode: false
       })
 
       // Re-check only when auto-update is enabled — switching channel while
@@ -573,7 +590,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
    * Internal action: Called when download progress updates (IPC event)
    */
   _setDownloadProgress: (progress: DownloadProgress): void => {
-    set({ downloadProgress: progress.percent })
+    set({ downloadProgress: progress.percent, isPreparingDownload: false })
   },
 
   /**
@@ -705,6 +722,7 @@ export function useUpdaterState() {
       skippedVersion: state.skippedVersion,
       isChecking: state.isChecking,
       isDownloading: state.isDownloading,
+      isPreparingDownload: state.isPreparingDownload,
       error: state.error,
       errorSource: state.errorSource,
       lastChecked: state.lastChecked,

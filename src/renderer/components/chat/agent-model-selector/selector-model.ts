@@ -2,12 +2,117 @@ import type { PersistedModelCatalog } from '@shared/types/persistence.types'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { AgentCapabilities, SessionConfigOption, SessionModelState } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
-import { flattenConfigOptionValues } from '../chat-input-bar-config'
+import {
+  flattenConfigOptionValues,
+  isBinaryOnOffOption,
+  isFastModeEnabled,
+  THOUGHT_LEVEL_CATEGORY
+} from '../chat-input-bar-config'
+import { type FavoriteKey, favoriteKey } from './favorite-models'
 
 /** Tabs shown in the agent track before the rest go behind "More". */
 export const MAX_VISIBLE_AGENT_TABS = 4
 /** Value of `view` that shows the overflow agent list instead of a model list. */
 export const MORE_AGENTS_VIEW = '\0more'
+
+/**
+ * A model row's accessible name, set as the row button's `aria-label`:
+ * `<name>[ · <agent>]`. One string, not sr-only fragments: Chrome reads an
+ * absolutely positioned sr-only span as its own block and puts a space before
+ * it ("Opus , thinking High"). The name is trimmed, as agents can send edge
+ * whitespace. The Thinking level is on the row's Edit button, not here.
+ */
+export function rowAccessibleName({
+  name,
+  agentName
+}: {
+  name: string
+  /** Another agent's model: whose it is. */
+  agentName?: string
+}): string {
+  const label = name.trim()
+  return agentName && agentInRowName(agentName) ? `${label} · ${agentName}` : label
+}
+
+/**
+ * Whether `rowAccessibleName` names the agent: any other agent's model does.
+ * Callers pass this to `rowTooltipDescription` instead of parsing the name.
+ */
+export function agentInRowName(agentName?: string): boolean {
+  return Boolean(agentName)
+}
+
+/**
+ * The row's visual tooltip: the full model name first (a long name truncates in
+ * the row), then the agent, then the description. Never part of the accessible
+ * name; the row keeps `rowAccessibleName`.
+ */
+export function rowTooltip({
+  name,
+  agentName,
+  details
+}: {
+  name: string
+  agentName?: string
+  details?: string
+}): string {
+  return [name.trim(), agentName, details].filter(Boolean).join('\n\n')
+}
+
+/**
+ * What the row tooltip adds for screen readers: everything the row's
+ * `aria-label` does not already say. The name is always there; the agent is
+ * too when `agentInName` (`agentInRowName`), so it is left out rather than
+ * read twice. A blank string, not '', when there is nothing more, since Radix
+ * falls back to the visible text for a falsy label.
+ */
+export function rowTooltipDescription({
+  agentName,
+  agentInName,
+  details
+}: {
+  agentName?: string
+  /** The row's accessible name already names the agent. */
+  agentInName: boolean
+  details?: string
+}): string {
+  return [agentInName ? undefined : agentName, details].filter(Boolean).join('\n\n') || ' '
+}
+
+/** Whether the row tooltip says anything the row's name does not (else no `aria-describedby`). */
+export function rowHasDescription(description: string): boolean {
+  return description.trim() !== ''
+}
+
+/**
+ * The active row's Edit button name. With a Thinking level the button shows
+ * that level, so the name carries it (WCAG 2.5.3, label in name):
+ * `Edit <name>, thinking <level>`. Without one it says what it edits:
+ * `Edit <sections> for <name>`.
+ */
+export function editButtonAccessibleName({
+  name,
+  thinking,
+  sections,
+  inFavorites = false
+}: {
+  name: string
+  /** The current Thinking level, as the button shows it. */
+  thinking?: string
+  /** What the flyout sets, e.g. `Thinking and Context`. */
+  sections: string
+  /**
+   * The button sits on the Favorites copy of the row, so its name says so and
+   * differs from the list row's. The level stays last: the visible text is in the name.
+   */
+  inFavorites?: boolean
+}): string {
+  const model = name.trim()
+  const where = inFavorites ? ' in Favorites' : ''
+  return thinking
+    ? `Edit ${model}${where}, thinking ${thinking}`
+    : `Edit ${sections} for ${model}${where}`
+}
 
 export interface CatalogModel {
   value: string
@@ -159,26 +264,19 @@ function tabFromEntry(
 }
 
 /**
- * Split agents into the visible tab track and the "More" list. The current
- * agent is always first, then the armed target, then other ready agents in
- * catalog order, up to `max` tabs. An agent opened from "More"
- * takes the last free slot so its tab shows as selected.
+ * Every agent as a tab, in catalog order, plus a stored-config tab for the
+ * current, armed, or viewed agent when the catalog has not listed it yet.
  */
-export function buildAgentTabs({
+function allAgentTabs({
   currentConfigId,
   armedConfigId,
   viewConfigId,
   entries,
-  agentConfigs,
-  max = MAX_VISIBLE_AGENT_TABS
-}: {
-  max?: number
-  currentConfigId: string | null
-  armedConfigId: string | null
-  viewConfigId: string | null
-  entries: readonly SupportedAcpAgentEntry[]
-  agentConfigs: readonly StoredAgentConfig[]
-}): { visible: AgentTab[]; overflow: AgentTab[] } {
+  agentConfigs
+}: AgentTabSource): {
+  all: AgentTab[]
+  pinnedTab: (configId: string | null) => AgentTab | null
+} {
   const all = entries.map((entry) => tabFromEntry(entry, agentConfigs))
   const byId = new Map(all.map((tab) => [tab.configId, tab]))
   const pinnedTab = (configId: string | null): AgentTab | null => {
@@ -188,6 +286,37 @@ export function buildAgentTabs({
     const config = agentConfigs.find((c) => c.id === configId)
     return config ? { configId, name: config.name, config, entry: null } : null
   }
+  const extra: AgentTab[] = []
+  for (const id of [currentConfigId, armedConfigId, viewConfigId]) {
+    const tab = pinnedTab(id)
+    if (tab && !byId.has(tab.configId) && !extra.some((t) => t.configId === tab.configId)) {
+      extra.push(tab)
+    }
+  }
+  return { all: [...all, ...extra], pinnedTab }
+}
+
+interface AgentTabSource {
+  currentConfigId: string | null
+  armedConfigId: string | null
+  viewConfigId: string | null
+  entries: readonly SupportedAcpAgentEntry[]
+  agentConfigs: readonly StoredAgentConfig[]
+}
+
+/**
+ * Split agents into the visible tab track and the "More" list. The current
+ * agent is always first, then the armed target, then other ready agents in
+ * catalog order, up to `max` tabs. An agent opened from "More"
+ * takes the last free slot so its tab shows as selected. (V1 panel.)
+ */
+export function buildAgentTabs({
+  max = MAX_VISIBLE_AGENT_TABS,
+  ...source
+}: AgentTabSource & { max?: number }): { visible: AgentTab[]; overflow: AgentTab[] } {
+  const { currentConfigId, armedConfigId, viewConfigId, entries, agentConfigs } = source
+  const { pinnedTab } = allAgentTabs(source)
+  const all = entries.map((entry) => tabFromEntry(entry, agentConfigs))
   const visible: AgentTab[] = []
   const push = (tab: AgentTab | null): void => {
     if (tab && !visible.some((t) => t.configId === tab.configId)) visible.push(tab)
@@ -214,9 +343,300 @@ export function buildAgentTabs({
   return { visible, overflow: all.filter((tab) => !shown.has(tab.configId)) }
 }
 
+/**
+ * Installed on this machine, from the registry's install status: `ready`
+ * (not `install-required`, `needs-runtime`, `manual-install`, `unavailable`).
+ * A tab with no registry entry is a stored custom agent, so it is installed.
+ */
+export function isInstalledTab(tab: AgentTab): boolean {
+  return tab.entry ? tab.entry.status === 'ready' : tab.config != null
+}
+
+/**
+ * The V2 agent order: installed agents, then the rest, each A to Z by name
+ * (case- and accent-insensitive). It ignores which agent is current, armed, or
+ * viewed, so choosing an agent never moves its tab.
+ */
+export function orderAgentTabs(tabs: readonly AgentTab[]): AgentTab[] {
+  return tabs
+    .map((tab, index) => ({ tab, index, installed: isInstalledTab(tab) }))
+    .sort(
+      (a, b) =>
+        Number(b.installed) - Number(a.installed) ||
+        a.tab.name.localeCompare(b.tab.name, undefined, { sensitivity: 'base' }) ||
+        a.index - b.index
+    )
+    .map(({ tab }) => tab)
+}
+
+/**
+ * Fill `capacity` slots with tabs. When they all fit there is no "More";
+ * otherwise the last slot is "More" and holds the rest, in the same order.
+ */
+export function splitAgentTabs(
+  ordered: readonly AgentTab[],
+  capacity: number
+): { visible: AgentTab[]; overflow: AgentTab[] } {
+  const slots = Math.max(1, Math.floor(capacity))
+  if (ordered.length <= slots) return { visible: [...ordered], overflow: [] }
+  const shown = Math.max(0, slots - 1)
+  return { visible: ordered.slice(0, shown), overflow: ordered.slice(shown) }
+}
+
+/** V2: every agent in `orderAgentTabs` order, split to fill `capacity` slots. */
+export function stableAgentTabs(source: AgentTabSource & { capacity: number }): {
+  visible: AgentTab[]
+  overflow: AgentTab[]
+} {
+  return splitAgentTabs(orderAgentTabs(allAgentTabs(source).all), source.capacity)
+}
+
+/**
+ * Slots in a track of `length` px whose tabs are `pitch` px apart, after
+ * `padding` px of insets.
+ */
+export function tabTrackCapacity(length: number, pitch: number, padding = 0): number {
+  return Math.max(1, Math.floor((length - padding) / pitch))
+}
+
+/**
+ * The rail's Tailwind classes, the one source for its geometry: SelectorPanelV2
+ * renders these and AGENT_TRACK derives its px from them.
+ */
+export const AGENT_TRACK_CLASS = {
+  /** The list's height cap; the rail runs beside it. */
+  listMaxHeight: 'max-h-72',
+  /** The rail's top and bottom inset. */
+  railPadding: 'py-1',
+  /** Rail tabs are squares, as tall as a list row. */
+  railTab: 'size-7',
+  railTabTouch: 'size-11'
+} as const
+
+/** px of a class on Tailwind's default 4px spacing scale: `size-7` is 28. */
+export function spacingPx(className: string): number {
+  const step = Number(className.slice(className.lastIndexOf('-') + 1))
+  if (!Number.isFinite(step)) throw new Error(`Not a spacing class: ${className}`)
+  return step * 4
+}
+
+/** V2 track geometry, in px. */
+export const AGENT_TRACK = {
+  listMaxHeight: spacingPx(AGENT_TRACK_CLASS.listMaxHeight),
+  /** `py-*` insets both ends. */
+  railPadding: 2 * spacingPx(AGENT_TRACK_CLASS.railPadding),
+  railPitch: spacingPx(AGENT_TRACK_CLASS.railTab),
+  railPitchTouch: spacingPx(AGENT_TRACK_CLASS.railTabTouch),
+  /** The desktop panel's `w-75`, less the strip's `px-1`. */
+  stripWidth: 300,
+  stripPadding: 8,
+  stripPaddingTouch: 24,
+  /** Narrowest top-strip tab: a 16px glyph with 10px either side; 44 on touch. */
+  stripMinTab: 36,
+  stripMinTabTouch: 44,
+  /** Top strip on touch before its width is measured: the old 4 tabs + More. */
+  stripFallbackSlots: 5
+} as const
+
+/**
+ * Slots in the V2 agent track, "More" included. The rail runs the fixed list
+ * height, so it is computed; the top strip on touch spans the sheet, so it
+ * takes the measured panel width (null until measured).
+ */
+export function agentTrackCapacity({
+  rail,
+  touch,
+  width
+}: {
+  rail: 'top' | 'left'
+  touch: boolean
+  width: number | null
+}): number {
+  const t = AGENT_TRACK
+  if (rail === 'left') {
+    return tabTrackCapacity(t.listMaxHeight, touch ? t.railPitchTouch : t.railPitch, t.railPadding)
+  }
+  if (!touch) return tabTrackCapacity(t.stripWidth, t.stripMinTab, t.stripPadding)
+  return width
+    ? tabTrackCapacity(width, t.stripMinTabTouch, t.stripPaddingTouch)
+    : t.stripFallbackSlots
+}
+
 /** Case-insensitive match on a model's name, id, and description. */
 export function modelMatches(model: CatalogModel, query: string): boolean {
   const q = query.trim().toLowerCase()
   if (!q) return true
   return [model.name, model.value, model.description ?? ''].join(' ').toLowerCase().includes(q)
+}
+
+/**
+ * Categories a context-window option arrives under. ACP reserves
+ * `model_config` for "context size or speed"; agents that predate it send
+ * `other`. A missing category is allowed too: ACP makes categories optional.
+ */
+const CONTEXT_OPTION_CATEGORIES: ReadonlySet<string> = new Set(['model_config', 'other'])
+/** `context`, `context_window`, `contextWindow`, `context-size`, … */
+const CONTEXT_OPTION_ID = /^context(?:[_-]?(?:window|size))?$/i
+
+/**
+ * Whether an agent config option picks the context window (Cursor's
+ * `context`: 300K | 1M, or 256K | 500K on some models). Matches the option
+ * id and category only, never a value label: the values change per model and
+ * the view renders whatever the agent sends.
+ */
+export function isContextOption(option: SessionConfigOption): boolean {
+  if (option.type !== 'select') return false
+  if (option.category != null && !CONTEXT_OPTION_CATEGORIES.has(option.category)) return false
+  if (!CONTEXT_OPTION_ID.test(option.id)) return false
+  return flattenConfigOptionValues(option).length > 0
+}
+
+/** The first context-window option, and the options left over. */
+export function splitContextOption(options: readonly SessionConfigOption[]): {
+  context: SessionConfigOption | null
+  rest: SessionConfigOption[]
+} {
+  const index = options.findIndex(isContextOption)
+  if (index < 0) return { context: null, rest: [...options] }
+  return { context: options[index], rest: options.filter((_, i) => i !== index) }
+}
+
+/**
+ * The favorite key for a model on an agent with its option snapshot, or null
+ * when the agent cannot be armed.
+ */
+export function favoriteFor(
+  entry: SupportedAcpAgentEntry,
+  agentConfigs: readonly { id: string }[],
+  modelId: string,
+  options?: Record<string, string>
+): FavoriteKey | null {
+  const configId = armableConfigId(entry, agentConfigs)
+  return configId ? favoriteKey(configId, modelId, options) : null
+}
+
+/** Option ids that name an effort level, for a snapshot whose agent's options are unknown. */
+const EFFORT_OPTION_ID = /effort|thought|thinking|reasoning/i
+/** An on/off value, as stored for a switch whose option is unknown. */
+const ON_OFF_VALUE = /^(true|false|on|off|enabled|disabled)$/i
+const ON_VALUE = /^(true|on|enabled)$/i
+
+function titleCase(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+/** A value as its option names it, else title-cased. */
+function valueName(option: SessionConfigOption | undefined, value: string): string {
+  const named = option
+    ? flattenConfigOptionValues(option)
+        .find((entry) => entry.value === value)
+        ?.name.trim()
+    : undefined
+  return named || titleCase(value)
+}
+
+/**
+ * The effort a favorite's snapshot holds, as its option names it ("High"),
+ * or null. The agent's `thought_level` option says which entry is effort;
+ * without it an effort-like option id with a non-on/off value is read.
+ */
+export function snapshotEffortLabel(
+  options: Record<string, string> | undefined,
+  agentOptions: readonly SessionConfigOption[]
+): string | null {
+  if (!options) return null
+  const effortOption = agentOptions.find((o) => o.category === THOUGHT_LEVEL_CATEGORY)
+  const optionId = effortOption
+    ? effortOption.id
+    : Object.keys(options).find(
+        (id) => EFFORT_OPTION_ID.test(id) && !ON_OFF_VALUE.test(options[id] ?? '')
+      )
+  const value = optionId ? options[optionId] : undefined
+  return value === undefined ? null : valueName(effortOption, value)
+}
+
+/** One snapshot value in a label: "Fast" for an On switch, nothing for Off, else the value's name. */
+function snapshotValueLabel(
+  option: SessionConfigOption | undefined,
+  optionId: string,
+  value: string
+): string | null {
+  const onOff = option ? isBinaryOnOffOption(option) : ON_OFF_VALUE.test(value)
+  if (!onOff) return valueName(option, value)
+  const on = option ? isFastModeEnabled(option, value) : ON_VALUE.test(value)
+  if (!on) return null
+  const name = option?.name.trim() || titleCase(optionId)
+  return /fast/i.test(name) ? 'Fast' : name
+}
+
+/**
+ * Favorites to show, in the given (starred) order, with the model each points
+ * at and the label its snapshot reads as: the effort ("High"), plus what sets
+ * it apart when another favorite of the model has the same effort ("High ·
+ * Fast"). A favorite whose agent is not installed, has no known list, or no
+ * longer offers the model is HIDDEN: the store keeps it, so a reinstall
+ * brings it back.
+ */
+export function resolveFavorites<F extends FavoriteKey>(
+  favorites: readonly F[],
+  catalogOf: (configId: string) => ModelCatalog | null,
+  installed: (configId: string) => boolean = () => true,
+  optionsOf: (configId: string) => readonly SessionConfigOption[] = () => []
+): Array<F & { model: CatalogModel; label: string | null }> {
+  const shown = favorites.flatMap((favorite) => {
+    if (!installed(favorite.configId)) return []
+    const model = catalogOf(favorite.configId)?.options.find((m) => m.value === favorite.modelId)
+    if (!model) return []
+    const label = snapshotEffortLabel(favorite.options, optionsOf(favorite.configId))
+    return [{ ...favorite, model, label }]
+  })
+  return shown.map((entry) => {
+    const twins = shown.filter(
+      (other) =>
+        other !== entry &&
+        other.configId === entry.configId &&
+        other.modelId === entry.modelId &&
+        other.label === entry.label
+    )
+    if (twins.length === 0) return entry
+    const differing = new Set(
+      twins.flatMap((twin) =>
+        Object.keys({ ...twin.options, ...entry.options }).filter(
+          (id) => twin.options?.[id] !== entry.options?.[id]
+        )
+      )
+    )
+    const agentOptions = optionsOf(entry.configId)
+    const extras = [...differing].sort().flatMap((id) => {
+      const value = entry.options?.[id]
+      const extra =
+        value === undefined
+          ? null
+          : snapshotValueLabel(
+              agentOptions.find((o) => o.id === id),
+              id,
+              value
+            )
+      return extra ? [extra] : []
+    })
+    return { ...entry, label: [entry.label, ...extras].filter(Boolean).join(' · ') || null }
+  })
+}
+
+/** A Favorites row's name: the model, then its snapshot's label ("Opus · High"). */
+export function favoriteRowName(name: string, label: string | null): string {
+  return label ? `${name.trim()} · ${label}` : name.trim()
+}
+
+/**
+ * True when every snapshot value is live now. A snapshot option the loaded
+ * options lack does not match.
+ */
+export function snapshotMatches(
+  options: Record<string, string> | undefined,
+  live: Record<string, string>
+): boolean {
+  // Before the live options load there is nothing to differ from.
+  if (Object.keys(live).length === 0) return true
+  return Object.entries(options ?? {}).every(([optionId, value]) => live[optionId] === value)
 }

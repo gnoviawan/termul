@@ -83,6 +83,71 @@ describe('hydrateProject', () => {
     expect(staged.editorFiles.size).toBe(0)
   })
 
+  it('restores image, video, and PDF tabs by path without reading them', async () => {
+    mockRead.mockResolvedValue({
+      success: true,
+      data: {
+        openFiles: [
+          persistedFile({ filePath: '/p/shot.png', isDirty: false, draftContent: undefined }),
+          persistedFile({ filePath: '/p/clip.webm', isDirty: false, draftContent: undefined }),
+          persistedFile({ filePath: '/p/report.pdf', isDirty: false, draftContent: undefined })
+        ],
+        activeFilePath: '/p/shot.png',
+        expandedDirs: [],
+        activeTabId: null
+      }
+    })
+
+    const staged = await hydrateProject('p1', () => true)
+
+    expect(mockReadFile).not.toHaveBeenCalled()
+    expect(
+      [...staged.editorFiles.values()].map((file) => [file.filePath, file.kind, file.isDirty])
+    ).toEqual([
+      ['/p/shot.png', 'image', false],
+      ['/p/clip.webm', 'video', false],
+      ['/p/report.pdf', 'pdf', false]
+    ])
+  })
+
+  it('restores a file that now reads as binary as an unsupported tab', async () => {
+    mockRead.mockResolvedValue(persistedState(persistedFile({ filePath: '/p/a.ts' })))
+    mockReadFile.mockResolvedValue({
+      success: false,
+      error: 'Binary file cannot be displayed',
+      code: 'BINARY_FILE'
+    })
+
+    const staged = await hydrateProject('p1', () => true)
+
+    expect(staged.editorFiles.get('/p/a.ts')).toMatchObject({
+      kind: 'unsupported',
+      reason: 'binary',
+      isDirty: false
+    })
+  })
+
+  it('reads the legacy persisted markdown view mode as preview', async () => {
+    mockRead.mockResolvedValue(
+      persistedState(
+        persistedFile({
+          filePath: '/p/notes.md',
+          viewMode: 'markdown',
+          isDirty: false,
+          draftContent: undefined
+        })
+      )
+    )
+    mockReadFile.mockResolvedValue({ success: true, data: { content: '# hi', modifiedAt: 1 } })
+
+    const staged = await hydrateProject('p1', () => true)
+
+    expect(staged.editorFiles.get('/p/notes.md')).toMatchObject({
+      kind: 'text',
+      viewMode: 'preview'
+    })
+  })
+
   it('withTree:false stages editor state only and no tree', async () => {
     mockRead.mockResolvedValue(persistedState(persistedFile()))
     mockReadFile.mockResolvedValue({ success: true, data: { content: 'disk', modifiedAt: 1 } })

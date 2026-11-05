@@ -46,7 +46,7 @@ export function SelectionContextChip({
           className={cn(
             'inline-flex h-[1.1em] max-w-full items-center gap-1 align-baseline leading-none',
             'text-inherit font-medium text-foreground outline-none',
-            'focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-ring',
+            'focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-focus-ring',
             className
           )}
         >

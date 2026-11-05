@@ -1,4 +1,4 @@
-import { Bug, Edit2, Search, SlidersHorizontal } from '@/components/icons'
+import { Bug, Edit2, Search, SlidersHorizontal, Workflow } from '@/components/icons'
 import { RailColumnIcons } from '@/components/shell/RailColumnIcons'
 import { RailUtilityButtons } from '@/components/shell/RailFooter'
 import { RailProjectStack } from '@/components/shell/RailProjectStack'
@@ -12,6 +12,7 @@ import { useShortcutLabel } from '@/components/shell/use-shortcut-label'
 import { cn } from '@/lib/utils'
 import { useReportBugStore } from '@/stores/report-bug-store'
 import { useSettingsModalStore, useSettingsModalView } from '@/stores/settings-modal-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 
 interface RailCollapsedProps {
@@ -108,7 +109,7 @@ function BrandToggleSwap({ dragRegion }: { dragRegion: boolean }): React.JSX.Ele
  * Collapsed Rail body (48px): the top band (the 8px window gutter plus the
  * Rail's 40px part of the top row) with the mark / Rail toggle swap, the
  * project stack with status, the Column tab icons (Chats, Explorer, Changes)
- * in a track, Search, Canvas, SSH, then Theme, Shortcuts and Settings pinned
+ * in a track, Search, Canvas, Automations, SSH, then Theme, Shortcuts and Settings pinned
  * at the bottom.
  */
 export function RailCollapsed({
@@ -185,6 +186,18 @@ export function RailCollapsed({
             onClick={onOpenCanvas}
           >
             <Edit2 size={16} />
+          </RailButton>
+
+          <RailButton
+            label="Automations"
+            hint={activeProject ? undefined : NEED_PROJECT}
+            aria-label="Open automations"
+            disabled={!activeProject}
+            onClick={() =>
+              activeProject && useWorkspaceStore.getState().addAutomationsTab(activeProject.id)
+            }
+          >
+            <Workflow size={16} />
           </RailButton>
 
           {/* Desktop only: renders nothing on web. */}

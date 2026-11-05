@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { acpApi } from '@/lib/acp-api'
 import { AcpTransportError } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
+import { endedState, subagentToolCall } from '@/lib/test-utils/subagent'
 import { agentReuseKey } from '@/stores/acp-reuse-keys'
 import {
   _addEphemeralSessionIdForTesting,
@@ -99,7 +100,7 @@ beforeEach(() => {
       sessions: { ...s.sessions, [id]: { ...s.sessions[id], activeTurn: false, openTurnId: null } }
     }))
   })
-  api.setProjectAccount.mockResolvedValue(undefined)
+  api.setProjectAccount.mockResolvedValue(true)
   useAcpStore.setState({
     ...FRESH,
     killAgent,
@@ -169,6 +170,55 @@ describe('claude account switch', () => {
     expect(retryCrashedSession).toHaveBeenCalledWith('c2', { resend: false })
   })
 
+  describe('with a background subagent still running after the turn', () => {
+    const launch = (state?: 'completed') =>
+      subagentToolCall(
+        { background: true, ...(state ? { state: endedState(state) } : {}) },
+        { toolCallId: 'bg-1', status: 'completed', seq: 2 }
+      )
+    beforeEach(() => {
+      useAcpStore.setState({
+        messages: { c1: [{ id: 'u1', role: 'user', blocks: [], timestamp: 1, seq: 1 }] },
+        toolCalls: { c1: [launch()] }
+      } as never)
+    })
+
+    it('defers the restart until the subagent ends', async () => {
+      const restart = restartClaudeSession('c1')
+      await Promise.resolve()
+      expect(killAgent).not.toHaveBeenCalled()
+      useAcpStore.setState({ toolCalls: { c1: [launch('completed')] } } as never)
+      await expect(restart).resolves.toBe(true)
+      expect(killAgent).toHaveBeenCalledWith('agent-c1')
+      expect(retryCrashedSession).toHaveBeenCalledWith('c1', { resend: false })
+    })
+
+    it('logs that the restart waits on the background subagent', async () => {
+      const restart = restartClaudeSession('c1')
+      await Promise.resolve()
+      const deferred = vi
+        .mocked(logFrontendError)
+        .mock.calls.map(([entry]) => entry)
+        .filter((entry) => entry.message.includes('background'))
+      expect(deferred).toEqual([
+        {
+          level: 'info',
+          source: 'claudeAccountSwitch.restart',
+          message: 'Restart of chat c1 waits on 1 background subagent'
+        }
+      ])
+      useAcpStore.setState({ toolCalls: { c1: [launch('completed')] } } as never)
+      await restart
+    })
+
+    it('does not wait for it when continuing after a limit', async () => {
+      await expect(restartClaudeSession('c1', { resend: true, cancelTurn: true })).resolves.toBe(
+        true
+      )
+      expect(retryCrashedSession).toHaveBeenCalledWith('c1', { resend: true })
+    })
+  })
+
   it('cancels a held turn and resends when continuing after a limit', async () => {
     await restartClaudeSession('c2', { resend: true, cancelTurn: true })
     expect(cancelPrompt).toHaveBeenCalledWith('c2')
@@ -176,7 +226,9 @@ describe('claude account switch', () => {
   })
 
   it('restarts only the Claude chats of the project, continuing the one that hit the limit', async () => {
-    await applyProjectClaudeAccount('office', { continueSessionId: 'c2' })
+    await expect(
+      applyProjectClaudeAccount('office', { continueSessionIds: ['c2'] })
+    ).resolves.toEqual(['c2'])
     const restarted = retryCrashedSession.mock.calls.map(([id, o]) => [id, o.resend])
     expect(restarted).toEqual(
       expect.arrayContaining([
@@ -198,8 +250,10 @@ describe('claude account switch', () => {
   })
 
   it('saves the project account on the host before restarting', async () => {
-    await switchProjectClaudeAccount('office', 'ab12')
-    expect(api.setProjectAccount).toHaveBeenCalledWith('office', 'ab12')
+    await expect(switchProjectClaudeAccount('office', 'ab12')).resolves.toEqual([])
+    expect(api.setProjectAccount).toHaveBeenCalledWith('office', 'ab12', {
+      expectedAccountId: undefined
+    })
     expect(api.setProjectAccount.mock.invocationCallOrder[0]).toBeLessThan(
       killAgent.mock.invocationCallOrder[0]
     )
@@ -398,5 +452,22 @@ describe('a switch the host refuses', () => {
     expect(retryCrashedSession).not.toHaveBeenCalled()
     expect(useAcpStore.getState().sessions).toBe(before)
     expect(useAcpStore.getState().sessions.c1.status).toBe('active')
+  })
+
+  it('restarts nothing when another client switched the project first', async () => {
+    const before = useAcpStore.getState().sessions
+    api.setProjectAccount.mockResolvedValue(false)
+    await expect(
+      switchProjectClaudeAccount('office', 'ab12', {
+        continueSessionIds: ['c1'],
+        expectedAccountId: 'default'
+      })
+    ).resolves.toBeNull()
+    expect(api.setProjectAccount).toHaveBeenCalledWith('office', 'ab12', {
+      expectedAccountId: 'default'
+    })
+    expect(killAgent).not.toHaveBeenCalled()
+    expect(retryCrashedSession).not.toHaveBeenCalled()
+    expect(useAcpStore.getState().sessions).toBe(before)
   })
 })

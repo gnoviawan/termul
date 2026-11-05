@@ -28,7 +28,7 @@ interface GitSheetState {
 
 /**
  * Open state for the mobile Git Changes sheet, lifted out of `WorkspaceLayout`
- * so the chat dock's changed-files bar can open it. Renderer-only: no
+ * so the chat status pill's changed-files list can open it. Renderer-only: no
  * transport or backend change.
  */
 export const useGitSheetStore = create<GitSheetState>((set) => ({

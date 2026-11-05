@@ -34,13 +34,32 @@
 //!   `restoredSummary` records, so the restored chat renders as before.
 //!   The durable DTO only ever holds the path-only summary — never diff
 //!   text, titles, or raw input.
+//! - A subagent dispatch (a call whose durable `_meta` carries the host's
+//!   `termul/subagent` record) is the one tool call restored as a timeline
+//!   card: `{toolCallId, kind, status?, seq, timestamp, _meta, content?,
+//!   subagentText?, restoredSummary: false}` with the latest record, its
+//!   bounded text result and the newest text its subagent wrote (subagent
+//!   `message_chunk`s), so a reopened chat shows its subagents as a live one
+//!   does.
+//! - A subagent's own tool calls (their parent is a restored dispatch) are
+//!   restored with their masked title and path, newest
+//!   [`MAX_RESTORED_CHILD_CALLS`] per subagent, for the subagent panel's
+//!   Activity. The timeline hides them under their dispatch.
 
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::acp::subagents::SUBAGENT_META_KEY;
+
+mod controls;
+
+pub(crate) use controls::CONTROLS_RECORD_TYPES;
+pub use controls::{ControlsFold, SessionControls};
+
 use crate::acp::session_persistence::{
     is_file_change_kind, is_subagent_chunk, last_unmatched_user_prompt, PersistedEventRecord,
-    PersistedSessionStatus, SessionMetadata, MAX_SUMMARY_PATH_CHARS,
+    PersistedSessionStatus, SessionMetadata, MAX_DURABLE_SUBAGENT_TEXT_CHARS,
+    MAX_SUMMARY_PATH_CHARS,
 };
 
 /// The renderer session-metadata shape (`SessionIndexEntry` in
@@ -168,8 +187,8 @@ pub struct MaterializedDiffStat {
 }
 
 /// One restored durable file-change summary (renderer `ToolCall` with
-/// `restoredSummary: true`). camelCase keys; `status`/`diffStat` are omitted
-/// when no record carried them.
+/// `restoredSummary: true`), or a restored subagent dispatch card. camelCase
+/// keys; `status`/`diffStat` are omitted when no record carried them.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MaterializedToolCallSummary {
@@ -177,15 +196,30 @@ pub struct MaterializedToolCallSummary {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// Empty (omitted) only on a subagent dispatch.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub locations: Vec<MaterializedToolCallLocation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_stat: Option<MaterializedDiffStat>,
+    /// A subagent's own tool call: its masked title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// A subagent dispatch: the text result it returned (bounded).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<Value>,
+    /// A subagent dispatch: the newest text the subagent wrote (bounded tail).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_text: Option<String>,
     /// The first record's seq (the original card placement).
     pub seq: u64,
     /// The first record's `recorded_at`.
     pub timestamp: u64,
-    /// Always `true`: marks the record as a summary the timeline never
-    /// renders as a card.
+    /// A subagent dispatch's latest `termul/subagent` record and its parent
+    /// dispatch (`claudeCode.parentToolUseId`).
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
+    /// `true` for a file-change summary the timeline never renders as a
+    /// card; `false` for a subagent dispatch, which renders as one.
     pub restored_summary: bool,
 }
 
@@ -209,6 +243,10 @@ pub struct MaterializedSessionPayload {
     /// when the host knows of none.
     #[serde(flatten)]
     pub commands: Option<CommandList>,
+    /// The session's latest config options, modes and models. All four keys
+    /// are absent when no record carried any.
+    #[serde(flatten)]
+    pub controls: Option<SessionControls>,
 }
 
 /// The newest `commands_update` record's `availableCommands` and seq. The
@@ -292,6 +330,7 @@ pub fn materialize_session_payload(
         switches,
         tool_calls,
         commands: last_command_list(records),
+        controls: ControlsFold::of_records(records).controls(),
     }
 }
 
@@ -311,8 +350,42 @@ struct ToolSummaryFold {
     status: Option<String>,
     locations: Option<Vec<MaterializedToolCallLocation>>,
     diff_stat: Option<MaterializedDiffStat>,
+    /// The latest durable `termul/subagent` record.
+    subagent: Option<Value>,
+    /// The first durable `claudeCode.parentToolUseId`.
+    parent: Option<Value>,
+    title: Option<String>,
+    content: Option<Value>,
+    /// Subagent text written under this dispatch, newest last.
+    text: String,
     seq: u64,
     timestamp: u64,
+}
+
+/// Newest restored tool calls kept per subagent.
+pub(crate) const MAX_RESTORED_CHILD_CALLS: usize = 100;
+
+/// Append subagent text, keeping at most the newest `max` characters.
+fn push_text_tail(text: &mut String, chunk: &str, max: usize) {
+    text.push_str(chunk);
+    // Trim only past eight times the bound in bytes (twice it in 4-byte
+    // characters), so long text costs amortized linear time.
+    if text.len() <= max * 8 {
+        return;
+    }
+    trim_text_tail(text, max);
+}
+
+fn trim_text_tail(text: &mut String, max: usize) {
+    let count = text.chars().count();
+    if count <= max {
+        return;
+    }
+    let cut = text
+        .char_indices()
+        .nth(count - max)
+        .map_or(0, |(index, _)| index);
+    text.drain(..cut);
 }
 
 /// Fold seq-sorted durable tool records into restored file-change summaries.
@@ -321,9 +394,9 @@ struct ToolSummaryFold {
 /// `tool_call` upserts by `toolCallId`, a `tool_call_update` folds into an
 /// already-seen id (updates for unknown ids are dropped), and per id the
 /// LATEST event carrying a field wins (`kind`, `status`, `locations`,
-/// `diffStat`) while `seq`/`timestamp` stay those of the first record. Only
-/// summaries whose final kind is edit/delete/move and that carry a path are
-/// emitted. Non-tool records are ignored, so callers may pass the full
+/// `diffStat`, the subagent record) while `seq`/`timestamp` stay those of
+/// the first record. Only subagent dispatches and summaries whose final kind
+/// is edit/delete/move and that carry a path are emitted. Non-tool records are ignored, so callers may pass the full
 /// record set or just the tool-call log. Malformed fields degrade (skipped),
 /// never fail the fold.
 #[must_use]
@@ -336,6 +409,10 @@ pub fn fold_tool_call_summaries(
         let key = match record.type_.as_str() {
             "tool_call" => "toolCall",
             "tool_call_update" => "update",
+            "message_chunk" if is_subagent_chunk(&record.payload) => {
+                fold_subagent_text(&mut folds, &index, &record.payload);
+                continue;
+            }
             _ => continue,
         };
         let Some(tool) = record.payload.get(key).and_then(Value::as_object) else {
@@ -354,6 +431,11 @@ pub fn fold_tool_call_summaries(
                     status: None,
                     locations: None,
                     diff_stat: None,
+                    subagent: None,
+                    parent: None,
+                    title: None,
+                    content: None,
+                    text: String::new(),
                     seq: record.seq,
                     timestamp: record.recorded_at,
                 });
@@ -375,10 +457,92 @@ pub fn fold_tool_call_summaries(
         if let Some(diff_stat) = summary_diff_stat(tool.get("diffStat")) {
             fold.diff_stat = Some(diff_stat);
         }
+        if let Some(title) = tool.get("title").and_then(Value::as_str) {
+            fold.title = Some(title.to_string());
+        }
+        if let Some(content) = tool.get("content").filter(|content| content.is_array()) {
+            fold.content = Some(content.clone());
+        }
+        let meta = tool.get("_meta");
+        if let Some(subagent) = meta.and_then(|meta| meta.get(SUBAGENT_META_KEY)) {
+            fold.subagent = Some(subagent.clone());
+        }
+        if fold.parent.is_none() {
+            fold.parent = meta
+                .and_then(|meta| meta.get("claudeCode"))
+                .and_then(|claude| claude.get("parentToolUseId"))
+                .cloned();
+        }
     }
+    let dispatches: std::collections::HashSet<&str> = folds
+        .iter()
+        .filter(|fold| fold.subagent.is_some())
+        .map(|fold| fold.tool_call_id.as_str())
+        .collect();
+    let mut kept_children = std::collections::HashMap::<&str, usize>::new();
+    let keep: Vec<bool> = folds
+        .iter()
+        .rev()
+        .map(|fold| {
+            let Some(parent) = child_parent(fold, &dispatches) else {
+                return true;
+            };
+            let kept = kept_children.entry(parent).or_default();
+            *kept += 1;
+            *kept <= MAX_RESTORED_CHILD_CALLS
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let children: std::collections::HashSet<String> = folds
+        .iter()
+        .filter(|fold| child_parent(fold, &dispatches).is_some())
+        .map(|fold| fold.tool_call_id.clone())
+        .collect();
     folds
         .into_iter()
-        .filter_map(|fold| {
+        .zip(keep)
+        .filter_map(|(mut fold, keep)| {
+            if let Some(subagent) = fold.subagent {
+                let mut meta = serde_json::json!({ SUBAGENT_META_KEY: subagent });
+                if let Some(parent) = fold.parent {
+                    meta["claudeCode"] = serde_json::json!({ "parentToolUseId": parent });
+                }
+                trim_text_tail(&mut fold.text, MAX_DURABLE_SUBAGENT_TEXT_CHARS);
+                return Some(MaterializedToolCallSummary {
+                    tool_call_id: fold.tool_call_id,
+                    kind: fold.kind.unwrap_or_else(|| "think".to_string()),
+                    status: fold.status,
+                    locations: fold.locations.unwrap_or_default(),
+                    diff_stat: fold.diff_stat,
+                    title: None,
+                    content: fold.content,
+                    subagent_text: (!fold.text.is_empty()).then_some(fold.text),
+                    seq: fold.seq,
+                    timestamp: fold.timestamp,
+                    meta: Some(meta),
+                    restored_summary: false,
+                });
+            }
+            // A child past the cap still restores as a file-change summary.
+            if keep && children.contains(&fold.tool_call_id) {
+                let parent = fold.parent.unwrap_or(Value::Null);
+                return Some(MaterializedToolCallSummary {
+                    tool_call_id: fold.tool_call_id,
+                    kind: fold.kind.unwrap_or_else(|| "other".to_string()),
+                    status: fold.status,
+                    locations: fold.locations.unwrap_or_default(),
+                    diff_stat: fold.diff_stat,
+                    title: fold.title,
+                    content: None,
+                    subagent_text: None,
+                    seq: fold.seq,
+                    timestamp: fold.timestamp,
+                    meta: Some(serde_json::json!({ "claudeCode": { "parentToolUseId": parent } })),
+                    restored_summary: false,
+                });
+            }
             let kind = fold
                 .kind
                 .filter(|kind| is_file_change_kind(Some(kind.as_str())))?;
@@ -389,12 +553,63 @@ pub fn fold_tool_call_summaries(
                 status: fold.status,
                 locations,
                 diff_stat: fold.diff_stat,
+                title: None,
+                content: None,
+                subagent_text: None,
                 seq: fold.seq,
                 timestamp: fold.timestamp,
+                meta: None,
                 restored_summary: true,
             })
         })
         .collect()
+}
+
+/// The dispatch a subagent's own call belongs to: its parent, when that
+/// parent is a restored dispatch. Other calls are not restored as children.
+fn child_parent<'a>(
+    fold: &ToolSummaryFold,
+    dispatches: &std::collections::HashSet<&'a str>,
+) -> Option<&'a str> {
+    if fold.subagent.is_some() {
+        return None;
+    }
+    let parent = fold.parent.as_ref()?.as_str()?;
+    dispatches.get(parent).copied()
+}
+
+/// Add a subagent's text chunk to its dispatch, as the renderer's
+/// `appendSubagentChunk` does live: agent text only, for a known dispatch.
+fn fold_subagent_text(
+    folds: &mut [ToolSummaryFold],
+    index: &std::collections::HashMap<String, usize>,
+    payload: &Value,
+) {
+    let role = payload.get("role").and_then(Value::as_str);
+    if role.is_some_and(|role| role != "agent") {
+        return;
+    }
+    let Some(content) = payload.get("content") else {
+        return;
+    };
+    if content.get("type").and_then(Value::as_str) != Some("text") {
+        return;
+    }
+    let Some(text) = content.get("text").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(slot) = payload
+        .get("parentToolCallId")
+        .and_then(Value::as_str)
+        .and_then(|id| index.get(id))
+    else {
+        return;
+    };
+    push_text_tail(
+        &mut folds[*slot].text,
+        text,
+        MAX_DURABLE_SUBAGENT_TEXT_CHARS,
+    );
 }
 
 /// Path-only locations from a durable record; `None` when absent or when no
@@ -605,10 +820,7 @@ pub(crate) fn fold_session_records(
                     .and_then(|b| b.get("text"))
                     .and_then(Value::as_str)
                     .map(str::to_owned);
-                match first_text
-                    .as_deref()
-                    .and_then(strip_handoff_display_text)
-                {
+                match first_text.as_deref().and_then(strip_handoff_display_text) {
                     Some(HandoffText::Draft(draft)) => {
                         if let Some(obj) = blocks[0].as_object_mut() {
                             obj.insert("text".to_string(), Value::from(draft));

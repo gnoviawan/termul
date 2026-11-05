@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { AgentProse } from './chat-agent-prose'
@@ -37,6 +38,7 @@ function renderProse(text: string, filePathContext?: FilePathResolutionContext) 
   return render(
     <TooltipProvider>
       <AgentProse text={text} streaming={false} reduced filePathContext={filePathContext} />
+      <ExternalLinkConfirmHost />
     </TooltipProvider>
   )
 }

@@ -3,7 +3,7 @@
  *
  * Shown when the host's browser-open shim captured the URL an agent tried to
  * open during its auth flow (`acp:browser_open_request` → the store's
- * `pendingBrowserOpen[agentId]`). Headless servers can't open a browser, so
+ * `pendingSignIn[agentId]`). Headless servers can't open a browser, so
  * the user completes the provider login on their own device, then pastes the
  * failed loopback redirect URL their browser lands on back here — the host
  * replays it to the agent's callback listener (`acp_deliver_auth_redirect`,
@@ -35,6 +35,7 @@ import { openerApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { configIdFromReuseKey, useAcpStore } from '@/stores/acp-store'
+import { SignInElicitationDialog } from './SignInElicitationDialog'
 
 /**
  * Client-side mirror of the host's paste-back SSRF guard: http(s) scheme AND
@@ -222,19 +223,20 @@ export function BrowserAuthDialog({
   )
 }
 /**
- * Global mount point for the headless-auth dialog (spec-acp-terminal-auth).
- * Rendered once by BOTH app roots (TauriApp + App) so a browser-open request
- * is surfaced no matter where the auth was triggered — the launcher, a chat
- * panel, or a warm-pool spawn. Reads `pendingBrowserOpen` + resolves the
+ * Global mount point for agent sign-in dialogs: a captured browser-open URL
+ * (spec-acp-terminal-auth) or a sign-in link and code the agent asked for.
+ * Rendered once by BOTH app roots (TauriApp + App) so a prompt is surfaced
+ * no matter where the auth was triggered — the launcher, a chat panel, or a
+ * warm-pool spawn. Reads `pendingSignIn` + resolves the
  * agent's display name via `configToLiveAgent` → `agentConfigs` (the agents
  * record carries no name).
  */
 export function BrowserAuthDialogHost(): React.JSX.Element {
-  const pendingBrowserOpen = useAcpStore((s) => s.pendingBrowserOpen)
+  const pendingSignIn = useAcpStore((s) => s.pendingSignIn)
   const configToLiveAgent = useAcpStore((s) => s.configToLiveAgent)
   const agentConfigs = useAcpStore((s) => s.agentConfigs)
   const autoOpenBrowserUrl = useAcpStore((s) => s.autoOpenBrowserUrl)
-  const clearPendingBrowserOpen = useAcpStore((s) => s.clearPendingBrowserOpen)
+  const clearPendingSignIn = useAcpStore((s) => s.clearPendingSignIn)
   // Desktop can finish the localhost callback in the system browser. The
   // web client cannot: that callback lands on the host, so paste-back stays.
   const desktopCanOpenBrowser = isTauriContext()
@@ -256,19 +258,29 @@ export function BrowserAuthDialogHost(): React.JSX.Element {
 
   return (
     <>
-      {Object.entries(pendingBrowserOpen).map(([agentId, url]) => (
-        <BrowserAuthDialog
-          key={agentId}
-          agentId={agentId}
-          agentName={agentNames[agentId] ?? 'Agent'}
-          url={url}
-          autoOpen={
-            autoOpenBrowserUrl[agentId] === url &&
-            (desktopCanOpenBrowser || agentNames[agentId] === 'Factory Droid')
-          }
-          onDismiss={() => clearPendingBrowserOpen(agentId)}
-        />
-      ))}
+      {Object.entries(pendingSignIn).map(([agentId, prompt]) =>
+        prompt.kind === 'elicitation' ? (
+          <SignInElicitationDialog
+            key={`${agentId}:${prompt.requestId}`}
+            agentId={agentId}
+            agentName={agentNames[agentId] ?? 'Agent'}
+            url={prompt.url}
+            message={prompt.message}
+          />
+        ) : (
+          <BrowserAuthDialog
+            key={agentId}
+            agentId={agentId}
+            agentName={agentNames[agentId] ?? 'Agent'}
+            url={prompt.url}
+            autoOpen={
+              autoOpenBrowserUrl[agentId] === prompt.url &&
+              (desktopCanOpenBrowser || agentNames[agentId] === 'Factory Droid')
+            }
+            onDismiss={() => clearPendingSignIn(agentId)}
+          />
+        )
+      )}
     </>
   )
 }

@@ -52,6 +52,19 @@ vi.mock('@/lib/log-api', () => ({
   logFrontendError: (...args: unknown[]) => mockLogFrontendError(...args)
 }))
 
+// gh-1105: the web-only ServerSection mounts on web-variant renders and
+// would fetch `/server/config` — keep it in its loading state (never-
+// resolving) so it adds no boundary-log calls or controls to these pages.
+vi.mock('@/lib/web-setup-api', () => ({
+  webSetupApi: {
+    getStatus: vi.fn(() => new Promise(() => {})),
+    validate: vi.fn(() => new Promise(() => {})),
+    apply: vi.fn(() => new Promise(() => {})),
+    getServerConfig: vi.fn(() => new Promise(() => {})),
+    applyServerConfig: vi.fn(() => new Promise(() => {}))
+  }
+}))
+
 vi.mock('@/lib/tauri-updater-api', () => ({
   isAurUpdateMode: () => false
 }))
@@ -62,7 +75,8 @@ vi.mock('@/lib/tauri-updater-api', () => ({
 // flip it.
 const { tauriRef } = vi.hoisted(() => ({ tauriRef: { current: true as boolean } }))
 
-vi.mock('@/lib/tauri-runtime', () => ({
+vi.mock('@/lib/tauri-runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tauri-runtime')>()),
   isTauriContext: () => tauriRef.current
 }))
 

@@ -2,12 +2,20 @@
 
 import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
 import type { PersistedSessionSummary } from '@shared/types/web-protocol.types'
-import type { AvailableCommand, StopReason, ToolCall } from '@/lib/acp-api'
+import type {
+  AvailableCommand,
+  SessionConfigOption,
+  SessionModelState,
+  SessionModeState,
+  StopReason,
+  ToolCall
+} from '@/lib/acp-api'
 import { acpHistoryApi } from '@/lib/acp-history-api'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { persistenceApi } from '@/lib/api'
 import { replaceSelectionContextsWithMarkers } from '@/lib/composer/selection-context'
 import { logFrontendError } from '@/lib/log-api'
+import { startOfToday, startOfYesterday } from '@/lib/relative-time'
 import { sanitizeDisplayText } from '@/lib/skill-tokens'
 import type { ChatMessage, SessionStatus } from '@/stores/acp-store'
 
@@ -133,6 +141,16 @@ export interface SessionPayload {
   commands?: AvailableCommand[]
   /** Seq of the `commands_update` record that set `commands`. */
   commandsSeq?: number
+  /**
+   * The session's latest controls, folded from its newest
+   * `config_options_update` / `mode_update` records over `session_created`.
+   * Each is absent when the fold has none, and all are absent on older hosts.
+   */
+  configOptions?: SessionConfigOption[]
+  modes?: SessionModeState
+  models?: SessionModelState
+  /** Seq of the newest record that contributed to the controls above. */
+  controlsSeq?: number
 }
 
 /**
@@ -384,31 +402,48 @@ export type RecencyGroup = 'Today' | 'Yesterday' | 'Earlier'
 
 /** The history bucket for sessions the host could not attribute to any project. */
 export const UNASSIGNED_GROUP = 'Unassigned'
-export type HistoryGroup = RecencyGroup | typeof UNASSIGNED_GROUP
+/** The mobile Recents bucket for chats open in the active project's tree, listed first. */
+export const ACTIVE_GROUP = 'Active'
+export type HistoryGroup = typeof ACTIVE_GROUP | RecencyGroup | typeof UNASSIGNED_GROUP
+
+/**
+ * The timestamp that buckets and orders history: last activity (the desktop
+ * History) or creation (the mobile Recents, so reopening a chat never moves it).
+ */
+export type RecencyKey = 'lastActivityAt' | 'createdAt'
 
 /** Index entries stamped with the host's unassigned-project sentinel. */
 export function unassignedSessions(entries: SessionIndexEntry[]): SessionIndexEntry[] {
   return entries.filter((entry) => entry.projectId === UNASSIGNED_PROJECT_ID)
 }
 
-export function groupSessionsByRecency<T extends { lastActivityAt: number }>(
+/** An entry's `key` timestamp; a missing `createdAt` reads as 0 (oldest). */
+export function recencyTime(
+  entry: { lastActivityAt: number; createdAt?: number },
+  key: RecencyKey
+): number {
+  return entry[key] ?? 0
+}
+
+/** Bucket entries into Today / Yesterday / Earlier by `key`, newest first in each. */
+export function groupSessionsByRecency<T extends { lastActivityAt: number; createdAt?: number }>(
   entries: T[],
-  now: number
+  now: number,
+  key: RecencyKey = 'lastActivityAt'
 ): { group: RecencyGroup; entries: T[] }[] {
-  const startOfToday = new Date(now)
-  startOfToday.setHours(0, 0, 0, 0)
-  const todayMs = startOfToday.getTime()
-  const yesterdayMs = todayMs - 24 * 60 * 60 * 1000
+  const todayMs = startOfToday(now)
+  const yesterdayMs = startOfYesterday(now)
   const buckets: Record<RecencyGroup, T[]> = { Today: [], Yesterday: [], Earlier: [] }
   for (const entry of entries) {
-    if (entry.lastActivityAt >= todayMs) buckets.Today.push(entry)
-    else if (entry.lastActivityAt >= yesterdayMs) buckets.Yesterday.push(entry)
+    const at = recencyTime(entry, key)
+    if (at >= todayMs) buckets.Today.push(entry)
+    else if (at >= yesterdayMs) buckets.Yesterday.push(entry)
     else buckets.Earlier.push(entry)
   }
   return (['Today', 'Yesterday', 'Earlier'] as const)
     .map((group) => ({
       group,
-      entries: buckets[group].slice().sort((a, b) => b.lastActivityAt - a.lastActivityAt)
+      entries: buckets[group].slice().sort((a, b) => recencyTime(b, key) - recencyTime(a, key))
     }))
     .filter(({ entries: grouped }) => grouped.length > 0)
 }

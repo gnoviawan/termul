@@ -5,7 +5,9 @@
 
 ## Overview
 
-Termul Manager does not expose a public HTTP API. Its primary integration surface is an **internal IPC contract** between the React renderer and the Rust/Tauri runtime.
+This page covers the desktop app's **internal IPC contract** between the React renderer and the Rust/Tauri runtime.
+
+`termul-server` and the desktop shared-live host also expose an HTTP and WebSocket API. Its HTTP routes are described by an OpenAPI 3.1 spec that the server builds from the `ROUTES` table in `src-tauri/src/web/openapi/`. A running server serves it at `GET /openapi.json`, `termul-server openapi` prints it, and each release attaches it as `openapi.yaml`. The WebSocket protocol is defined in `src/shared/types/web-protocol.types.ts`. The user guide is `website-docs/content/docs/server-api.mdx`.
 
 This contract is implemented through:
 
@@ -159,6 +161,51 @@ Stops agent browsing for `{sessionId}` from the desktop `main` webview: queued a
 
 Pages in tab webviews report nothing through commands. Tab URL, title, loading state and document epoch come from engine navigation and title events (see Browser Event Flow).
 
+## Automation Commands and Routes
+
+Chat-authored automations live in the host's automation service (`src-tauri/src/automation/service.rs`). Every operation has a Tauri command (`src-tauri/src/commands/automation.rs`) and an HTTP route (`src-tauri/src/web/automation_api.rs`). The renderer facade `src/renderer/lib/automation-api.ts` picks the transport. Wire types are in `src/shared/types/automation.types.ts`.
+
+Tauri commands take camelCase arguments and run only from the `main` webview. Other webviews get `FORBIDDEN`. HTTP bodies and query keys are snake_case. Both transports return `IpcResult<T>`.
+
+| Command | HTTP route | Input | Returns |
+| --- | --- | --- | --- |
+| `automation_list` | `GET /api/automations?project_id=` | `projectId` | `Automation[]` |
+| `automation_get` | `GET /api/automations/{id}` | `id` | `AutomationDetail` (`{automation, issues, policy}`) |
+| `automation_create` | `POST /api/automations` | `projectId`, `name` | `Automation` |
+| `automation_apply_ops` | `POST /api/automations/{id}/ops` | `id`, `baseRevision`, `ops` | `ApplyOpsResult` (`{automation, issues}`) |
+| `automation_delete` | `DELETE /api/automations/{id}` | `id` | `null` |
+| `automation_set_enabled` | `POST /api/automations/{id}/enabled` | `id`, `enabled` | `Automation` |
+| `automation_approve` | `POST /api/automations/{id}/approve` | `id`, `revision` | `Automation` |
+| `automation_run_now` | `POST /api/automations/{id}/run` | `id` | `AutomationRun` (status `running`) |
+| `automation_cancel_run` | `POST /api/automation-runs/{run_id}/cancel` | `runId` | `boolean`. `false` when the run is not in flight. |
+| `automation_list_runs` | `GET /api/automations/{id}/runs?limit=` | `id`, `limit` | `AutomationRun[]`, newest first, at most 200. The route's default `limit` is 50. |
+| `automation_run_steps` | `GET /api/automation-runs/{run_id}/steps` | `runId` | `AutomationStep[]` |
+| `automation_mark_seen` | `POST /api/automations/{id}/seen` | `id` | `null` |
+| `automation_preview_schedule` | `POST /api/automations/preview-schedule` | `schedule` | `{next_runs, error}`. An invalid schedule is a success with `next_runs: []` and the reason in `error`. |
+| `automation_list_agents` | `GET /api/automation-agents` | none | `{agent_id, name}[]` |
+| `automation_list_secrets` | `GET /api/automation-secrets?project_id=` | `projectId` | secret names |
+| `automation_set_secret` | `PUT /api/automation-secrets` | `projectId`, `name`, `value` | `null` |
+| `automation_delete_secret` | `DELETE /api/automation-secrets?project_id=&name=` | `projectId`, `name` | `null` |
+
+Secret values go in and never come back out. The host stores them in the OS keychain. A host whose keychain does not answer at startup, such as `termul-server` on headless Linux, stores them instead in `automation-secrets.json` in its data directory: an owner-only (`0600`) JSON object keyed like the keychain entries, `automation:<project_id>:<NAME>`. A host that already has that file keeps using it. The log names the backend once at startup and never carries a value.
+
+The `/api/automation` prefix is bearer-gated. A host without a token gate serves only loopback peers. Every `POST`, `PUT` and `DELETE` except `preview-schedule` passes the remote-write guard: the desktop shared-live host refuses them, and `termul-server` admits a non-loopback peer only with `--allow-remote-writes`.
+
+A failure carries the service's code. On HTTP it also sets the status:
+
+| Code | HTTP status |
+| --- | --- |
+| `not_found` | 404 |
+| `revision_conflict` | 409. The body adds `current_revision`. |
+| `not_approved` | 409 |
+| `has_issues`, `invalid_ops`, `invalid_input`, `secret_missing` | 422 |
+| `keychain_unavailable` | 503 |
+| `unavailable` | 503. The host's automation store did not open. |
+| `FORBIDDEN` | 403 |
+| `internal` | 500 |
+
+Every change emits `automation_changed` with the payload `{project_id, automation_id}`. `automation_id` is `null` for a project-wide change, such as a secret name. When a chat agent calls `automation_propose`, the payload also carries `proposed: true` and, when the host knows the agent, `proposed_by` with its display name. A client that has that project on screen opens the Automations tab on the automation and shows a toast. Every client receives it once, as an `agents` watch delta `{event: "automation_changed", payload}`: web, phone, shared-live peers and the desktop renderer over its own channel carrier. There is no separate Tauri event.
+
 ## Data Migration Commands
 
 ### `data_migration_get_version`
@@ -186,6 +233,47 @@ The host owns durable chat history. The desktop and `termul-server` both write e
 The renderer-authored store under `<app data dir>/acp-chat-history` (`ChatHistoryStore`) is legacy. The one-shot renderer wipe migration is the only caller of `acp_history_save`, `acp_history_flush`, `acp_history_mark_legacy_import_complete`, `acp_history_list_legacy` and `acp_history_get_legacy`. Each of them is listed in the command table above. After every legacy write the host imports the new entries into `SessionPersistence` (`import_chat_history`), so a following `acp_history_list` returns what the migration saved. The migration deletes the old Tauri Store ACP keys only after `acp_history_list_legacy` and `acp_history_get_legacy` return what it wrote. Unrelated preferences stay.
 
 The `/ws` requests `list_persisted_sessions`, `get_session_payload` and `get_session_payload_tail` read `SessionPersistence` directly, on the desktop-hosted browser and on the standalone server alike.
+
+## GitHub Issues and PRs
+
+The host runs the user's `gh` CLI for every GitHub read and write. Termul stores no GitHub token. The contract is `src/shared/types/github.types.ts`, and the renderer facade is `src/renderer/lib/github-api.ts`. `GithubService` (`src-tauri/src/github/`) implements each operation once. The desktop calls it through a Tauri command, and the browser and `termul-server` call it through an HTTP route.
+
+| Facade method | Tauri command | Web route | Reply `data` |
+|---|---|---|---|
+| `getContext(cwd)` | `github_get_context` | `POST /github/context` | `GithubContext` |
+| `listItems(request)` | `github_list_items` | `POST /github/items` | `GithubListResult` |
+| `getItem(request)` | `github_get_item` | `POST /github/item` | `GithubItemDetail` |
+| `getChecks(request)` | `github_get_checks` | `POST /github/checks` | `GithubChecksResult` |
+| `getCheckLog(request)` | `github_get_check_log` | `POST /github/check-log` | `GithubCheckLog` |
+| `merge(request)` | `github_merge` | `POST /github/merge` | `GithubMergeResult` |
+| `comment(request)` | `github_comment` | `POST /github/comment` | `GithubCommentResult` |
+| `checkoutPr(request)` | `github_checkout_pr` | `POST /github/checkout-pr` | `GithubCheckoutPrResult` |
+| `getRepoMeta(request)` | `github_repo_meta` | `POST /github/repo-meta` | `GithubRepoMeta` |
+| `createLabel(request)` | `github_create_label` | `POST /github/create-label` | `GithubCreateLabelResult` |
+| `editItem(request)` | `github_edit_item` | `POST /github/edit-item` | `GithubEditItemResult` |
+| `setItemState(request)` | `github_set_item_state` | `POST /github/item-state` | `GithubSetItemStateResult` |
+
+Each Tauri command takes one argument, `request`. Each route takes the same object as its JSON body. Every reply is `IpcResult<T>`.
+
+- **Repository.** A request names a `cwd` and a slot (`origin` or `upstream`), never a host or `owner/name`. The host reads the `origin` remote, or the first remote when there is no `origin`. It finds a fork's parent with `gh repo view --json parent`.
+- **Host routing.** The host passes a remote's host to `gh` only when the host is `github.com` or is in `gh auth status`. For any other host, `getContext` returns `auth: unauthenticated` with a `gh auth login --hostname <host>` command and `repo: { kind: 'not_github' }`. The host makes no `gh` call to that host.
+- **Caching and quota.** Reads are cached for 30 seconds per repository and arguments. `refresh: true` skips the cache. At most four `gh` processes run at once. When `gh` reports a rate limit, every call for that host fails with `GH_RATE_LIMITED` until the reset. When less than 40% of the GraphQL budget remains, reads are served from the cache until the budget resets, even with `refresh: true`.
+- **List.** `listItems` returns the first 50 matches in the filter's `sort` order (`updated`, `created` or `comments`, newest or most first). There is no paging. The filter becomes one GitHub search:
+  - `labels` with `labelMode: 'any'` is `label:"bug","ai"`, with `'all'` is `label:"bug" label:"ai"`, and with `'exclude'` is `-label:"bug" -label:"ai"`.
+  - `assignee` is `assignee:@me` (`me`), `no:assignee` (`unassigned`) or `assignee:<login>` (`user`). A login with characters other than ASCII letters, digits, `-` and `_` is refused with `GH_FAILED`.
+  - `search` is added as plain words. The host removes `"` and parentheses and drops `OR`, `AND`, `NOT` and every `name:value` qualifier (such as `is:pr` or `repo:other/x`), so the text never overrides the filter's own terms or leaves the request's repository.
+- **Detail.** `getItem` follows GitHub's pages up to 500 conversation comments, 300 review threads and 100 comments per thread, within the 20-second budget of one call. If a page fails or the budget runs out, the reply keeps the comments already loaded. `item.commentCount` is always GitHub's total. `comment.isBot` is true when GitHub reports the author as a `Bot`. `timeline` holds the latest 50 labeled, unlabeled, assigned, unassigned, closed and reopened events, oldest first, plus merged events for a PR. `stateReason` is set only for a closed issue; GitHub's `DUPLICATE` reason is reported as `not_planned`.
+- **Repository metadata.** `getRepoMeta` returns the repository's first 100 labels by name, its first 100 assignable users and the signed-in login. It is a cached read like the others.
+- **Check logs.** `getCheckLog` returns the lines around the last `##[error]` line of the job log: up to 150 lines before it and 30 after it. A log without an error line gives its last 200 lines. The tail is at most 16 KB. When trimming, the host keeps the error line and drops the earliest lines first.
+- **Writes.** `/github/merge`, `/github/comment`, `/github/checkout-pr`, `/github/create-label`, `/github/edit-item` and `/github/item-state` are write routes. A LAN peer needs `--allow-remote-writes`. A GitHub write clears that repository's cached reads, even when it fails.
+- **Merge.** A direct merge runs only when GitHub reports the merge state as `CLEAN` or `HAS_HOOKS`, and it pins the head commit it read. Otherwise the reply is `GH_NOT_MERGEABLE`.
+- **Comment.** `target: { kind: 'conversation' }` adds a comment to the issue or PR conversation (GraphQL `addComment`). `target: { kind: 'review_thread', threadId }` replies in a review thread of that PR (`addPullRequestReviewThreadReply`). The host checks that the thread belongs to the PR the request names. The body goes to `gh` on stdin, never on the command line. A blank body is `GH_EMPTY_COMMENT`, and a body over 65,536 characters is refused before any `gh` call. The reply is the comment GitHub created. When `gh` times out or GitHub returns no comment, the error says the comment may already be posted.
+- **Create label.** `createLabel` runs `gh label create`. The name is trimmed and must have 1 to 50 characters. The colour must be six hex digits (a leading `#` is dropped). The description is optional, at most 100 characters. Invalid input is refused with `GH_FAILED` before any `gh` call. An existing label name fails; the host never passes `--force`. When `gh` times out, the error says the change may already be applied.
+- **Edit item.** `editItem` adds and removes labels and assignees by name or login, matched without case. The host reads the item and the repository's labels and assignable users, resolves each name to its id, and refuses a name it cannot resolve before it writes. It sends one GraphQL mutation on stdin. The label and assignee changes in it run in order and are not a transaction: when one fails, the earlier ones may already be applied, so the client re-reads the item. An edit with no names succeeds without a write. When `gh` times out, the error says the change may already be applied.
+- **Item state.** `setItemState` closes or reopens an issue or PR (`closeIssue` with `stateReason`, `reopenIssue`, `closePullRequest`, `reopenPullRequest`). A PR close ignores `reason`. When `gh` times out, the error says the change may already be applied.
+- **Checkout PR.** `cwd` must be a clean Termul chat worktree: a linked worktree under its repository's `.termul/worktrees/`, on a `chat/` branch, with no uncommitted or untracked changes. Any other path is `PATH_VALIDATION_FAILED`. The host refuses with `GH_FORK_PUSH_BLOCKED` unless the user can write to the PR's head repository, or the PR allows maintainer edits and the user can write to the base repository. It checks this before it changes the worktree. Then it runs `gh pr checkout <n> --detach` in the worktree, which, like `git checkout`, refuses to overwrite local changes made since the cleanliness check. It then points the chat branch at the PR head with `git switch -C <chat branch>`. `headSha` is the commit the worktree is at, and it must equal the PR head. `pushCommand` is `git push <remote> HEAD:<headRefName>`, shell-quoted, where `<remote>` is the remote for the PR's head repository (or its URL).
+- **Errors.** The failure codes are `GITHUB_ERROR_CODES` in the contract file, plus `PATH_VALIDATION_FAILED` (desktop) and `OUTSIDE_PROJECT_ROOT` (web).
+- **Logging.** Each operation logs its start, success or failure with the repository, operation and code. The logs never include tokens, `gh` output, request bodies or remote URLs.
 
 ## Web Terminal WebSocket
 
@@ -309,7 +397,12 @@ auth banner spawns an ordinary termul terminal tab (`kind:'shell'`, titled
 `Sign in — <agent>`) running the agent binary with the method's `args`/`env` in the
 session cwd. Exit code 0 → `authenticate(methodId)` runs and session creation
 proceeds; non-zero → toast and the banner stays. No live PTY is killed or
-recreated — the login terminal is an extra tab.
+recreated — the login terminal is an extra tab. The renderer watches the exit in
+`login-terminal-sign-in-store` (one running sign-in per live agent, keyed by
+agent id with its PTY id), not in the surface that was pressed, so the
+authenticate and the re-prepare that rereads the models still run after the
+model selector popover or the phone setup sheet closes. Reopening either shows
+the sign-in as running until the login terminal exits.
 
 **2b. Browser auth handoff (headless servers).** On POSIX the host injects a
 browser-open shim into the agent's PATH (`xdg-open` et al. append the URL to a
@@ -417,13 +510,10 @@ These are the `acp_*`, `claude_accounts_*`, `ws_channel_*` and `codex_cli_auth_s
 | `acp_install_registry_binary` | Legacy desktop-only install of a registry release archive (`agentId`, `archiveUrl`, `cmd`, `args?`) into `<app data dir>/acp-registry-binaries/<agentId>`. The archive URL must be `https`. The verified install is `install_acp_agent`. |
 | `claude_accounts_list` | Returns the Claude Accounts snapshot. `/ws` equivalent: `list_claude_accounts`. |
 | `claude_accounts_usage` | Returns the usage windows of every Account. `force` refreshes reads older than 60 seconds. `/ws` equivalent: `list_claude_usage`. |
-| `claude_accounts_add` | Adds an Account with the given name. Desktop only. |
-| `claude_accounts_login` | Runs the Claude browser login for one Account and resolves when it finishes. Desktop only. |
-| `claude_accounts_login_cancel` | Stops a running login. Returns `false` when none was running. Desktop only. |
-| `claude_accounts_rename` | Renames an Account. Desktop only. |
-| `claude_accounts_remove` | Removes an Account and returns the ids of the Projects that moved to the Default Account. Desktop only. |
+| `claude_accounts_login` | Runs the Claude browser login for one Account and resolves when it finishes. Desktop only. `/ws` `cancel_claude_login` stops it. |
 | `claude_accounts_set_default` | Chooses the Default Account. `/ws` equivalent: `set_default_claude_account`. |
-| `claude_accounts_set_project` | Chooses a Project's Account, or clears it with `null`. `/ws` equivalent: `set_project_claude_account`. |
+| `claude_accounts_set_project` | Chooses a Project's Account, or clears it with `null`. With `expectedAccountId`, applies only while the Project still uses that Account; returns whether it applied. `/ws` equivalent: `set_project_claude_account`. |
+| `claude_accounts_set_auto_switch` | Turns automatic switching at a usage limit on or off (default on). `/ws` equivalent: `set_claude_auto_switch`. |
 | `acp_history_list` | Returns `{sessions, legacyImportComplete}`. The sessions come from the host's durable session index (`SessionPersistence`) and are empty when the host opened no persistence. |
 | `acp_history_get` | Returns one session's `{metadata, messages, toolCalls?}` payload from the host store, or `null` when absent. |
 | `acp_history_get_tail` | Same as `acp_history_get` for the last `limit` messages (default 50, clamped to 1-500) and their tool calls. |
@@ -462,6 +552,7 @@ The class column is the request's command class, defined in `src-tauri/src/web/c
 | `promote_session` | command | Turns an ephemeral session into a durable one, so its first real prompt persists. |
 | `send_prompt` | command | Starts a prompt turn. `turnId` is the `command_id`. The reply is the stop reason or a receipt. |
 | `cancel_prompt` | idempotent | Cancels the running turn of a session. |
+| `stop_subagent` | idempotent | Stops one subagent of a chat: `session/cancel` for its child session when the agent offers a stop. Replies `{ outcome: "sent" \| "already_ended" }`; `not_found` or `unsupported` otherwise. |
 | `set_config_option` | idempotent | Sets one session config option. |
 | `set_mode` | idempotent | Sets the session mode. |
 | `set_model` | idempotent | Sets the session model. |
@@ -483,11 +574,25 @@ The class column is the request's command class, defined in `src-tauri/src/web/c
 | `set_catalog_opt_in` | idempotent | Sets the host-persisted opt-in for registry augmentation of the catalog. |
 | `fetch_acp_registry_snapshot` | read | The registry check behind "Check for updates". Every check bypasses the cache TTL. |
 | `install_acp_agent` | command | Installs a catalog agent. The host downloads, verifies the sha256, extracts and activates it atomically. The request is `{agentId}` only. |
-| `search_mcp_catalog` | read | Searches the bundled MCP server catalog (`{query?, cursor?, limit?}`) and returns one ranked page, `{items, nextCursor, total, snapshotFetchedAt}`. The desktop sends it over its `ws_channel_*` relay, and `GET /mcp-catalog/search` gives a browser the same answer. |
+| `search_mcp_catalog` | read | Searches the host's MCP server catalog (`{query?, cursor?, limit?}`) and returns one ranked page, `{items, nextCursor, total, updatedAt, sample}`. The desktop sends it over its `ws_channel_*` relay, and `GET /mcp-catalog/search` gives a browser the same answer. |
+| `get_mcp_catalog_status` | read | Returns where the catalog comes from and what live sync is doing, `{updatedAt, sample, servers, sync}`. `GET /mcp-catalog/status` gives a browser the same answer. |
+| `set_mcp_catalog_sync` | idempotent | Turns live registry sync on or off (`{enabled}`) and returns the new status. A write: shared-live and view-only connections are refused. `POST /mcp-catalog/sync` is the HTTP route. |
+| `describe_mcp_install` | read | Returns the generated install form for `{source, choice?}`, or `{outcome: "unsupported", reason}`. `POST /mcp-catalog/install/form` gives a browser the same answer. |
+| `plan_mcp_install` | idempotent | Builds an immutable install plan from `{source, choice?, inputs}` with non-secret inputs only. The plan holds the consent view and the launch digest, expires after 10 minutes and is bound to this connection. Needs write. HTTP: `POST /mcp-catalog/install/plan`. |
+| `commit_mcp_install` | command | Commits a plan once with `{planId, launchDigest, secretValues}` and returns the resolved entry, secret values included. A changed digest is `MCP_PLAN_MISMATCH`, an old plan `MCP_PLAN_EXPIRED`, and a repeat `MCP_PLAN_CONSUMED`. It never enters the receipt ledger, so a resend of the same `command_id` runs again and gets `MCP_PLAN_CONSUMED` instead of a stored reply. Needs write. HTTP: `POST /mcp-catalog/install/commit`. |
+| `cancel_mcp_install` | idempotent | Drops the caller's plan (`{planId}`). Needs write. HTTP: `POST /mcp-catalog/install/cancel`. |
+| `get_mcp_catalog_icon` | read | Returns a catalog server's logo, `{contentType, base64}` (`{name}`). Only the host fetches the publisher URL; rows carry `hasIcon`, never the URL. `GET /mcp-catalog/icon/<name>` serves the raw bytes to a browser. |
 | `list_claude_accounts` | read | Returns the Claude Accounts snapshot. |
 | `list_claude_usage` | read | Returns Account usage windows. The host caches reads for 5 minutes. |
 | `set_default_claude_account` | idempotent | Chooses the Default Account. |
-| `set_project_claude_account` | idempotent | Chooses a Project's Account, or clears it with `null`. |
+| `set_project_claude_account` | idempotent | Chooses a Project's Account, or clears it with `null`. With `expectedAccountId`, applies only while the Project still uses that Account; replies `{ applied }`. |
+| `set_claude_auto_switch` | idempotent | Turns automatic switching at a usage limit on or off (default on). |
+| `add_claude_account` | command | Adds a signed-out Account named `{name}` and replies with it. A resent command replays the first reply. |
+| `rename_claude_account` | idempotent | Renames `{accountId}` to `{name}` and replies `{}`. Renaming to the current name succeeds. |
+| `remove_claude_account` | idempotent | Signs the Claude CLI out of `{accountId}`, removes it and replies `{movedProjectIds}`, the Projects that moved to the Default Account. An Account that is already gone replies `{movedProjectIds: []}`. The built-in Account is refused. |
+| `start_claude_link_login` | idempotent | Starts a link sign-in for `{accountId}` and replies `{url}`, the Claude sign-in link. Stops a sign-in already running for the Account. |
+| `finish_claude_link_login` | command | Writes `{code}` from the Claude page to the link sign-in of `{accountId}`. Replies `{}` once the Claude CLI stored the login. Two errors leave the sign-in running: `claude_login_code_incomplete` (it still waits for the whole code) and `claude_login_busy` (the CLI still checks an earlier code, whose sender gets the verdict). Any other error ended the sign-in for this caller, including a code that reaches a newer sign-in still waiting for its link. Receipt-only: the code is never stored or digested. |
+| `cancel_claude_login` | idempotent | Stops the browser or link sign-in of `{accountId}`. Replies `{cancelled}`, `false` when none was running. On one connection it runs after a `start_claude_link_login` of the same Account sent before it, so a cancel sent while the link loads stops that sign-in. |
 | `add_project` | idempotent | Adds a project to the host registry. See "Project registry commands". |
 | `update_project` | idempotent | Changes a project's name, color, archive flag or root. See "Project registry commands". |
 | `remove_project` | idempotent | Removes a project. See "Project registry commands". |
@@ -526,6 +631,7 @@ A session log event has one of three delivery tiers (`tier_of` in `src-tauri/src
 | `acp:mode_update` | session | Session log event (reliable). |
 | `acp:config_options_update` | session | Session log event (reliable). |
 | `acp:usage_update` | session | Session log event (reliable). Context-window use and optional cost. |
+| `acp:agent_working` | session | Session log event (reliable). Live only. The agent started or stopped working in the session outside a prompt turn, `{agentId, sessionId, working}`. The `list_agents` summary carries the current set as `workingSessions`. |
 | `acp:permission_request` | session | Session log event (reliable). Live only: never written to the durable log. A `host:` request id with `_meta.termul.origin_kind = "browser"` is a host-originated browser consent ticket with the fixed options `allow_session`, `allow_project` and `deny`. |
 | `acp:question_request` | session | Session log event (reliable). A structured question from the agent, including one from the host `ask_user` tool. |
 | `acp:question_cancelled` | session | Session log event (reliable). A pending question can no longer be answered. |
@@ -539,6 +645,8 @@ A session log event has one of three delivery tiers (`tier_of` in `src-tauri/src
 | `acp:browser_tab_updated` | session | Session log event (reliable). The tab registry's view of one of the session's agent tabs, `{tabId, url, title, loading, agentControlled, epoch}`, after an engine navigation, title or load event. |
 | `acp:browser_tab_closed` | session | Session log event (reliable). The engine destroyed one of the session's agent tabs, `{tabId}`. |
 | `acp:browser_open_request` | agent | `agents` watch delta. A POSIX host captured a URL the agent tried to open, `{agentId, url}`. A delta lost to a gap is lost. |
+| `acp:agent_sign_in_request` | agent | `agents` watch delta. The host holds a request-scoped URL elicitation raised during `authenticate` (Codex device-code sign-in), `{agentId, requestId, url, message}`. `message` carries the device code and is never logged. Clients answer through `respond_elicitation` with the `requestId`. A delta lost to a gap is lost. |
+| `acp:agent_sign_in_resolved` | agent | `agents` watch delta. The host no longer holds that sign-in prompt (completed, answered, replaced, or its `authenticate` ended), `{agentId, requestId}`. |
 | `acp:worktree_branch_renamed` | agent | `chat_history` watch delta. The host renamed a worktree's branch. |
 | `acp:worktree_progress` | none | Plain Tauri event on the desktop only, `{progressId, line}`. The `worktree_create` command emits it while `git worktree add` runs. It never travels the relay. |
 
@@ -636,9 +744,14 @@ from the plan store (logged `source: 'planRehydrate'`); the agent can still emit
 >   engages only after a durability probe (`loadSessionPayload`) confirms the host holds the
 >   full payload; a session whose probe resolves `null` (`live_only` / degraded host) is
 >   untrimmable and keeps every message.
-> - **Live tool calls** — `toolCalls[sessionId]` plateaus at 500 (`MAX_LIVE_TOOL_CALLS`):
->   the oldest *finished* calls drop, in-flight ones are always retained, and every install
->   path (reopen/resume/recovery) applies the same cap.
+> - **Live tool calls** — the live calls in `toolCalls[sessionId]` plateau at 500
+>   (`MAX_LIVE_TOOL_CALLS`): the oldest *finished* calls drop, in-flight ones are always
+>   retained, and every install path (reopen/resume/recovery) applies the same cap. A dropped
+>   edit, delete or move call leaves a path-only file-change summary (`restoredSummary`), and
+>   summaries do not count toward the cap, so the Changed files list never loses a file
+>   that an edit, delete or move call touched. In a git repository the list still shows
+>   only those files that git reports uncommitted, and a file changed only by a shell
+>   command never enters it.
 > - **Tool raw output clamp** — a string `rawOutput` ≥ 32 KiB clamps to 32 KiB +
 >   a `[termul: tool output truncated]` marker on live update (logged once per toolCallId
 >   without content; non-string values pass through).
@@ -740,9 +853,9 @@ Every session subscription holds a bounded channel (256 items, plus room for the
 
 The project list, the chat-history index, the agent roster, a project's file changes, shared store keys and a project's terminal set are state, not session logs. They reach a client through `watch` instead of `seq = 0` broadcasts, which a client could miss, receive twice or never receive on a socket without a session subscription.
 
-- `watch{watch, scope?}` with `watch` one of `projects`, `chat_history`, `agents` (scope is always `""`), `fs` and `terminals` (scope = a project id) or `store` (scope = a store key: `shared/...`, or `device/<deviceId>/...` of the connection's own device; any other key is refused with `STORE_KEY_SCOPE`). The host queues one top-level frame `{"type":"watch","watch","scope","revision":{"hostEpoch","n":1},"reset":true,"state":...}` and then replies `{watch, scope, revision}`, so the client holds the state when the reply arrives. `unwatch{watch, scope?}` is idempotent. View-only connections may watch. An unknown watch or scope is `unsupported`; an `fs` watch of an unknown or archived project is `not_found`; a `store` watch on a host without a store is `STORE_UNAVAILABLE`; a full connection queue is `rate_limited`. `watch_project` and `unwatch_project` no longer exist.
+- `watch{watch, scope?}` with `watch` one of `projects`, `chat_history`, `agents`, `chat_activity` (scope is always `""`), `fs` and `terminals` (scope = a project id) or `store` (scope = a store key: `shared/...`, or `device/<deviceId>/...` of the connection's own device; any other key is refused with `STORE_KEY_SCOPE`). The host queues one top-level frame `{"type":"watch","watch","scope","revision":{"hostEpoch","n":1},"reset":true,"state":...}` and then replies `{watch, scope, revision}`, so the client holds the state when the reply arrives. `unwatch{watch, scope?}` is idempotent. View-only connections may watch. An unknown watch or scope is `unsupported`; an `fs` watch of an unknown or archived project is `not_found`; a `store` watch on a host without a store is `STORE_UNAVAILABLE`; a full connection queue is `rate_limited`. `watch_project` and `unwatch_project` no longer exist.
 - Each change is a delta frame `{"type":"watch","watch","scope","revision":{"hostEpoch","n"},"delta":...}`. `n` counts per connection and watch, and a socket receives each watch once, whatever sessions it subscribed to. A second `watch` of the same watch replaces the subscription and restarts at `n = 1` with fresh state.
-- State and deltas: `projects` — state `{projects, defaultProjectId}` (what `GET /projects` returns), delta the replacement state; `chat_history` — state the persisted-session index (what `list_persisted_sessions` returns, empty without durable history), delta `{changed: [sessionId]}` (empty list: changed in bulk) which the client answers by refetching; `agents` — state the live agent summaries, delta `{event, payload}` for `agent_spawned`, `agent_crashed`, `agent_error` and `agent_disconnected` (a kill or an idle reap arrives as `agent_disconnected` with a `reason`; applying one is idempotent). `agents` also carries the transient `{event: "browser_open_request", payload: {agentId, url}}`, which is not roster state, so a delta lost to a gap is lost. `chat_history` also carries `{changed: [], event: "worktree_branch_renamed", payload: {worktreePath, oldBranch, newBranch}}` for a branch rename. `fs` — state `{root}` (a state after the first one tells the client to refresh its trees), delta `{root, paths}` for one debounced batch of changes, and a last delta `{ended: true, reason}` when the project is no longer watchable (the host then releases the subscription; the client asks again). `store` — state and delta `{exists, value?}`, the value the key holds after a write or delete from any connection. `terminals` — state and delta `{terminals: [{terminalId, projectId, cwd, attached}]}`, the project's terminals including detached ones, replaced after each spawn, kill, reap, first attach or last detach, with no claim credential (`list_preserved` still issues claims).
+- State and deltas: `projects` — state `{projects, defaultProjectId}` (what `GET /projects` returns), delta the replacement state; `chat_history` — state the persisted-session index (what `list_persisted_sessions` returns, empty without durable history), delta `{changed: [sessionId]}` (empty list: changed in bulk) which the client answers by refetching; `agents` — state the live agent summaries, delta `{event, payload}` for `agent_spawned`, `agent_crashed`, `agent_error` and `agent_disconnected` (a kill or an idle reap arrives as `agent_disconnected` with a `reason`; applying one is idempotent). `agents` also carries the transient `{event: "browser_open_request", payload: {agentId, url}}`, which is not roster state, so a delta lost to a gap is lost. `chat_history` also carries `{changed: [], event: "worktree_branch_renamed", payload: {worktreePath, oldBranch, newBranch}}` for a branch rename. `fs` — state `{root}` (a state after the first one tells the client to refresh its trees), delta `{root, paths}` for one debounced batch of changes, and a last delta `{ended: true, reason}` when the project is no longer watchable (the host then releases the subscription; the client asks again). `store` — state and delta `{exists, value?}`, the value the key holds after a write or delete from any connection. `terminals` — state and delta `{terminals: [{terminalId, projectId, cwd, attached}]}`, the project's terminals including detached ones, replaced after each spawn, kill, reap, first attach or last detach, with no claim credential (`list_preserved` still issues claims). `chat_activity` — state `{sessions: {sessionId: {busy, needsYou, unread, turnEnd, projectId}}}`, delta `{sessionId, busy, needsYou, unread, turnEnd, projectId}`, one chat's record as it stands. The relay derives the record from the session events it numbers, so a connection with no subscription to the session gets it too: `busy` while a prompt turn is open (`user_prompt` without its `prompt_complete`) or `agent_working` is true, cleared by `session_closed` and by the agent's `agent_crashed` or `agent_disconnected`; `needsYou` while the relay holds a pending permission, question or elicitation of the session (host `host:` tickets are not counted); `unread` while the newest `prompt_complete` the host saw (`turnEnd`, `{seq, logEpoch}`) is past the session's last-read marker (`mark_chat_read`); `projectId` is the project in the session's persisted record (`null` without one), so a surface counts a chat it never opened under its project. A record with every flag false means the chat has nothing to show and leaves the state (a read turn end is not kept, so `turnEnd` is `null` then). Records live in memory, and a deleted session's record is dropped along with any later event of it. A host restart starts with no records: the agents it ran are gone, so nothing is busy or needs the user, and the New activity of turns that ended before the restart is lost, because the last-read markers it is compared with live in memory too (rebuilding the turn ends from the session logs without them would flag every chat ever answered). Every chat list (the desktop Chats panel and tab chrome, the phone drawer) and every project-level count (the rail's Needs you badges and activity marks, the status bar pill, the phone's Needs you count and its screen-reader announcements) reads this watch; a surface showing an unread chat sends `mark_chat_read` at `turnEnd`.
 - The host never waits to queue a delta. A delta that finds the connection queue full is dropped but keeps its `n`, so the next frame shows the hole. A `{"resync":true}` marker then takes the next `n` and is queued as soon as there is room, so a hole shows even when no later change comes.
 - The client applies a delta only when it is `n + 1` of the same `hostEpoch`. A skipped `n`, a different epoch (a new serve start), a `resync` marker or a reconnect makes it send `watch` again and rebuild from the fresh state.
 - `projects_changed` and `chat_history_changed` no longer exist, and the relay no longer sends `agent_spawned`, `agent_crashed`, `agent_error` or `agent_disconnected` without a session as `seq = 0` events. `browser_open_request`, `worktree_branch_renamed`, `fs_changed` and `fs_watch_ended` no longer exist either: the relay sends no `seq = 0` event except the `auth_required` handshake frame, and an agent-level event no watch carries is logged and dropped. The web client reads the watches: the project switcher rebuilds its list from `projects`, the chat-history sidebar installs the `chat_history` index and refetches on a delta, the agent store reconciles its roster from `agents` and takes `browser_open_request` from it, the explorer refreshes from `fs`, and `watchStoreKey` exposes the `store` watch. The persistence facade (`watchShared`) watches each shared key (`shared/lww/...`, `shared/cas/...`) once the page has read it, applies a frame only when it differs from the value the page last read, wrote or applied (so the echo of its own write is dropped), and applies nothing while the key's last read failed; owners only update memory, so an applied value is never written back.

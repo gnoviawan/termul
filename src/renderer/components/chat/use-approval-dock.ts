@@ -56,7 +56,7 @@ interface UseApprovalDockOptions {
 }
 
 interface ApprovalDock {
-  /** True while the keyboard is up with an approval pending: collapse the plan and changed-files bars. */
+  /** True while the keyboard is up with an approval pending: collapse the plan bar. */
   compactDock: boolean
   /** Spread on the panel root. Records where focus sits inside a prompt. */
   onFocus: (event: React.FocusEvent<HTMLElement>) => void

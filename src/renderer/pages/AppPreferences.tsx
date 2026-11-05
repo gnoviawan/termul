@@ -54,6 +54,7 @@ import { McpServersSection } from './app-preferences/mcp-servers-section'
 import { NotificationsSection } from './app-preferences/notifications-section'
 import { ProviderSection } from './app-preferences/provider-section'
 import { ResetSection } from './app-preferences/reset-section'
+import { ServerSection } from './app-preferences/server-section'
 import { ShellSection } from './app-preferences/shell-section'
 import { ShortcutsSection } from './app-preferences/shortcuts-section'
 import { SkillsSection } from './app-preferences/skills-section'
@@ -363,6 +364,7 @@ export function AppPreferencesModal(): React.JSX.Element {
             handleAutoUpdateToggle={handleAutoUpdateToggle}
             setUpdateChannel={setUpdateChannel}
           />
+          <ServerSection />
           <DiagnosticsSection />
           <ResetSection setIsResetDialogOpen={setIsResetDialogOpen} />
         </SettingsLayout>

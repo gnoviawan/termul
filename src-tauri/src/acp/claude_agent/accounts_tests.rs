@@ -100,7 +100,7 @@ async fn a_project_account_exports_its_config_dir_and_probes_that_login() {
     let h = host(|_| None);
     let work = h.accounts.add("Work").unwrap();
     h.accounts
-        .set_project_account("office", Some(&work.id))
+        .set_project_account("office", Some(&work.id), None)
         .unwrap();
     let dir = h.accounts.config_dir(&work.id).unwrap();
 
@@ -135,7 +135,7 @@ async fn a_signed_out_project_account_names_the_account() {
     let h = host(|accounts| {
         let work = accounts.add("Work").unwrap();
         accounts
-            .set_project_account("office", Some(&work.id))
+            .set_project_account("office", Some(&work.id), None)
             .unwrap();
         accounts.config_dir(&work.id)
     });
@@ -186,7 +186,7 @@ async fn a_project_env_config_dir_overrides_the_project_account() {
     let h = host(|_| None);
     let work = h.accounts.add("Work").unwrap();
     h.accounts
-        .set_project_account("office", Some(&work.id))
+        .set_project_account("office", Some(&work.id), None)
         .unwrap();
     let mut config = with_env_config_dir(&h.entrypoint, work_dir().to_str().unwrap());
     assert!(h
@@ -221,7 +221,7 @@ async fn a_relative_project_env_config_dir_falls_back_to_the_account_dir_for_pro
     let h = host(|_| None);
     let work = h.accounts.add("Work").unwrap();
     h.accounts
-        .set_project_account("office", Some(&work.id))
+        .set_project_account("office", Some(&work.id), None)
         .unwrap();
     let account_dir = h.accounts.config_dir(&work.id).unwrap();
     let mut config = with_env_config_dir(&h.entrypoint, "relative/dir");
@@ -295,10 +295,10 @@ async fn the_snapshot_reports_the_login_state_of_each_account() {
     assert_eq!(states, vec![("Default", Some(true)), ("Work", Some(false))]);
 }
 
-#[test]
-fn cancelling_without_a_running_login_is_a_no_op() {
+#[tokio::test]
+async fn cancelling_without_a_running_login_is_a_no_op() {
     let h = host(|_| None);
-    assert!(!h.service.cancel_login("default"));
+    assert!(!h.service.cancel_login("default").await);
 }
 
 #[tokio::test]
@@ -324,7 +324,7 @@ async fn a_signed_out_account_is_refused_as_the_project_account_and_nothing_chan
     let (h, work) = host_with_signed_out_work();
     let error = h
         .service
-        .set_project_account("office", Some(&work), SignInCheck::Required)
+        .set_project_account("office", Some(&work), None, SignInCheck::Required)
         .await
         .unwrap_err();
     assert_eq!(
@@ -341,13 +341,31 @@ async fn a_signed_out_account_is_refused_as_the_project_account_and_nothing_chan
 }
 
 #[tokio::test]
+async fn a_stale_expectation_loses_before_the_sign_in_probe() {
+    let (h, work) = host_with_signed_out_work();
+    let applied = h
+        .service
+        .set_project_account(
+            "office",
+            Some(&work),
+            Some("someone-else"),
+            SignInCheck::Required,
+        )
+        .await
+        .unwrap();
+    assert!(!applied);
+    assert!(h.accounts.snapshot().unwrap().project_profiles.is_empty());
+    assert!(h.runtime.probed.lock().is_empty());
+}
+
+#[tokio::test]
 async fn an_account_whose_login_cannot_be_read_is_refused_too() {
     let h = host(|_| None);
     let side = h.accounts.add("Side").unwrap();
     *h.runtime.unconfirmed.lock() = h.accounts.config_dir(&side.id);
     let error = h
         .service
-        .set_project_account("office", Some(&side.id), SignInCheck::Required)
+        .set_project_account("office", Some(&side.id), None, SignInCheck::Required)
         .await
         .unwrap_err();
     assert_eq!(
@@ -364,7 +382,7 @@ async fn a_signed_in_account_becomes_the_project_account() {
     let h = host(|_| None);
     let work = h.accounts.add("Work").unwrap();
     h.service
-        .set_project_account("office", Some(&work.id), SignInCheck::Required)
+        .set_project_account("office", Some(&work.id), None, SignInCheck::Required)
         .await
         .unwrap();
     assert_eq!(
@@ -382,11 +400,11 @@ async fn following_a_signed_out_default_is_refused() {
     let (h, work) = host_with_signed_out_work();
     h.accounts.set_default(&work).unwrap();
     h.accounts
-        .set_project_account("office", Some("default"))
+        .set_project_account("office", Some("default"), None)
         .unwrap();
     let error = h
         .service
-        .set_project_account("office", None, SignInCheck::Required)
+        .set_project_account("office", None, None, SignInCheck::Required)
         .await
         .unwrap_err();
     assert!(
@@ -421,7 +439,7 @@ async fn a_signed_out_account_is_refused_as_the_default_and_the_default_stays() 
 async fn headless_setup_chooses_an_account_before_its_login() {
     let (h, work) = host_with_signed_out_work();
     h.service
-        .set_project_account("office", Some(&work), SignInCheck::Skip)
+        .set_project_account("office", Some(&work), None, SignInCheck::Skip)
         .await
         .unwrap();
     h.service
@@ -439,7 +457,7 @@ async fn api_key_mode_does_not_use_accounts_so_it_does_not_check_them() {
     let (h, work) = host_with_signed_out_work();
     h.service.set_auth_mode(ClaudeAuthMode::ApiKey).unwrap();
     h.service
-        .set_project_account("office", Some(&work), SignInCheck::Required)
+        .set_project_account("office", Some(&work), None, SignInCheck::Required)
         .await
         .unwrap();
     assert!(h.runtime.probed.lock().is_empty());
@@ -449,7 +467,7 @@ async fn api_key_mode_does_not_use_accounts_so_it_does_not_check_them() {
 async fn a_signed_out_spawn_carries_the_signed_out_tag() {
     let (h, work) = host_with_signed_out_work();
     h.accounts
-        .set_project_account("office", Some(&work))
+        .set_project_account("office", Some(&work), None)
         .unwrap();
     let mut config = managed(&h.entrypoint);
     let error = h

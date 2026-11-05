@@ -12,21 +12,21 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSearchMatch {
     pub line_number: usize,
     pub line_text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSearchResult {
     pub file_path: String,
     pub matches: Vec<FileSearchMatch>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSearchResponse {
     pub results: Vec<FileSearchResult>,
@@ -35,7 +35,7 @@ pub struct FileSearchResponse {
     pub failed_files: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchContentRequest {
     pub scope_root: String,
@@ -52,7 +52,7 @@ pub struct SearchContentStreamRequest {
     pub search_id: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchContentCancelRequest {
     pub search_id: String,
@@ -109,8 +109,9 @@ pub struct SearchFileNamesStreamRequest {
 /// omitted from the wire for files (absent = file), so file payloads are
 /// unchanged. Every `path` is root-relative with forward slashes; dir hit
 /// paths have no trailing slash.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"One filename-search hit. `ignored` is set when the path runs through a commonly ignored directory or a hidden segment, so a picker can dim it; it is `false` for every hit unless the request set `includeIgnored`. `kind` is `"dir"` for a folder and absent for a file. Every `path` is relative to the search root, with forward slashes; folder paths have no trailing slash."#)]
 pub struct SearchFileHit {
     pub path: String,
     pub ignored: bool,
@@ -145,7 +146,7 @@ pub struct SearchFileNamesDoneEvent {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RgInfoResponse {
     pub sidecar_binary_name: String,
@@ -216,15 +217,29 @@ pub(crate) fn rg_bundled_file_name() -> &'static str {
     }
 }
 
+/// Private lib dir the Linux deb/rpm/AppImage install the bundled rg into
+/// (`/usr/lib/termul-manager/rg`, `$APPDIR/usr/lib/termul-manager/rg`).
+/// Must match the `files` targets in `src-tauri/tauri.linux.conf.json`;
+/// `/usr/bin/rg` belongs to the distro `ripgrep` package (gh-1575).
+pub(crate) const LINUX_PACKAGE_RG_DIR: &str = "termul-manager";
+
 /// Sidecar locations, first match wins. The bundled name beside the running
 /// executable comes before the triple-named dev file so a packaged app does
-/// not fall through to `rg` on `PATH`.
+/// not fall through to `rg` on `PATH`. The Linux package lib dir comes first
+/// so an installed Termul keeps its own rg even when the distro one sits next
+/// to it in `/usr/bin`.
 fn rg_sidecar_candidates(cwd: Option<&Path>, exe_dir: Option<&Path>) -> Vec<PathBuf> {
     let bundled = rg_bundled_file_name();
     let triple = rg_sidecar_name();
     let mut candidates = Vec::new();
 
     if let Some(exe_dir) = exe_dir {
+        candidates.push(
+            exe_dir
+                .join("../lib")
+                .join(LINUX_PACKAGE_RG_DIR)
+                .join(bundled),
+        );
         candidates.push(exe_dir.join(bundled));
         candidates.push(exe_dir.join("../Resources").join(bundled));
         candidates.push(exe_dir.join("../lib").join(bundled));
@@ -300,7 +315,12 @@ pub(crate) fn detect_rg_path() -> String {
         return cached.clone();
     }
 
-    let (detected, _source) = resolve_rg_path();
+    let (detected, source) = resolve_rg_path();
+    if source == "path" {
+        log::warn!("[Search] bundled ripgrep not found; falling back to `rg` on PATH");
+    } else {
+        log::info!("[Search] ripgrep resolved (source: {source}): {detected}");
+    }
     let _ = RG_PATH_CACHE.set(detected.clone());
     detected
 }

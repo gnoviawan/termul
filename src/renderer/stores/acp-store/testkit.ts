@@ -47,7 +47,7 @@ export const FRESH = {
   suppressQueueFlush: {},
   promptCommandStates: {},
   transportReconnecting: false,
-  pendingBrowserOpen: {},
+  pendingSignIn: {},
   autoOpenBrowserUrl: {}
 }
 

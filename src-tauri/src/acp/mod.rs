@@ -31,6 +31,7 @@ pub mod legacy_models;
 pub mod manager;
 pub mod mcp_oauth;
 pub mod mcp_probe;
+pub mod oneshot;
 pub mod opencode_version;
 pub mod project_registry;
 pub mod provider_errors;
@@ -38,6 +39,7 @@ pub mod safe_url;
 pub mod session;
 pub mod session_payload;
 pub mod session_persistence;
+pub(crate) mod subagents;
 pub mod terminal;
 
 // Re-exported for the renderer bridge and `lib.rs` wiring. `AcpManager`
@@ -55,7 +57,9 @@ pub use chat_history_store::{
     ChatHistoryIndexEntry, ChatHistoryStatus, ChatHistoryStore, ChatHistoryStoreError,
 };
 #[allow(unused_imports)]
-pub use claude_agent::{ClaudeAgentService, ClaudeAuthMode, ClaudeAuthStatus, SignInCheck};
+pub use claude_agent::{
+    ClaudeAgentService, ClaudeAuthMode, ClaudeAuthStatus, LinkCodeError, SignInCheck,
+};
 #[allow(unused_imports)]
 pub use config::{AgentConfig, AgentId, SessionId};
 #[allow(unused_imports)]

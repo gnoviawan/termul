@@ -67,6 +67,7 @@ describe('AskUserQuestion (issue #411)', () => {
     render(<AskUserQuestion question={question} />)
     const card = screen.getByTestId('ask-user-question').firstElementChild
     expect(card).toHaveClass('border-border/60', 'bg-card', 'rounded-2xl')
+    expect(card?.className).not.toMatch(/focus-within:|has-\[/)
   })
 
   it('hides the option scroller and Submit when the agent provides no options', () => {

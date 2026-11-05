@@ -27,7 +27,11 @@
   {
     "id": "claude-acp",
     "name": "Claude Agent",
-    "file": "claude-acp.svg"
+    "file": "claude-acp.svg",
+    "brandColor": {
+      "light": "#C15F3C",
+      "dark": "#D97757"
+    }
   },
   {
     "id": "cline",
@@ -97,7 +101,15 @@
   {
     "id": "gemini",
     "name": "Gemini CLI",
-    "file": "gemini.svg"
+    "file": "gemini.svg",
+    "brandColor": {
+      "light": "#1C69FF",
+      "dark": "#4796E3",
+      "gradient": {
+        "light": ["#1C69FF", "#9168C0"],
+        "dark": ["#4796E3", "#9177C7"]
+      }
+    }
   },
   {
     "id": "github-copilot-cli",
@@ -157,7 +169,11 @@
   {
     "id": "mistral-vibe",
     "name": "Mistral Vibe",
-    "file": "mistral-vibe.svg"
+    "file": "mistral-vibe.svg",
+    "brandColor": {
+      "light": "#D9440A",
+      "dark": "#FA520F"
+    }
   },
   {
     "id": "nova",

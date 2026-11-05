@@ -14,7 +14,7 @@ Termul also checks the online registry for newer versions when it starts, and ag
 ## See which agents are ready
 
 1. Open Settings with `Ctrl+,` (`Cmd+,` on macOS).
-2. Click **AI Agents**.
+2. Click **Agent chats**.
 3. Scroll to the agent list. Type in **Filter agents…** to find one by name.
 
 ![The agent list in Settings. Agoragentic shows Available and Latest. Amp shows Install from Agent Chat.](/screenshots/agent-setup-agents-list.png)
@@ -53,6 +53,16 @@ If you already have the agent on your computer, click **Custom path** instead of
 
 Some agents ask you to sign in the first time you use them. The chat shows the sign-in choices the agent offers. For Claude, see [Claude accounts](/docs/agent-setup/claude-accounts).
 
+### Sign in to an agent
+
+The sign-in choices depend on the agent:
+
+- **A sign-in that runs in a terminal.** Termul opens a login terminal. Follow the steps there. When the terminal ends without an error, Termul finishes the sign-in and loads the agent's models, even if you already closed the model menu.
+- **An API key.** Some agents, such as Codex and Gemini CLI, take a key. Type it in the key field and submit it. Termul passes the key to the agent once and does not save it. If the key is already set on the computer that runs the agent, submit the field empty.
+- **A device code.** Codex can sign in to ChatGPT with a code, which works on a server without a browser, for example from a phone. Termul shows the code large, with **Copy code**, **Copy link** and **Open sign-in page**. Open the page, enter the code there, and finish the sign-in. Click **Cancel sign-in** to stop.
+
+You can also sign in to another agent from a chat. Open the model menu and pick the agent's tab. If the agent is signed out, the tab lists its sign-in choices under the error. After you sign in, the tab shows the agent's models, so you can pick one without leaving the chat. On a phone, see [Pick a model](/docs/remote/phone#pick-a-model).
+
 ## Point Termul at an agent you installed
 
 Agents marked **Manual install** must come from the vendor. The agent's row in Settings shows the command Termul expects, after **Expected:**.
@@ -62,7 +72,7 @@ Agents marked **Manual install** must come from the vendor. The agent's row in S
 3. In the **Manual install** bar, type the path to the agent's program, or click the folder button to find it.
 4. Click **Save**.
 
-After you save a path, the agent's row in **Settings** > **AI Agents** has a path box. To change the path, edit it and click **Save path**. To go back to the default, click **Clear saved path**.
+After you save a path, the agent's row in **Settings** > **Agent chats** has a path box. To change the path, edit it and click **Save path**. To go back to the default, click **Clear saved path**.
 
 ## Set up Claude Agent
 
@@ -76,7 +86,7 @@ When those are in place, pick **Claude Agent** in a new chat and click **Install
 
 ## Update an agent
 
-Termul compares your agents with the online registry when it starts and every 24 hours. To check right now, click **Check for updates** in **Settings** > **AI Agents**. The line under the button says how many updates exist and when Termul last checked.
+Termul compares your agents with the online registry when it starts and every 24 hours. To check right now, click **Check for updates** in **Settings** > **Agent chats**. The line under the button says how many updates exist and when Termul last checked.
 
 1. Find the agent in the list. An agent with an update shows its current and new version, for example `0.9.0 → 0.10.0`.
 2. Click **Update to** followed by the version number.

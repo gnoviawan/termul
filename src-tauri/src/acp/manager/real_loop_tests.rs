@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 const MOCK_AGENT: &str = r#"
-import json, os, subprocess, sys
+import json, os, subprocess, sys, time
 
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
@@ -29,16 +29,35 @@ def chunk(text):
                    "content": {"type": "text", "text": text}}}})
 
 hung = None
+auth = None
 for line in sys.stdin:
     line = line.strip()
     if not line:
         continue
     msg = json.loads(line)
     method, rid = msg.get("method"), msg.get("id")
-    if method == "initialize":
+    if method is None and rid == 950:
+        # Codex device-code sign-in: accept waits for the login, then
+        # completes the elicitation and resolves authenticate.
+        if msg.get("result", {}).get("action") == "accept":
+            send({"jsonrpc": "2.0", "method": "elicitation/complete",
+                  "params": {"elicitationId": "login-1"}})
+            send({"jsonrpc": "2.0", "id": auth, "result": {}})
+        else:
+            send({"jsonrpc": "2.0", "id": auth, "error": {
+                "code": -32800, "message": "device code sign-in was cancelled"}})
+        auth = None
+    elif method == "authenticate":
+        auth = rid
+        send({"jsonrpc": "2.0", "id": 950, "method": "elicitation/create", "params": {
+            "mode": "url", "requestId": rid, "elicitationId": "login-1",
+            "url": "https://auth.example.com/device",
+            "message": "Sign in and enter this code: ABCD-1234"}})
+    elif method == "initialize":
         send({"jsonrpc": "2.0", "id": rid, "result": {
             "protocolVersion": 1,
-            "agentCapabilities": {"sessionCapabilities": {"close": {}}},
+            "agentCapabilities": {"loadSession": True,
+                                  "sessionCapabilities": {"close": {}, "resume": {}}},
             "authMethods": []}})
     elif method == "session/new":
         send({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": "mock-1"}})
@@ -47,6 +66,11 @@ for line in sys.stdin:
         if text == "ok":
             chunk("hello")
             send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": "end_turn"}})
+        elif text == "autonomous":
+            # Ends the turn, then keeps working with no prompt open.
+            send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": "end_turn"}})
+            time.sleep(0.3)
+            chunk("on my own")
         elif text == "rpcfail":
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32000, "message": "mock failure"}})
@@ -82,6 +106,9 @@ for line in sys.stdin:
             hung = None
     elif method == "session/close":
         send({"jsonrpc": "2.0", "id": rid, "result": {}})
+    elif method in ("session/load", "session/resume"):
+        send({"jsonrpc": "2.0", "id": rid,
+              "error": {"code": -32603, "message": "reopen reached the agent"}})
 "#;
 
 /// Serializes every test that reads or writes process-global ACP timeout state:
@@ -91,16 +118,16 @@ for line in sys.stdin:
 /// `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS`. It covers all real-loop tests and
 /// the override and precedence tests in `manager/tests.rs`. A real-loop test
 /// therefore never inherits another test's timeout, and vice versa.
-pub(super) static TIMEOUT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) static TIMEOUT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Opt-out for hosts without a Python interpreter. Without it a missing
 /// interpreter is a hard failure: these are the only tests that drive the
 /// production `SendPrompt` arm, `race_turn` and the crash teardown.
-const SKIP_ENV: &str = "TERMUL_SKIP_REAL_LOOP_TESTS";
+pub(crate) const SKIP_ENV: &str = "TERMUL_SKIP_REAL_LOOP_TESTS";
 
 /// First interpreter on PATH that runs (`python3`, then `python` for
 /// Windows runners).
-fn find_python() -> Option<&'static str> {
+pub(crate) fn find_python() -> Option<&'static str> {
     ["python3", "python"].into_iter().find(|candidate| {
         std::process::Command::new(candidate)
             .arg("--version")
@@ -1102,6 +1129,143 @@ async fn close_session_waits_out_an_agent_that_ignores_the_cancel() {
     h.finish().await;
 }
 
+/// Reopening a chat on the agent that holds its session live (a PWA reopen of
+/// an idle chat) is answered by the host. claude-acp rebuilds a live session
+/// when any reopen input differs from the one it was created with, and the
+/// rebuild kills the session's background shells and subagents. The mock
+/// fails every `session/load` and `session/resume` that reaches it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reopen_of_a_session_the_agent_holds_never_reaches_the_agent() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let tokens_before = h.acp.host_plan_server.tokens_bound_to(&h.session_id.0);
+    let resume = h
+        .acp
+        .resume_session(
+            &h.agent_id,
+            h.session_id.clone(),
+            h.dir.to_string_lossy().to_string(),
+            Vec::new(),
+            Some(Vec::new()),
+        )
+        .await;
+    let load = h
+        .acp
+        .load_session(
+            &h.agent_id,
+            h.session_id.clone(),
+            h.dir.to_string_lossy().to_string(),
+            Vec::new(),
+            Some(Vec::new()),
+        )
+        .await;
+    let unheld = h
+        .acp
+        .resume_session(
+            &h.agent_id,
+            SessionId("mock-unheld".to_string()),
+            h.dir.to_string_lossy().to_string(),
+            Vec::new(),
+            Some(Vec::new()),
+        )
+        .await;
+
+    assert_eq!(resume.map(|outcome| outcome.models), Ok(None));
+    assert_eq!(load.map(|outcome| outcome.models), Ok(None));
+    assert_eq!(tokens_before.len(), 1, "{tokens_before:?}");
+    assert_eq!(
+        h.acp.host_plan_server.tokens_bound_to(&h.session_id.0),
+        tokens_before,
+        "the agent keeps the plan token it holds"
+    );
+    let error = unheld.expect_err("a session the agent does not hold still reopens on the agent");
+    assert!(error.contains("reopen reached the agent"), "{error}");
+    h.finish().await;
+}
+
+/// The `working` value of every `agent_working` event in `log`, in order.
+fn working_events(log: &EventLog) -> Vec<bool> {
+    log.0
+        .lock()
+        .iter()
+        .filter(|(type_, _)| type_ == crate::acp::events::EVENT_AGENT_WORKING)
+        .map(|(_, payload)| payload["working"].as_bool().expect("working flag"))
+        .collect()
+}
+
+async fn wait_for_working_events(log: &EventLog, expected: &[bool]) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while working_events(log) != expected {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "agent_working events {:?}, want {expected:?}",
+            working_events(log)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// An agent that streams after its prompt turn ended works on its own (Claude
+/// Code after a background task finished). Every sink hears it, the agent
+/// listing names the session for clients that open it later, the idle reaper
+/// keeps the agent, and the next prompt turn takes over.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_after_a_turn_reports_the_agent_working_until_the_next_prompt() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let first = spawn_turn(&h, "autonomous", "t1").await;
+    tokio::time::timeout(RUN_TIMEOUT, first)
+        .await
+        .expect("the turn ends")
+        .expect("turn task")
+        .expect("turn ok");
+    for log in &h.logs {
+        wait_for_working_events(log, &[true]).await;
+    }
+    let summaries = h.acp.list_agent_summaries_with_ownership().await;
+    let summary = summaries
+        .iter()
+        .find(|summary| summary.id == h.agent_id)
+        .expect("the agent is listed");
+    assert_eq!(summary.working_sessions, vec![h.session_id.0.clone()]);
+    wait_for_activity(&h, |activity| activity.unprompted_sessions == 1).await;
+
+    let second = spawn_turn(&h, "ok", "t2").await;
+    let _ = tokio::time::timeout(RUN_TIMEOUT, second).await;
+    for log in &h.logs {
+        wait_for_working_events(log, &[true, false]).await;
+    }
+    h.finish().await;
+}
+
+/// Stop with no prompt turn open ends the agent's own work at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stop_without_a_turn_ends_the_agents_own_work() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let first = spawn_turn(&h, "autonomous", "t1").await;
+    tokio::time::timeout(RUN_TIMEOUT, first)
+        .await
+        .expect("the turn ends")
+        .expect("turn task")
+        .expect("turn ok");
+    wait_for_working_events(&h.logs[0], &[true]).await;
+
+    h.acp
+        .cancel_prompt(&h.agent_id, h.session_id.clone())
+        .await
+        .expect("cancel reaches the agent");
+
+    for log in &h.logs {
+        wait_for_working_events(log, &[true, false]).await;
+    }
+    wait_for_activity(&h, |activity| activity.unprompted_sessions == 0).await;
+    h.finish().await;
+}
+
 /// CPU time, in clock ticks, of the thread of this process whose `comm` is
 /// `name` (`utime + stime` from `/proc/self/task/<tid>/stat`).
 #[cfg(target_os = "linux")]
@@ -1171,3 +1335,6 @@ async fn idle_agent_driver_thread_stays_parked() {
         "the idle acp-agent thread used {used} of {ticks_per_second} clock ticks per second over 2 s"
     );
 }
+
+#[path = "real_loop_sign_in_tests.rs"]
+mod sign_in;

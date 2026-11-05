@@ -110,13 +110,21 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         {
             handle_respond_host_ticket(id, &req.payload, env)
         }
-        "respond_permission" => handle_respond_permission(id, &req.payload, relay, env.connection_id).await,
+        "respond_permission" => {
+            let reply = handle_respond_permission(id, &req.payload, relay, env.connection_id).await;
+            relay.refresh_pending_chat_activity();
+            reply
+        }
         "browser_stop" => handle_browser_stop(id, &req.payload, env),
         // Issue #411: `answer_question` — route the browser's structured-question
         // answer through the server-side question rendezvous (first-response-wins,
         // TOCTOU re-validation) to `AcpManager::answer_question`, which resolves
         // the agent's `Responder` on the driver thread.
-        "answer_question" => handle_answer_question(id, &req.payload, relay, env.connection_id).await,
+        "answer_question" => {
+            let reply = handle_answer_question(id, &req.payload, relay, env.connection_id).await;
+            relay.refresh_pending_chat_activity();
+            reply
+        }
         // Story 1.8: ACP command forwarding → `AcpManager`. The streaming events
         // (`message_chunk`, `tool_call`, `prompt_complete`, `session_created`,
         // `config_options_update`, …) flow back automatically through the
@@ -161,12 +169,18 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "update_project" => handle_update_project(id, &req.payload, env).await,
         "remove_project" => handle_remove_project(id, &req.payload, env).await,
         "spawn_agent" => handle_spawn_agent(id, &req.payload, acp, req.command_id.clone()).await,
-        // Claude Accounts: view and choose only. Add, sign-in, rename and
-        // remove stay on the host (desktop UI / `termul-server claude account`).
+        // Claude Accounts: view, choose, add, rename, remove and link sign-in.
         "list_claude_accounts" => handle_list_claude_accounts(id, acp).await,
         "list_claude_usage" => handle_list_claude_usage(id, &req.payload, acp).await,
         "set_default_claude_account" => handle_set_default_claude_account(id, &req.payload, acp).await,
         "set_project_claude_account" => handle_set_project_claude_account(id, &req.payload, acp).await,
+        "set_claude_auto_switch" => handle_set_claude_auto_switch(id, &req.payload, acp).await,
+        "add_claude_account" => handle_add_claude_account(id, &req.payload, acp).await,
+        "rename_claude_account" => handle_rename_claude_account(id, &req.payload, acp).await,
+        "remove_claude_account" => handle_remove_claude_account(id, &req.payload, acp).await,
+        "start_claude_link_login" => handle_start_claude_link_login(id, &req.payload, acp).await,
+        "finish_claude_link_login" => handle_finish_claude_link_login(id, &req.payload, acp).await,
+        "cancel_claude_login" => handle_cancel_claude_login(id, &req.payload, acp).await,
         // CAP-6 / Story 8: host-owned ACP catalog resolution. The catalog
         // carries the host's OS/arch/runtime availability + per-agent
         // resolved `SupportedAcpAgentStatus`. The web client never probes
@@ -185,6 +199,25 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         // registry snapshot. Shares its service with `GET /mcp-catalog/search`.
         "search_mcp_catalog" => {
             mcp_catalog::handle_search_mcp_catalog(id, &req.payload).await
+        }
+        "get_mcp_catalog_status" => mcp_catalog::handle_get_mcp_catalog_status(id).await,
+        "set_mcp_catalog_sync" => {
+            mcp_catalog::handle_set_mcp_catalog_sync(id, &req.payload).await
+        }
+        "describe_mcp_install" => {
+            mcp_catalog::handle_describe_mcp_install(id, &req.payload).await
+        }
+        "plan_mcp_install" => {
+            mcp_catalog::handle_plan_mcp_install(id, &req.payload, env).await
+        }
+        "commit_mcp_install" => {
+            mcp_catalog::handle_commit_mcp_install(id, &req.payload, env).await
+        }
+        "cancel_mcp_install" => {
+            mcp_catalog::handle_cancel_mcp_install(id, &req.payload, env).await
+        }
+        "get_mcp_catalog_icon" => {
+            mcp_catalog::handle_get_mcp_catalog_icon(id, &req.payload).await
         }
         // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web
         // client installs a catalog agent through `install_acp_agent`; the
@@ -217,7 +250,11 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "authenticate_agent" => handle_authenticate_agent(id, &req.payload, acp).await,
         "logout_agent" => handle_logout_agent(id, &req.payload, acp).await,
         "delete_agent_session" => handle_delete_agent_session(id, &req.payload, acp).await,
-        "respond_elicitation" => handle_respond_elicitation(id, &req.payload, acp).await,
+        "respond_elicitation" => {
+            let reply = handle_respond_elicitation(id, &req.payload, acp, relay).await;
+            relay.refresh_pending_chat_activity();
+            reply
+        }
         // Paste-back half of the headless browser-auth flow
         // (spec-acp-terminal-auth): the client delivers the failed loopback
         // redirect URL; the host validates loopback-only then replays it.
@@ -232,6 +269,7 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
             handle_record_agent_switch(id, &req.payload, acp, relay, history_mode).await
         }
         "cancel_prompt" => handle_cancel_prompt(id, &req.payload, acp).await,
+        "stop_subagent" => handle_stop_subagent(id, &req.payload, acp).await,
         "set_mode" => handle_set_mode(id, &req.payload, acp).await,
         "set_model" => handle_set_model(id, &req.payload, acp).await,
         "set_config_option" => handle_set_config_option(id, &req.payload, acp).await,

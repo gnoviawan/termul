@@ -1,9 +1,6 @@
-//! The bundled registry snapshot (AD-3). Dev and test builds embed the
-//! committed fixture in `resources/mcp-registry/`; the release workflow
-//! overwrites those two files with the full fetch from its secret-less
-//! snapshot job before `cargo build`. Loading verifies the recorded sha256,
-//! and any failure leaves an empty catalog rather than a panic.
+//! The bundled registry snapshot (AD-3).
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Read;
 
@@ -14,6 +11,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::convert::{convert, safe_repository_url, CatalogOption, RegistryServer};
+use super::icon::{self, IconSource};
 
 const EMBEDDED_SNAPSHOT: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -26,9 +24,9 @@ const EMBEDDED_META: &str = include_str!(concat!(
 
 const SNAPSHOT_FORMAT_VERSION: u32 = 1;
 const MAX_SNAPSHOT_JSON_BYTES: u64 = 256 * 1024 * 1024;
-const OFFICIAL_META: &str = "io.modelcontextprotocol.registry/official";
+pub(super) const OFFICIAL_META: &str = "io.modelcontextprotocol.registry/official";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RegistryStatus {
     Active,
@@ -45,15 +43,62 @@ pub(crate) struct CatalogItem {
     pub version: String,
     pub status: RegistryStatus,
     pub repository_url: Option<String>,
+    pub icon: Option<IconSource>,
     /// `None` when the row did not parse: the item shows as unsupported.
-    pub options: Option<Vec<CatalogOption>>,
+    pub parsed: Option<ParsedItem>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ParsedItem {
+    pub server: RegistryServer,
+    pub options: Vec<CatalogOption>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct McpCatalogSource {
+    pub updated_at: Option<String>,
+    pub sample: bool,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct LoadedCatalog {
     /// Sorted by name, one per name.
     pub items: Vec<CatalogItem>,
-    pub fetched_at: Option<String>,
+    pub source: McpCatalogSource,
+}
+
+impl LoadedCatalog {
+    pub(crate) fn from_items(items: Vec<CatalogItem>, source: McpCatalogSource) -> Self {
+        Self::default().with_changes(
+            items
+                .into_iter()
+                .map(|item| (item.name.clone(), Some(item))),
+            source,
+        )
+    }
+
+    pub(crate) fn with_changes(
+        &self,
+        changes: impl IntoIterator<Item = (String, Option<CatalogItem>)>,
+        source: McpCatalogSource,
+    ) -> Self {
+        let mut items: BTreeMap<String, CatalogItem> = self
+            .items
+            .iter()
+            .map(|item| (item.name.clone(), item.clone()))
+            .collect();
+        for (name, item) in changes {
+            match item {
+                Some(item) => items.insert(name, item),
+                None => items.remove(&name),
+            };
+        }
+        Self {
+            items: items.into_values().collect(),
+            source,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -86,6 +131,8 @@ impl fmt::Display for SnapshotError {
 struct SnapshotMeta {
     sha256: String,
     fetched_at: String,
+    #[serde(default)]
+    sample: bool,
 }
 
 #[derive(Deserialize)]
@@ -106,13 +153,14 @@ pub(crate) fn load_or_empty(gz: &[u8], meta: &str) -> LoadedCatalog {
             let unparseable = catalog
                 .items
                 .iter()
-                .filter(|item| item.options.is_none())
+                .filter(|item| item.parsed.is_none())
                 .count();
             log::info!(
-                "[mcp-catalog] snapshot loaded items={} unparseable={} fetched_at={}",
+                "[mcp-catalog] snapshot loaded items={} unparseable={} fetched_at={} sample={}",
                 catalog.items.len(),
                 unparseable,
-                catalog.fetched_at.as_deref().unwrap_or("")
+                catalog.source.updated_at.as_deref().unwrap_or(""),
+                catalog.source.sample
             );
             catalog
         }
@@ -148,7 +196,10 @@ pub(crate) fn load(gz: &[u8], meta: &str) -> Result<LoadedCatalog, SnapshotError
     items.dedup_by(|a, b| a.name == b.name);
     Ok(LoadedCatalog {
         items,
-        fetched_at: Some(meta.fetched_at),
+        source: McpCatalogSource {
+            updated_at: Some(meta.fetched_at),
+            sample: meta.sample,
+        },
     })
 }
 
@@ -194,16 +245,21 @@ pub(crate) fn item_from_row(mut row: Value) -> Option<CatalogItem> {
     let (title, description, version) = (text("title"), text("description"), text("version"));
     Some(match RegistryServer::deserialize(server) {
         Ok(parsed) => CatalogItem {
-            options: Some(convert(&parsed)),
+            icon: icon::pick(&parsed.icons),
             repository_url: parsed
                 .repository
-                .and_then(|repository| repository.url)
-                .and_then(|url| safe_repository_url(&url)),
+                .as_ref()
+                .and_then(|repository| repository.url.as_deref())
+                .and_then(safe_repository_url),
             name,
-            title: parsed.title,
-            description: parsed.description,
-            version: parsed.version,
+            title: parsed.title.clone(),
+            description: parsed.description.clone(),
+            version: parsed.version.clone(),
             status,
+            parsed: Some(ParsedItem {
+                options: convert(&parsed),
+                server: parsed,
+            }),
         },
         Err(_) => CatalogItem {
             name,
@@ -212,7 +268,8 @@ pub(crate) fn item_from_row(mut row: Value) -> Option<CatalogItem> {
             version: version.unwrap_or_default(),
             status,
             repository_url: None,
-            options: None,
+            icon: None,
+            parsed: None,
         },
     })
 }

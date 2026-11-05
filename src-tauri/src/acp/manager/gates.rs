@@ -164,9 +164,20 @@ pub(super) fn to_auth_method_infos(methods: &[AuthMethod]) -> Vec<AuthMethodInfo
                 r#type: r#type.to_string(),
                 args,
                 env,
+                api_key: api_key_shape(m.meta()),
             }
         })
         .collect()
+}
+
+/// The key shape an advertised `_meta["api-key"]` asks for, from the provider
+/// it names. An unknown provider gets none rather than a guessed shape.
+fn api_key_shape(meta: Option<&Meta>) -> Option<ApiKeyShape> {
+    match meta?.get("api-key")?.get("provider")?.as_str()? {
+        "openai" => Some(ApiKeyShape::Object),
+        "google" => Some(ApiKeyShape::Text),
+        _ => None,
+    }
 }
 
 /// Capability gate for `session/load`: requires the agent's `loadSession`
@@ -261,6 +272,56 @@ impl ConfigOptionValue {
             Value::Bool(flag) => Ok(Self::Bool(*flag)),
             Value::String(text) => Ok(Self::Text(text.clone())),
             _ => Err("config option value must be a string or a boolean".to_string()),
+        }
+    }
+}
+
+/// A key typed into Termul for an API-key sign-in. Its `Debug` never prints
+/// it, and it is never logged or stored.
+#[derive(Clone)]
+pub struct ApiKey(String);
+
+impl ApiKey {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        let key = raw.trim();
+        if key.is_empty() {
+            return Err("the API key is empty".to_string());
+        }
+        if key.chars().any(char::is_control) {
+            return Err("the API key contains a control character".to_string());
+        }
+        Ok(Self(key.to_string()))
+    }
+
+    pub(super) fn secret(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ApiKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ApiKey(<redacted>)")
+    }
+}
+
+/// What a sign-in hands the agent beyond the method id.
+#[derive(Debug, Clone)]
+pub enum AuthCredential {
+    Gateway(GatewayAuthInput),
+    ApiKey(ApiKey),
+}
+
+impl AuthCredential {
+    /// `text` with every copy of the carried key replaced: an agent's error
+    /// may echo what it was given.
+    pub(super) fn redact(&self, text: String) -> String {
+        let secret = match self {
+            Self::Gateway(gateway) => gateway.api_key.as_deref(),
+            Self::ApiKey(key) => Some(key.secret()),
+        };
+        match secret.filter(|secret| !secret.is_empty()) {
+            Some(secret) => text.replace(secret, "<redacted>"),
+            None => text,
         }
     }
 }
@@ -461,9 +522,10 @@ pub(super) struct AgentRuntimeProfile {
     /// summarized thinking display. The chat already renders `agent_thought_chunk`
     /// as a Thought row.
     pub(super) summarize_thinking: bool,
-    /// Claude Agent ACP versions that send native subagent sessions in the
-    /// AIR draft form: advertise `subagents` so each subagent reports its
-    /// real end (`native_subagents.rs`).
+    /// Claude and Codex ACP versions that send native subagent sessions (AIR
+    /// draft or RFD form): advertise `subagents` so each subagent reports its
+    /// real end and can be stopped. Gates only the advertisement; the router in
+    /// `native_subagents.rs` handles subagent updates from any agent.
     pub(super) native_subagents: bool,
 }
 
@@ -494,6 +556,65 @@ pub(super) fn summarized_thinking_meta() -> Meta {
     )])
 }
 
+/// `meta` plus the Claude Agent ACP options of a headless session. Claude
+/// Code reads, searches and runs some tools inside its cwd without asking,
+/// so the host also limits its built-in tools to the ones `allowlist` names
+/// and denies the protected paths in the flag settings tier. It loads no
+/// settings files, so no saved allow rule, hook or sandbox auto-allow runs a
+/// tool without asking the host, and it offers no bypass mode. Other agents
+/// ignore `claudeCode`.
+pub(super) fn with_headless_options(
+    mut meta: Meta,
+    allowlist: &crate::acp::session::ToolAllowlist,
+) -> Meta {
+    use agent_client_protocol::schema::v1::ToolKind;
+    const CLAUDE_TOOLS: [(ToolKind, &[&str]); 5] = [
+        (ToolKind::Read, &["Read"]),
+        (ToolKind::Search, &["Grep", "Glob"]),
+        (ToolKind::Edit, &["Edit", "Write", "NotebookEdit"]),
+        (ToolKind::Execute, &["Bash", "BashOutput", "KillShell"]),
+        (ToolKind::Fetch, &["WebFetch", "WebSearch"]),
+    ];
+    let tools: Vec<&str> = CLAUDE_TOOLS
+        .iter()
+        .filter(|(kind, _)| allowlist.allows(*kind))
+        .flat_map(|(_, names)| names.iter().copied())
+        .collect();
+    let deny: Vec<String> = crate::acp::session::PROTECTED_DIRS
+        .iter()
+        .map(|dir| format!("**/{dir}/**"))
+        .chain(
+            crate::acp::session::PROTECTED_FILES
+                .iter()
+                .map(|file| format!("**/{file}")),
+        )
+        .chain(["**/.env*".to_string()])
+        .flat_map(|pattern| [format!("Read({pattern})"), format!("Edit({pattern})")])
+        .collect();
+    let claude = meta
+        .entry("claudeCode".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !claude.is_object() {
+        *claude = serde_json::json!({});
+    }
+    let options = claude
+        .as_object_mut()
+        .map(|c| c.entry("options".to_string()).or_insert_with(|| serde_json::json!({})));
+    if let Some(serde_json::Value::Object(options)) = options {
+        options.insert("settingSources".to_string(), serde_json::json!([]));
+        options.insert(
+            "allowDangerouslySkipPermissions".to_string(),
+            serde_json::json!(false),
+        );
+        options.insert("tools".to_string(), serde_json::json!(tools));
+        options.insert(
+            "settings".to_string(),
+            serde_json::json!({ "permissions": { "deny": deny } }),
+        );
+    }
+    meta
+}
+
 impl AgentRuntimeProfile {
     pub(super) fn resolve(config: &AgentConfig) -> Self {
         let factory_droid = crate::acp::factory_key::is_factory_droid(config);
@@ -502,8 +623,7 @@ impl AgentRuntimeProfile {
             lenient_config_option_ack: factory_droid,
             mask_failure_details: factory_droid,
             summarize_thinking: requests_summarized_thinking(config),
-            native_subagents: requests_summarized_thinking(config)
-                && super::native_subagents::uses_air_native_subagents(config),
+            native_subagents: super::native_subagents::uses_native_subagents(config),
         }
     }
 }

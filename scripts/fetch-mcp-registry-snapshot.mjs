@@ -49,6 +49,7 @@ export function verifySnapshot(dir, minServers = MIN_RELEASE_SERVERS) {
   const sha256 = createHash('sha256').update(gz).digest('hex')
   if (sha256 !== meta.sha256)
     throw new Error(`snapshot sha256 ${sha256} does not match ${meta.sha256}`)
+  if (meta.sample) throw new Error('snapshot is the --only sample, not a release snapshot')
   const snapshot = JSON.parse(gunzipSync(gz).toString('utf8'))
   if (snapshot.formatVersion !== 1) throw new Error(`snapshot format ${snapshot.formatVersion}`)
   if (snapshot.servers.length !== meta.servers || snapshot.servers.length < minServers) {
@@ -113,14 +114,28 @@ export async function crawl(fetcher = fetchPage) {
   throw new Error(`registry crawl did not finish within ${MAX_PAGES} pages`)
 }
 
-// The host never reads these: icons are never fetched (AD-15), publisher
-// `_meta` is enrichment (deferred), and parsing never depends on `$schema`.
-const DROPPED_SERVER_FIELDS = new Set(['$schema', 'icons', '_meta'])
+export const DROPPED_SERVER_FIELDS = new Set(['$schema', '_meta'])
+export const ICON_FIELDS = ['src', 'mimeType', 'sizes', 'theme']
+
+function slimIcons(icons) {
+  if (!Array.isArray(icons)) return undefined
+  return icons
+    .filter((icon) => typeof icon?.src === 'string')
+    .map((icon) =>
+      Object.fromEntries(ICON_FIELDS.filter((key) => key in icon).map((key) => [key, icon[key]]))
+    )
+}
 
 function slimServer(server) {
-  return Object.fromEntries(
+  const slim = Object.fromEntries(
     Object.entries(server).filter(([key]) => !DROPPED_SERVER_FIELDS.has(key))
   )
+  if ('icons' in slim) {
+    const icons = slimIcons(slim.icons)
+    if (icons?.length) slim.icons = icons
+    else delete slim.icons
+  }
+  return slim
 }
 
 /**
@@ -190,7 +205,8 @@ async function main() {
     fetchedAt,
     bytes: gz.length,
     servers: snapshot.servers.length,
-    versions: snapshot.versions.length
+    versions: snapshot.versions.length,
+    ...(only && { sample: true })
   }
   mkdirSync(opts.out, { recursive: true })
   writeAtomic(resolve(opts.out, SNAPSHOT_FILE), gz)

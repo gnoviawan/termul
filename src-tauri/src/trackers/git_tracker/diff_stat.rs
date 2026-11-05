@@ -29,7 +29,7 @@ pub(super) const MAX_UNTRACKED_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Added / removed lines of one changed file. `path` is relative to the
 /// repository root, like `git status --porcelain` paths.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitFileDiffStat {
     pub path: String,
@@ -39,7 +39,7 @@ pub struct GitFileDiffStat {
 
 /// Added / removed line totals for a working tree, plus the per-file rows
 /// they sum (tracked files sorted by path, then untracked files).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffStat {
     pub added: u64,

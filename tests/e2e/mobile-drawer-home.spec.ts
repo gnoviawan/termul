@@ -37,8 +37,8 @@ test.setTimeout(120_000)
 /** The id of the shell header's `h1`: where a navigation hands focus (else the opener). */
 const SHELL_TITLE_ID = 'mobile-shell-title'
 
-/** The footer's healthy reading: the status and the host this client talks to (V-12). */
-const CONNECTED_TEXT = `Connected · ${new URL(E2E_BASE_URL).host}`
+/** The footer's healthy reading: screen-reader text beside the lamp. */
+const CONNECTED_TEXT = 'Connected'
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

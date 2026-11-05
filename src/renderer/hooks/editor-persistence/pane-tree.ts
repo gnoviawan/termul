@@ -5,10 +5,12 @@ import { reportUnknownTabKind } from '@/lib/workspace-tab-kinds'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 import {
+  automationsTabId,
   browserTabId,
   commitDiffTabId,
   diffTabId,
   editorTabId,
+  githubItemTabId,
   terminalTabId
 } from '@/stores/workspace-store'
 import type { Terminal } from '@/types/project'
@@ -38,6 +40,18 @@ export function serializePaneTree(node: PaneNode): PersistedPaneNode {
           return [{ type: 'agent-chat', id: tab.id, sessionId: tab.sessionId }]
         case 'git-history':
           return [{ type: 'git-history', id: tab.id, cwd: tab.cwd }]
+        case 'github-item':
+          return [
+            {
+              type: 'github-item',
+              id: tab.id,
+              cwd: tab.cwd,
+              repo: tab.repo,
+              kind: tab.kind,
+              number: tab.number,
+              title: tab.title
+            }
+          ]
         case 'diff':
           return [{ type: 'diff', id: tab.id, cwd: tab.cwd, path: tab.path, staged: tab.staged }]
         case 'commit-diff':
@@ -51,6 +65,8 @@ export function serializePaneTree(node: PaneNode): PersistedPaneNode {
               ...(tab.oldPath ? { oldPath: tab.oldPath } : {})
             }
           ]
+        case 'automations':
+          return [{ type: 'automations', id: tab.id, projectId: tab.projectId }]
         case 'canvas':
           // Not persisted (see WORKSPACE_TAB_KIND_TRAITS): the canvas re-opens
           // user-initiated.
@@ -221,8 +237,10 @@ export function reconcileTerminalTabs(
           case 'git':
           case 'agent-chat':
           case 'git-history':
+          case 'github-item':
           case 'diff':
           case 'commit-diff':
+          case 'automations':
             return [tab]
           case 'canvas':
             // Canvas tabs: the mount/iframe runtime is host-local state, never
@@ -314,6 +332,43 @@ function restoreCommitDiff(ref: {
   ]
 }
 
+/** A persisted GitHub item ref as a tab; a malformed ref is dropped with one warn. */
+function restoreGithubItem(ref: {
+  cwd?: unknown
+  repo?: unknown
+  kind?: unknown
+  number?: unknown
+  title?: unknown
+}): WorkspaceTab[] {
+  if (
+    typeof ref.cwd !== 'string' ||
+    (ref.repo !== 'origin' && ref.repo !== 'upstream') ||
+    (ref.kind !== 'issue' && ref.kind !== 'pr') ||
+    typeof ref.number !== 'number' ||
+    !Number.isSafeInteger(ref.number) ||
+    ref.number <= 0
+  ) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'useEditorPersistence.deserializePaneTree',
+      message:
+        'Dropped malformed GitHub item tab (cwd/repo/kind/number invalid) during workspace restore'
+    })
+    return []
+  }
+  return [
+    {
+      type: 'github-item',
+      id: githubItemTabId(ref.cwd, ref.repo, ref.number),
+      cwd: ref.cwd,
+      repo: ref.repo,
+      kind: ref.kind,
+      number: ref.number,
+      title: typeof ref.title === 'string' ? ref.title : ''
+    }
+  ]
+}
+
 // Deserialize pane tree with full tab mapping
 export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode {
   if (persisted.type === 'leaf') {
@@ -381,6 +436,22 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
                 cwd: tab.cwd
               }
             ]
+          case 'automations':
+            if (typeof tab.projectId !== 'string') {
+              void logFrontendError({
+                level: 'warn',
+                source: 'useEditorPersistence.deserializePaneTree',
+                message: 'Dropped automations tab with a missing projectId during workspace restore'
+              })
+              return []
+            }
+            return [
+              {
+                type: 'automations',
+                id: automationsTabId(tab.projectId),
+                projectId: tab.projectId
+              }
+            ]
           case 'diff': {
             // Never coerce a malformed diff ref: drop it with one warn.
             if (
@@ -408,6 +479,8 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
           }
           case 'commit-diff':
             return restoreCommitDiff(tab)
+          case 'github-item':
+            return restoreGithubItem(tab)
           case 'terminal':
             return [
               {

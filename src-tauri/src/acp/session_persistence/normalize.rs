@@ -23,6 +23,7 @@ pub fn is_durable_event(type_: &str) -> bool {
         "permission_request"
             | "browser_ticket_closed"
             | "browser_stop_changed"
+            | "agent_working"
             | "auth_required"
             | "agent_spawned"
             | "agent_disconnected"
@@ -32,6 +33,14 @@ pub fn is_durable_event(type_: &str) -> bool {
 
 pub(super) fn is_tool_event(type_: &str) -> bool {
     matches!(type_, "tool_call" | "tool_call_update")
+}
+
+/// True for a record that lives in `tool-calls.jsonl`: tool events and the
+/// text a subagent writes under its dispatch. Subagent work then sits in the
+/// log a tail payload reads whole, so a reopened chat restores each
+/// subagent's text however far back it ran.
+pub(super) fn is_tool_log_record(type_: &str, payload: &Value) -> bool {
+    is_tool_event(type_) || (type_ == "message_chunk" && is_subagent_chunk(payload))
 }
 
 /// True when the record participates in the transcript fold
@@ -274,6 +283,126 @@ fn add_file_change_summary(
     }
 }
 
+/// Longest durable subagent record (serialized bytes).
+const MAX_DURABLE_SUBAGENT_BYTES: usize = 16 * 1024;
+/// Longest durable subagent control marker (serialized bytes).
+const MAX_DURABLE_SUBAGENT_CONTROL_BYTES: usize = 4 * 1024;
+const MAX_DURABLE_PARENT_TOOL_USE_ID_CHARS: usize = 512;
+
+fn serialized_len(value: &Value) -> usize {
+    serde_json::to_string(value).map_or(usize::MAX, |text| text.len())
+}
+
+/// The durable part of a tool event's `_meta`: the host's subagent record
+/// (`termul/subagent`) and control marker (`termul/subagentControl`), each
+/// bounded, and `claudeCode.parentToolUseId`. Nothing else from `_meta`.
+/// These values are host-written (the router strips agent-sent copies) and
+/// skip `sanitize_value`, whose secret-key rule would erase the record's
+/// token counts. A record over the bound loses its prompt first, then is
+/// dropped.
+fn durable_subagent_meta(tool: &serde_json::Map<String, Value>) -> Option<Value> {
+    use crate::acp::subagents::{SUBAGENT_CONTROL_META_KEY, SUBAGENT_META_KEY};
+    let meta = tool.get("_meta")?.as_object()?;
+    let mut kept = serde_json::Map::new();
+    if let Some(record) = meta.get(SUBAGENT_META_KEY) {
+        let mut record = record.clone();
+        if record.is_object() && serialized_len(&record) > MAX_DURABLE_SUBAGENT_BYTES {
+            if let Some(fields) = record.as_object_mut() {
+                fields.remove("prompt");
+            }
+            log::warn!("[acp] persistence: dropped an oversized subagent prompt");
+        }
+        if record.is_object() && serialized_len(&record) <= MAX_DURABLE_SUBAGENT_BYTES {
+            kept.insert(SUBAGENT_META_KEY.to_string(), record);
+        } else {
+            log::warn!("[acp] persistence: dropped a malformed or oversized subagent record");
+        }
+    }
+    if let Some(control) = meta.get(SUBAGENT_CONTROL_META_KEY) {
+        if control.is_object() && serialized_len(control) <= MAX_DURABLE_SUBAGENT_CONTROL_BYTES {
+            kept.insert(SUBAGENT_CONTROL_META_KEY.to_string(), control.clone());
+        } else {
+            log::warn!(
+                "[acp] persistence: dropped a malformed or oversized subagent control marker"
+            );
+        }
+    }
+    let parent = meta
+        .get("claudeCode")
+        .and_then(|claude| claude.get("parentToolUseId"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty() && id.chars().count() <= MAX_DURABLE_PARENT_TOOL_USE_ID_CHARS);
+    if let Some(parent) = parent {
+        kept.insert(
+            "claudeCode".to_string(),
+            serde_json::json!({ "parentToolUseId": parent }),
+        );
+    }
+    (!kept.is_empty()).then_some(Value::Object(kept))
+}
+
+/// Longest durable title of a subagent's own tool call (characters).
+const MAX_DURABLE_CHILD_TITLE_CHARS: usize = 512;
+/// Longest durable subagent result or text (characters). Same bound as the
+/// renderer's `MAX_SUBAGENT_TEXT_CHARS`.
+pub(crate) const MAX_DURABLE_SUBAGENT_TEXT_CHARS: usize = 8_000;
+
+/// A subagent's own tool call (it names a parent dispatch): keep what its
+/// Activity row shows, the title and path with credentials masked.
+fn add_child_call_summary(
+    tool: &serde_json::Map<String, Value>,
+    reduced: &mut serde_json::Map<String, Value>,
+) {
+    if let Some(title) =
+        crate::acp::subagents::bounded_text(tool.get("title"), MAX_DURABLE_CHILD_TITLE_CHARS)
+    {
+        let masked = crate::acp::manager::stderr_ring::redact_line(title);
+        reduced.insert("title".to_string(), Value::String(masked));
+    }
+    if reduced.contains_key("locations") {
+        return;
+    }
+    if let Some(path) =
+        tool_event_path(tool).filter(|path| path.chars().count() <= MAX_SUMMARY_PATH_CHARS)
+    {
+        let masked = crate::acp::manager::stderr_ring::redact_line(path);
+        reduced.insert(
+            "locations".to_string(),
+            serde_json::json!([{ "path": masked }]),
+        );
+    }
+}
+
+/// The text a subagent dispatch returned (its content's text blocks),
+/// bounded. That text is the subagent's result.
+fn add_subagent_result(
+    tool: &serde_json::Map<String, Value>,
+    reduced: &mut serde_json::Map<String, Value>,
+) {
+    let text = tool
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("content"))
+        .filter_map(|item| item.get("content"))
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let text = Value::String(text);
+    let Some(text) =
+        crate::acp::subagents::bounded_text(Some(&text), MAX_DURABLE_SUBAGENT_TEXT_CHARS)
+    else {
+        return;
+    };
+    reduced.insert(
+        "content".to_string(),
+        serde_json::json!([{ "type": "content", "content": { "type": "text", "text": text } }]),
+    );
+}
+
 pub(super) fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
     if matches!(type_, "tool_call" | "tool_call_update") {
         // Strict DTO: tool-authored free-form content, arguments, output, and
@@ -282,7 +411,12 @@ pub(super) fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
         // host-derived file-change summary for file-changing calls
         // (`add_file_change_summary`: path-only `locations` + `diffStat`
         // counts) so restored sessions can repopulate the Changed files
-        // panel without persisting any diff text.
+        // panel without persisting any diff text, plus the subagent `_meta`
+        // (`durable_subagent_meta`: the host's subagent record or control
+        // marker, and the parent dispatch id) so a reopened chat shows its
+        // subagents and groups their calls under them. A dispatch also keeps
+        // its bounded text result, and a subagent's own call its masked
+        // title and path, so the subagent panel restores Activity and Result.
         let mut event = serde_json::Map::new();
         for field in ["agentId", "sessionId"] {
             if let Some(value) = payload.get(field) {
@@ -302,6 +436,14 @@ pub(super) fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
                 }
             }
             add_file_change_summary(type_, tool, &mut reduced);
+            if let Some(meta) = durable_subagent_meta(tool) {
+                if meta.get(crate::acp::subagents::SUBAGENT_META_KEY).is_some() {
+                    add_subagent_result(tool, &mut reduced);
+                } else if meta.get("claudeCode").is_some() {
+                    add_child_call_summary(tool, &mut reduced);
+                }
+                reduced.insert("_meta".to_string(), meta);
+            }
             event.insert(key.to_string(), Value::Object(reduced));
         }
         Value::Object(event)
@@ -404,7 +546,14 @@ pub(crate) fn normalize_title(text: &str) -> String {
 }
 
 pub(super) fn derive_title(payload: &Value) -> String {
-    let text = payload
+    let text = user_prompt_text(payload).unwrap_or_else(|| "Untitled Chat".to_string());
+    normalize_title(&text)
+}
+
+/// What the user typed in a `user_prompt` payload: its first text block with
+/// handoff and skills framing removed. `None` when it carries no user text.
+pub fn user_prompt_text(payload: &Value) -> Option<String> {
+    payload
         .get("content")
         .and_then(Value::as_array)
         .into_iter()
@@ -415,9 +564,9 @@ pub(super) fn derive_title(payload: &Value) -> String {
                 .flatten()
         })
         // spec-agent-switch-separator-redesign: a legacy framed handoff
-        // `user_prompt` (`summary + --- + draft`) must title the session with
-        // the draft, not the wire header — same strip the materialize fold
-        // applies. `Dropped` (summary-only) → fall through to Untitled.
+        // `user_prompt` (`summary + --- + draft`) yields the draft, not the
+        // wire header — same strip the materialize fold applies. `Dropped`
+        // (summary-only) carries no user text.
         .and_then(
             |text| match crate::acp::session_payload::strip_handoff_display_text(text) {
                 Some(crate::acp::session_payload::HandoffText::Draft(draft)) => Some(draft),
@@ -426,8 +575,6 @@ pub(super) fn derive_title(payload: &Value) -> String {
             },
         )
         .map(|text| skills_framing_title(&text).unwrap_or(text))
-        .unwrap_or_else(|| "Untitled Chat".to_string());
-    normalize_title(&text)
 }
 
 fn skills_framing_title(text: &str) -> Option<String> {
