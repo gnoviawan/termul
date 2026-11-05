@@ -12,6 +12,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { agentReuseKey } from '../../acp-reuse-keys'
 import { ensureLiveAgent, resolveSpawnProject } from '../shared-state'
 import type { AcpState, ImportSessionOutcome } from '../types'
+import { withAuthRetry } from './agent'
 
 type ImportSliceState = Pick<AcpState, 'listImportableSessions' | 'importAgentSessions'>
 
@@ -56,7 +57,9 @@ export const createImportSlice: StateCreator<AcpState, [], [], ImportSliceState>
     const seen = new Set<string>()
     let cursor: string | undefined
     for (let page = 0; page < MAX_LIST_PAGES; page++) {
-      const res = await acpApi.listSessions(agentId, trimmedCwd, cursor)
+      const res = await withAuthRetry(get, agentId, 'session/list', 'text', () =>
+        acpApi.listSessions(agentId, trimmedCwd, cursor)
+      )
       for (const info of res.sessions ?? []) {
         if (seen.has(info.sessionId)) continue
         seen.add(info.sessionId)
@@ -64,6 +67,14 @@ export const createImportSlice: StateCreator<AcpState, [], [], ImportSliceState>
       }
       if (res.nextCursor == null) break
       cursor = res.nextCursor
+    }
+    if (get().agentStatus[agentId] !== 'connected') {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.importSessions.list',
+        message: 'Agent disconnected while listing sessions for import'
+      })
+      return { status: 'unavailable' }
     }
     void logFrontendError({
       level: 'info',

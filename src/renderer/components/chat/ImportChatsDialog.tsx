@@ -153,7 +153,9 @@ function Body({ chats }: { chats: ImportChats }): React.JSX.Element {
   if (phase.kind === 'error') {
     return (
       <div className="flex flex-col items-start gap-2 py-4 text-xs">
-        <p className="text-destructive">{phase.message}</p>
+        <p role="alert" className="text-destructive">
+          {phase.message}
+        </p>
         <Button variant="outline" size="xs" onClick={chats.retry}>
           Try again
         </Button>

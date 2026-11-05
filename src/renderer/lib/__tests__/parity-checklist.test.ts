@@ -3459,7 +3459,9 @@ describe('Agent session import parity', () => {
       /"import_agent_session" => handle_import_agent_session\(id, &req\.payload, acp, relay\)\.await/
     )
     expect(read('web', 'ws', 'import_session.rs')).toMatch(/import_agent_session\(/)
-    expect(read('web', 'command_ledger', 'class.rs')).toContain('"import_agent_session"')
+    expect(read('web', 'command_ledger', 'class.rs')).toMatch(
+      /\(\s*"import_agent_session",\s*CommandClass::command\(/
+    )
   })
 
   it('the chat list offers the import on the desktop Chats tab and the phone drawer', () => {

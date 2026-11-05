@@ -19,6 +19,10 @@ vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: vi.fn(() => true),
   cleanupTauriListener: vi.fn()
 }))
+vi.mock('./slices/agent', async (orig) => {
+  const actual = await orig<typeof import('./slices/agent')>()
+  return { ...actual, withAuthRetry: vi.fn(actual.withAuthRetry) }
+})
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn()
 }))
@@ -146,6 +150,7 @@ import { acpApi } from '@/lib/acp-api'
 import { AcpTransportError } from '@/lib/acp-transport'
 import { agentReuseKey } from '@/stores/acp-reuse-keys'
 import { useAcpStore } from '@/stores/acp-store'
+import { withAuthRetry } from './slices/agent'
 import { FRESH } from './testkit'
 
 const CAPABLE = {
@@ -210,6 +215,31 @@ describe('listImportableSessions', () => {
 
     expect(result).toEqual({ status: 'unsupported' })
     expect(list).not.toHaveBeenCalled()
+  })
+
+  it('lists through the authenticate-on-demand retry', async () => {
+    vi.spyOn(acpApi, 'listSessions').mockResolvedValue({ sessions: [], nextCursor: null })
+
+    await useAcpStore.getState().listImportableSessions('cfg-1', '/work', 'p1')
+
+    expect(withAuthRetry).toHaveBeenCalledWith(
+      expect.any(Function),
+      'agent-1',
+      'session/list',
+      'text',
+      expect.any(Function)
+    )
+  })
+
+  it('reports the agent unavailable when it disconnects while listing', async () => {
+    vi.spyOn(acpApi, 'listSessions').mockImplementation(async () => {
+      useAcpStore.setState({ agentStatus: { 'agent-1': 'error' } })
+      return { sessions: [{ sessionId: 'a', cwd: '/work' }], nextCursor: null }
+    })
+
+    const result = await useAcpStore.getState().listImportableSessions('cfg-1', '/work', 'p1')
+
+    expect(result).toEqual({ status: 'unavailable' })
   })
 
   it('lets a listing failure reach the caller', async () => {

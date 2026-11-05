@@ -151,7 +151,10 @@ describe('importAgentSession facade', () => {
     const summary = await acpApi.importAgentSession(input)
 
     expect(summary).toEqual({ sessionId: 's1' })
-    expect(importAgentSession).toHaveBeenCalledWith(input, expect.anything())
+    expect(importAgentSession).toHaveBeenCalledWith(input, {
+      commandId: expect.any(String),
+      onVisibleAt: expect.any(Function)
+    })
   })
 
   it('surfaces the host rejection to the caller', async () => {
