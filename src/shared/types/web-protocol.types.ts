@@ -86,6 +86,9 @@ export const WS_EVENT_TYPES = [
   // Live-only, never persisted: the agent started or stopped working in the
   // session outside a prompt turn (reliable tier).
   'agent_working',
+  // Live-only, never persisted: the session's whole list of commands the agent
+  // left running, replacing the previous one (reliable tier).
+  'background_commands',
   // Top-level frame `{ type: 'gap', sid }` (no `seq`): LOSSY events of `sid`
   // were dropped for this connection because it could not keep up. The client
   // installs an atomic snapshot of the session.
@@ -495,7 +498,26 @@ export interface WsAgentSummary {
    * the `agent_working` event reports live). Older servers omit it.
    */
   workingSessions?: string[]
+  /**
+   * The commands the agent left running, by owned session (the list the
+   * `background_commands` event reports live). Older servers omit it.
+   */
+  backgroundCommands?: Record<string, BackgroundCommand[]>
 }
+
+/**
+ * A command the agent left running after its tool call reported done or its
+ * prompt turn ended. The host derives it from ACP updates; an ended command
+ * stays listed until the next prompt of its session starts.
+ */
+export type BackgroundCommand = {
+  toolCallId: string
+  /** The command's description, else its tool call title. */
+  title: string
+  command: string | null
+  /** Wall clock, when the tool call first appeared. */
+  startedAtMs: number
+} & ({ state: 'running' } | { state: 'ended'; endedAtMs: number })
 
 // ============================================================================
 // Server-side key-value store (issue #613) — request payloads + replies
@@ -769,6 +791,7 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   // Durable host record that owns a seq — reliable so no seq goes missing.
   local_title_generated: WS_RELAY_TIERS.RELIABLE,
   agent_working: WS_RELAY_TIERS.RELIABLE,
+  background_commands: WS_RELAY_TIERS.RELIABLE,
   // Frames about delivery itself: a gap must reach the client in order, and a
   // heartbeat is never queued, so neither may be a lossy event.
   gap: WS_RELAY_TIERS.RELIABLE,
