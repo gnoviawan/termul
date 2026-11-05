@@ -208,22 +208,30 @@ fn path_permitted(root: &Path, path: &Path) -> bool {
     })
 }
 
-/// `path` made absolute against `root`, with `.` and `..` folded and the
-/// deepest existing ancestor canonicalized, so a symlink cannot lead out.
+/// `path` made absolute against `root`, with `.` and `..` folded the way the
+/// OS folds them and the deepest existing ancestor canonicalized, so a
+/// symlink cannot lead out.
 fn resolve(root: &Path, path: &Path) -> Option<PathBuf> {
-    let mut lexical = PathBuf::new();
+    let mut resolved = PathBuf::new();
     for component in root.join(path).components() {
         match component {
             Component::ParentDir => {
-                if !lexical.pop() {
+                // The OS follows a symlink before `..` leaves it.
+                resolved = canonical_prefix(&resolved)?;
+                if !resolved.pop() {
                     return None;
                 }
             }
             Component::CurDir => {}
-            other => lexical.push(other),
+            other => resolved.push(other),
         }
     }
-    let mut existing = lexical.as_path();
+    canonical_prefix(&resolved)
+}
+
+/// `path` with its deepest existing ancestor canonicalized.
+fn canonical_prefix(path: &Path) -> Option<PathBuf> {
+    let mut existing = path;
     let mut rest = Vec::new();
     loop {
         if let Ok(canonical) = existing.canonicalize() {
