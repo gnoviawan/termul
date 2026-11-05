@@ -28,7 +28,7 @@ Inside, the steps are grouped, for example "Read 1 file, ran 1 search". Click a 
 
 ## Review changed files
 
-When the agent edited, deleted, or moved files in this chat, a status pill shows at the top right of the chat. It shows how many files changed and how many subagents there are. In a wide chat it also shows how many lines were added and removed and how many subagents are running or have ended. On a phone or in a narrow pane it shows only the totals, so open the list for the details. Click the pill to open the list. In a Git repository, the list shows the files that this chat's edit, delete, and move steps touched and that are still uncommitted, under the caption "Edited this session, uncommitted". Files you commit or discard drop out of the list. A file that only you, a terminal, or another chat changed is not listed. For a file this chat did change, the row and its line counts include all its uncommitted changes, also ones made outside this chat. A file the agent changed only through a shell command, for example a formatter, is not listed either. The **Changes** tab in the side panel still shows it. When there are both changed files and subagents, the list has a **Changed files** tab and a **Subagents** tab. On a phone the list opens as a sheet, and you can swipe between the tabs.
+When the agent edited, deleted, or moved files in this chat, a status pill shows at the top right of the chat. It shows how many files changed and how many subagents there are. In a wide chat it also shows how many lines were added and removed and how many subagents are running or have ended. On a phone or in a narrow pane it shows only the totals, so open the list for the details. Click the pill to open the list. In a Git repository, the list shows the files that this chat's edit, delete, and move steps touched and that are still uncommitted, under the caption "Edited this session, uncommitted". Files you commit or discard drop out of the list. A file that only you, a terminal, or another chat changed is not listed. For a file this chat did change, the row and its line counts include all its uncommitted changes, also ones made outside this chat. A file the agent changed only through a shell command, for example a formatter, is not listed either. The **Changes** tab in the side panel still shows it. When the pill has more than one kind of item, the list has a tab for each kind: **Changed files**, **Subagents**, and **Background**. On a phone the list opens as a sheet, and you can swipe between the tabs.
 
 The picture below was taken when the list was a bar above the message box. The list itself is the same.
 
@@ -57,6 +57,18 @@ To stop one subagent and leave the others running, click **Stop** in its panel. 
 ### Subagents that run in the background
 
 An agent can end its turn while subagents it started keep working in the background. The chat then keeps those subagents as running. The [status pill](#review-changed-files) shows "Waiting on N background subagents" in its hover tooltip, and the opened list shows it above the subagent rows. While they run, Troupe does not switch the agent or the Claude account of the chat, because that would stop them.
+
+## Commands that run in the background
+
+An agent can end its turn while a command it started keeps running. For example, Claude Code can run a command in the background, and Codex can leave a shell command running when it ends its turn. The step of that command reads **Running in background** with a timer that counts up until the command ends.
+
+The [status pill](#review-changed-files) also shows these commands. In a wide chat it shows how many are running and how many have ended, and on hover it shows "1 command running in the background". On a phone or in a narrow pane it shows only the total. Open the list to see each command, its state, and how long it ran. When the list has tabs, the commands are on the **Background** tab. Click a row to go to the step of that command in the chat and open its output.
+
+The agent gets the result of each command when the command ends. An ended command stays in the list until you send your next message. You can keep chatting while a command runs. Termul does not switch the agent or the Claude account of the chat while a command runs, because that would stop the command. **Reload this chat** also stops it, so Termul asks you to confirm the reload first. When you close the chat, its commands leave the list.
+
+When you stop a reply, the list keeps only a command that had already started. A command that was waiting for your approval does not run, so it is not listed. When a reply fails or times out, Termul lists no command for it.
+
+Termul shows background commands of agents that report when the command ends, such as Claude Code, Codex, and Factory Droid. The list has no stop button for a command.
 
 ## See earlier steps of a long turn
 
