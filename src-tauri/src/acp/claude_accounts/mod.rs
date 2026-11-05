@@ -402,6 +402,12 @@ impl ClaudeAccountStore {
             return builtin_resolution(BUILTIN_ACCOUNT_NAME);
         };
         // Repair links that a manual cleanup or a new shared entry left out.
+        // This runs under `self.lock`, so a Windows migration of a large private
+        // directory (merge, rename, junction) blocks other account calls while
+        // it runs. It stays under the lock on purpose: `remove` and a second
+        // `resolve` of the same account would otherwise race the merge and the
+        // rename on one directory. It happens once per account, and only on
+        // Windows for a private directory an earlier version created.
         if let Err(error) = links::ensure_links(&self.shared_dir, &dir) {
             log::warn!(
                 "[claude-accounts] could not repair shared links: {:?}",
