@@ -192,6 +192,20 @@ jobs:
         shell: bash
         run: test -f dist-web/index.html && test -s dist-web/index.html
 
+      # The figcraft canvas bundle is embedded alongside dist-web/ (spine
+      # AD-24), exactly as in release.yml: without it the canvas answers
+      # BUNDLE_MISSING. Fetched by the pin in canvas/figcraft.pin, sha256
+      # verified, and unpacked to canvas/bundle/ before the cargo build.
+      - name: Check figcraft pin
+        run: bun scripts/canvas/check-figcraft-pin.mjs
+
+      - name: Fetch and verify figcraft bundle (canvas/bundle/)
+        run: bun scripts/canvas/fetch-figcraft-bundle.mjs
+
+      - name: Assert canvas/bundle/index.html exists
+        shell: bash
+        run: test -f canvas/bundle/index.html && test -s canvas/bundle/index.html
+
       # --- macOS signing & notarization (#1498) --------------------------------
       # Nightlies used to ship ad-hoc signed + unnotarized, so Gatekeeper
       # blocked them on first launch ("damaged and can't be opened"). When
@@ -449,6 +463,20 @@ jobs:
 
       - name: Assert dist-web/index.html exists
         run: test -f dist-web/index.html && test -s dist-web/index.html
+
+      # The figcraft canvas bundle is embedded alongside dist-web/ (spine
+      # AD-24), exactly as in release.yml: without it the canvas answers
+      # BUNDLE_MISSING. Fetched by the pin in canvas/figcraft.pin, sha256
+      # verified, and unpacked to canvas/bundle/ before the cargo build.
+      - name: Check figcraft pin
+        run: bun scripts/canvas/check-figcraft-pin.mjs
+
+      - name: Fetch and verify figcraft bundle (canvas/bundle/)
+        run: bun scripts/canvas/fetch-figcraft-bundle.mjs
+
+      - name: Assert canvas/bundle/index.html exists
+        shell: bash
+        run: test -f canvas/bundle/index.html && test -s canvas/bundle/index.html
 
       - name: Build termul-server (linux-${{ matrix.arch }} release)
         working-directory: src-tauri
