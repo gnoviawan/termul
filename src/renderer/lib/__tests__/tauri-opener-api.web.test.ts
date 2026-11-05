@@ -204,4 +204,26 @@ describe('revealInFileManager (web branch: WEB_UNSUPPORTED)', () => {
     expect(result).toEqual({ success: true, data: undefined })
     expect(mockRevealItemInDir).toHaveBeenCalledWith(PATH)
   })
+
+  it('desktop: drops the verbatim prefix the Windows explorer paths carry', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockRevealItemInDir.mockResolvedValue(undefined)
+
+    await openerApi.revealInFileManager('//?/E:/pawbytes/agents/pawbytes-skill-suites/skills')
+    await openerApi.revealInFileManager(String.raw`\\?\UNC\srv\share\docs`)
+
+    expect(mockRevealItemInDir.mock.calls).toEqual([
+      ['E:/pawbytes/agents/pawbytes-skill-suites/skills'],
+      [String.raw`\\srv\share\docs`]
+    ])
+  })
+
+  it('desktop: opens a verbatim Windows path without its prefix', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockOpenPath.mockResolvedValue(undefined)
+
+    await openerApi.openWithExternalApp('//?/E:/pawbytes/notes.pdf')
+
+    expect(mockOpenPath).toHaveBeenCalledWith('E:/pawbytes/notes.pdf')
+  })
 })
