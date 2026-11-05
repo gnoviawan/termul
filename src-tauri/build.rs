@@ -54,7 +54,10 @@ fn main() {
     println!("cargo:rerun-if-changed=../canvas/figcraft.pin");
     println!("cargo:rustc-check-cfg=cfg({CANVAS_BUNDLE_MISSING_CFG})");
     println!("cargo:rerun-if-env-changed={ALLOW_MISSING_CANVAS_BUNDLE_ENV}");
-    let has_canvas_bundle = Path::new("../canvas/bundle/index.html").is_file();
+    // Non-empty, as the CI `test -s` checks require: an empty index.html
+    // would embed a canvas that loads a blank page.
+    let has_canvas_bundle = std::fs::metadata("../canvas/bundle/index.html")
+        .is_ok_and(|meta| meta.is_file() && meta.len() > 0);
     let allow_missing_canvas_bundle =
         std::env::var(ALLOW_MISSING_CANVAS_BUNDLE_ENV).unwrap_or_default();
     if release_without_canvas_bundle(
