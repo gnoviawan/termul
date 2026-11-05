@@ -150,9 +150,12 @@ pub(super) struct ImportWindow {
 impl DriverState {
     /// Open the replay window of a session that is being imported. Its history
     /// becomes durable records instead of being dropped. Refused like
-    /// [`DriverState::try_begin_replay_window`] while a turn is active.
+    /// [`DriverState::try_begin_replay_window`] while a turn is active, and
+    /// while any other replay window of the session is open: sharing a window
+    /// would fold an ordinary load's replay into the import, or the reverse.
     pub(crate) fn try_begin_import_replay_window(&mut self, session_id: &str) -> bool {
-        if !self.try_begin_replay_window(session_id) {
+        if self.replay_windows.contains_key(session_id) || !self.try_begin_replay_window(session_id)
+        {
             return false;
         }
         if let Some(window) = self.replay_windows.get_mut(session_id) {

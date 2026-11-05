@@ -74,7 +74,14 @@ fn each_user_message_after_a_reply_starts_the_next_turn() {
 #[test]
 fn chunks_of_one_user_message_join_into_one_prompt() {
     let steps = fold(vec![user("he"), user("llo"), agent("x")]);
-    assert_eq!(steps[0], prompt(1, "hello"));
+    assert_eq!(
+        steps,
+        vec![
+            prompt(1, "hello"),
+            ImportStep::Update(Box::new(agent("x"))),
+            complete(1),
+        ]
+    );
 }
 
 #[test]
@@ -115,4 +122,19 @@ fn a_reply_before_any_user_message_is_kept_without_a_turn() {
 #[test]
 fn an_empty_history_has_no_steps() {
     assert!(fold(Vec::new()).is_empty());
+}
+
+#[test]
+fn an_import_window_and_an_ordinary_window_exclude_each_other() {
+    use crate::acp::session::DriverState;
+
+    let mut state = DriverState::new();
+    assert!(state.try_begin_import_replay_window("s"));
+    assert!(!state.try_begin_replay_window("s"));
+    assert!(!state.try_begin_import_replay_window("s"));
+    state.finish_replay_window("s");
+
+    assert!(state.try_begin_replay_window("s"));
+    assert!(!state.try_begin_import_replay_window("s"));
+    assert!(state.try_begin_replay_window("s"));
 }

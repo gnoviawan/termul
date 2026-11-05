@@ -622,6 +622,15 @@ impl DriverState {
         if self.active_turns.contains_key(session_id) {
             return false;
         }
+        // An import owns the window of its session: a second load would
+        // replay the history again into the import's records.
+        if self
+            .replay_windows
+            .get(session_id)
+            .is_some_and(|window| window.import.is_some())
+        {
+            return false;
+        }
         self.last_active.touch();
         // The reopened session re-advertises its commands: fan that out.
         self.last_commands.forget(session_id);

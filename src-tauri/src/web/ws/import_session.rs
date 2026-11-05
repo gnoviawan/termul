@@ -46,7 +46,7 @@ pub(super) async fn handle_import_agent_session(
             "session persistence unavailable",
         );
     };
-    let session_id = parsed.session_id.clone();
+    let session_id = parsed.session_id.trim().to_string();
     let result = import_agent_session(
         acp,
         &persistence,
@@ -71,7 +71,7 @@ pub(super) async fn handle_import_agent_session(
             ok_with_payload(id, &crate::acp::SessionIndexEntry::from(&metadata))
         }
         Err(error) => {
-            if !matches!(error, ImportAgentSessionError::AlreadyKnown) {
+            if error.registered_session() {
                 relay.forget_session(&session_id).await;
             }
             warn!(
@@ -83,12 +83,18 @@ pub(super) async fn handle_import_agent_session(
                 ImportAgentSessionError::AlreadyKnown => {
                     WsReply::err(id, WsErrorCode::Duplicate, error.to_string())
                 }
-                ImportAgentSessionError::Agent(message) => acp_err_to_reply(id, message),
-                ImportAgentSessionError::Invalid(_)
-                | ImportAgentSessionError::Empty
-                | ImportAgentSessionError::Persistence(_) => {
+                ImportAgentSessionError::UnknownAgent(message)
+                | ImportAgentSessionError::Agent(message) => acp_err_to_reply(id, message),
+                ImportAgentSessionError::Invalid(_) | ImportAgentSessionError::Empty => {
                     WsReply::err(id, WsErrorCode::Unsupported, error.to_string())
                 }
+                // The store's own message names paths: it stays in the host log.
+                ImportAgentSessionError::Registration(_)
+                | ImportAgentSessionError::Persistence(_) => WsReply::err(
+                    id,
+                    WsErrorCode::Unsupported,
+                    "the session could not be saved to the chat history",
+                ),
             }
         }
     }

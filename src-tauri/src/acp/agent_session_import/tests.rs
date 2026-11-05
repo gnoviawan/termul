@@ -54,6 +54,10 @@ for line in sys.stdin:
         reopened.append(sid)
         send({"jsonrpc": "2.0", "id": rid, "result": {}})
     elif method == "session/resume":
+        if sid not in reopened:
+            send({"jsonrpc": "2.0", "id": rid,
+                  "error": {"code": -32602, "message": "session was never loaded"}})
+            continue
         send({"jsonrpc": "2.0", "id": rid, "result": {}})
     elif method == "session/close":
         send({"jsonrpc": "2.0", "id": rid, "result": {}})
@@ -266,10 +270,53 @@ async fn a_request_without_a_session_id_or_cwd_is_invalid() {
     let mut request = h.request("cc-ok");
     request.session_id = "  ".to_string();
     let result = import_agent_session(&h.acp, &h.persistence, request).await;
-
     assert!(
         matches!(result, Err(ImportAgentSessionError::Invalid(_))),
         "{result:?}"
     );
+
+    let mut request = h.request("cc-ok");
+    request.cwd = "  ".to_string();
+    let result = import_agent_session(&h.acp, &h.persistence, request).await;
+    assert!(
+        matches!(result, Err(ImportAgentSessionError::Invalid(_))),
+        "{result:?}"
+    );
+    assert!(!result.unwrap_err().registered_session());
+    h.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_imports_of_one_session_at_once_keep_one_intact_copy() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let (first, second) = tokio::join!(h.import("cc-ok"), h.import("cc-ok"));
+
+    let refused = [&first, &second]
+        .into_iter()
+        .filter(|result| matches!(result, Err(ImportAgentSessionError::AlreadyKnown)))
+        .count();
+    assert_eq!(refused, 1, "{first:?} / {second:?}");
+    assert!(first.is_ok() != second.is_ok(), "{first:?} / {second:?}");
+    assert_eq!(h.persistence.metadata("cc-ok").unwrap().message_count, 6);
+    h.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_padded_project_id_is_stored_trimmed_and_a_future_time_is_not_trusted() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let mut request = h.request("cc-ok");
+    request.project_id = Some("  project-1 ".to_string());
+    request.updated_at = Some(u64::MAX);
+    let metadata = import_agent_session(&h.acp, &h.persistence, request)
+        .await
+        .expect("import");
+
+    assert_eq!(metadata.project_id.as_deref(), Some("project-1"));
+    assert!(metadata.last_activity_at <= now_millis() + 300_000);
+    assert!(metadata.created_at <= now_millis() + 300_000);
     h.finish().await;
 }
