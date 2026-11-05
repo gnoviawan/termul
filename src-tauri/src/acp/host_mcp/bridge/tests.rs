@@ -673,3 +673,25 @@ fn the_wait_is_20_s_by_default_and_at_most_25_s() {
         Duration::from_secs(25)
     );
 }
+
+#[test]
+fn a_timeout_after_an_answer_returns_the_last_reply() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let answered = AtomicUsize::new(0);
+    let _seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, move |_| {
+        if answered.fetch_add(1, Ordering::SeqCst) == 0 {
+            Some(Ok(NO_EVENTS.to_string()))
+        } else {
+            Some(Err(CanvasError::new(
+                CanvasErrorCode::CanvasTimeout,
+                "the canvas did not answer in time",
+            )))
+        }
+    });
+    let mut bridge = Bridge::new(configs[0].clone());
+    let reply = bridge
+        .call("events.poll", json!({"after": 7, "timeoutMs": 10_000}))
+        .unwrap();
+    assert_eq!(reply, serde_json::from_str::<Value>(NO_EVENTS).unwrap());
+}

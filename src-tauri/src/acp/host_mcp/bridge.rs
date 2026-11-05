@@ -121,10 +121,20 @@ impl Bridge {
     /// answers `events.poll` at once rather than wait for events no one could
     /// add meanwhile. Poll it again with the same params until events arrive,
     /// the event log resets, or the wait passes, then return the last reply.
+    /// A later poll that times out (a busy editor near the deadline) returns
+    /// the last reply instead, so the wait never ends in `CANVAS_TIMEOUT`
+    /// after the editor has answered once.
     fn poll_events(&self, params: &Value) -> Result<Value, CanvasError> {
         let deadline = Instant::now() + poll_wait(params);
+        let mut last: Option<Value> = None;
         loop {
-            let reply = self.request(EVENTS_POLL, params)?;
+            let reply = match (self.request(EVENTS_POLL, params), last.take()) {
+                (Ok(reply), _) => reply,
+                (Err(error), Some(previous)) if error.code == CanvasErrorCode::CanvasTimeout => {
+                    return Ok(previous)
+                }
+                (Err(error), _) => return Err(error),
+            };
             let woke = reply["events"]
                 .as_array()
                 .is_some_and(|events| !events.is_empty())
@@ -133,6 +143,7 @@ impl Bridge {
             if woke || left.is_zero() {
                 return Ok(reply);
             }
+            last = Some(reply);
             std::thread::sleep(left.min(POLL_INTERVAL));
         }
     }
