@@ -535,7 +535,7 @@ export function ServerSetupWizard({
 
   if (mode === 'setup') {
     return (
-      <div className="flex h-screen flex-col overflow-y-auto bg-background px-6 py-10">
+      <div className="flex h-dvh flex-col overflow-y-auto bg-background px-6 py-10">
         {/* Auto margins center the block while there is room and collapse to 0
             once the content is taller than the viewport, so the top stays
             reachable. The wrapper itself must not be the scroll container:
