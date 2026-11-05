@@ -28,7 +28,7 @@ Inside, the steps are grouped, for example "Read 1 file, ran 1 search". Click a 
 
 ## Review changed files
 
-When the agent edited, deleted, or moved files in this chat, a status pill shows at the top right of the chat. It shows how many files changed and how many lines were added and removed, and how many subagents run or ended. Click the pill to open the list. In a Git repository, the list shows the files that this chat's edit, delete, and move steps touched and that are still uncommitted, under the caption "Edited this session, uncommitted". Files you commit or discard drop out of the list. Changes made by you, by a terminal, or by other chats in the same checkout are not listed. A file the agent changed only through a shell command, for example a formatter, is not listed either. The **Changes** tab in the side panel still shows it. When there are both changed files and subagents, the list has a **Changed files** tab and a **Subagents** tab. On a phone the list opens as a sheet, and you can swipe between the tabs.
+When the agent edited, deleted, or moved files in this chat, a status pill shows at the top right of the chat. It shows how many files changed and how many subagents there are. In a wide chat it also shows how many lines were added and removed and how many subagents are running or have ended. On a phone or in a narrow pane it shows only the totals, so open the list for the details. Click the pill to open the list. In a Git repository, the list shows the files that this chat's edit, delete, and move steps touched and that are still uncommitted, under the caption "Edited this session, uncommitted". Files you commit or discard drop out of the list. A file that only you, a terminal, or another chat changed is not listed. For a file this chat did change, the row and its line counts include all its uncommitted changes, also ones made outside this chat. A file the agent changed only through a shell command, for example a formatter, is not listed either. The **Changes** tab in the side panel still shows it. When there are both changed files and subagents, the list has a **Changed files** tab and a **Subagents** tab. On a phone the list opens as a sheet, and you can swipe between the tabs.
 
 The picture below was taken when the list was a bar above the message box. The list itself is the same.
 
@@ -40,7 +40,7 @@ Each file has a letter: **M** for modified, **D** for deleted, or **R** for rena
 
 Some agents hand part of a task to a helper agent, called a subagent. Subagents that the agent starts together show as one group in the turn. The group header shows up to three agent icons, the number of subagents, a summary such as "1 working · 1 done · 1 failed", and how long they have run. The group opens while a subagent runs and folds when all of them finish. You can fold it earlier by clicking the header. A single subagent shows as one card without the header. The group stays in the chat after the turn ends, and when you reopen the chat later.
 
-Each row shows the subagent's title and type, its latest step while it runs or the first line of its result when it ends, its status (**Working**, **Done**, **Failed** or **Stopped**) and its time.
+Each row shows the subagent's title and type, its latest step while it runs or the first line of its result when it ends, its status (**Working**, **Needs input** when it waits for you, **Done**, **Failed** or **Stopped**) and its time.
 
 Click a row to open the subagent. On a wide window it opens beside the chat; on a narrow one it slides in from the right, and on a phone it opens as a full-height sheet. The panel shows:
 
@@ -48,7 +48,7 @@ Click a row to open the subagent. On a wide window it opens beside the chat; on 
 - **Activity**, the steps the subagent ran. Click a step to expand it. A subagent that started its own subagents shows them here too; click one to open it, and click **Back** to return.
 - **Latest message** while the subagent runs, or **Result** when it ends.
 
-Use the up and down arrow keys to move between subagents. From a group row, the keys stay within that group. When the agent did not report a section, the panel says why.
+When the focus is on a control in the panel header, such as **Back**, use the up and down arrow keys to move between subagents. The keys don't switch subagents while the focus is in the panel body. From a group row, the keys stay within that group. When the agent did not report a section, the panel says why.
 
 ### Stop one subagent
 
