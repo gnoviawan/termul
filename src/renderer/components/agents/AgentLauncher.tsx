@@ -167,6 +167,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // is still the latest, so an earlier launch finishing late cannot clear a
   // newer one's guard.
   const launchGenerationRef = useRef(0)
+  // Set once the latest launch reset the composer and opened its chat tab.
+  const launchHandedOffRef = useRef(false)
   const menuRef = useRef<SlashMenuHandle>(null)
   const editorRef = useRef<Editor | null>(null)
   // Set when an agent pick happens INSIDE the open selector popover (the only
@@ -225,18 +227,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     }
   }, [isPresent, paneLeaf, isOverlayLauncher])
   const showOverlayChrome = isOverlayLauncher || (isExiting && overlayVariantRef.current)
-  // New chat inside the exit window restores this exiting instance. Its last
-  // launch already handed off to a chat tab, but a claimed warm session holds
-  // the in-flight flag until that chat's first turn ends, which would make
-  // the re-shown launcher ignore Enter. Re-presence is a fresh launcher.
-  const wasPresentRef = useRef(isPresent)
-  useEffect(() => {
-    if (isPresent && !wasPresentRef.current) {
-      launchGenerationRef.current += 1
-      launchInFlightRef.current = false
-    }
-    wasPresentRef.current = isPresent
-  }, [isPresent])
 
   const exitAnim = useLauncherExitAnim({
     isPresent,
@@ -294,6 +284,22 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // not just the resolved default.
   const [branches, setBranches] = useState<string[]>([])
   const [worktreeCreating, setWorktreeCreating] = useState(false)
+  // New chat inside the exit window restores this exiting instance. When its
+  // last launch already handed off to a chat tab, that launch can still hold
+  // the in-flight flag (a claimed warm session holds it until the first turn
+  // ends) and its worktree progress, which would make the re-shown launcher
+  // ignore Enter. Start a new generation so the old launch stops touching
+  // either. A launch that has not handed off keeps its guard.
+  const wasPresentRef = useRef(isPresent)
+  useEffect(() => {
+    if (isPresent && !wasPresentRef.current && launchHandedOffRef.current) {
+      launchGenerationRef.current += 1
+      launchHandedOffRef.current = false
+      launchInFlightRef.current = false
+      setWorktreeCreating(false)
+    }
+    wasPresentRef.current = isPresent
+  }, [isPresent])
   // Skills live at {project.path}/.agents/skills/ which is gitignored and
   // excluded from worktree symlinks, so resolve against the main project root
   // — not the worktree CWD which has no .agents/skills/.
@@ -1322,8 +1328,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
     launchInFlightRef.current = true
     const generation = ++launchGenerationRef.current
+    launchHandedOffRef.current = false
+    const isCurrentLaunch = (): boolean => launchGenerationRef.current === generation
     const releaseLaunch = (): void => {
-      if (launchGenerationRef.current === generation) launchInFlightRef.current = false
+      if (isCurrentLaunch()) launchInFlightRef.current = false
     }
     const attachmentsSnapshot = [...attachments]
     const appOwnedPaths = appOwnedTempPaths(attachmentsSnapshot)
@@ -1415,6 +1423,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       clearAttachments(attachmentsSnapshot)
       resetMentions()
       setPrompt('')
+      if (isCurrentLaunch()) launchHandedOffRef.current = true
     }
 
     // Runs once the checkout is ready: persist the picks, then build the wire
@@ -1483,7 +1492,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           initialUserBlocks: syncBlocks.length > 0 ? syncBlocks : undefined
         },
         onOpened: resetComposer,
-        onWorktreeCreating: setWorktreeCreating,
+        onWorktreeCreating: (creating) => {
+          if (isCurrentLaunch()) setWorktreeCreating(creating)
+        },
         // Roll back to the launcher: the tab closes and the launcher reappears.
         onWorktreeFailed: () => {
           worktreeFailed = true
