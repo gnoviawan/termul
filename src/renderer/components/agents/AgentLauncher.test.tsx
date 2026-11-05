@@ -4712,7 +4712,6 @@ describe('AgentLauncher exit handoff', () => {
     mockClaimPreparedChat
       .mockReturnValueOnce('prepared-ready-1')
       .mockReturnValueOnce('prepared-ready-2')
-      .mockReturnValueOnce('prepared-ready-3')
     let endFirstTurn: () => void = () => {}
     mockSendPrompt
       .mockReturnValueOnce(

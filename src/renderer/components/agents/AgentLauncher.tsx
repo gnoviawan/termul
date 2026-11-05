@@ -377,6 +377,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         // detaches any process with live chats, so those chats keep running
         // the old version while this new chat uses the applied version.
         if (isolationMode === 'worktree' && canUseWorktree) {
+          // Own the worktree flag for this restart only. A newer launch bumps
+          // launchGenerationRef and must not inherit this restart's progress or
+          // failure recovery.
+          const restartGeneration = launchGenerationRef.current
+          const isCurrentRestart = (): boolean => launchGenerationRef.current === restartGeneration
           await launchChat({
             configId,
             projectId: activeProjectId,
@@ -384,8 +389,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             checkout: { launchCwd: projectRoot },
             newWorktree: { projectRoot, baseBranch },
             onOpened: () => useWorkspaceStore.getState().hideAgentLauncher(),
-            onWorktreeCreating: setWorktreeCreating,
-            onWorktreeFailed: () => useWorkspaceStore.getState().showAgentLauncher(paneId)
+            onWorktreeCreating: (creating) => {
+              if (isCurrentRestart()) setWorktreeCreating(creating)
+            },
+            onWorktreeFailed: () => {
+              if (isCurrentRestart()) {
+                useWorkspaceStore.getState().showAgentLauncher(paneId)
+              }
+            }
           }).started
         } else {
           let launchCwd = projectRoot
@@ -1495,10 +1506,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         onWorktreeCreating: (creating) => {
           if (isCurrentLaunch()) setWorktreeCreating(creating)
         },
-        // Roll back to the launcher: the tab closes and the launcher reappears.
+        // Roll back to the launcher only when this launch is still current.
+        // launch-chat always rolls back the placeholder; a stale failure must
+        // not reopen the launcher over a newer chat.
         onWorktreeFailed: () => {
           worktreeFailed = true
-          useWorkspaceStore.getState().showAgentLauncher(paneSnapshot)
+          if (isCurrentLaunch()) {
+            useWorkspaceStore.getState().showAgentLauncher(paneSnapshot)
+          }
         },
         beforeStart: async () => {
           const { wireBlocks, pendingPayload } = await prepareFirstTurn()
