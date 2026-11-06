@@ -66,7 +66,8 @@ export function defaultServerBinary() {
   const local = join(repoRoot(), 'src-tauri', 'target', 'release', 'termul-server')
   if (existsSync(local)) return local
   throw new Error(
-    `termul-server binary missing at ${local}. Build it with ` +
+    `termul-server binary missing at ${local}. Run ` +
+      '`bun scripts/canvas/fetch-figcraft-bundle.mjs`, then build it with ' +
       '`cargo build --release --bin termul-server --features standalone-server`, ' +
       'or pass --server-bin <path>.'
   )

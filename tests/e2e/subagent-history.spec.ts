@@ -32,9 +32,15 @@ async function expectGroupAndPanel(page: Page, title: string, text: RegExp): Pro
   const header = pane.getByRole('button', { name: /^2 subagents:/ }).filter({ visible: true })
   await expect(header).toHaveCount(1)
   await expect(header).toBeVisible()
+  // The group folds once every subagent settles, and its rows stay mounted
+  // (clipped, still "visible") while folded. Read the header's expanded state
+  // instead, and retry: the fold can land between the read and the click.
   const row = pane.locator('[data-subagent-row]').filter({ visible: true }).first()
-  if (!(await row.isVisible())) await header.click()
-  await row.click()
+  await expect(async () => {
+    if ((await header.getAttribute('aria-expanded')) !== 'true') await header.click()
+    await expect(header).toHaveAttribute('aria-expanded', 'true', { timeout: 2_000 })
+    await row.click({ timeout: 2_000 })
+  }).toPass({ timeout: 15_000 })
   const body = page.locator('[data-subagent-panel-body]')
   await expect(body.getByText(/^Activity · [1-9]/)).toBeVisible()
   await expect(body.getByText('Read chat.ts').first()).toBeVisible()

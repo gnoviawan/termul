@@ -201,3 +201,110 @@ fn a_dispatch_keeps_its_bounded_text_result() {
         "the record carries the dispatch title"
     );
 }
+
+fn reduced_edit(type_: &str, tool: serde_json::Value) -> serde_json::Value {
+    let key = if type_ == "tool_call" {
+        "toolCall"
+    } else {
+        "update"
+    };
+    let payload = json!({ "agentId": "agent", "sessionId": "chat", key: tool });
+    super::normalize_durable_payload(type_, &payload)[key].clone()
+}
+
+#[test]
+fn a_multi_file_edit_without_locations_persists_every_diff_path() {
+    let edit = reduced_edit(
+        "tool_call",
+        json!({
+            "toolCallId": "multi",
+            "kind": "edit",
+            "content": [
+                { "type": "diff", "path": "/work/a.ts", "oldText": "a\n", "newText": "A\n" },
+                { "type": "content", "content": { "type": "text", "text": "note" } },
+                { "type": "diff", "path": "/work/b.ts", "oldText": null, "newText": "b\n" },
+                { "type": "diff", "path": "", "newText": "x\n" },
+                { "type": "diff", "path": "/work/a.ts", "oldText": "A\n", "newText": "AA\n" },
+            ],
+        }),
+    );
+    assert_eq!(
+        edit["locations"],
+        json!([{ "path": "/work/a.ts" }, { "path": "/work/b.ts" }]),
+        "each diff path once, in order"
+    );
+    assert_eq!(edit["diffStat"], json!({ "added": 4, "removed": 2 }));
+    let update = reduced_edit(
+        "tool_call_update",
+        json!({
+            "toolCallId": "multi",
+            "status": "completed",
+            "content": [
+                { "type": "diff", "path": "/work/a.ts", "newText": "A\n" },
+                { "type": "diff", "path": "/work/c.ts", "newText": "c\n" },
+            ],
+        }),
+    );
+    assert_eq!(
+        update["locations"],
+        json!([{ "path": "/work/a.ts" }, { "path": "/work/c.ts" }])
+    );
+}
+
+#[test]
+fn a_file_change_summary_claims_every_location_and_diff_path_within_bounds() {
+    let move_ = reduced_edit(
+        "tool_call",
+        json!({
+            "toolCallId": "m",
+            "kind": "move",
+            "locations": [{ "path": "/work/old.ts" }, { "path": "/work/new.ts" }],
+            "rawInput": { "path": "/work/input.ts" },
+        }),
+    );
+    assert_eq!(
+        move_["locations"],
+        json!([{ "path": "/work/old.ts" }, { "path": "/work/new.ts" }]),
+        "both ends of a move persist"
+    );
+    let huge = format!("/{}", "a".repeat(super::MAX_SUMMARY_PATH_CHARS));
+    let items: Vec<serde_json::Value> = std::iter::once(huge)
+        .chain((0..super::MAX_SUMMARY_PATHS + 5).map(|i| format!("/work/f{i}.ts")))
+        .map(|path| json!({ "type": "diff", "path": path, "newText": "x\n" }))
+        .collect();
+    let many = reduced_edit(
+        "tool_call",
+        json!({ "toolCallId": "e", "kind": "edit", "content": items }),
+    );
+    let paths = many["locations"].as_array().unwrap();
+    assert_eq!(paths.len(), super::MAX_SUMMARY_PATHS);
+    assert_eq!(
+        paths[0],
+        json!({ "path": "/work/f0.ts" }),
+        "an overlong path is skipped"
+    );
+}
+
+#[test]
+fn a_subagents_multi_file_edit_masks_every_persisted_path() {
+    let edit = reduced_edit(
+        "tool_call",
+        json!({
+            "toolCallId": "c2",
+            "kind": "edit",
+            "content": [
+                { "type": "diff", "path": "/work/a.ts", "newText": "a\n" },
+                { "type": "diff", "path": "https://bob:hunter2pass@example.com/b.ts", "newText": "b\n" },
+            ],
+            "_meta": { "claudeCode": { "parentToolUseId": "d1" } },
+        }),
+    );
+    let paths = edit["locations"].as_array().unwrap();
+    assert_eq!(paths.len(), 2);
+    assert_eq!(paths[0], json!({ "path": "/work/a.ts" }));
+    let second = paths[1]["path"].as_str().unwrap();
+    assert!(
+        second.starts_with("https://bob:") && !second.contains("hunter2pass"),
+        "{second}"
+    );
+}

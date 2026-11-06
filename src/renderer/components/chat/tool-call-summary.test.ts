@@ -12,6 +12,7 @@ import {
   isSubagentRunning,
   readableOutput,
   summarizeToolActivity,
+  toolCallChangedPaths,
   toolCallPath
 } from './tool-call-summary'
 
@@ -440,6 +441,40 @@ describe('toolCallPath', () => {
   it('returns undefined when no path source is available', () => {
     expect(toolCallPath(call({ kind: 'edit', rawInput: { command: 'ls' } }))).toBeUndefined()
     expect(toolCallPath(call({ kind: 'edit' }))).toBeUndefined()
+  })
+})
+
+describe('toolCallChangedPaths', () => {
+  it('claims every diff path of a multi-file edit without locations', () => {
+    const paths = toolCallChangedPaths(
+      call({
+        kind: 'edit',
+        content: [
+          { type: 'diff', path: 'src/a.ts', newText: 'a' },
+          { type: 'content', content: { type: 'text', text: 'note' } },
+          { type: 'diff', path: ' src/b.ts ', newText: 'b' },
+          { type: 'diff', path: '  ', newText: 'x' },
+          { type: 'diff', path: 'src/a.ts', newText: 'aa' }
+        ]
+      })
+    )
+    expect(paths).toEqual(['src/a.ts', 'src/b.ts'])
+  })
+
+  it('puts the toolCallPath first, then every location, then the diff paths', () => {
+    const paths = toolCallChangedPaths(
+      call({
+        kind: 'move',
+        rawInput: { path: 'src/input.ts' },
+        locations: [{ path: 'src/old.ts' }, { path: 'src/new.ts' }],
+        content: [{ type: 'diff', path: 'src/diff.ts', newText: 'x' }]
+      })
+    )
+    expect(paths).toEqual(['src/old.ts', 'src/new.ts', 'src/diff.ts'])
+    expect(
+      toolCallChangedPaths(call({ kind: 'edit', rawInput: { path: 'src/input.ts' } }))
+    ).toEqual(['src/input.ts'])
+    expect(toolCallChangedPaths(call({ kind: 'edit' }))).toEqual([])
   })
 })
 

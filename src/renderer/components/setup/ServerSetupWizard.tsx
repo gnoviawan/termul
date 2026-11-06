@@ -535,41 +535,47 @@ export function ServerSetupWizard({
 
   if (mode === 'setup') {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center overflow-y-auto bg-background px-6 py-10">
-        {loading ? (
-          loadingBody
-        ) : loadError ? (
-          errorBody
-        ) : (
-          <form
-            className="flex w-full max-w-md flex-col gap-5"
-            aria-label="Set up Termul"
-            noValidate
-            onSubmit={(event) => {
-              void handleSubmit(event)
-            }}
-          >
-            <div className="flex flex-col gap-1.5 text-center">
-              <h1 className="text-lg font-semibold text-foreground">Set up Termul</h1>
-              <p className="text-sm text-muted-foreground">
-                A few questions and you're in — the defaults work for most people.
-              </p>
-            </div>
-            {configError ? (
-              <div
-                role="status"
-                className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-left text-xs text-warning"
-              >
-                <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-                <p>
-                  A saved server configuration couldn't be used ({configError}). Answer the
-                  questions below and Termul will write a fresh one.
+      <div className="flex h-dvh flex-col overflow-y-auto bg-background px-6 py-10">
+        {/* Auto margins center the block while there is room and collapse to 0
+            once the content is taller than the viewport, so the top stays
+            reachable. The wrapper itself must not be the scroll container:
+            `justify-center` on an overflowing flex container clips the top. */}
+        <div className="m-auto flex w-full flex-col items-center">
+          {loading ? (
+            loadingBody
+          ) : loadError ? (
+            errorBody
+          ) : (
+            <form
+              className="flex w-full max-w-md flex-col gap-5"
+              aria-label="Set up Termul"
+              noValidate
+              onSubmit={(event) => {
+                void handleSubmit(event)
+              }}
+            >
+              <div className="flex flex-col gap-1.5 text-center">
+                <h1 className="text-lg font-semibold text-foreground">Set up Termul</h1>
+                <p className="text-sm text-muted-foreground">
+                  A few questions and you're in — the defaults work for most people.
                 </p>
               </div>
-            ) : null}
-            {form}
-          </form>
-        )}
+              {configError ? (
+                <div
+                  role="status"
+                  className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-left text-xs text-warning"
+                >
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                  <p>
+                    A saved server configuration couldn't be used ({configError}). Answer the
+                    questions below and Termul will write a fresh one.
+                  </p>
+                </div>
+              ) : null}
+              {form}
+            </form>
+          )}
+        </div>
       </div>
     )
   }

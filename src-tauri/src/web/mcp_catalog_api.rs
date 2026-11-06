@@ -110,7 +110,7 @@ pub async fn search(
 }
 
 pub async fn status() -> Json<IpcBody<McpCatalogStatus>> {
-    Json(IpcBody::ok(McpCatalogService::shared().await.status()))
+    Json(IpcBody::ok(McpCatalogService::shared().await.status().await))
 }
 
 pub async fn set_sync(

@@ -246,7 +246,11 @@ async fn initialize_advertises_the_chat_and_canvas_instructions() {
             .as_str()
             .unwrap_or_default();
         assert!(
-            instructions.starts_with(crate::acp::host_mcp::TERMUL_CHAT_INSTRUCTIONS),
+            instructions.starts_with(crate::acp::host_mcp::TERMUL_TOOL_INSTRUCTIONS),
+            "{instructions}"
+        );
+        assert!(
+            instructions.contains(crate::acp::host_mcp::TERMUL_CHAT_INSTRUCTIONS),
             "{instructions}"
         );
         for needle in [
@@ -262,6 +266,10 @@ async fn initialize_advertises_the_chat_and_canvas_instructions() {
             "This looks repeatable. Want me to turn it into a scheduled background automation?",
             "\"Yes, schedule it\" and \"Not now\"",
             "ask once per chat with the `ask_user` tool",
+            "the `plan` tool",
+            "call `set_session_title` once",
+            "ask with the `ask_user` tool or your client's own question tool",
+            "load its definition (for example with tool search)",
         ] {
             assert!(instructions.contains(needle), "missing {needle:?}");
         }
@@ -275,6 +283,41 @@ async fn initialize_advertises_the_chat_and_canvas_instructions() {
     })
     .await;
     result.expect("instructions handshake timed out");
+}
+
+/// Claude Code keeps only the first `CLAUDE_INSTRUCTIONS_BUDGET` UTF-16 code
+/// units of a server's instructions. Everything Termul writes must survive
+/// that cut; only figcraft's guide, last, may be clipped.
+#[test]
+fn termul_instructions_fit_claude_codes_budget() {
+    let instructions = crate::acp::host_mcp::session_instructions();
+    let termul_owned = instructions
+        .strip_suffix(figcraft_mcp::INSTRUCTIONS)
+        .expect("figcraft's guide closes the instructions");
+    let units = termul_owned.encode_utf16().count();
+    assert!(
+        units <= crate::acp::host_mcp::CLAUDE_INSTRUCTIONS_BUDGET,
+        "Termul-owned instructions are {units} UTF-16 code units, over the budget"
+    );
+}
+
+/// `plan` and `set_session_title` carry `_meta` `anthropic/alwaysLoad`, so
+/// Claude Code loads their full definitions instead of deferring them
+/// behind tool search. Other tools stay deferred.
+#[tokio::test]
+async fn every_session_tools_are_always_loaded() {
+    let tools = list_tools(handshake_config()).await;
+    let always_load = |name: &str| {
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("{name} served"));
+        tool["_meta"]["anthropic/alwaysLoad"].as_bool()
+    };
+    assert_eq!(always_load("plan"), Some(true));
+    assert_eq!(always_load("set_session_title"), Some(true));
+    assert_eq!(always_load("ask_user"), None);
+    assert_eq!(always_load("create_node"), None);
 }
 
 /// Story 16 (CAP-5): `set_session_title` advertises an OPTIONAL `branch` slug

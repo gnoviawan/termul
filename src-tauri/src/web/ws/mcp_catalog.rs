@@ -60,7 +60,7 @@ pub(super) async fn handle_search_mcp_catalog(id: String, payload: &Value) -> Ws
 }
 
 pub(super) async fn handle_get_mcp_catalog_status(id: String) -> WsReply {
-    ok_with_payload(id, &McpCatalogService::shared().await.status())
+    ok_with_payload(id, &McpCatalogService::shared().await.status().await)
 }
 
 pub(super) async fn handle_set_mcp_catalog_sync(id: String, payload: &Value) -> WsReply {

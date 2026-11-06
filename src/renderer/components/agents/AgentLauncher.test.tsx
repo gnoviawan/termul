@@ -3590,6 +3590,39 @@ describe('AgentLauncher worktree isolation', () => {
     fireEvent.change(base, { target: { value: branch } })
   }
 
+  it('re-enables launch when New chat re-shows the launcher while a worktree is still being created', async () => {
+    function PresenceHarness({ show }: { show: boolean }) {
+      return (
+        <TooltipProvider>
+          <MemoryRouter>
+            <AnimatePresence initial={false}>
+              {show ? (
+                <motion.div exit={{ opacity: 0 }} transition={{ duration: 5 }}>
+                  <AgentLauncher paneId="pane1" />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </MemoryRouter>
+        </TooltipProvider>
+      )
+    }
+    mockWorktreeCreate.mockReturnValueOnce(new Promise(() => {}))
+    const { rerender } = render(<PresenceHarness show />)
+    await chooseWorktreeBaseBranch('feat/x')
+    setComposerValue('first')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
+
+    // The chat opened and the worktree is still being created when New chat
+    // brings back this exiting launcher.
+    rerender(<PresenceHarness show={false} />)
+    rerender(<PresenceHarness show />)
+    setComposerValue('second')
+    expect(screen.getByLabelText('Start agent chat')).toBeEnabled()
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(2))
+  })
+
   // CAP-3: launch in worktree mode calls worktreeApi.create once with chat/{id}
   // then copyIncludeFiles, then threads cwd=worktreePath
   it('creates a worktree, copies includes, and threads cwd=worktreePath on launch (CAP-3)', async () => {
@@ -4670,6 +4703,76 @@ describe('AgentLauncher exit handoff', () => {
       // constant dock-offset fallback with identity scale.
       expect(group.style.transform).toBe('translate(0px, 0px) scale(1, 1)')
       expect(group.style.transition).toContain('transform')
+    } finally {
+      restorePaneRoot()
+    }
+  })
+
+  it('launches again when re-shown while the previous launch is still exiting', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-ready-1' }
+    mockClaimPreparedChat
+      .mockReturnValueOnce('prepared-ready-1')
+      .mockReturnValueOnce('prepared-ready-2')
+    // session/prompt resolves at turn end: the first chat's turn keeps running.
+    mockSendPrompt.mockReturnValue(new Promise(() => {}))
+    try {
+      const { rerender } = render(<Harness show />)
+      await screen.findByText(/what should we do/i)
+      setComposerValue('first')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1))
+
+      // New chat inside the exit window: the boundary restores this instance.
+      simulateChatTabTakeover()
+      rerender(<Harness show={false} />)
+      rerender(<Harness show />)
+      setComposerValue('second')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+      expect(mockClaimPreparedChat).toHaveBeenCalledTimes(2)
+      expect(mockAddAgentChatTab).toHaveBeenLastCalledWith('prepared-ready-2', 'pane1')
+    } finally {
+      restorePaneRoot()
+    }
+  })
+
+  it('keeps the newer launch guarded when the earlier launch finishes during it', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-ready-1' }
+    mockClaimPreparedChat
+      .mockReturnValueOnce('prepared-ready-1')
+      .mockReturnValueOnce('prepared-ready-2')
+    let endFirstTurn: () => void = () => {}
+    mockSendPrompt
+      .mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          endFirstTurn = resolve
+        })
+      )
+      .mockReturnValue(new Promise(() => {}))
+    try {
+      const { rerender } = render(<Harness show />)
+      await screen.findByText(/what should we do/i)
+      setComposerValue('first')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1))
+
+      simulateChatTabTakeover()
+      rerender(<Harness show={false} />)
+      rerender(<Harness show />)
+      setComposerValue('second')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2))
+
+      // The first chat's turn ends while the second launch is still in flight.
+      await act(async () => endFirstTurn())
+      setComposerValue('third')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+      expect(mockClaimPreparedChat).toHaveBeenCalledTimes(2)
     } finally {
       restorePaneRoot()
     }
