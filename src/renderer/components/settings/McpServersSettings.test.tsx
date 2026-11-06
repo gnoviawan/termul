@@ -858,6 +858,46 @@ describe('McpServersSettings', () => {
       })
     })
 
+    it('opens Edit as JSON with an invalid form change kept for fixing', () => {
+      useAcpStore.setState({
+        mcpServers: [
+          { id: 'r2', type: 'http', name: 'Remote', url: 'https://old.test/mcp', enabled: true }
+        ]
+      })
+      render(<McpServersSettings />)
+      chooseRowAction('Remote', 'Edit')
+      type('Server URL', 'not a url')
+      fireEvent.click(screen.getByRole('button', { name: 'Edit as JSON' }))
+      expect(editorJson()).toEqual({
+        type: 'http',
+        name: 'Remote',
+        url: 'not a url',
+        enabled: true
+      })
+    })
+
+    it('keeps enabled from the edit JSON after switching back to the form', async () => {
+      useAcpStore.setState({
+        mcpServers: [{ id: 's4', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
+      })
+      render(<McpServersSettings />)
+      openEditJson('Files')
+      const edited = editorJson()
+      edited.enabled = false
+      typeJson(JSON.stringify(edited))
+      fireEvent.click(screen.getByRole('button', { name: 'Use the form' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() =>
+        expect(saveMcpServer).toHaveBeenCalledWith({
+          type: 'stdio',
+          name: 'Files',
+          command: 'node',
+          id: 's4',
+          enabled: false
+        })
+      )
+    })
+
     it('keeps the form open with the rollback toast and a log when the save fails', async () => {
       importMcpServers.mockRejectedValueOnce(new Error('disk full'))
       render(<McpServersSettings />)

@@ -158,7 +158,7 @@ export function rowProblem(row: KeyValueRow): RowProblem | null {
 function filledPairs(rows: KeyValueRow[]): McpEnvVar[] {
   return rows
     .filter((row) => row.name.trim() !== '' && row.value.trim() !== '')
-    .map((row) => ({ name: row.name.trim(), value: row.value.trim() }))
+    .map((row) => ({ name: row.name.trim(), value: row.value }))
 }
 
 function firstRowProblem(rows: KeyValueRow[]): DraftErrors['env'] {
@@ -186,7 +186,7 @@ function buildConfig(draft: McpServerDraft): { config: McpServerConfig; errors: 
   }
   const local = liftEnvPrefix(draft.local)
   const tokens = tokenizeCommandLine(local.commandLine)
-  const [command = '', ...args] = tokens ?? []
+  const [command = '', ...args] = tokens ?? [local.commandLine.trim()]
   const env = filledPairs(local.env)
   const problem = firstRowProblem(local.env)
   return {
@@ -202,6 +202,10 @@ function buildConfig(draft: McpServerDraft): { config: McpServerConfig; errors: 
       ...(tokens ? {} : { commandLine: 'Close the quote in the command.' })
     }
   }
+}
+
+export function draftToUncheckedConfig(draft: McpServerDraft): McpServerConfig {
+  return buildConfig(draft).config
 }
 
 export function draftToConfig(draft: McpServerDraft): DraftResult {

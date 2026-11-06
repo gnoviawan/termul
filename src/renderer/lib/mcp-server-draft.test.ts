@@ -120,6 +120,18 @@ describe('draftToConfig', () => {
     })
   })
 
+  it('saves env values with their surrounding spaces', () => {
+    const draft = localDraft('my-server', [blankRow(' PADDED ', ' two words ')])
+    expect(draftToConfig(draft)).toEqual({
+      config: {
+        type: 'stdio',
+        name: 'github',
+        command: 'my-server',
+        env: [{ name: 'PADDED', value: ' two words ' }]
+      }
+    })
+  })
+
   it('omits empty args and env', () => {
     expect(draftToConfig(localDraft('my-server'))).toEqual({
       config: { type: 'stdio', name: 'github', command: 'my-server' }

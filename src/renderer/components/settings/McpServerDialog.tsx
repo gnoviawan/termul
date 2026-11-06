@@ -19,6 +19,7 @@ import {
   type DraftErrors,
   draftFromServer,
   draftToConfig,
+  draftToUncheckedConfig,
   emptyDraft,
   type McpServerDraft
 } from '@/lib/mcp-server-draft'
@@ -57,6 +58,15 @@ function logMcpJsonRejection(errors: string[]): void {
     source: LOG_SOURCE,
     message: `MCP server JSON rejected: ${errors.join(' | ')}`
   })
+}
+
+function jsonEnabled(text: string): boolean | undefined {
+  try {
+    const raw: unknown = JSON.parse(text)
+    return isRecord(raw) && typeof raw.enabled === 'boolean' ? raw.enabled : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function serverToJson(server: StoredMcpServer): string {
@@ -128,12 +138,11 @@ export function useMcpServerDialog(): {
   const showJson = (state: McpDialogState): void => {
     let text = ''
     if (state.mode === 'edit') {
-      const result = draftToConfig(state.draft)
-      text = serverToJson(
-        'config' in result
-          ? { ...result.config, id: state.server.id, enabled: state.server.enabled }
-          : state.server
-      )
+      text = serverToJson({
+        ...draftToUncheckedConfig(state.draft),
+        id: state.server.id,
+        enabled: state.server.enabled
+      })
     }
     setDialog({ ...targetOf(state), view: 'json', text, errors: [], draft: state.draft })
   }
@@ -144,7 +153,12 @@ export function useMcpServerDialog(): {
       errors.length === 0 && parsed.length === 1 && parsed[0]
         ? draftFromServer({ ...parsed[0], id: '' })
         : state.draft
-    setDialog({ ...targetOf(state), view: 'form', showErrors: false, draft })
+    const enabled = jsonEnabled(state.text)
+    const target =
+      state.mode === 'edit' && enabled !== undefined
+        ? { mode: 'edit' as const, server: { ...state.server, enabled } }
+        : targetOf(state)
+    setDialog({ ...target, view: 'form', showErrors: false, draft })
   }
 
   const logSaveFailure = (mode: McpDialogTarget['mode']): void => {

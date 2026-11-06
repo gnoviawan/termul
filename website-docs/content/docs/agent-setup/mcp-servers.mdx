@@ -22,7 +22,7 @@ Enter the **Server URL** from the server's docs. It usually ends in `/mcp` or `/
 
 Leave **Sign-in** at **Browser sign-in, if the server asks** unless the docs give you an API key. When the server asks you to sign in, its row in the list offers **Connect**. If the docs do give you a key, pick **API key or token** and enter the value of the `Authorization` header, for example `Bearer $LINEAR_API_KEY`.
 
-Termul picks the connection type from the URL. A URL that ends in `/sse` uses SSE, and any other URL uses Streamable HTTP. To change it, or to add other headers, open **Advanced**.
+Termul picks the connection type from the URL. A URL that ends in `/sse` uses SSE, and any other URL uses Streamable HTTP. To change it, open **Advanced**. With **API key or token**, the **Headers** rows sit under **Sign-in**, and you add other headers there. With browser sign-in, add headers under **Advanced**.
 
 ### A server on this computer
 
@@ -90,7 +90,7 @@ When Termul tests a server, it replaces `$NAME` references in `env` with the val
 Use the other buttons on the row to manage the server:
 
 - The switch turns the server on or off. Agents get only the servers that are on.
-- The pencil button opens the server's JSON for editing. Edit one server object here, without the `mcpServers` wrapper.
+- The pencil button opens the server in the same form you added it with. Click **Edit as JSON** to edit one server object instead, without the `mcpServers` wrapper.
 - The trash button deletes the server.
 
 ## Sign in to a server
