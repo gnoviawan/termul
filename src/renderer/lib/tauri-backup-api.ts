@@ -364,8 +364,11 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
     const backupPath = await getBackupPath(backupId)
     const userDataPath = await getUserDataDir()
 
-    // Create backup directory
-    await mkdir(backupPath, { recursive: true })
+    // The backup folder itself is created without `recursive` so mkdir fails
+    // when the path already exists (an existing backup, or a link). Only a
+    // folder this attempt created may be removed on failure below.
+    await mkdir(await getBackupsDir(), { recursive: true })
+    await mkdir(backupPath)
     createdBackupPath = backupPath
 
     const entries = await readDir(userDataPath)

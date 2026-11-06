@@ -229,11 +229,8 @@ describe('tauri-backup-api createBackup directory skipping', () => {
 
     expect(result.success).toBe(false)
 
-    // The only folder created this attempt is the destination backup root; it is
-    // removed recursively so no partial copy is left behind. Nothing else under
-    // backups/ is touched.
-    const createdPath = String(vi.mocked(mkdir).mock.calls[0]?.[0])
-    expect(createdPath.startsWith('/appdata/backups/')).toBe(true)
+    const createdPath = String(vi.mocked(mkdir).mock.calls[1]?.[0])
+    expect(createdPath).toMatch(/^\/appdata\/backups\/\d+$/)
     const removeCalls = vi.mocked(remove).mock.calls
     expect(removeCalls).toHaveLength(1)
     expect(String(removeCalls[0][0])).toBe(createdPath)
