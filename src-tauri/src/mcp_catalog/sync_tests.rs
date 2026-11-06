@@ -547,6 +547,7 @@ fn a_cache_older_than_the_snapshot_never_loads() {
     commit(
         dir.path(),
         &base(&[], false),
+        &base(&[], false).source,
         SyncPlan::Full,
         delta,
         synced_at,
@@ -792,6 +793,7 @@ fn a_failed_snapshot_ignores_an_incremental_cache_and_keeps_a_full_one() {
     commit(
         dir.path(),
         &base(&[], false),
+        &base(&[], false).source,
         SyncPlan::Full,
         full,
         synced_at,
@@ -811,7 +813,8 @@ fn a_failed_snapshot_ignores_an_incremental_cache_and_keeps_a_full_one() {
     commit(
         incremental_dir.path(),
         &base(&["io.example/alpha"], false),
-        SyncPlan::Since(synced_at),
+        &base(&[], false).source,
+        SyncPlan::Since(SNAPSHOT_AT.parse().unwrap()),
         delta,
         "2026-10-29T00:00:00Z".parse().unwrap(),
     )
@@ -824,20 +827,27 @@ fn a_failed_snapshot_ignores_an_incremental_cache_and_keeps_a_full_one() {
     assert!(waiting.source.updated_at.is_none());
 }
 
+/// Commits an incremental sync from `from` with no cache on disk. The loaded
+/// catalog's cursor is `from`, as `SyncPlan::for_catalog` plans it.
 fn commit_beta_over_stamp(
-    stamp: &str,
+    stamp: Option<&str>,
     from: DateTime<Utc>,
 ) -> (tempfile::TempDir, std::io::Result<LoadedCatalog>) {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("registry-cursor.json"), stamp).unwrap();
+    if let Some(stamp) = stamp {
+        std::fs::write(dir.path().join("registry-cursor.json"), stamp).unwrap();
+    }
     let mut delta = Delta::default();
     delta.rows.insert(
         "io.example/beta".to_string(),
         Some(raw_row("io.example/beta")),
     );
+    let mut current = base(&["io.example/alpha"], false);
+    current.source.updated_at = Some(from.to_rfc3339());
     let outcome = commit(
         dir.path(),
-        &base(&["io.example/alpha"], false),
+        &current,
+        &base(&[], false).source,
         SyncPlan::Since(from),
         delta,
         "2026-10-28T00:00:00Z".parse().unwrap(),
@@ -848,30 +858,29 @@ fn commit_beta_over_stamp(
 #[test]
 fn an_incremental_commit_without_a_cache_trusts_only_a_stamp_older_than_the_snapshot() {
     let snapshot_at: DateTime<Utc> = SNAPSHOT_AT.parse().unwrap();
-    let (dir, upgraded) = commit_beta_over_stamp(
-        r#"{"cursor":"2026-10-01T00:00:00.000Z","full":true}"#,
-        snapshot_at,
-    );
-    assert_eq!(upgraded.unwrap().items.len(), 2);
-    let cache = read_cache(dir.path(), &base(&[], false).source).unwrap();
-    assert!(!cache.full);
-    let cached: Vec<_> = cache.servers.keys().map(String::as_str).collect();
-    assert_eq!(cached, ["io.example/beta"]);
+    let old_stamp = r#"{"cursor":"2026-10-01T00:00:00.000Z","full":true}"#;
+    for stamp in [Some(old_stamp), None] {
+        let (dir, started) = commit_beta_over_stamp(stamp, snapshot_at);
+        assert_eq!(started.unwrap().items.len(), 2, "{stamp:?}");
+        let cache = read_cache(dir.path(), &base(&[], false).source).unwrap();
+        assert!(!cache.full);
+        let cached: Vec<_> = cache.servers.keys().map(String::as_str).collect();
+        assert_eq!(cached, ["io.example/beta"]);
+    }
 
+    // A catalog that synced past the snapshot holds changes a delta from its
+    // cursor would not, so a restart onto the snapshot would lose them.
+    let synced_past: DateTime<Utc> = "2026-10-27T12:00:00Z".parse().unwrap();
+    let snapshot_stamp = format!(r#"{{"cursor":"{SNAPSHOT_AT}","full":true}}"#);
     let refused = [
-        (
-            format!(r#"{{"cursor":"{SNAPSHOT_AT}","full":true}}"#),
-            snapshot_at,
-        ),
-        ("not json".to_string(), snapshot_at),
-        (
-            r#"{"cursor":"2026-10-01T00:00:00.000Z","full":false}"#.to_string(),
-            "2026-10-27T12:00:00Z".parse().unwrap(),
-        ),
+        (Some(snapshot_stamp.as_str()), snapshot_at),
+        (Some("not json"), snapshot_at),
+        (Some(old_stamp), synced_past),
+        (None, synced_past),
     ];
     for (stamp, from) in refused {
-        let (_dir, outcome) = commit_beta_over_stamp(&stamp, from);
-        let error = outcome.expect_err(&stamp);
+        let (_dir, outcome) = commit_beta_over_stamp(stamp, from);
+        let error = outcome.expect_err(&format!("{stamp:?} from {from}"));
         assert_eq!(error.to_string(), "registry cache missing or invalid");
     }
 }
@@ -921,6 +930,7 @@ async fn a_rejected_attach_keeps_the_accepted_hosts_directory() {
     commit(
         dir_a.path(),
         &base(&[], true),
+        &base(&[], false).source,
         SyncPlan::Full,
         alpha,
         synced_at,
@@ -934,6 +944,7 @@ async fn a_rejected_attach_keeps_the_accepted_hosts_directory() {
     commit(
         dir_b.path(),
         &base(&[], true),
+        &base(&[], false).source,
         SyncPlan::Full,
         beta,
         synced_at,
@@ -1092,7 +1103,15 @@ async fn an_older_cache_than_the_loaded_snapshot_starts_a_fresh_delta_cache() {
         "io.example/stale".to_string(),
         Some(raw_row("io.example/stale")),
     );
-    commit(dir.path(), &base(&[], false), SyncPlan::Full, stale, old).unwrap();
+    commit(
+        dir.path(),
+        &base(&[], false),
+        &base(&[], false).source,
+        SyncPlan::Full,
+        stale,
+        old,
+    )
+    .unwrap();
     let service = start(
         base(&["io.example/stale", "io.example/alpha"], false),
         dir.path(),

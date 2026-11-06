@@ -13,9 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::Value;
 
-use super::snapshot::{
-    embedded_source, item_from_row, CatalogItem, LoadedCatalog, McpCatalogSource, OFFICIAL_META,
-};
+use super::snapshot::{item_from_row, CatalogItem, LoadedCatalog, McpCatalogSource, OFFICIAL_META};
 use super::McpCatalogService;
 
 pub(crate) const REGISTRY_BASE: &str = "https://registry.modelcontextprotocol.io";
@@ -549,14 +547,20 @@ fn stored_source(dir: &Path, snapshot: &McpCatalogSource) -> McpCatalogSource {
 }
 
 /// Whether an incremental sync with no extendable cache may start a delta-only
-/// one. Yes on the first sync (no stamp), and when the stamp predates the
-/// snapshot the crawl starts from: an upgrade shipped a newer snapshot, so the
-/// delta since it is complete. A stamp at or after the snapshot means its cache
-/// went missing or invalid, and a delta-only cache would drop what it held.
-fn may_start_delta_cache(dir: &Path, source: &McpCatalogSource, from: DateTime<Utc>) -> bool {
+/// one. A restart folds that cache onto the embedded snapshot, so the crawl
+/// must start at or before the snapshot cursor; a loaded catalog that synced
+/// past it holds changes the delta would not. Then yes on the first sync (no
+/// stamp), and when the stamp predates the snapshot: an upgrade shipped a newer
+/// snapshot, so the delta since it is complete. A stamp at or after the
+/// snapshot means its cache went missing or invalid, and a delta-only cache
+/// would drop what it held.
+fn may_start_delta_cache(dir: &Path, snapshot: &McpCatalogSource, from: DateTime<Utc>) -> bool {
+    let Some(at) = source_cursor(snapshot).filter(|at| from <= *at) else {
+        return false;
+    };
     match load_stamp(dir) {
         Ok(None) => true,
-        Ok(Some(stamp)) => source_cursor(source).is_some_and(|at| stamp.cursor < at && from <= at),
+        Ok(Some(stamp)) => stamp.cursor < at,
         Err(()) => false,
     }
 }
@@ -565,6 +569,7 @@ fn may_start_delta_cache(dir: &Path, source: &McpCatalogSource, from: DateTime<U
 fn update_cache(
     dir: &Path,
     source: &McpCatalogSource,
+    snapshot: &McpCatalogSource,
     plan: SyncPlan,
     delta: Delta,
     started_at: DateTime<Utc>,
@@ -573,7 +578,7 @@ fn update_cache(
         SyncPlan::Full => RegistryCache::new(started_at, true),
         SyncPlan::Since(from) => match read_cache(dir, source) {
             Some(cache) => cache,
-            None if may_start_delta_cache(dir, source, from) => {
+            None if may_start_delta_cache(dir, snapshot, from) => {
                 log::info!(
                     "[mcp-catalog] sync starting a fresh delta cache from cursor={}",
                     rfc3339(from)
@@ -602,6 +607,7 @@ fn update_cache(
 pub(crate) fn commit(
     dir: &Path,
     current: &LoadedCatalog,
+    snapshot: &McpCatalogSource,
     plan: SyncPlan,
     delta: Delta,
     started_at: DateTime<Utc>,
@@ -615,7 +621,7 @@ pub(crate) fn commit(
             .map(|(name, row)| (name.clone(), row.as_deref().and_then(item_from_raw)))
             .collect()
     };
-    let cache = update_cache(dir, &current.source, plan, delta, started_at)?;
+    let cache = update_cache(dir, &current.source, snapshot, plan, delta, started_at)?;
     if plan.is_full() {
         return Ok(merge(&LoadedCatalog::default(), &cache));
     }
@@ -769,7 +775,7 @@ impl McpCatalogService {
         if let Some(source) = self.sync_cursor.lock().clone() {
             return source;
         }
-        let snapshot = embedded_source();
+        let snapshot = self.snapshot.clone();
         let dir = self.state_dir.lock().clone();
         let source = match dir {
             Some(dir) => {
@@ -838,17 +844,18 @@ impl McpCatalogService {
         let cursor_slot = Arc::clone(&self.sync_cursor);
         let dir = host.dir.clone();
         let source_for_cache = source.clone();
+        let snapshot = self.snapshot.clone();
         let updated = tokio::task::spawn_blocking(move || -> io::Result<Option<usize>> {
             let _gate = gate.lock();
             // Drop the read guard before `publish` takes the write lock.
             let current = catalog_slot.read().as_ref().map(Arc::clone);
             if let Some(current) = current {
-                let catalog = commit(&dir, &current, plan, delta, started_at)?;
+                let catalog = commit(&dir, &current, &snapshot, plan, delta, started_at)?;
                 let count = catalog.items.len();
                 super::publish(&catalog_slot, &cursor_slot, catalog);
                 Ok(Some(count))
             } else {
-                update_cache(&dir, &source_for_cache, plan, delta, started_at)?;
+                update_cache(&dir, &source_for_cache, &snapshot, plan, delta, started_at)?;
                 *cursor_slot.lock() = Some(source_after_sync(&source_for_cache, plan, started_at));
                 Ok(None)
             }
