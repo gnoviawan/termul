@@ -24,7 +24,9 @@ test.beforeEach(async ({ page }) => {
 test('the status pill waits on background subagents after the turn ends', async ({ page }) => {
   await launchChat(page, `${TITLE} [SUBAGENTS:4] [BG_TAIL:8]`)
   const pane = page.locator('[data-pane-content]').filter({ has: chatTab(page, TITLE) })
-  await expect(pane.getByText('I am waiting for them.').first()).toBeVisible()
+  // An earlier run's chat ends with the same sentence and stays mounted,
+  // invisible, behind this tab. The role query skips it.
+  await expect(pane.getByRole('log').getByText('I am waiting for them.')).toBeVisible()
 
   const pill = pane.getByRole('button', { name: /^Session status: subagents/ })
   await expect(pill).toHaveAccessibleName(

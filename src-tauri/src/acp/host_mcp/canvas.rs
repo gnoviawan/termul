@@ -130,7 +130,7 @@ impl CanvasErrorCode {
                 Self::CanvasTimeout,
                 Some(
                     "get_node" | "inspect_document" | "list_commands" | "list_issues"
-                    | "inspect_ui",
+                    | "inspect_ui" | "wait_for_changes",
                 ),
             ) => Some(
                 "The canvas did not answer in time: retry once, and if it times out again ask \

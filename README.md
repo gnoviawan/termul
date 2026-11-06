@@ -423,6 +423,8 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 - [Tauri](https://tauri.app/) — Desktop app framework
 - [FigCraft](https://github.com/storytold/figcraft) — Canvas based on FigCraft by the ArtCraft team (MIT OR Apache-2.0)
 - [Inter](https://github.com/rsms/inter) — Font embedded in the canvas, Copyright (c) 2016 The Inter Project Authors, SIL Open Font License 1.1 ([licence](canvas/licenses/OFL-inter.txt))
+- [Noto Sans Georgian](https://github.com/notofonts/georgian) — Font embedded in the canvas, Copyright 2022 The Noto Project Authors, SIL Open Font License 1.1 ([licence](canvas/licenses/OFL-noto-sans-georgian.txt)). The canvas bundle also ships the SIL OFL 1.1 licence of each family in FigCraft's font catalog as `OFL-<family>.txt`
+- [Ubuntu](https://design.ubuntu.com/font), [Hack](https://github.com/source-foundry/Hack), [Noto Emoji](https://github.com/googlefonts/noto-emoji) and [emoji-icon-font](https://github.com/jslegers/emoji-icon-font) — egui's interface fonts, embedded in the canvas editor: Ubuntu Light, Copyright 2011 Canonical Ltd., Ubuntu Font Licence 1.0 ([licence](canvas/licenses/UFL-ubuntu.txt)); Hack, Copyright 2018 Source Foundry Authors, MIT, with Bitstream Vera Sans Mono, Copyright 2003 Bitstream Inc., Bitstream Vera License ([licence](canvas/licenses/LICENSE-hack.txt)); Noto Emoji, Copyright 2013 Google Inc., SIL Open Font License 1.1 ([licence](canvas/licenses/OFL-noto-emoji.txt)); emoji-icon-font, Copyright (c) 2014 John Slegers, MIT ([licence](canvas/licenses/MIT-emoji-icon-font.txt))
 
 ---
 

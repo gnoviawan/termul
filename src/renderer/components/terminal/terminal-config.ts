@@ -10,13 +10,17 @@ export const RESIZE_DEBOUNCE_MS = 50
 // behavior (e.g., correct line wrapping calculations).
 export const CONPTY_MIN_BUILD_NUMBER = 21376
 
+// Row height shared by every terminal surface and the preview.
+export const TERMINAL_LINE_HEIGHT = 1.2
+
 export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
   // Bundled Paper Mono on every OS. `monospace` covers glyphs the file lacks.
   fontFamily: MONO_STACK,
   fontSize: 14,
-  lineHeight: 1.2,
+  lineHeight: TERMINAL_LINE_HEIGHT,
   cursorBlink: true,
   cursorStyle: 'block',
+  cursorInactiveStyle: 'outline',
   allowTransparency: false,
   scrollback: 10000,
   tabStopWidth: 4,

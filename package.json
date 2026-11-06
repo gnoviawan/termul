@@ -1,7 +1,7 @@
 {
   "name": "termul-manager",
   "productName": "Termul Manager",
-  "version": "0.4.52",
+  "version": "0.4.60",
   "description": "Project-aware terminal that treats workspaces as first-class citizens",
   "author": "gnoviawan",
   "contributors": [
@@ -98,6 +98,7 @@
     "@blocknote/code-block": "^0.46.2",
     "@blocknote/core": "^0.46.2",
     "@blocknote/react": "^0.46.2",
+    "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.10.2",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-html": "^6.4.11",

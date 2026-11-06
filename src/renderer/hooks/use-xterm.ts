@@ -3,6 +3,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import { useCallback, useEffect, useRef } from 'react'
+import { TERMINAL_LINE_HEIGHT } from '@/components/terminal/terminal-config'
 import { bindXtermTouchTapFocus } from '@/components/terminal/xterm-touch-tap-focus'
 import { getActiveTerminalTheme } from '@/lib/themes'
 
@@ -92,10 +93,11 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
     const terminal = new Terminal({
       fontFamily,
       fontSize,
-      lineHeight: 1.2,
+      lineHeight: TERMINAL_LINE_HEIGHT,
       theme: getActiveTerminalTheme(),
       cursorBlink: true,
       cursorStyle: 'block',
+      cursorInactiveStyle: 'none',
       allowTransparency: false,
       scrollback,
       tabStopWidth: 4,

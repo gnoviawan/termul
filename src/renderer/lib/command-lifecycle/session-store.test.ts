@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs'
+import type { EditorView } from '@codemirror/view'
 import type { SessionLifecyclePayload } from '@shared/types/web-terminal-protocol.types'
 import { listen } from '@tauri-apps/api/event'
+import { cleanup, render } from '@testing-library/react'
+import { createElement } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
+import { CommandEditor } from '@/components/terminal/command-editor/CommandEditor'
 import { terminalApi } from '@/lib/api'
 import { createTauriTerminalApi } from '@/lib/tauri-terminal-api'
 import { mockTerminal } from '@/lib/test-utils/terminal'
@@ -12,6 +16,7 @@ import { commandDraftStore } from './draft-store'
 import { sessionStore } from './session-store'
 
 afterEach(() => {
+  cleanup()
   vi.restoreAllMocks()
   sessionStore.reset()
   commandDraftStore.processExited('t1')
@@ -498,6 +503,21 @@ it('process exit drops the stored draft', () => {
     prompt_suppressed: true
   })
   expect(sessionStore.read('t1').mode).toBe('Editor')
+
+  const viewRef: { current: EditorView | null } = { current: null }
+  render(createElement(CommandEditor, { terminalId: 't1', focused: false, viewRef }))
+  expect(viewRef.current?.state.doc.toString()).toBe('')
+
+  const connected = readFileSync('src/renderer/components/terminal/ConnectedTerminal.tsx', 'utf8')
+  const exitBlocks = connected.split('terminalApi.onExit(').slice(1)
+  expect(exitBlocks).toHaveLength(2)
+  for (const block of exitBlocks) {
+    const callbackBody = block.split('cleanupExitListenerRef')[0] ?? block
+    const exitHelperIdx = callbackBody.indexOf('sessionStore.processExited(')
+    const onExitIdx = callbackBody.indexOf('onExitRef.current')
+    expect(exitHelperIdx).toBeGreaterThan(-1)
+    expect(exitHelperIdx).toBeLessThan(onExitIdx)
+  }
 })
 
 function trustedPromptSnapshot() {
@@ -577,6 +597,9 @@ for (const kind of ['Desync', 'CommandStarted', 'PromptReady'] as const) {
     sessionStore.apply('t1', { ...prompt, prompt_generation: 2 })
     expect(sessionStore.read('t1').mode).toBe('Editor')
     expect(commandDraftStore.read('t1')).toBe('unfinished draft')
+    const viewRef: { current: EditorView | null } = { current: null }
+    render(createElement(CommandEditor, { terminalId: 't1', focused: false, viewRef }))
+    expect(viewRef.current?.state.doc.toString()).toBe('unfinished draft')
   })
 }
 
