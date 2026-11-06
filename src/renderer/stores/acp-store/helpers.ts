@@ -14,7 +14,7 @@ import {
 } from '@/components/chat/chat-input-bar-config'
 import { stripHandoffPreamble } from '@/components/chat/handoff-summary'
 import { runningBackgroundSubagents } from '@/components/chat/subagent-strip'
-import { describeToolCall, toolCallPath } from '@/components/chat/tool-call-summary'
+import { describeToolCall, toolCallChangedPaths } from '@/components/chat/tool-call-summary'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import {
   type AgentId,
@@ -941,21 +941,18 @@ export const MAX_LIVE_TOOL_CALLS = 500
 
 /**
  * The restored-style summary of a file-changing call: its paths (both ends
- * of a move), kind, status and line counts, which the changed files list
- * reads, without the diff text. Null for a call that changes no file.
+ * of a move, every file of a multi-file edit), kind, status and line counts,
+ * which the changed files list reads, without the diff text. Null for a call
+ * that changes no file.
  */
 function fileChangeSummary(call: ToolCall): ToolCall | null {
   if (call.kind !== 'edit' && call.kind !== 'delete' && call.kind !== 'move') return null
-  const paths = new Set<string>()
-  for (const raw of [toolCallPath(call), ...(call.locations ?? []).map((loc) => loc.path)]) {
-    const path = raw?.trim()
-    if (path) paths.add(path)
-  }
-  if (paths.size === 0) return null
+  const paths = toolCallChangedPaths(call)
+  if (paths.length === 0) return null
   const summary: ToolCall = {
     toolCallId: call.toolCallId,
     kind: call.kind,
-    locations: Array.from(paths, (path) => ({ path })),
+    locations: paths.map((path) => ({ path })),
     restoredSummary: true
   }
   if (call.status !== undefined) summary.status = call.status
