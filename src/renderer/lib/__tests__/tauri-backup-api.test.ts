@@ -41,7 +41,8 @@ vi.mock('../log-api', () => ({
   logFrontendError: vi.fn(async () => {})
 }))
 
-import { copyFile, mkdir, readDir } from '@tauri-apps/plugin-fs'
+import { copyFile, mkdir, readDir, remove } from '@tauri-apps/plugin-fs'
+import { Store } from '@tauri-apps/plugin-store'
 import { logFrontendError } from '../log-api'
 import { _resetBackupStateForTesting, createBackup } from '../tauri-backup-api'
 
@@ -216,5 +217,73 @@ describe('tauri-backup-api createBackup directory skipping', () => {
     if (!result.success) {
       expect(result.error).toContain('permission denied')
     }
+  })
+
+  it('removes the partial backup folder it created when the copy fails', async () => {
+    vi.mocked(readDir).mockImplementation(async (path: string | URL) =>
+      String(path) === '/appdata' ? [file('settings.json')] : []
+    )
+    vi.mocked(copyFile).mockRejectedValueOnce('permission denied')
+
+    const result = await createBackup()
+
+    expect(result.success).toBe(false)
+
+    const createdPath = String(vi.mocked(mkdir).mock.calls[1]?.[0])
+    expect(createdPath).toMatch(/^\/appdata\/backups\/\d+$/)
+    const removeCalls = vi.mocked(remove).mock.calls
+    expect(removeCalls).toHaveLength(1)
+    expect(String(removeCalls[0][0])).toBe(createdPath)
+    expect(removeCalls[0][1]).toEqual({ recursive: true })
+  })
+
+  it('reports the original failure and logs when removing the partial folder also fails', async () => {
+    vi.mocked(readDir).mockImplementation(async (path: string | URL) =>
+      String(path) === '/appdata' ? [file('settings.json')] : []
+    )
+    vi.mocked(copyFile).mockRejectedValueOnce('permission denied')
+    vi.mocked(remove).mockRejectedValueOnce('folder in use')
+
+    const result = await createBackup()
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      // The original copy failure is still what the caller sees.
+      expect(result.error).toContain('permission denied')
+    }
+
+    const warning = vi
+      .mocked(logFrontendError)
+      .mock.calls.map((c) => c[0])
+      .find((payload) => payload.level === 'warn')
+    expect(warning?.message).toContain('failed to remove partial backup folder')
+    expect(warning?.message).toContain('folder in use')
+  })
+
+  it('does not remove anything when a successful backup leaves no partial folder', async () => {
+    vi.mocked(readDir).mockImplementation(async (path: string | URL) =>
+      String(path) === '/appdata' ? [file('settings.json')] : []
+    )
+
+    const result = await createBackup()
+
+    expect(result.success).toBe(true)
+    expect(vi.mocked(remove)).not.toHaveBeenCalled()
+  })
+
+  it('keeps a completed backup when a step after backup-info.json fails', async () => {
+    vi.mocked(readDir).mockImplementation(async (path: string | URL) =>
+      String(path) === '/appdata' ? [file('settings.json')] : []
+    )
+    // getAppVersion swallows the first load failure; the second one hits the
+    // metadata write that runs after backup-info.json is written.
+    vi.mocked(Store.load)
+      .mockRejectedValueOnce('store unavailable')
+      .mockRejectedValueOnce('store unavailable')
+
+    const result = await createBackup()
+
+    expect(result.success).toBe(false)
+    expect(vi.mocked(remove)).not.toHaveBeenCalled()
   })
 })
