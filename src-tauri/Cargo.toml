@@ -156,6 +156,10 @@ rmcp = { version = "3.5.0", features = [
 # the fork's `termul-*` release tag, which `scripts/canvas/check-figcraft-pin.mjs`
 # compares with canvas/figcraft.pin.
 figcraft-mcp = { git = "https://github.com/gnoviawan/figcraft", tag = "termul-v0.6.0" }
+# figcraft-mcp's engine, for its default key bindings: the canvas policy routes
+# a `ui.key` call as the command its key runs (`acp/host_mcp/canvas_policy.rs`).
+# Same tag as figcraft-mcp; a test checks the lock holds one figcraft-engine.
+figcraft-engine = { git = "https://github.com/gnoviawan/figcraft", tag = "termul-v0.6.0" }
 # OAuth2 — needed for the `TokenResponse` trait used by the MCP OAuth flow
 # (rmcp's `auth` feature pulls this transitively, but we use it directly).
 oauth2 = "5.0"

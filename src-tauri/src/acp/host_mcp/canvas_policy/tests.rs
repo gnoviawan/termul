@@ -10,15 +10,19 @@ fn refused(route: &CanvasRoute) -> bool {
     matches!(route, CanvasRoute::Refuse(error) if error.code == CanvasErrorCode::UnsupportedInKiosk)
 }
 
-/// The id of every command the pinned engine runs.
-fn engine_commands() -> std::collections::BTreeSet<String> {
+/// Every command the pinned engine runs: `{id, label, params, ...}`, where
+/// `params` documents its parameters for agents.
+fn engine_specs() -> Vec<Value> {
     use figcraft_mcp::Backend as _;
     let listed = figcraft_mcp::Headless::new()
         .call("engine.commands", json!({}))
         .unwrap();
-    listed
-        .as_array()
-        .unwrap()
+    listed.as_array().unwrap().clone()
+}
+
+/// The id of every command the pinned engine runs.
+fn engine_commands() -> std::collections::BTreeSet<String> {
+    engine_specs()
         .iter()
         .filter_map(|command| command["id"].as_str().map(str::to_owned))
         .collect()
@@ -594,6 +598,45 @@ fn reaching_a_server_or_choosing_the_server_the_editor_contacts_is_refused() {
     }
 }
 
+/// A listener standing in for a server the agent chose, and its WebSocket URL.
+fn agents_server() -> (std::net::TcpListener, String) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("ws://{}/agent-chosen-path/", listener.local_addr().unwrap());
+    (listener, url)
+}
+
+/// The request the editor sent the agent's server within a second, if any.
+fn request_received(listener: &std::net::TcpListener) -> Option<String> {
+    for _ in 0..10 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if let Ok((mut stream, _)) = listener.accept() {
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+                .unwrap();
+            let mut request = [0u8; 256];
+            let read = std::io::Read::read(&mut stream, &mut request).unwrap_or(0);
+            return Some(String::from_utf8_lossy(&request[..read]).into_owned());
+        }
+    }
+    None
+}
+
+/// Send `call` the way the gateway does: a forwarded call reaches the
+/// editor, and a refused one answers its message.
+fn send(editor: &mut figcraft_mcp::Headless, call: Value) -> Option<String> {
+    use figcraft_mcp::Backend as _;
+    match route("engine.execute", &call) {
+        CanvasRoute::Forward => {
+            let _ = editor.call("engine.execute", call);
+            None
+        }
+        CanvasRoute::Refuse(error) => Some(error.message),
+        other => panic!("{call}: {other:?}"),
+    }
+}
+
 /// The figcraft audit's probe, sent through the policy the way the gateway
 /// sends calls: an agent points the editor's sharing server at a listener and
 /// asks it to refresh the online files, which made the engine open a
@@ -601,44 +644,188 @@ fn reaching_a_server_or_choosing_the_server_the_editor_contacts_is_refused() {
 /// link, so a forwarded call would really connect.
 #[test]
 fn an_agent_cannot_point_the_editor_at_its_own_server_and_make_it_connect() {
-    use figcraft_mcp::Backend as _;
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let url = format!("ws://{}/agent-chosen-path/", listener.local_addr().unwrap());
+    let (listener, url) = agents_server();
     let mut editor = figcraft_mcp::Headless::new();
-    let mut refusals = Vec::new();
-    for call in [
-        execute("pref.publishServer", json!({"url": url})),
-        execute("collab.files", json!({"refresh": true})),
-    ] {
-        match route("engine.execute", &call) {
-            CanvasRoute::Forward => {
-                let _ = editor.call("engine.execute", call);
-            }
-            CanvasRoute::Refuse(error) => refusals.push(error.message),
-            other => panic!("{call}: {other:?}"),
-        }
-    }
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    if let Ok((mut stream, _)) = listener.accept() {
-        stream.set_nonblocking(false).unwrap();
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
-            .unwrap();
-        let mut request = [0u8; 256];
-        let read = std::io::Read::read(&mut stream, &mut request).unwrap_or(0);
-        panic!(
-            "the editor connected to the agent's server: {}",
-            String::from_utf8_lossy(&request[..read])
-        );
-    }
+    let refusals = [
+        send(
+            &mut editor,
+            execute("pref.publishServer", json!({"url": url})),
+        ),
+        send(
+            &mut editor,
+            execute("collab.files", json!({"refresh": true})),
+        ),
+    ];
+    assert_eq!(request_received(&listener), None);
     assert_eq!(
         refusals,
         [
-            "`pref.publishServer` sets the sharing server the editor contacts for online files \
-             and join codes, which the Termul canvas does not allow",
-            "`collab.files` is for live sessions and files kept on a sharing server outside \
-             Termul, which the Termul canvas does not allow",
+            Some(
+                "`pref.publishServer` sets the sharing server the editor contacts for online \
+                 files and join codes, which the Termul canvas does not allow"
+                    .to_string()
+            ),
+            Some(
+                "`collab.files` is for live sessions and files kept on a sharing server outside \
+                 Termul, which the Termul canvas does not allow"
+                    .to_string()
+            ),
+        ]
+    );
+}
+
+/// An editor showing a document that links the team library "Brand" on
+/// `url`, as a document the user opened or cloned can.
+fn editor_with_team_library(url: &str) -> figcraft_mcp::Headless {
+    use base64::Engine as _;
+    use figcraft_mcp::Backend as _;
+    let base64 = base64::engine::general_purpose::STANDARD;
+    let mut editor = figcraft_mcp::Headless::new();
+    let saved = editor
+        .call(
+            "engine.execute",
+            execute("file.saveAs", json!({"data": true})),
+        )
+        .unwrap();
+    let saved = saved.get("result").unwrap_or(&saved);
+    let bytes = base64.decode(saved["data"].as_str().unwrap()).unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut linked = std::io::Cursor::new(Vec::new());
+    let mut writer = zip::ZipWriter::new(&mut linked);
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().to_string();
+        let mut data = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut data).unwrap();
+        if name == "document.json" {
+            let mut document: Value = serde_json::from_slice(&data).unwrap();
+            document["libraries"] = json!({"enabled": [{
+                "id": "lib-brand",
+                "name": "Brand",
+                "path": format!("{url}?file=brandfile&token=aaaaaaaaaaaaaaaaaaaaaaaa"),
+                "version": 1
+            }]});
+            data = serde_json::to_vec(&document).unwrap();
+        }
+        writer
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut writer, &data).unwrap();
+    }
+    writer.finish().unwrap();
+    let data = base64.encode(linked.into_inner());
+    editor
+        .call(
+            "engine.execute",
+            execute(
+                "file.open",
+                json!({"data": data, "name": "design.figcraft"}),
+            ),
+        )
+        .unwrap();
+    editor
+}
+
+const BRAND_STYLE: &str = r#"{"library": "Brand", "style": "Primary"}"#;
+
+/// The second audit's probe: `text.preview` runs the command it names, and
+/// a preview of `library.applyStyle` made the editor load the document's
+/// team library from the agent's server.
+#[test]
+fn previewing_a_team_library_style_cannot_make_the_editor_connect() {
+    let (listener, url) = agents_server();
+    let mut editor = editor_with_team_library(&url);
+    assert_eq!(
+        request_received(&listener),
+        None,
+        "opening contacts nothing"
+    );
+    let style: Value = serde_json::from_str(BRAND_STYLE).unwrap();
+    let preview = execute(
+        "text.preview",
+        json!({"command": "library.applyStyle", "params": style}),
+    );
+    let refusals = [
+        send(&mut editor, preview.clone()),
+        send(
+            &mut editor,
+            execute("command.batch", json!({"commands": [preview]})),
+        ),
+    ];
+    assert_eq!(request_received(&listener), None);
+    let preview_refusal = "`text.preview` runs the command it previews: `library.applyStyle` \
+                           loads the document's linked libraries, which contacts the servers of \
+                           its team libraries and reads library files outside the project, which \
+                           the Termul canvas does not allow";
+    assert_eq!(
+        refusals,
+        [
+            Some(preview_refusal.to_string()),
+            Some(format!("batch step 0: {preview_refusal}")),
+        ]
+    );
+}
+
+/// A batch step's param can be a reference to an earlier step's result,
+/// which the engine fills in after Termul checked the batch. The audit's
+/// preview names its command that way, and an export takes its path that
+/// way, so each is refused unread.
+#[test]
+fn a_batch_step_cannot_take_a_param_termul_checks_from_an_earlier_step() {
+    let (listener, url) = agents_server();
+    let mut editor = editor_with_team_library(&url);
+    let outside = std::env::temp_dir().join(format!(
+        "termul-canvas-reference-{}.svg",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&outside);
+    // `proto.evaluate` answers `{value: {value}}` with the text the agent wrote.
+    let named = |text: &str| {
+        json!({"command": "proto.evaluate", "as": "named", "params": {
+            "expression": format!("'{text}'")
+        }})
+    };
+    let text_of_named = json!({"$ref": "named", "field": "value/value"});
+    let preview = execute(
+        "command.batch",
+        json!({"commands": [
+            named("library.applyStyle"),
+            {"command": "text.preview", "params": {
+                "command": text_of_named,
+                "params": serde_json::from_str::<Value>(BRAND_STYLE).unwrap()
+            }}
+        ]}),
+    );
+    let export = execute(
+        "command.batch",
+        json!({"commands": [
+            {"command": "node.create", "as": "frame", "params": {
+                "type": "frame", "width": 10, "height": 10
+            }},
+            named(outside.to_str().unwrap()),
+            {"command": "file.exportSvg", "params": {
+                "ids": [{"$ref": "frame"}], "path": text_of_named
+            }}
+        ]}),
+    );
+    let refusals = [send(&mut editor, preview), send(&mut editor, export)];
+    assert_eq!(request_received(&listener), None);
+    assert!(!outside.exists(), "the editor wrote {}", outside.display());
+    assert_eq!(
+        refusals,
+        [
+            Some(
+                "batch step 1: `text.preview` runs the command it previews: its `command` is \
+                 taken from an earlier batch step, which Termul cannot check before the batch \
+                 runs; name the command itself"
+                    .to_string()
+            ),
+            Some(
+                "batch step 2: `file.exportSvg` reads or writes files, which the Termul canvas \
+                 does not allow: save_file saves the project's document, and export returns \
+                 bytes or writes inside the project"
+                    .to_string()
+            ),
         ]
     );
 }
@@ -686,6 +873,94 @@ fn every_command_in_a_server_family_is_refused_unless_reviewed_to_contact_none()
         .filter(|id| !refused(&route("engine.execute", &execute(id, json!({})))))
         .collect();
     assert_eq!(forwarded, CONTACTS_NO_SERVER);
+}
+
+/// The params of a wrapper's call that runs `inner` (`{command, params}`).
+type Wrapping = fn(Value) -> Value;
+
+/// Commands that run another command named in their params, each with a
+/// call of it running the command `inner`.
+const RUNS_THE_COMMAND_IT_NAMES: &[(&str, Wrapping)] = &[
+    (
+        "command.batch",
+        |inner| json!({"commands": [{"command": "node.create", "params": {}}, inner]}),
+    ),
+    ("text.preview", |inner| inner),
+];
+
+/// Commands whose label or params speak of commands but name no engine
+/// command they run, reviewed against the pinned engine.
+const NAMES_NO_ENGINE_COMMAND: &[&str] = &[
+    // `command` is one of the installed plugin's own commands. The engine
+    // calls it makes go through figcraft's plugin policy and the
+    // plugin's permissions, like every installed plugin run.
+    "plugin.run",
+    // Its params are widget layers; "the next command" is what ends its
+    // hover preview.
+    "widget.hover",
+];
+
+/// Whether a command's label or documented parameters (before the `→` of
+/// its result) speak of commands.
+fn names_a_command(spec: &Value) -> bool {
+    let params = spec["params"].as_str().unwrap_or_default();
+    let inputs = params.split('→').next().unwrap_or_default();
+    format!("{} {inputs}", spec["label"].as_str().unwrap_or_default())
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|word| word.eq_ignore_ascii_case("command") || word.eq_ignore_ascii_case("commands"))
+}
+
+/// A command that runs a command it names would carry a refused command past
+/// a policy that reads only the outer id, so every such command the engine
+/// forwards is routed by the command it runs, or reviewed above.
+#[test]
+fn every_command_that_runs_a_command_it_names_is_routed_by_that_command() {
+    let mut forwarded: Vec<String> = engine_specs()
+        .iter()
+        .filter(|spec| names_a_command(spec))
+        .filter_map(|spec| spec["id"].as_str())
+        .filter(|id| !refused(&route("engine.execute", &execute(id, json!({})))))
+        .map(str::to_owned)
+        .collect();
+    forwarded.sort_unstable();
+    let mut reviewed: Vec<&str> = RUNS_THE_COMMAND_IT_NAMES
+        .iter()
+        .map(|(id, _)| *id)
+        .chain(NAMES_NO_ENGINE_COMMAND.iter().copied())
+        .collect();
+    reviewed.sort_unstable();
+    assert_eq!(forwarded, reviewed);
+    for (wrapper, call_running) in RUNS_THE_COMMAND_IT_NAMES {
+        for (command, params, does) in REACHES_A_SERVER {
+            let params: Value = serde_json::from_str(params).unwrap();
+            let call = execute(
+                wrapper,
+                call_running(json!({"command": command, "params": params})),
+            );
+            let message = refusal("engine.execute", &call).message;
+            assert!(
+                message.ends_with(&format!(
+                    "`{command}` {does}, which the Termul canvas does not allow"
+                )),
+                "{call}: {message}"
+            );
+        }
+        let save = execute(wrapper, call_running(json!({"command": "file.save"})));
+        refusal("engine.execute", &save);
+    }
+}
+
+/// `edit.repeat` runs the editor's last command again: one Termul never saw
+/// when the user ran it, such as a team library style from the Libraries
+/// panel.
+#[test]
+fn repeating_the_editors_last_command_is_refused() {
+    assert_eq!(
+        refusal("engine.execute", &execute("edit.repeat", json!({}))).message,
+        "`edit.repeat` runs the editor's last command again, which may be one the user ran and \
+         which Termul cannot check, so the Termul canvas does not allow it. Run that command \
+         itself instead"
+    );
 }
 
 #[test]
@@ -1133,4 +1408,112 @@ fn an_export_write_lands_in_the_folder_it_opened_even_if_it_moves() {
         .map(|entry| entry.unwrap().file_name())
         .collect();
     assert_eq!(leftovers, ["a.png"]);
+}
+
+/// `ui.key` params pressing `spec`, a figcraft key binding (`Shift+Cmd+K`).
+fn pressing(spec: &str) -> Value {
+    let mut params = serde_json::Map::new();
+    for part in spec.split('+') {
+        match part {
+            "Shift" | "Cmd" | "Ctrl" | "Alt" => {
+                params.insert(part.to_ascii_lowercase(), json!(true));
+            }
+            key => {
+                params.insert("key".to_string(), json!(key));
+            }
+        }
+    }
+    Value::Object(params)
+}
+
+/// `ui.key` runs the command its key is bound to, so a shortcut for a
+/// command the policy refuses or handles itself would run it past the
+/// policy: every such binding, on either platform, is refused naming it.
+#[test]
+fn every_shortcut_for_a_command_termul_refuses_or_handles_is_refused() {
+    use figcraft_engine::keymap::{bindings, Platform};
+    let mut pressed = Vec::new();
+    for (command, _) in COMMANDS {
+        if route("engine.execute", &execute(command, json!({}))) == CanvasRoute::Forward {
+            continue;
+        }
+        for platform in [Platform::Mac, Platform::Other] {
+            for spec in bindings(command, platform) {
+                let message = refusal("ui.key", &pressing(spec)).message;
+                assert!(
+                    message.contains(&format!("runs the shortcut `{command}`: ")),
+                    "{spec}: {message}"
+                );
+                pressed.push(*command);
+            }
+        }
+    }
+    pressed.sort_unstable();
+    pressed.dedup();
+    assert_eq!(
+        pressed,
+        [
+            "collab.cursorChat",
+            "doc.nextTab",
+            "doc.previousTab",
+            "file.close",
+            "file.new",
+            "file.open",
+            "file.save",
+            "file.saveAs",
+            "text.openLink",
+        ]
+    );
+    for spec in ["Cmd+Z", "R", "Shift+Cmd+E", "Shift+Cmd+K", "Escape"] {
+        assert_eq!(
+            route("ui.key", &pressing(spec)),
+            CanvasRoute::Forward,
+            "{spec}"
+        );
+    }
+}
+
+/// Pressing New file through the `key` tool would put a second document in
+/// front of the project's, which Termul's save would then write over it.
+#[test]
+fn a_shortcut_cannot_open_a_second_document() {
+    use figcraft_mcp::Backend as _;
+    let mut editor = figcraft_mcp::Headless::new();
+    let documents = |editor: &mut figcraft_mcp::Headless| {
+        editor
+            .call("engine.execute", execute("doc.list", json!({})))
+            .unwrap()
+    };
+    let before = documents(&mut editor);
+    let press = json!({"key": "N", "cmd": true});
+    let refused = match route("ui.key", &press) {
+        CanvasRoute::Forward => {
+            let _ = editor.call("ui.key", press);
+            None
+        }
+        CanvasRoute::Refuse(error) => Some(error.message),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(documents(&mut editor), before);
+    assert_eq!(
+        refused.as_deref(),
+        Some(
+            "`ui.key` cmd+N runs the shortcut `file.new`: `file.new` opens, closes or switches \
+             documents, which the Termul canvas does not allow: it shows only the project's \
+             document, with no tabs to switch back, and Termul's save would write the document \
+             in front over the project's canvas file"
+        )
+    );
+}
+
+/// The key bindings the policy reads come from the same engine the
+/// `figcraft-mcp` pin builds, never a second copy at another tag.
+#[test]
+fn the_policy_reads_key_bindings_from_the_pinned_engine() {
+    let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.lock")).unwrap();
+    let engines: Vec<&str> = lock
+        .split("\n[[package]]\n")
+        .filter(|package| package.starts_with("name = \"figcraft-engine\"\n"))
+        .collect();
+    assert_eq!(engines.len(), 1, "{engines:#?}");
 }

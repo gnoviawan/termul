@@ -7929,6 +7929,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "cron",
+ "figcraft-engine",
  "figcraft-mcp",
  "flate2",
  "futures",
