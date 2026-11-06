@@ -11,7 +11,9 @@
 //! command that would leave the project's one document behind or make the
 //! editor contact a server ([`Why`]). A call that runs another command,
 //! named in its params (`command.batch`, `text.preview`) or bound to the key
-//! it presses (`ui.key`), is routed as each command it runs.
+//! it presses (`ui.key`), is routed as each command it runs. Termul decides
+//! by reading a command's params, so a command whose whole params are a
+//! reference the engine fills in from an earlier batch step is refused.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -290,6 +292,15 @@ fn route_execute(execute: &Value) -> CanvasRoute {
         return CanvasRoute::Forward;
     };
     let params = execute.get("params").unwrap_or(&Value::Null);
+    if is_reference(params) {
+        return CanvasRoute::Refuse(CanvasError::new(
+            CanvasErrorCode::UnsupportedInKiosk,
+            format!(
+                "`{command}`'s params come from an earlier batch step, so Termul cannot check \
+                 them; pass them directly"
+            ),
+        ));
+    }
     match command {
         BATCH => return route_batch(params),
         PREVIEW => return route_preview(params),
@@ -298,9 +309,7 @@ fn route_execute(execute: &Value) -> CanvasRoute {
     match COMMANDS.iter().find(|(name, _)| *name == command) {
         None => CanvasRoute::Forward,
         Some((_, CommandPolicy::HostSave)) => CanvasRoute::HostSave,
-        Some((_, CommandPolicy::ExportTo))
-            if is_reference(params) || unresolved(params, "path") =>
-        {
+        Some((_, CommandPolicy::ExportTo)) if unresolved(params, "path") => {
             CanvasRoute::Refuse(refusal(command, Why::Files { instead: None }))
         }
         Some((_, CommandPolicy::ExportTo)) => match string_param(params, "path") {

@@ -830,6 +830,86 @@ fn a_batch_step_cannot_take_a_param_termul_checks_from_an_earlier_step() {
     );
 }
 
+/// The third audit's probe: a step stores a `library.applyStyle` call as a
+/// widget's state, `widget.list` reads it back as JSON, and a `text.preview`
+/// step takes its whole params from that, which made the editor load the
+/// team library from the agent's server.
+#[test]
+fn a_batch_step_cannot_take_its_whole_params_from_an_earlier_step() {
+    let (listener, url) = agents_server();
+    let mut editor = editor_with_team_library(&url);
+    let state = json!({
+        "command": "library.applyStyle",
+        "params": serde_json::from_str::<Value>(BRAND_STYLE).unwrap()
+    });
+    let batch = execute(
+        "command.batch",
+        json!({"commands": [
+            {"command": "node.create", "as": "widget", "params": {
+                "type": "frame", "width": 10, "height": 10
+            }},
+            {"command": "node.set", "params": {"ids": [{"$ref": "widget"}], "props": {
+                "pluginData": {"figcraft.widget": "x.y", "figcraft.widget.state": state.to_string()}
+            }}},
+            {"command": "widget.list", "params": {}},
+            {"command": "text.preview", "params": {"$step": 2, "field": "widgets/0/state"}}
+        ]}),
+    );
+    let refusal = send(&mut editor, batch);
+    assert_eq!(request_received(&listener), None);
+    assert_eq!(
+        refusal.as_deref(),
+        Some(
+            "batch step 3: `text.preview`'s params come from an earlier batch step, so Termul \
+             cannot check them; pass them directly"
+        )
+    );
+}
+
+#[test]
+fn every_command_whose_whole_params_come_from_an_earlier_step_is_refused() {
+    let message = |route: CanvasRoute| match route {
+        CanvasRoute::Refuse(error) if error.code == CanvasErrorCode::UnsupportedInKiosk => {
+            error.message
+        }
+        other => format!("{other:?}"),
+    };
+    for command in engine_commands() {
+        for reference in [
+            json!({"$step": 0}),
+            json!({"$ref": "first", "field": "ids"}),
+            json!({"$name": "first"}),
+        ] {
+            let step = execute(&command, reference.clone());
+            let preview = execute(
+                "text.preview",
+                json!({"command": command, "params": reference}),
+            );
+            let batch = |step: &Value| {
+                execute(
+                    "command.batch",
+                    json!({"commands": [
+                        {"command": "node.create", "as": "first", "params": {"type": "frame"}},
+                        step
+                    ]}),
+                )
+            };
+            let unread = format!(
+                "`{command}`'s params come from an earlier batch step, so Termul cannot check \
+                 them; pass them directly"
+            );
+            assert_eq!(
+                message(route("engine.execute", &batch(&step))),
+                format!("batch step 1: {unread}"),
+            );
+            assert_eq!(
+                message(route("engine.execute", &batch(&preview))),
+                format!("batch step 1: `text.preview` runs the command it previews: {unread}"),
+            );
+        }
+    }
+}
+
 /// Engine command families that reach servers or open links. The reviewed
 /// command list only catches new ids, not an existing command that starts
 /// contacting a server, so every command in these families is refused
