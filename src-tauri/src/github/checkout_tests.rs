@@ -38,7 +38,13 @@ struct Checkout {
 impl Checkout {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let main = dir.path().canonicalize().unwrap().join("main");
+        // Windows canonicalize adds the `\\?\` verbatim prefix, which
+        // `git worktree add` rejects ("could not create leading directories").
+        let canonical = dir.path().canonicalize().unwrap();
+        let main = PathBuf::from(
+            crate::path_validation::strip_verbatim_prefix(&canonical.to_string_lossy()).as_ref(),
+        )
+        .join("main");
         std::fs::create_dir(&main).unwrap();
         git(&main, &["init", "-q", "-b", "main"]);
         git(

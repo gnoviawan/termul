@@ -35,6 +35,17 @@ compile_error!(
      release binary (rust-embed embeds the Vite bundle at cargo-build time)"
 );
 
+// Release builds without the figcraft canvas bundle fail here too (set by
+// `build.rs` via the `canvas_bundle_missing` cfg), so no release binary ships
+// a canvas that answers BUNDLE_MISSING. `build.rs` sets the cfg only for the
+// release profile, so dev builds stay green.
+#[cfg(canvas_bundle_missing)]
+compile_error!(
+    "canvas/bundle/ is missing: run `bun scripts/canvas/fetch-figcraft-bundle.mjs` before \
+     building a release binary (rust-embed embeds the figcraft canvas at cargo-build time), \
+     or set TERMUL_ALLOW_MISSING_CANVAS_BUNDLE=1 to build without the canvas"
+);
+
 /// The SPA entry served for any non-asset path (the hash-router client).
 const INDEX_HTML: &str = "index.html";
 
@@ -415,9 +426,10 @@ fn read_bundle_file(path: &str) -> Option<BundleFile> {
 }
 
 /// Whether the active bundle source (the dev override directory, else the
-/// embedded set) holds an `index.html`.
+/// embedded set) holds a non-empty `index.html`. An empty one would serve a
+/// blank canvas, so it counts as missing.
 pub fn canvas_bundle_available() -> bool {
-    read_bundle_file(INDEX_HTML).is_some()
+    read_bundle_file(INDEX_HTML).is_some_and(|file| !file.data.is_empty())
 }
 
 /// Typed 503 for a request that reaches a build without the bundle.

@@ -69,6 +69,9 @@ pub const FILE_INPUT: Helper = helper!("file_input");
 /// WebKit engines set a file input by answering the chooser it opens.
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
 pub const OPEN_FILE_CHOOSER: Helper = helper!("open_file_chooser");
+/// WebKit engines confirm the answered chooser filled the input.
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+pub const INPUT_FILE_COUNT: Helper = helper!("input_file_count");
 
 /// Main-world script every agent tab frame runs at document start on
 /// engines whose console is observed by page script: it buffers console
@@ -206,6 +209,13 @@ pub fn file_input(path: &str) -> Script {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn open_file_chooser(path: &str) -> Script {
     Script::new(OPEN_FILE_CHOOSER, json!({ "path": path }))
+}
+
+/// How many files the file input at `path` holds; -1 when `path` names
+/// anything else.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub fn input_file_count(path: &str) -> Script {
+    Script::new(INPUT_FILE_COUNT, json!({ "path": path }))
 }
 
 /// Up to `limit` UTF-16 units of the rendered text of the element at

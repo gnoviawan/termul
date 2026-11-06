@@ -60,7 +60,7 @@ mod ui {
     use tokio::sync::oneshot;
 
     use super::{release_tab, stage};
-    use crate::browser_automation::budgets::FILE_CHOOSER;
+    use crate::browser_automation::budgets::{FILE_CHOOSER, UPLOAD_SETTLE};
     use crate::browser_automation::engine::string_eval::{self, Completion};
     use crate::browser_automation::engine::{assets, EngineError, EngineErrorKind};
     use crate::browser_tab_manager::BrowserTabManager;
@@ -76,13 +76,14 @@ mod ui {
         eval: F,
     ) -> Result<(), EngineError>
     where
-        F: FnOnce(&PlatformWebview, &str, &str, Completion) + Send + 'static,
+        F: Fn(&PlatformWebview, &str, &str, Completion) + Copy + Send + 'static,
     {
         let script = assets::open_file_chooser(path);
         let body = string_eval::call_body(&script);
         let params = string_eval::params_json(&script);
         let (chosen_tx, chosen_rx) = oneshot::channel();
         let label = tab.to_string();
+        let want = files.len();
         let files = files.to_vec();
         // Staged in the same UI-thread job that opens the chooser, so the
         // hook can never see the chooser before the files.
@@ -93,7 +94,7 @@ mod ui {
         .await;
         let outcome = match opened {
             Ok(Value::Bool(true)) => match tokio::time::timeout(FILE_CHOOSER, chosen_rx).await {
-                Ok(Ok(())) => return Ok(()),
+                Ok(Ok(())) => return wait_for_files(tabs, tab, path, want, eval).await,
                 Ok(Err(_)) => EngineError::new(EngineErrorKind::NoReply),
                 Err(_) => EngineError::new(EngineErrorKind::Timeout),
             },
@@ -107,6 +108,47 @@ mod ui {
         }
         Err(outcome)
     }
+
+    /// The chooser hook answered, but WebKit may fill the input (and fire
+    /// its `change`) a moment later: WKWebView on macOS 15 does. Report the
+    /// upload only once the input holds the files, so the agent's next step
+    /// sees them.
+    async fn wait_for_files<F>(
+        tabs: &BrowserTabManager,
+        tab: &str,
+        path: &str,
+        want: usize,
+        eval: F,
+    ) -> Result<(), EngineError>
+    where
+        F: Fn(&PlatformWebview, &str, &str, Completion) + Copy + Send + 'static,
+    {
+        let script = assets::input_file_count(path);
+        let body = string_eval::call_body(&script);
+        let params = string_eval::params_json(&script);
+        let deadline = tokio::time::Instant::now() + UPLOAD_SETTLE;
+        loop {
+            let (body, params) = (body.clone(), params.clone());
+            let count = string_eval::call(tabs, tab, move |platform, done| {
+                eval(platform, &body, &params, done)
+            })
+            .await?;
+            match count.as_i64() {
+                Some(n) if n >= 0 && n as usize >= want => return Ok(()),
+                Some(n) if n >= 0 => {}
+                _ => return Err(EngineError::new(EngineErrorKind::PageException)),
+            }
+            if tokio::time::Instant::now() >= deadline {
+                log::warn!(
+                    "[browser-tab] upload chooser answered but the file input never held the files"
+                );
+                return Err(EngineError::new(EngineErrorKind::Timeout));
+            }
+            tokio::time::sleep(SETTLE_POLL).await;
+        }
+    }
+
+    const SETTLE_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 }
 
 #[cfg(test)]

@@ -452,6 +452,17 @@ mod served_from_dev_dir {
     }
 
     #[tokio::test]
+    async fn an_empty_index_answers_the_same_typed_error() {
+        let _bundle = Bundle::with(&[("index.html", b""), ("app.js", b"export default 1")]);
+        let id = "cv_empty_index";
+        let token = bundle_tokens().issue(id).unwrap();
+        let response = get(&format!("/canvas/{id}/{token}/"), &HeaderMap::new());
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+        assert_eq!(body["code"], "BUNDLE_MISSING");
+    }
+
+    #[tokio::test]
     async fn web_router_and_desktop_router_serve_the_same_bundle() {
         let _bundle = Bundle::standard();
         let id = "cv_parity";
