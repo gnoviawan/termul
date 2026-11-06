@@ -19,6 +19,7 @@ import { SettingsSwitchRow } from '@/components/settings/SettingsSwitchRow'
 import { type StatusTone, StatusWord } from '@/components/settings/StatusWord'
 import { Button } from '@/components/ui/button'
 import { PANEL_FIELD_CLASS, PANEL_FIELD_ICON_CLASS } from '@/components/ui/panel-styles'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { useMcpCatalogInstall } from '@/hooks/use-mcp-catalog-install'
 import { type McpCatalogResults, useMcpCatalogSearch } from '@/hooks/use-mcp-catalog-search'
@@ -81,8 +82,40 @@ function openLink(url: string, failure: string): void {
   })
 }
 
-function CatalogSource({ state, setSync }: McpCatalogStatusHandle): React.JSX.Element | null {
-  if (state.status === 'loading') return null
+/** One text line of the placeholder: `line` is the line box, `bar` the bar. */
+function PlaceholderLine({ line, bar }: { line: string; bar: string }): React.JSX.Element {
+  return (
+    <div className={cn('flex items-center', line)}>
+      <Skeleton className={cn('max-w-full', bar)} />
+    </div>
+  )
+}
+
+/**
+ * Line-for-line stand-in for the source card while the first status loads, so
+ * the search box under it does not jump down when the card arrives.
+ */
+function CatalogSourcePlaceholder(): React.JSX.Element {
+  return (
+    <SettingsCard aria-busy="true" data-testid="mcp-catalog-source-placeholder">
+      <div aria-hidden className="flex flex-col gap-1 px-4 py-3">
+        <PlaceholderLine line="h-5" bar="h-3.5 w-56" />
+        <PlaceholderLine line="h-4" bar="h-3 w-44" />
+        <PlaceholderLine line="h-4" bar="h-3 w-24" />
+      </div>
+      <div aria-hidden className="flex items-center gap-x-6 px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <PlaceholderLine line="h-5" bar="h-3.5 w-48" />
+          <PlaceholderLine line="mt-0.5 h-5" bar="h-3 w-80" />
+        </div>
+        <Skeleton className="h-5 w-9 shrink-0 rounded-full" />
+      </div>
+    </SettingsCard>
+  )
+}
+
+function CatalogSource({ state, setSync }: McpCatalogStatusHandle): React.JSX.Element {
+  if (state.status === 'loading') return <CatalogSourcePlaceholder />
   if (state.status === 'unavailable') {
     return (
       <p className="px-1 text-xs text-muted-foreground">
