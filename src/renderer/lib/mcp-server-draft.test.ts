@@ -46,6 +46,12 @@ describe('tokenizeCommandLine', () => {
     ])
   })
 
+  it('reads a backslash before a space or quote outside quotes as an escape', () => {
+    expect(
+      tokenizeCommandLine(`node /home/alice/My\\ Tools/server.js it\\'s C:\\tools\\x.exe`)
+    ).toEqual(['node', '/home/alice/My Tools/server.js', "it's", 'C:\\tools\\x.exe'])
+  })
+
   it('returns null for an unclosed quote', () => {
     expect(tokenizeCommandLine('npx "@scope/pkg')).toBeNull()
   })

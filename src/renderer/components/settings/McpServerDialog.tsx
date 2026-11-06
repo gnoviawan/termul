@@ -60,6 +60,16 @@ function logMcpJsonRejection(errors: string[]): void {
   })
 }
 
+const FORM_NEEDS_ONE_SERVER = 'The form holds one valid server. Fix the JSON, or save it from here.'
+
+function isBlankDraft(draft: McpServerDraft): boolean {
+  return (
+    draft.name.trim() === '' &&
+    draft.remote.url.trim() === '' &&
+    draft.local.commandLine.trim() === ''
+  )
+}
+
 function jsonEnabled(text: string): boolean | undefined {
   try {
     const raw: unknown = JSON.parse(text)
@@ -136,23 +146,26 @@ export function useMcpServerDialog(): {
     setDialog((prev) => (prev?.view === 'json' ? { ...prev, errors } : prev))
 
   const showJson = (state: McpDialogState): void => {
-    let text = ''
-    if (state.mode === 'edit') {
-      text = serverToJson({
-        ...draftToUncheckedConfig(state.draft),
-        id: state.server.id,
-        enabled: state.server.enabled
-      })
-    }
+    const config = draftToUncheckedConfig(state.draft)
+    const text =
+      state.mode === 'edit'
+        ? serverToJson({ ...config, id: state.server.id, enabled: state.server.enabled })
+        : isBlankDraft(state.draft)
+          ? ''
+          : serverToJson({ ...config, id: '' })
     setDialog({ ...targetOf(state), view: 'json', text, errors: [], draft: state.draft })
   }
 
   const showForm = (state: McpDialogState & { view: 'json' }): void => {
-    const { servers: parsed, errors } = parseMcpJsonImport(state.text)
-    const draft =
-      errors.length === 0 && parsed.length === 1 && parsed[0]
-        ? draftFromServer({ ...parsed[0], id: '' })
-        : state.draft
+    let draft = state.draft
+    if (state.text.trim() !== '') {
+      const { servers: parsed, errors } = parseMcpJsonImport(state.text)
+      if (errors.length > 0 || parsed.length !== 1 || !parsed[0]) {
+        setJsonErrors([FORM_NEEDS_ONE_SERVER])
+        return
+      }
+      draft = draftFromServer({ ...parsed[0], id: '' })
+    }
     const enabled = jsonEnabled(state.text)
     const target =
       state.mode === 'edit' && enabled !== undefined

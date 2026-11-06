@@ -777,6 +777,34 @@ describe('McpServersSettings', () => {
       )
     })
 
+    it('stays on JSON with a message when the JSON holds more than one server', () => {
+      render(<McpServersSettings />)
+      openAddDialog()
+      const text = JSON.stringify({
+        mcpServers: { a: { command: 'a' }, b: { url: 'https://b.test/mcp' } }
+      })
+      typeJson(text)
+      fireEvent.click(screen.getByRole('button', { name: 'Use the form' }))
+      expect(screen.getByLabelText('MCP JSON')).toHaveValue(text)
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'The form holds one valid server. Fix the JSON, or save it from here.'
+      )
+    })
+
+    it('shows the add form as JSON when switching to Import JSON instead', () => {
+      render(<McpServersSettings />)
+      openAddForm()
+      type('Name', 'docs')
+      type('Server URL', 'https://docs.test/mcp')
+      fireEvent.click(screen.getByRole('button', { name: 'Import JSON instead' }))
+      expect(editorJson()).toEqual({
+        type: 'http',
+        name: 'docs',
+        url: 'https://docs.test/mcp',
+        enabled: true
+      })
+    })
+
     it('edits a server in the form, keeping its id, enabled state and catalog provenance', async () => {
       const catalog = {
         source: 'mcp-registry' as const,

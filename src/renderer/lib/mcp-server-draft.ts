@@ -79,6 +79,8 @@ type Token = { value: string; start: number }
 
 const DOUBLE_QUOTE_ESCAPES = new Set(['"', '\\'])
 
+const UNQUOTED_ESCAPES = /^[\s'"]$/
+
 function scanTokens(line: string): Token[] | null {
   const tokens: Token[] = []
   let value = ''
@@ -96,6 +98,10 @@ function scanTokens(line: string): Token[] | null {
         i += 1
       } else if (char === '"') quote = null
       else value += char
+    } else if (char === '\\' && UNQUOTED_ESCAPES.test(next)) {
+      if (start === -1) start = i
+      value += next
+      i += 1
     } else if (/\s/.test(char)) {
       if (start !== -1) tokens.push({ value, start })
       value = ''
