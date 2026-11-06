@@ -3596,7 +3596,8 @@ fn file_change_summary_gate_and_path_precedence() {
         json!({"toolCallId":"r", "kind":"read", "locations":[{"path":"/a.ts"}]}),
     );
     assert_eq!(read, json!({"toolCallId":"r", "kind":"read"}));
-    // `locations[0].path` wins over rawInput and diff paths.
+    // `locations[0].path` comes first (over rawInput), then every location,
+    // then every diff path.
     let edit = reduced_tool(
         "tool_call",
         json!({"toolCallId":"e", "kind":"edit",
@@ -3604,7 +3605,10 @@ fn file_change_summary_gate_and_path_precedence() {
             "rawInput":{"path":"/input.ts"},
             "content":[{"type":"diff", "path":"/diff.ts", "oldText":null, "newText":"x\n"}]}),
     );
-    assert_eq!(edit["locations"], json!([{"path":"/loc.ts"}]));
+    assert_eq!(
+        edit["locations"],
+        json!([{"path":"/loc.ts"}, {"path":"/second.ts"}, {"path":"/diff.ts"}])
+    );
     assert_eq!(edit["diffStat"], json!({"added":1, "removed":0}));
     // rawInput PATH_KEYS order + trim, ahead of the diff path.
     let input = reduced_tool(
@@ -3613,7 +3617,10 @@ fn file_change_summary_gate_and_path_precedence() {
             "rawInput":{"fileName":"/late.ts", "file_path":"  /input.ts  ", "path":"   "},
             "content":[{"type":"diff", "path":"/diff.ts", "newText":""}]}),
     );
-    assert_eq!(input["locations"], json!([{"path":"/input.ts"}]));
+    assert_eq!(
+        input["locations"],
+        json!([{"path":"/input.ts"}, {"path":"/diff.ts"}])
+    );
     // Diff path fallback (first diff item with a path).
     let diff_only = reduced_tool(
         "tool_call",

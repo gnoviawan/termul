@@ -1,5 +1,9 @@
 import { useMemo } from 'react'
-import { describeToolCall, toolCallPath } from '@/components/chat/tool-call-summary'
+import {
+  describeToolCall,
+  toolCallChangedPaths,
+  toolCallPath
+} from '@/components/chat/tool-call-summary'
 import type { ToolCall } from '@/lib/acp-api'
 import type { GitDisplayStatus } from '@/lib/git-status-display'
 import { useGitChangedFiles } from './use-git-changed-files'
@@ -151,16 +155,15 @@ function extractChangedFiles(toolCalls: ToolCall[], cwd: string): ChangedFile[] 
 
 /**
  * The resolved paths this session's file-changing calls touched, both ends of
- * a move included: the git rows the session may claim. A failed call changed
- * nothing, so it claims no row.
+ * a move and every file of a multi-file edit included: the git rows the
+ * session may claim. A failed call changed nothing, so it claims no row.
  */
 function sessionTouchedPaths(toolCalls: ToolCall[], cwd: string): Set<string> {
   const paths = new Set<string>()
   for (const tc of toolCalls) {
     if (!isChangedFileKind(tc.kind) || tc.status === 'failed') continue
-    for (const raw of [toolCallPath(tc), ...(tc.locations ?? []).map((loc) => loc.path)]) {
-      const trimmed = raw?.trim()
-      const path = trimmed && resolveFilePath(trimmed, cwd)
+    for (const raw of toolCallChangedPaths(tc)) {
+      const path = resolveFilePath(raw, cwd)
       if (path) paths.add(path)
     }
   }
