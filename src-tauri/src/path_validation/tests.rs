@@ -205,3 +205,18 @@ fn plain_windows_client_path_drops_a_verbatim_prefix_in_any_slash_style() {
         r"\\srv\share\p\a.figcraft"
     );
 }
+
+#[test]
+fn test_git_path_strips_verbatim_for_git_exe() {
+    // Mirrors the Windows CI failure in #1724: canonicalize + worktree add.
+    assert_eq!(
+        git_path(r"\\?\C:\Users\runneradmin\AppData\Local\Temp\.tmpABC\main").as_ref(),
+        r"C:\Users\runneradmin\AppData\Local\Temp\.tmpABC\main"
+    );
+    assert_eq!(
+        git_path(r"\\?\UNC\server\share\repo").as_ref(),
+        r"\\server\share\repo"
+    );
+    assert_eq!(git_path("/home/user/project").as_ref(), "/home/user/project");
+    assert_eq!(git_path("chat/abc").as_ref(), "chat/abc");
+}

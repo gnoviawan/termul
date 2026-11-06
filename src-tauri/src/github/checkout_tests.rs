@@ -38,7 +38,16 @@ struct Checkout {
 impl Checkout {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let main = dir.path().canonicalize().unwrap().join("main");
+        // canonicalize yields `\\?\…` on Windows; git rejects those (#1724).
+        // Prefer a plain path for the repo root (GitTracker also scrubs, but
+        // keeping the fixture non-verbatim matches guard_tests / production).
+        let main = PathBuf::from(
+            crate::path_validation::git_path(
+                &dir.path().canonicalize().unwrap().to_string_lossy(),
+            )
+            .as_ref(),
+        )
+        .join("main");
         std::fs::create_dir(&main).unwrap();
         git(&main, &["init", "-q", "-b", "main"]);
         git(
