@@ -13,12 +13,21 @@ export function stripVerbatimPrefix(path: string): string {
     .replace(/^[\\/]{2}\?[\\/](?=[A-Za-z]:)/, '')
 }
 
+// A component that a plain Windows path cannot name: one ending in `.` or a
+// space (Windows trims those) or a reserved device name such as `AUX.txt`.
+const VERBATIM_ONLY_COMPONENT =
+  /(?:^|[\\/])(?:[^\\/]*[. ]|(?:con|prn|aux|nul|conin\$|conout\$|(?:com|lpt)[1-9\u00b9\u00b2\u00b3])(?:\.[^\\/]*)?)(?=[\\/]|$)/i
+
 /**
- * `path` in the form the OS shell opens. Windows trims a trailing `.` or space
- * from every component of a plain path, so a name like `notes.` is reachable
- * only through the verbatim form: such a path keeps its prefix.
+ * `path` as the Windows shell (`ShellExecuteExW`, `ILCreateFromPathW`) takes
+ * it: a verbatim drive or UNC path loses its prefix. Elsewhere `path` is
+ * returned as is, since `//?/x` is an ordinary path on macOS and Linux. A path
+ * with a component only the verbatim form can name also stays as is: the
+ * plain spelling would address a different file, so the shell call fails with
+ * its own error instead.
  */
-export function shellPath(path: string): string {
+export function shellPath(path: string, os: string): string {
+  if (os !== 'windows') return path
   const stripped = stripVerbatimPrefix(path)
-  return /[. ](?:[\\/]|$)/.test(stripped) && stripped !== path ? path : stripped
+  return VERBATIM_ONLY_COMPONENT.test(stripped) ? path : stripped
 }
