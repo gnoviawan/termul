@@ -17,7 +17,7 @@ import type { IpcResult } from '@shared/types/ipc.types'
 import { openPath, openUrl, revealItemInDir } from '@tauri-apps/plugin-opener'
 
 import { isTauriContext } from './tauri-runtime'
-import { stripVerbatimPrefix } from './windows-verbatim-path'
+import { shellPath } from './windows-verbatim-path'
 
 export interface OpenerApi {
   openWithExternalApp: (path: string) => Promise<IpcResult<void>>
@@ -36,7 +36,7 @@ function createTauriOpenerApi(): OpenerApi {
         }
       }
       try {
-        await openPath(stripVerbatimPrefix(path))
+        await openPath(shellPath(path))
         return { success: true, data: undefined }
       } catch (error) {
         return {
@@ -109,7 +109,7 @@ function createTauriOpenerApi(): OpenerApi {
         }
       }
       try {
-        await revealItemInDir(stripVerbatimPrefix(path))
+        await revealItemInDir(shellPath(path))
         return { success: true, data: undefined }
       } catch (error) {
         return {

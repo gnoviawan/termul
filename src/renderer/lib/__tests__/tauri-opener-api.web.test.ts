@@ -218,6 +218,32 @@ describe('revealInFileManager (web branch: WEB_UNSUPPORTED)', () => {
     ])
   })
 
+  it('desktop: passes a verbatim path that is not a drive or UNC path through unchanged', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockRevealItemInDir.mockResolvedValue(undefined)
+    mockOpenPath.mockResolvedValue(undefined)
+    const volume = String.raw`\\?\Volume{0b1c2d3e-0000-0000-0000-100000000000}\proj`
+
+    await openerApi.revealInFileManager(volume)
+    await openerApi.revealInFileManager('//?/notes.txt')
+    await openerApi.openWithExternalApp('//?/notes.txt')
+
+    expect(mockRevealItemInDir.mock.calls).toEqual([[volume], ['//?/notes.txt']])
+    expect(mockOpenPath).toHaveBeenCalledWith('//?/notes.txt')
+  })
+
+  it('desktop: keeps the prefix on a name only the verbatim form can reach', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockRevealItemInDir.mockResolvedValue(undefined)
+    mockOpenPath.mockResolvedValue(undefined)
+
+    await openerApi.openWithExternalApp('//?/E:/pawbytes/notes.')
+    await openerApi.revealInFileManager(String.raw`\\?\E:\pawbytes\draft \a.md`)
+
+    expect(mockOpenPath).toHaveBeenCalledWith('//?/E:/pawbytes/notes.')
+    expect(mockRevealItemInDir).toHaveBeenCalledWith(String.raw`\\?\E:\pawbytes\draft \a.md`)
+  })
+
   it('desktop: opens a verbatim Windows path without its prefix', async () => {
     mockIsTauriContext.mockReturnValue(true)
     mockOpenPath.mockResolvedValue(undefined)
