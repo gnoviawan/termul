@@ -808,6 +808,47 @@ describe('acp-store', () => {
     }
   })
 
+  it('a late dispatch reply does not cancel the busy retry armed for the next prompt', async () => {
+    vi.useFakeTimers()
+    try {
+      seedSession('s1', 'agent-1', false)
+      const x: ContentBlock[] = [{ type: 'text', text: 'X' }]
+      const y: ContentBlock[] = [{ type: 'text', text: 'Y' }]
+      const xReply = deferred<string>()
+      const sendPromptBlocks = vi
+        .fn()
+        .mockReturnValueOnce(xReply.promise)
+        .mockRejectedValueOnce(
+          new AcpTransportError('rate_limited', 'ACP_TURN_IN_PROGRESS: session s1')
+        )
+        .mockReturnValue(new Promise(() => {}))
+      _setAcpTransportForTests({
+        sendPrompt: sendPromptBlocks,
+        sendPromptBlocks,
+        dispose: vi.fn()
+      } as unknown as AcpTransport)
+
+      void useAcpStore.getState().sendPromptBlocks('s1', x)
+      await vi.advanceTimersByTimeAsync(0)
+      await useAcpStore.getState().sendPromptBlocks('s1', y)
+
+      // X's turn ends from its event before X's reply lands; Y goes out, is
+      // rejected as busy and waits on its retry timer.
+      completeSentTurn('end_turn')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(sendPromptBlocks).toHaveBeenCalledTimes(2)
+      expect(useAcpStore.getState().promptQueues['s1'].map((q) => q.blocks)).toEqual([y])
+
+      xReply.resolve('end_turn')
+      await vi.advanceTimersByTimeAsync(COMMAND_RESEND_DELAYS_MS[0])
+
+      expect(sendPromptBlocks).toHaveBeenCalledTimes(3)
+      expect(sendPromptBlocks.mock.calls[2][2]).toEqual(y)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('queues a prompt sent while a history reopen is in flight, then flushes onto the repointed agent', async () => {
     // Mid-reopen shape: the install stamps status 'closed' while
     // `openingHistoryIds` marks the open in flight. A send typed in that

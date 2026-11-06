@@ -209,6 +209,14 @@ function clearBusyQueueRetry(sessionId: SessionId): void {
 }
 
 /**
+ * Start the busy-retry ladder over after a dispatch settles. An armed timer
+ * belongs to a later prompt the host rejected as busy, so it keeps running.
+ */
+function resetBusyQueueRetry(sessionId: SessionId): void {
+  if (!busyQueueRetries.get(sessionId)?.timer) busyQueueRetries.delete(sessionId)
+}
+
+/**
  * End the current turn after the macrotask queue drains so streamed
  * `acp:message_chunk` events delivered alongside `acp:prompt_complete` are
  * still accepted. Only the durable `prompt_complete` (live or replayed) and
@@ -668,11 +676,11 @@ export async function runPromptTurn(
     }
     dispatchedAgentId = liveSession.agentId
     settleDispatch(await send(liveSession, turnId))
-    clearBusyQueueRetry(sessionId)
+    resetBusyQueueRetry(sessionId)
   } catch (err) {
     // Only a busy rejection keeps the retry ladder; any other outcome (an
     // echo-accepted or reconciled turn, a definite failure) starts it over.
-    if (!isPromptTurnInProgressError(err)) clearBusyQueueRetry(sessionId)
+    if (!isPromptTurnInProgressError(err)) resetBusyQueueRetry(sessionId)
     if (isPromptTurnInProgressError(err)) {
       settleCommand(turnId, 'rejected')
       activeWirePromptTurns.delete(sessionId)
