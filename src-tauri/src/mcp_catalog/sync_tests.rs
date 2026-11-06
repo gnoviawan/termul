@@ -947,3 +947,107 @@ async fn an_aborted_load_publishes_the_catalog_once() {
     assert_eq!(status.servers, super::load_for_use(None).items.len());
     assert!(service.is_loaded());
 }
+
+fn registry_rows(names: &[(&str, &str)]) -> Vec<Value> {
+    names
+        .iter()
+        .map(|(name, version)| row(name, version, "active", true))
+        .collect()
+}
+
+fn assert_named(got: &[(String, String, Value)], expected: &[(&str, &str)]) {
+    let pairs: Vec<_> = got
+        .iter()
+        .map(|(name, version, _)| (name.as_str(), version.as_str()))
+        .collect();
+    assert_eq!(pairs, expected);
+}
+
+/// Full crawl replaces the catalog. A restart with sync off must still see it,
+/// which a delta-only cache merged onto the sample snapshot would not.
+async fn assert_full_crawl_survives_restart(
+    mock: &MockRegistry,
+    dir: &Path,
+    service: &McpCatalogService,
+    expected: &[(&str, &str)],
+) {
+    let status = until(service, idle).await;
+    assert!(!status.source.sample);
+    let requests = mock.requests();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains("version=latest")),
+        "recovery must crawl the whole registry: {requests:?}"
+    );
+    assert_named(&rows(service).await, expected);
+
+    write_setting(dir, false);
+    let restarted = counting_service(&Arc::new(AtomicUsize::new(0)));
+    tokio::spawn({
+        let restarted = Arc::clone(&restarted);
+        let path = dir.to_path_buf();
+        async move {
+            restarted
+                .attach(path, Registry::new("http://127.0.0.1:9").unwrap())
+                .await;
+        }
+    });
+    let mut last = Vec::new();
+    for _ in 0..50 {
+        last = rows(&restarted).await;
+        if last.len() == expected.len()
+            && last.iter().zip(expected).all(
+                |((name, version, _), (expect_name, expect_version))| {
+                    name == expect_name && version == expect_version
+                },
+            )
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_named(&last, expected);
+}
+
+#[tokio::test]
+async fn an_older_cache_than_the_loaded_snapshot_recovers_with_a_full_crawl() {
+    let expected = [("io.example/alpha", "2.0.0"), ("io.example/gamma", "1.0.0")];
+    let mock = MockRegistry::new(registry_rows(&expected), vec![]);
+    let registry = serve(&mock).await;
+    let dir = tempfile::tempdir().unwrap();
+    let old: DateTime<Utc> = "2026-10-01T00:00:00Z".parse().unwrap();
+    let mut stale = Delta::default();
+    stale.rows.insert(
+        "io.example/stale".to_string(),
+        Some(raw_row("io.example/stale")),
+    );
+    commit(dir.path(), &base(&[], false), SyncPlan::Full, stale, old).unwrap();
+    let service = start(
+        base(&["io.example/stale", "io.example/alpha"], false),
+        dir.path(),
+        &registry,
+    );
+
+    assert_full_crawl_survives_restart(&mock, dir.path(), &service, &expected).await;
+}
+
+#[tokio::test]
+async fn a_loaded_catalog_with_a_stamp_and_no_cache_recovers_with_a_full_crawl() {
+    let expected = [("io.example/alpha", "2.0.0"), ("io.example/gamma", "1.0.0")];
+    let mock = MockRegistry::new(registry_rows(&expected), vec![]);
+    let registry = serve(&mock).await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("registry-cursor.json"),
+        format!(r#"{{"cursor":"{SNAPSHOT_AT}","full":false}}"#),
+    )
+    .unwrap();
+    let service = start(
+        base(&["io.example/stale", "io.example/alpha"], false),
+        dir.path(),
+        &registry,
+    );
+
+    assert_full_crawl_survives_restart(&mock, dir.path(), &service, &expected).await;
+}

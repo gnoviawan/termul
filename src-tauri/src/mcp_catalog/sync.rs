@@ -31,6 +31,8 @@ const REQUEST_ATTEMPTS: u32 = 3;
 const CACHE_FORMAT_VERSION: u32 = 2;
 const CONFIG_SCHEMA_VERSION: u32 = 1;
 const CACHE_FILE: &str = "registry-cache.json.gz";
+/// `update_cache` returns this when `Since` has a stamp but no extendable cache.
+const CACHE_UNAVAILABLE: &str = "registry cache missing or invalid";
 /// Cursor and `full` flag, so the next sync can plan without parsing `CACHE_FILE`.
 const STAMP_FILE: &str = "registry-cursor.json";
 const CONFIG_FILE: &str = "config.json";
@@ -557,12 +559,13 @@ fn update_cache(
         SyncPlan::Full => RegistryCache::new(started_at, true),
         SyncPlan::Since(_) => match read_cache(dir, source) {
             Some(cache) => cache,
+            // The first incremental sync has no stamp and no cache. Later
+            // failures (a stamp whose cache is missing, invalid, or older than
+            // the snapshot) must not invent a delta-only cache.
             None if !dir.join(STAMP_FILE).exists() => RegistryCache::new(started_at, false),
             None => {
-                log::warn!(
-                    "[mcp-catalog] incremental sync refused, registry cache is missing or invalid"
-                );
-                return Err(io::Error::other("registry cache missing or invalid"));
+                log::warn!("[mcp-catalog] incremental sync cannot extend the registry cache");
+                return Err(io::Error::other(CACHE_UNAVAILABLE));
             }
         },
     };
@@ -785,10 +788,7 @@ impl McpCatalogService {
         .ok();
     }
 
-    async fn sync_once(&self, host: &SyncHost) -> Result<(), SyncError> {
-        let started_at = Utc::now();
-        let source = self.sync_source().await;
-        let plan = SyncPlan::for_catalog(&source);
+    async fn crawl(&self, host: &SyncHost, plan: SyncPlan) -> Result<Delta, SyncError> {
         let full = plan.is_full();
         match plan {
             SyncPlan::Full => log::info!("[mcp-catalog] sync start: full crawl"),
@@ -797,14 +797,25 @@ impl McpCatalogService {
         *self.phase.lock() = SyncPhase::Syncing { full, fetched: 0 };
         // Biased so the setting is checked before every poll of the crawl: no page,
         // refetch, or retry goes out once sync is off, and a request in flight is dropped.
-        let delta = tokio::select! {
+        tokio::select! {
             biased;
-            () = host.until_enabled_is(false) => return Err(SyncError::Cancelled),
+            () = host.until_enabled_is(false) => Err(SyncError::Cancelled),
             delta = fetch(&host.registry, plan, |fetched| {
                 *self.phase.lock() = SyncPhase::Syncing { full, fetched };
-            }) => delta?,
-        };
+            }) => delta,
+        }
+    }
+
+    async fn store(
+        &self,
+        host: &SyncHost,
+        plan: SyncPlan,
+        delta: Delta,
+        started_at: DateTime<Utc>,
+        source: &McpCatalogSource,
+    ) -> Result<(), SyncError> {
         let (received, refetched, changed) = (delta.received, delta.refetched, delta.rows.len());
+        let full = plan.is_full();
         let gate = Arc::clone(&self.load_gate);
         let catalog_slot = Arc::clone(&self.catalog);
         let cursor_slot = Arc::clone(&self.sync_cursor);
@@ -842,5 +853,25 @@ impl McpCatalogService {
             }
         }
         Ok(())
+    }
+
+    async fn sync_once(&self, host: &SyncHost) -> Result<(), SyncError> {
+        let started_at = Utc::now();
+        let source = self.sync_source().await;
+        let mut plan = SyncPlan::for_catalog(&source);
+        loop {
+            let delta = self.crawl(host, plan).await?;
+            match self.store(host, plan, delta, started_at, &source).await {
+                Err(SyncError::Cache(message))
+                    if !plan.is_full() && message.contains(CACHE_UNAVAILABLE) =>
+                {
+                    log::warn!(
+                        "[mcp-catalog] incremental sync cannot extend the cache, starting a full crawl"
+                    );
+                    plan = SyncPlan::Full;
+                }
+                other => return other,
+            }
+        }
     }
 }
