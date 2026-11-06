@@ -303,6 +303,12 @@ pub enum NodeSpec {
     Wait {
         duration_ms: u64,
     },
+    /// Parks the run until a person approves it (`out`). A rejection, or
+    /// `timeout_ms` passing first, fails the step (`error`).
+    Approval {
+        message: Template,
+        timeout_ms: u64,
+    },
     /// Calls `tool` on the project's MCP server `server_id` (the registry
     /// entry id) with no LLM. The server's credentials come from its stored
     /// config, never from templates.
@@ -364,6 +370,8 @@ pub const AGENT_MAX_TIMEOUT_MS: u64 = 900_000;
 pub const AGENT_MAX_ATTEMPTS: u8 = 3;
 pub const FOR_EACH_MAX_ITERATIONS: u32 = 100;
 pub const WAIT_MAX_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+pub const APPROVAL_MIN_TIMEOUT_MS: u64 = 60_000;
+pub const APPROVAL_MAX_TIMEOUT_MS: u64 = WAIT_MAX_MS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -390,6 +398,7 @@ impl NodeSpec {
             NodeSpec::ForEach { .. } => NodeKind::ForEach,
             NodeSpec::Merge { .. } => NodeKind::Merge,
             NodeSpec::Wait { .. } => NodeKind::Wait,
+            NodeSpec::Approval { .. } => NodeKind::Approval,
             NodeSpec::McpTool { .. } => NodeKind::McpTool,
         }
     }
@@ -420,7 +429,9 @@ impl NodeSpec {
                 out.extend(right.iter().map(|r| ("right".to_string(), r)));
                 out
             }
-            NodeSpec::Fail { message } => vec![("message".to_string(), message)],
+            NodeSpec::Fail { message } | NodeSpec::Approval { message, .. } => {
+                vec![("message".to_string(), message)]
+            }
             NodeSpec::ForEach { items, .. } => vec![("items".to_string(), items)],
             NodeSpec::Merge { .. } | NodeSpec::Wait { .. } => Vec::new(),
             NodeSpec::McpTool { arguments, .. } => arguments
@@ -441,6 +452,7 @@ pub enum NodeKind {
     ForEach,
     Merge,
     Wait,
+    Approval,
     McpTool,
 }
 
@@ -588,6 +600,7 @@ pub enum IssueCode {
     NestedForEach,
     LoopItemOutsideBody,
     MergeNeedsTwoInputs,
+    ApprovalTimeoutOutOfRange,
     /// Added by the service, which owns the agent registry.
     UnknownAgent,
     McpTimeoutOutOfRange,
@@ -660,6 +673,18 @@ pub struct Run {
     pub summary: Option<String>,
     pub conversation_id: Option<String>,
     pub worktree_id: Option<String>,
+    /// Read from the run's `waiting` step, never stored on the run: a
+    /// parked run's status stays `running`.
+    #[serde(default)]
+    pub parked: Option<Parked>,
+}
+
+/// The step a `running` run is parked on and when its park ends (epoch ms).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Parked {
+    pub node_id: NodeId,
+    pub iteration: Option<u32>,
+    pub until: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -669,7 +694,7 @@ pub enum StepStatus {
     Succeeded,
     Failed,
     Skipped,
-    /// A `wait` step whose run is parked until `wait_until`.
+    /// A `wait` or `approval` step whose run is parked until `wait_until`.
     Waiting,
 }
 
@@ -691,7 +716,7 @@ pub struct Step {
     pub error: Option<String>,
     pub started_at: Option<i64>,
     pub finished_at: Option<i64>,
-    /// When a `waiting` step's run resumes.
+    /// When a `waiting` step's park ends.
     #[serde(default)]
     pub wait_until: Option<i64>,
 }

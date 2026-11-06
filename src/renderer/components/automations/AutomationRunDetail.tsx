@@ -2,6 +2,7 @@ import type {
   AutomationNode,
   AutomationRun,
   AutomationStep,
+  NodeKind,
   RunTrigger
 } from '@shared/types/automation.types'
 import { useMemo, useState } from 'react'
@@ -11,12 +12,18 @@ import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { WriteGate } from '@/components/ui/write-gate'
 import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { cancelAutomationRun } from '@/lib/automation-api'
+import { parseApprovalOutput } from '@/lib/automation-wire'
 import { cn } from '@/lib/utils'
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
+import { AutomationApprovalCard } from './AutomationApprovalCard'
 import {
+  DECISION_PRESENTATION,
   formatDateTime,
   formatDuration,
   NODE_KIND_PRESENTATION,
+  type ParkedApproval,
+  parkedApproval,
+  runStatusPresentation,
   STATUS_PRESENTATION
 } from './automation-format'
 import { layoutGraph } from './automation-layout'
@@ -30,8 +37,14 @@ const TRIGGER_LABEL: Record<RunTrigger, string> = {
 
 const ORDER_METRICS = { nodeWidth: 1, nodeHeight: 1, gapX: 0, gapY: 0 }
 
-export function AutomationRunDetail({ run }: { run: AutomationRun }): React.JSX.Element {
-  const { data: steps, error } = useRunSteps(run)
+export function AutomationRunDetail({
+  run,
+  onChanged
+}: {
+  run: AutomationRun
+  onChanged: () => void
+}): React.JSX.Element {
+  const { data: steps, error, reload } = useRunSteps(run)
   const [cancelling, setCancelling] = useState(false)
   const gated = !useServerAdmitsRemoteWrites()
   // Steps in graph order (by rank, then row position) of the run's own snapshot.
@@ -44,8 +57,9 @@ export function AutomationRunDetail({ run }: { run: AutomationRun }): React.JSX.
       .flatMap((p) => byId.get(p.id) ?? [])
   }, [run.graph])
   const stepsOf = groupSteps(steps ?? [])
+  const approval = parkedApproval(run)
 
-  const status = STATUS_PRESENTATION[run.status]
+  const status = runStatusPresentation(run)
   const cancel = async (): Promise<void> => {
     setCancelling(true)
     await cancelAutomationRun(run.id)
@@ -82,6 +96,22 @@ export function AutomationRunDetail({ run }: { run: AutomationRun }): React.JSX.
       {run.stop_reason && <p className="text-xs text-destructive">{run.stop_reason}</p>}
       {run.summary && <p className="text-sm text-foreground">{run.summary}</p>}
       {error && <p className="text-xs text-destructive">Could not load the steps: {error}</p>}
+      {approval && (
+        <AutomationApprovalCard
+          key={`${run.id}:${approval.node.id}:${approval.iteration}`}
+          runId={run.id}
+          nodeId={approval.node.id}
+          label={approval.node.label}
+          until={approval.until}
+          message={approvalMessage(approval, steps)}
+          messageFailed={steps === null && error !== null}
+          onRetry={reload}
+          onDecided={() => {
+            reload()
+            onChanged()
+          }}
+        />
+      )}
 
       <ol className="flex flex-col gap-2" aria-label="Steps">
         {nodes.map((node) => (
@@ -96,6 +126,15 @@ export function AutomationRunDetail({ run }: { run: AutomationRun }): React.JSX.
       </ol>
     </div>
   )
+}
+
+/** The parked step's rendered message: `null` while the steps load, empty if it has none. */
+function approvalMessage(approval: ParkedApproval, steps: AutomationStep[] | null): string | null {
+  if (steps === null) return null
+  const step = steps.find(
+    (row) => row.node_id === approval.node.id && row.iteration === approval.iteration
+  )
+  return parseApprovalOutput(step?.output)?.message ?? ''
 }
 
 /**
@@ -118,7 +157,7 @@ function StepRow({
   loading
 }: {
   label: string
-  kind: keyof typeof NODE_KIND_PRESENTATION
+  kind: NodeKind
   steps: AutomationStep[]
   loading: boolean
 }): React.JSX.Element {
@@ -145,18 +184,18 @@ function StepRow({
         <Disclosure label="Iterations" open={open} onToggle={() => setOpen((value) => !value)}>
           <ol className="flex flex-col" aria-label={`${label} iterations`}>
             {iterations.map((row) => (
-              <IterationRow key={row.iteration} step={row} />
+              <IterationRow key={row.iteration} step={row} kind={kind} />
             ))}
           </ol>
         </Disclosure>
       ) : (
-        step && <StepBody step={step} />
+        step && <StepBody step={step} kind={kind} />
       )}
     </li>
   )
 }
 
-function IterationRow({ step }: { step: AutomationStep }): React.JSX.Element {
+function IterationRow({ step, kind }: { step: AutomationStep; kind: NodeKind }): React.JSX.Element {
   return (
     <li className="border-t border-border">
       <div className="flex min-h-9 items-center gap-2 px-3 py-1.5">
@@ -166,7 +205,7 @@ function IterationRow({ step }: { step: AutomationStep }): React.JSX.Element {
         <StepDuration step={step} />
         <StepStatusLabel step={step} loading={false} />
       </div>
-      <StepBody step={step} />
+      <StepBody step={step} kind={kind} />
     </li>
   )
 }
@@ -200,14 +239,24 @@ function StepStatusLabel({
   )
 }
 
-/** The waiting line, the error and the output toggle of one row. */
-function StepBody({ step }: { step: AutomationStep }): React.JSX.Element {
+/** The waiting line, an approval's decision or the error, and the output toggle of one row. */
+function StepBody({ step, kind }: { step: AutomationStep; kind: NodeKind }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const hasOutput = step.output !== null && step.output !== undefined
+  const approval = kind === 'approval' ? parseApprovalOutput(step.output) : null
+  const decision = approval?.decision === undefined ? null : approval
   return (
     <>
-      <WaitingLine step={step} />
-      {step.error && (
+      <WaitingLine step={step} kind={kind} />
+      {decision && (
+        <p className="border-t border-border px-3 py-2 text-xs tabular-nums">
+          <span className={DECISION_PRESENTATION[decision.decision].className}>
+            {DECISION_PRESENTATION[decision.decision].label}
+          </span>
+          <span className="text-muted-foreground"> · {formatDateTime(decision.decided_at)}</span>
+        </p>
+      )}
+      {step.error && !decision && (
         <p className="border-t border-border px-3 py-2 font-mono text-xs break-words text-destructive">
           {step.error}
         </p>
@@ -223,11 +272,18 @@ function StepBody({ step }: { step: AutomationStep }): React.JSX.Element {
   )
 }
 
-function WaitingLine({ step }: { step: AutomationStep }): React.JSX.Element | null {
+function WaitingLine({
+  step,
+  kind
+}: {
+  step: AutomationStep
+  kind: NodeKind
+}): React.JSX.Element | null {
   if (step.status !== 'waiting' || step.wait_until === null) return null
   return (
     <p className="border-t border-border px-3 py-2 text-xs text-warning">
-      Waiting until {formatDateTime(step.wait_until)}
+      {kind === 'approval' ? 'Waiting for approval until' : 'Waiting until'}{' '}
+      {formatDateTime(step.wait_until)}
     </p>
   )
 }

@@ -1,10 +1,10 @@
 //! Control-flow nodes: `for_each` walks its body once per item, `merge`
-//! joins the branches that fired, `wait` parks the run.
+//! joins the branches that fired, `wait` and `approval` park the run.
 
 use serde_json::{json, Map, Value};
 
 use super::executor::{at_iteration, Region, Stop};
-use super::nodes::{render, NodeError, NodeScope, NodeSuccess};
+use super::nodes::{render, render_text, NodeError, NodeScope, NodeSuccess};
 use crate::automation::model::{EdgeSource, Port, StepStatus, Template};
 use crate::automation::template::LoopFrame;
 
@@ -108,9 +108,24 @@ pub(super) fn merge(scope: &NodeScope<'_>) -> Value {
     json!({ "from": from, "value": value, "inputs": inputs })
 }
 
-/// Records the step `waiting` until `now + duration_ms` and parks the run.
-/// The engine resumes it once that passes; see `park.rs`.
+/// Parks the run for `duration_ms`; it resumes through `out` once that
+/// passes.
 pub(super) fn wait(scope: &NodeScope<'_>, duration_ms: u64) -> NodeError {
+    park(scope, duration_ms, None)
+}
+
+/// Parks the run with the rendered `message` until a person decides or
+/// `timeout_ms` passes; see `ParkEnd` for how each end routes.
+pub(super) fn approval(scope: &NodeScope<'_>, message: &Template, timeout_ms: u64) -> NodeError {
+    match render_text(message, &scope.render_context(None)) {
+        Ok(message) => park(scope, timeout_ms, Some(json!({ "message": message }))),
+        Err(error) => error,
+    }
+}
+
+/// Records the step `waiting` with `output` until `now + duration_ms` and
+/// parks the run; see `park.rs` for how it resumes.
+fn park(scope: &NodeScope<'_>, duration_ms: u64, output: Option<Value>) -> NodeError {
     let now = scope.run.engine.now_ms();
     let wait_until = now.saturating_add(i64::try_from(duration_ms).unwrap_or(i64::MAX));
     let mut row = scope
@@ -118,14 +133,15 @@ pub(super) fn wait(scope: &NodeScope<'_>, duration_ms: u64) -> NodeError {
         .row(scope.node_id, scope.iteration, StepStatus::Waiting);
     row.started_at = Some(now);
     row.wait_until = Some(wait_until);
+    row.output = output;
     // Parking without a stored `waiting` row would leave nothing to resume.
     if let Err(error) = scope.run.engine.store.upsert_step(&row) {
         log::error!(
-            "[Automation] run {} wait {} not recorded: {error}",
+            "[Automation] run {} park at {} not recorded: {error}",
             scope.run.run.id,
             scope.node_id
         );
-        return NodeError::failed(format!("wait_not_recorded: {error}"));
+        return NodeError::failed(format!("park_not_recorded: {error}"));
     }
     log::info!(
         "[Automation] run {} parked at {}{} until {wait_until}",

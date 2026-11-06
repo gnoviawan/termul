@@ -25,16 +25,32 @@ function paneOf(page: Page, title: string) {
   return page.locator('[data-pane-content]').filter({ has: chatTab(page, title) })
 }
 
-/** The folded turn shows the group; its first row opens the subagent panel. */
-async function expectGroupAndPanel(page: Page, title: string, text: RegExp): Promise<void> {
+/**
+ * The folded turn shows the group; its first row opens the subagent panel.
+ * The group stays open while a subagent works. It folds once all settle, and
+ * the fold animation unmounts the rows when it ends: wait for that before
+ * opening the group, or a row seen mid-fold detaches under the click.
+ */
+async function expectGroupAndPanel(
+  page: Page,
+  title: string,
+  status: '2 done' | '2 working',
+  text: RegExp
+): Promise<void> {
   const pane = paneOf(page, title)
   await expect(pane.getByRole('button', { name: /^Worked/ })).toBeVisible()
-  const header = pane.getByRole('button', { name: /^2 subagents:/ }).filter({ visible: true })
+  const header = pane
+    .getByRole('button', { name: `2 subagents: ${status}`, exact: true })
+    .filter({ visible: true })
   await expect(header).toHaveCount(1)
-  await expect(header).toBeVisible()
-  const row = pane.locator('[data-subagent-row]').filter({ visible: true }).first()
-  if (!(await row.isVisible())) await header.click()
-  await row.click()
+  const rows = pane.locator('[data-subagent-row]').filter({ visible: true })
+  if (status === '2 done') {
+    await expect(header).toHaveAttribute('aria-expanded', 'false')
+    await expect(rows).toHaveCount(0)
+    await header.click()
+  }
+  await expect(header).toHaveAttribute('aria-expanded', 'true')
+  await rows.first().click()
   const body = page.locator('[data-subagent-panel-body]')
   await expect(body.getByText(/^Activity · [1-9]/)).toBeVisible()
   await expect(body.getByText('Read chat.ts').first()).toBeVisible()
@@ -66,14 +82,14 @@ test('RFD subagents stay in the transcript after the turn, a reload and a reopen
       timeout: 20_000
     }
   )
-  await expectGroupAndPanel(page, title, /Result.*Checked src\//s)
+  await expectGroupAndPanel(page, title, '2 done', /Result.*Checked src\//s)
 
   await page.reload()
   await chatTab(page, title).click()
-  await expectGroupAndPanel(page, title, /Result.*Checked src\//s)
+  await expectGroupAndPanel(page, title, '2 done', /Result.*Checked src\//s)
 
   await reopenFromHistory(page, title)
-  await expectGroupAndPanel(page, title, /Result.*Checked src\//s)
+  await expectGroupAndPanel(page, title, '2 done', /Result.*Checked src\//s)
 })
 
 test('legacy Claude background subagents keep their activity across a reload', async ({ page }) => {
@@ -81,9 +97,9 @@ test('legacy Claude background subagents keep their activity across a reload', a
   await launchChat(page, `${title} [SUBAGENTS:3]`)
   const pane = paneOf(page, title)
   await expect(pane.getByText('Both reviewers finished.').filter({ visible: true })).toBeVisible()
-  await expectGroupAndPanel(page, title, /Checked src\//)
+  await expectGroupAndPanel(page, title, '2 working', /Checked src\//)
 
   await page.reload()
   await chatTab(page, title).click()
-  await expectGroupAndPanel(page, title, /Checked src\//)
+  await expectGroupAndPanel(page, title, '2 working', /Checked src\//)
 })

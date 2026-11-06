@@ -16,7 +16,7 @@ use super::graph::{self, OpError};
 use super::mcp::{Lookup, McpFailure, McpServerEntry, ProjectMcpServers, RmcpClient, ToolSchema};
 use super::model::{
     ApplyOpsResult, Automation, AutomationChanged, AutomationId, Issue, IssueCode, NamedTemplate,
-    NodeId, NodeSpec, Op, Run, RunId, RunPolicy, RunTrigger, Schedule, Step,
+    NodeId, NodeKind, NodeSpec, Op, Run, RunId, RunPolicy, RunTrigger, Schedule, Step,
 };
 use super::policy;
 use super::schedule;
@@ -348,7 +348,36 @@ impl AutomationService {
         Ok(self.engine.cancel_run(run_id))
     }
 
-    /// Newest first, at most 200.
+    /// A person approves or rejects the run parked at the approval
+    /// `node_id`. `false` when it is not parked there: already decided,
+    /// timed out, cancelled or past its deadline. Only people decide: no
+    /// agent tool calls this.
+    pub fn decide_approval(
+        &self,
+        run_id: &RunId,
+        node_id: &NodeId,
+        approved: bool,
+    ) -> ServiceResult<bool> {
+        let run = self
+            .engine
+            .store()
+            .get_run(run_id)?
+            .ok_or_else(|| ServiceError::NotFound(run_id.to_string()))?;
+        if run.graph.node(node_id).map(|n| n.spec.kind()) != Some(NodeKind::Approval) {
+            return Err(ServiceError::InvalidInput(format!(
+                "{node_id} is not an approval node of run {run_id}"
+            )));
+        }
+        let decided = self.engine.decide(run_id, node_id, approved)?;
+        log::info!(
+            "[Automation] approval {node_id} of run {run_id} {} ({})",
+            if approved { "approved" } else { "rejected" },
+            if decided { "applied" } else { "not waiting" }
+        );
+        Ok(decided)
+    }
+
+    /// The run in flight first, then newest first, at most 200.
     pub fn list_runs(&self, id: &AutomationId, limit: usize) -> ServiceResult<Vec<Run>> {
         Ok(self
             .engine

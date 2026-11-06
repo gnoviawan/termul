@@ -81,7 +81,7 @@ export function AutomationsPanel({
       />
     )
 
-  const runView = run ? <AutomationRunDetail run={run} /> : null
+  const runView = run ? <AutomationRunDetail run={run} onChanged={runs.reload} /> : null
 
   if (phone) {
     const level = runView ? 'run' : selectedId ? 'detail' : 'list'
