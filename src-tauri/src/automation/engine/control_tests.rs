@@ -342,7 +342,11 @@ fn paused_graph(f: &Fixture) -> Value {
 }
 
 /// Waits until the run has a `waiting` step and its task has let go of it.
-pub(super) async fn parked(te: &TestEngine, a: &Automation, id: &RunId) -> (String, Option<u32>, i64) {
+pub(super) async fn parked(
+    te: &TestEngine,
+    a: &Automation,
+    id: &RunId,
+) -> (String, Option<u32>, i64) {
     for _ in 0..1500 {
         let waiting = te
             .store

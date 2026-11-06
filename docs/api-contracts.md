@@ -178,7 +178,8 @@ Tauri commands take camelCase arguments and run only from the `main` webview. Ot
 | `automation_approve` | `POST /api/automations/{id}/approve` | `id`, `revision` | `Automation` |
 | `automation_run_now` | `POST /api/automations/{id}/run` | `id` | `AutomationRun` (status `running`) |
 | `automation_cancel_run` | `POST /api/automation-runs/{run_id}/cancel` | `runId` | `boolean`. `false` when the run is not in flight. |
-| `automation_list_runs` | `GET /api/automations/{id}/runs?limit=` | `id`, `limit` | `AutomationRun[]`, newest first, at most 200. The route's default `limit` is 50. |
+| `automation_decide_approval` | `POST /api/automation-runs/{run_id}/approval` | `runId`, `nodeId`, `approved` | `boolean`. `false` when the run is no longer parked on that approval node, or its deadline passed. |
+| `automation_list_runs` | `GET /api/automations/{id}/runs?limit=` | `id`, `limit` | `AutomationRun[]`, the run in progress first, then newest first, at most 200. The route's default `limit` is 50. |
 | `automation_run_steps` | `GET /api/automation-runs/{run_id}/steps` | `runId` | `AutomationStep[]` |
 | `automation_mark_seen` | `POST /api/automations/{id}/seen` | `id` | `null` |
 | `automation_preview_schedule` | `POST /api/automations/preview-schedule` | `schedule` | `{next_runs, error}`. An invalid schedule is a success with `next_runs: []` and the reason in `error`. |

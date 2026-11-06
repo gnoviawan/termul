@@ -68,7 +68,10 @@ export type NodeSpec =
   | { kind: 'merge'; mode: MergeMode }
   /** Parks the run durably for `duration_ms`. */
   | { kind: 'wait'; duration_ms: number }
-  /** Parks the run until a person approves (`out`) or rejects it, or `timeout_ms` passes (`error`). */
+  /**
+   * Parks the run until a person approves it (`out`). A rejection, or
+   * `timeout_ms` passing first, fails the step (`error`).
+   */
   | { kind: 'approval'; message: Template; timeout_ms: number }
   | {
       kind: 'mcp_tool'

@@ -303,8 +303,8 @@ pub enum NodeSpec {
     Wait {
         duration_ms: u64,
     },
-    /// Parks the run until a person approves (`out`) or rejects it, or
-    /// `timeout_ms` passes (`error`).
+    /// Parks the run until a person approves it (`out`). A rejection, or
+    /// `timeout_ms` passing first, fails the step (`error`).
     Approval {
         message: Template,
         timeout_ms: u64,
