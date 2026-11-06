@@ -339,6 +339,9 @@ function readOnlyGuardOf(state: AcpState, sessionId: SessionId): string | null {
  * `queuedOrigin` marks a dequeue/send-now path: on `ACP_TURN_IN_PROGRESS` (or
  * if the session is still busy at stage time), the original queue item is
  * restored at the front with its existing id so FIFO order is preserved.
+ *
+ * `options.leadsQueue` marks a prompt that comes before anything already
+ * queued (a launch's first prompt), so a non-empty queue does not hold it.
  */
 export async function runPromptTurn(
   set: TurnEndSetter,
@@ -347,7 +350,7 @@ export async function runPromptTurn(
   userBlocks: ContentBlock[],
   dispatch: (session: AcpSession, turnId: string) => Promise<PromptDispatchResult>,
   queuedOrigin?: QueuedPrompt,
-  options?: { skipUserAppend?: boolean; displayBlocks?: ContentBlock[] }
+  options?: { skipUserAppend?: boolean; displayBlocks?: ContentBlock[]; leadsQueue?: boolean }
 ): Promise<void> {
   const session = get().sessions[sessionId]
   if (!session) throw new Error(`unknown session ${sessionId}`)
@@ -414,10 +417,14 @@ export async function runPromptTurn(
     // A new send also waits behind prompts already queued here, including a
     // busy-rejected prompt on its retry timer: the host may report the session
     // idle meanwhile, and the follow-up must not overtake it (#1726). A
-    // dequeue (`queuedOrigin`) is the queue head itself and always starts.
+    // dequeue (`queuedOrigin`) is the queue head itself and a launch's first
+    // prompt (`leadsQueue`) precedes anything typed during the launch, so
+    // both start.
     const retryArmed = Boolean(busyQueueRetries.get(sessionId)?.timer)
     const holdForPriorQueue =
-      !queuedOrigin && ((s.promptQueues[sessionId] ?? []).length > 0 || retryArmed)
+      !queuedOrigin &&
+      !options?.leadsQueue &&
+      ((s.promptQueues[sessionId] ?? []).length > 0 || retryArmed)
     if ((sessionTurnBusy(current) || awaitingAgent || holdForPriorQueue) && !skipUserAppend) {
       enqueued = true
       // Nothing else will flush a queue left behind on an idle session (a
