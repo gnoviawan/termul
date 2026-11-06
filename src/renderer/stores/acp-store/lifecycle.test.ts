@@ -150,6 +150,7 @@ import type { ContentBlock } from '@/lib/acp-api'
 import {
   _clearPayloadCacheForTesting,
   loadSessionIndex,
+  queueSessionPayloadDelete,
   setCachedSessionPayload
 } from '@/lib/acp-history-persistence'
 import { _resetAcpTransportForTests, AcpTransportError } from '@/lib/acp-transport'
@@ -692,6 +693,52 @@ describe('failed session lifecycle (story 5)', () => {
     await useAcpStore.getState().deleteHistorySession(placeholderId)
 
     expect(useAcpStore.getState().sessions[placeholderId]?.launchFirstTurnBlocks).toBeNull()
+  })
+
+  it('gh-1741: a retry started while the chat deletion is pending sends nothing; a failed delete allows retry again', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    const placeholderId = useAcpStore
+      .getState()
+      .createLaunchPlaceholder({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn boom'))
+    await expect(
+      useAcpStore.getState().finalizeChatLaunch({
+        placeholderId,
+        configId: 'cfg-1',
+        cwd: '/work',
+        projectId: 'p1',
+        initialBlocks: [{ type: 'text', text: 'fix the failing CI checks' }]
+      })
+    ).rejects.toBeTruthy()
+
+    const commands: string[] = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (command: string) => {
+      commands.push(command)
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 'sess-after-failed-delete' }
+      if (command === 'acp_send_prompt') return 'end_turn'
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    let failDelete: (error: Error) => void = () => {}
+    vi.mocked(queueSessionPayloadDelete).mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failDelete = reject
+        })
+    )
+
+    const deletion = useAcpStore.getState().deleteHistorySession(placeholderId)
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+    expect(commands).toEqual([])
+    expect(useAcpStore.getState().sessions[placeholderId]?.status).toBe('error')
+
+    failDelete(new Error('disk full'))
+    await deletion
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+    expect(commands).toContain('acp_send_prompt')
   })
 
   it('retryFailedLaunch rejects when no failed launch is recorded for the session', async () => {
