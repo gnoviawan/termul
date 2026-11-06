@@ -207,11 +207,6 @@ export function ComposerAddMenu({
                   aria-checked={row.on}
                   onSelect={(event) => {
                     event.preventDefault()
-                    void logFrontendError({
-                      level: 'info',
-                      source: LOG_SOURCE,
-                      message: `Turned connector ${row.id} ${row.on ? 'off' : 'on'} (${connectorsHost})`
-                    })
                     connectors.onToggle?.(row.id, !row.on)
                   }}
                 >
