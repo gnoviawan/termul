@@ -33,6 +33,7 @@ import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
 import { AgentModelSelector } from './agent-model-selector/AgentModelSelector'
 import { useCurrentAgentConfigId } from './agent-model-selector/use-agent-switch'
+import { BrowserShareChips, useBrowserShareAttachments } from './BrowserShareChips'
 import { ChatContextStrip } from './ChatContextStrip'
 import { ComposerBeamShell } from './ComposerBeamShell'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
@@ -236,6 +237,7 @@ export function ChatInputBar({
     canPick,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled })
+  const browserShares = useBrowserShareAttachments(session.id)
   // Drag feedback for the attachment drop zone (shared with AgentLauncher):
   // depth-counted dragenter/dragleave pairs; the overlay stays local.
   const { dragActive, dropProps } = useAttachmentDropZone({ canDropPaste, addFiles })
@@ -320,11 +322,14 @@ export function ChatInputBar({
     handlePaste
   })
 
-  const canSend = !disabled && !sending && (value.trim().length > 0 || attachments.length > 0)
+  const canSend =
+    !disabled &&
+    !sending &&
+    (value.trim().length > 0 || attachments.length > 0 || browserShares.blocks.length > 0)
   const showStop = busy && !canSend
 
   const submit = useCallback(async () => {
-    const hasAttachments = attachments.length > 0
+    const hasAttachments = attachments.length > 0 || browserShares.blocks.length > 0
     const hasText = value.trim().length > 0
     if ((!hasText && !hasAttachments) || disabled || sending) return
 
@@ -350,6 +355,7 @@ export function ChatInputBar({
         const wireBlocks: ContentBlock[] = []
         if (wireTrimmed) wireBlocks.push({ type: 'text', text: wireWithCommand })
         for (const a of attachments) wireBlocks.push(attachmentToBlock(a))
+        wireBlocks.push(...browserShares.blocks)
         wireBlocks.push(...fileBlocks)
         const wire = dedupeAttachmentBlocks(wireBlocks)
         // Split display from wire when skills, file-mention pills, OR a
@@ -362,6 +368,7 @@ export function ChatInputBar({
           const displayBlocks: ContentBlock[] = []
           if (displayTrimmed) displayBlocks.push({ type: 'text', text: displayWithCommand })
           for (const a of attachments) displayBlocks.push(attachmentToBlock(a))
+          displayBlocks.push(...browserShares.blocks)
           const display = dedupeAttachmentBlocks(displayBlocks)
           onSendBlocks(wire, display)
         } else {
@@ -412,6 +419,7 @@ export function ChatInputBar({
       setValue('')
       skillPathsRef.current = {}
       clearAttachments()
+      browserShares.markSent()
       resetMentions()
     } catch (err) {
       // Skill path resolution throws a specific user-facing message — keep it.
@@ -423,6 +431,7 @@ export function ChatInputBar({
   }, [
     value,
     attachments,
+    browserShares,
     disabled,
     sending,
     clearAttachments,
@@ -668,6 +677,7 @@ export function ChatInputBar({
             )}
             {permission && <PermissionPrompt permission={permission} isVisible={isVisible} />}
             {!controlsDisabled && <ClaudeLimitWarning sessionId={session.id} atTop={!permission} />}
+            <BrowserShareChips sessionId={session.id} />
             <AttachmentPreviewGroup
               attachments={attachments}
               onRemove={removeAttachment}

@@ -12,6 +12,7 @@ import {
 } from '@/lib/browser-api'
 import { logFrontendError } from '@/lib/log-api'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
+import { BrowserShareButton } from './BrowserShareStrip'
 
 interface BrowserControlsProps {
   browserTabId: string
@@ -127,6 +128,7 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
             <TooltipContent side="bottom">Debug Console</TooltipContent>
           </Tooltip>
         )}
+        <BrowserShareButton browserTabId={browserTabId} />
         <Tooltip>
           <TooltipTrigger asChild>
             <button

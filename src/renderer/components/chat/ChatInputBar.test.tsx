@@ -8,6 +8,8 @@ import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
+import { browserShareView } from '@/lib/test-utils/browser-share'
+import { useBrowserShareStore } from '@/stores/browser-share-store'
 import { useProjectStore } from '@/stores/project-store'
 import { ChatInputBar } from './ChatInputBar'
 import {
@@ -2200,5 +2202,69 @@ describe('ChatInputBar mobile dock', () => {
 
     expect(screen.getByTestId('permission-prompt')).toBeInTheDocument()
     expect(editorSurface).toHaveFocus()
+  })
+})
+
+describe('ChatInputBar browser share', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockIsTauri.mockReturnValue(true)
+    useBrowserShareStore.setState({ shares: {}, pending: {}, revoking: {}, consentTabId: null })
+  })
+
+  afterEach(() => {
+    mockIsTauri.mockReturnValue(false)
+    useBrowserShareStore.setState({ shares: {}, pending: {}, revoking: {}, consentTabId: null })
+  })
+
+  it('sends a pending share as the host reference block once, then keeps it listed as shared', async () => {
+    const s = session()
+    act(() =>
+      useBrowserShareStore
+        .getState()
+        .upsert(browserShareView({ sessionId: s.id }), { pending: true })
+    )
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+    expect(screen.getByText(/Sends with your message/)).toBeInTheDocument()
+
+    setComposerValue('why does login fail?')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() =>
+      expect(onSendBlocks).toHaveBeenCalledWith([
+        { type: 'text', text: 'why does login fail?' },
+        {
+          type: 'resource_link',
+          uri: 'termul-browser-share://host-share-1',
+          name: 'Browser page'
+        }
+      ])
+    )
+    expect(useBrowserShareStore.getState().pending).toEqual({})
+    expect(screen.getByText(/· Shared ·/)).toBeInTheDocument()
+
+    onSendBlocks.mockClear()
+    setComposerValue('and now?')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(getComposerValue()).toBe(''))
+    expect(onSendBlocks).not.toHaveBeenCalled()
+  })
+
+  it('does not send a share that ended before the message went out', async () => {
+    const s = session()
+    act(() => {
+      const store = useBrowserShareStore.getState()
+      store.upsert(browserShareView({ sessionId: s.id }), { pending: true })
+      store.upsert(browserShareView({ sessionId: s.id, status: 'navigated' }))
+    })
+    const onSend = vi.fn()
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSend, onSendBlocks })
+    expect(screen.getByText(/Page changed, share again/)).toBeInTheDocument()
+
+    setComposerValue('hello')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('hello'))
+    expect(onSendBlocks).not.toHaveBeenCalled()
   })
 })
