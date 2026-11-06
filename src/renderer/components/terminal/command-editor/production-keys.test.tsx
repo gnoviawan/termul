@@ -6,6 +6,7 @@ import { useWorkspaceKeyboard } from '@/layouts/workspace-layout/use-workspace-k
 import { clipboardApi, terminalApi } from '@/lib/api'
 import { commandDraftStore } from '@/lib/command-lifecycle/draft-store'
 import { sessionStore } from '@/lib/command-lifecycle/session-store'
+import * as frontendLog from '@/lib/log-api'
 import { isMac } from '@/lib/platform'
 import { useCommandHistoryStore } from '@/stores/command-history-store'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
@@ -232,7 +233,8 @@ it('production Ctrl+D keeps the editor usable until the shell actually exits', (
   expect(viewRef.current).toBeNull()
 })
 
-it('production Ctrl+D keeps the editor when the EOF write fails', async () => {
+it('production Ctrl+D keeps the editor and reports when the EOF write fails', async () => {
+  const logSpy = vi.spyOn(frontendLog, 'logFrontendError')
   vi.mocked(terminalApi.write).mockRejectedValueOnce(new Error('write failed'))
   const { view, viewRef } = mountKeys()
   act(() => fireEvent.keyDown(view.contentDOM, { key: 'd', ctrlKey: true }))
@@ -240,6 +242,9 @@ it('production Ctrl+D keeps the editor when the EOF write fails', async () => {
 
   expect(sessionStore.read('keys-live').mode).toBe('Editor')
   expect(viewRef.current).toBe(view)
+  expect(logSpy).toHaveBeenCalledWith(
+    expect.objectContaining({ level: 'warn', message: 'PTY EOF write failed' })
+  )
 })
 
 it('blocks PTY and EOF writes after write admission is withdrawn', () => {
@@ -256,8 +261,8 @@ it('blocks PTY and EOF writes after write admission is withdrawn', () => {
   )
 
   rerender({ allowWrite: false })
-  result.current.writePty?.('ordinary input')
-  result.current.sendEof?.()
+  result.current.writePty!('ordinary input')
+  result.current.sendEof!()
 
   expect(terminalApi.write).not.toHaveBeenCalled()
   expect(sessionStore.read('keys-live').mode).toBe('Editor')

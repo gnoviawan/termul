@@ -63,6 +63,11 @@ describe('applyEditorPaste', () => {
     expect(sanitizeEditorPaste('echo café\t\r\nnext')).toBe('echo café\t\nnext')
   })
 
+  it('paste preserves ZWJ and ZWNJ Unicode joiners', () => {
+    const text = '👩‍💻 فار\u200cسی क्\u200dष'
+    expect(sanitizeEditorPaste(text)).toBe(text)
+  })
+
   it('image paste does nothing', () => {
     const state = EditorState.create({ doc: 'keep this draft', selection: { anchor: 5, head: 9 } })
     const writePty = vi.fn()
@@ -807,7 +812,7 @@ it('menu paste sanitizes raw text without storing the visible ESC symbol', () =>
   expect(write).toHaveBeenCalledExactlyOnceWith('\x1b[200~␛ hi\x1b[201~')
 })
 
-it('paste sink reads the current mode after clipboard work completes', async () => {
+it('paste sink reads the mode at dispatch time', async () => {
   let mode: 'PTY' | 'Editor' = 'PTY'
   const getMode = () => mode
   const view = mountEditor('', { history: () => [], submit: () => {} })

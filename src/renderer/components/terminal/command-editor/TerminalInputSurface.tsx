@@ -46,7 +46,9 @@ function useFocusReturn(
       latest.current.viewRef.current.focus()
       return
     }
-    if (latest.current.mode !== 'Editor') latest.current.focusTerminal?.()
+    if (latest.current.mode !== 'Editor' || !latest.current.allowWrite) {
+      latest.current.focusTerminal?.()
+    }
   }
 }
 

@@ -55,7 +55,7 @@ function hasNonBlankRowAbove(terminal: Terminal, anchorRow: number): boolean {
 }
 
 /**
- * Prunes disposed markers and checks if any live marker is already on `anchorRow`.
+ * Checks whether any live marker is already on `anchorRow`.
  */
 function isRowAlreadyMarked(liveMarkers: IMarker[], anchorRow: number): boolean {
   return liveMarkers.some((m) => m.line === anchorRow)
@@ -72,6 +72,7 @@ export function attachCommandSeparators(terminal: Terminal): void {
 
   if (
     typeof terminal.parser?.registerOscHandler !== 'function' ||
+    typeof terminal.parser?.registerCsiHandler !== 'function' ||
     typeof terminal.registerMarker !== 'function' ||
     typeof terminal.registerDecoration !== 'function'
   ) {
@@ -80,6 +81,19 @@ export function attachCommandSeparators(terminal: Terminal): void {
 
   const markers: IMarker[] = []
   terminalMarkersMap.set(terminal, markers)
+
+  terminal.parser.registerCsiHandler({ final: 'J' }, (params) => {
+    const eraseMode = typeof params[0] === 'number' && params[0] >= 0 ? params[0] : 0
+    const buffer = terminal.buffer.active
+    if (eraseMode !== 0 || buffer.type === 'alternate') return false
+
+    const cursorRow = buffer.baseY + buffer.cursorY
+    const currentMarkers = terminalMarkersMap.get(terminal) ?? []
+    for (const marker of currentMarkers) {
+      if (!marker.isDisposed && marker.line === cursorRow) marker.dispose()
+    }
+    return false
+  })
 
   terminal.parser.registerOscHandler(133, (data) => {
     if (data !== 'A;termul') {

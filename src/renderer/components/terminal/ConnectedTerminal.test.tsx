@@ -998,9 +998,10 @@ describe('ConnectedTerminal', () => {
           fireEvent.click(insertButton)
         })
         expect(vi.mocked(terminalApi).write).not.toHaveBeenCalled()
-        expect(onError).toHaveBeenCalledWith(
+        expect(onError).toHaveBeenCalledExactlyOnceWith(
           'Refused to insert a command containing control characters'
         )
+        onError.mockClear()
       }
 
       // Ordinary commands are written exactly once, insertion-only (no
@@ -1012,6 +1013,17 @@ describe('ConnectedTerminal', () => {
       expect(vi.mocked(terminalApi).write).toHaveBeenCalledExactlyOnceWith(
         'pty-assist',
         'git status --short'
+      )
+
+      vi.mocked(terminalApi).write.mockClear()
+      mockServerAdmitsRemoteWrites.mockReturnValue(false)
+      mockAssistCommand.current = 'git diff'
+      await act(async () => {
+        fireEvent.click(insertButton)
+      })
+      expect(vi.mocked(terminalApi).write).not.toHaveBeenCalled()
+      expect(onError).toHaveBeenLastCalledWith(
+        'Terminal input is read-only until the server admits remote writes'
       )
     } finally {
       unmount()

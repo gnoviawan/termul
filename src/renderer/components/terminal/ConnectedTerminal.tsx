@@ -503,7 +503,13 @@ function ConnectedTerminalComponent({
   const insertAssistCommand = useCallback(
     async (command: string) => {
       const ptyId = ptyIdRef.current
-      if (!ptyId || !serverAdmitsRemoteWrites()) return
+      if (!ptyId) return
+      if (!serverAdmitsRemoteWrites()) {
+        const message = 'Terminal input is read-only until the server admits remote writes'
+        void logFrontendError({ level: 'warn', source: 'ConnectedTerminal', message })
+        onErrorRef.current?.(message)
+        return
+      }
       return routeForeignInsert(
         editorInputTarget,
         'assist',

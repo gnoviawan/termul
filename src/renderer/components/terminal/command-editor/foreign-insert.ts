@@ -40,7 +40,9 @@ export function routeForeignInsert(
 ): void | Promise<void> {
   if (!target.allowWrite()) return
   const mode = target.mode()
-  if ((mode === 'Editor' || kind === 'assist') && containsDisallowedControls(text)) {
+  const textToValidate =
+    mode === 'Editor' && kind === 'history' ? text.replace(/[\n\t]/g, '') : text
+  if (containsDisallowedControls(textToValidate)) {
     const message = 'Refused to insert a command containing control characters'
     void logFrontendError({ level: 'warn', source: 'foreign-insert', message })
     onError?.(message)
@@ -110,12 +112,12 @@ export function routeMobileKey(
   }
   const view = target.view()
   if (!view) return
-  void logFrontendError({
-    level: 'info',
-    source: 'foreign-insert',
-    message: 'Mobile input routed to editor'
-  })
   if (kind === 'paste') {
+    void logFrontendError({
+      level: 'info',
+      source: 'foreign-insert',
+      message: 'Mobile paste routed to editor'
+    })
     return handleTerminalPaste(target.mode, view, text, write, undefined, target.terminalId)
   }
   const init = mobileKeys[text]

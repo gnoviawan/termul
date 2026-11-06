@@ -73,6 +73,7 @@ describe('terminal-registry', () => {
 
       expect(() => registerTerminal('term-sep', terminal)).not.toThrow()
       expect(spy).toHaveBeenCalledWith(terminal)
+      spy.mockRestore()
     })
   })
 

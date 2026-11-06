@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { TERMINAL_LINE_HEIGHT } from '@/components/terminal/terminal-config'
+import { subscribeMediaQuery } from '@/hooks/use-mobile-web-shell'
 import { terminalApi } from '@/lib/api'
 import { useBindSessionClient } from '@/lib/command-lifecycle/bind-session'
 import { useTerminalFontSize } from '@/stores/app-settings-store'
@@ -25,9 +26,7 @@ function useCoarsePointer(): boolean {
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
     const query = window.matchMedia('(pointer: coarse)')
-    const onChange = (event: MediaQueryListEvent) => setCoarse(event.matches)
-    query.addEventListener('change', onChange)
-    return () => query.removeEventListener('change', onChange)
+    return subscribeMediaQuery(query, setCoarse)
   }, [])
   return coarse
 }

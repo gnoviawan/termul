@@ -802,6 +802,8 @@ it('an accepted submit clears the stored draft', async () => {
     await Promise.resolve()
 
     await binder.submit('git status')
+    sessionStore.apply(id, { type: 'CommandStarted', session_id: 's1', nonce: 'n1' })
+    expect(sessionStore.read(id).phase).toBe('Executing')
     thirdMount.unmount()
 
     for (const cb of rafCallbacks) cb(performance.now())

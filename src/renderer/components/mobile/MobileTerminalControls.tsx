@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ClipboardPaste, Keyboard } from '@/components/icons'
 import {
@@ -20,11 +20,6 @@ interface MobileTerminalControlsProps {
   terminalId: string
 }
 
-// [visible label, escape sequence, spoken name]. Speech engines misread the
-// bare glyphs ("leftwards arrow", "P G up"), so each key's accessible name is
-// a spoken form. Text keys keep their visible label at the start of the name
-// (WCAG 2.5.3); the three arrow keys are symbols, not text, so they get plain
-// word names instead.
 function terminalWriteIds(terminalId: string): { lifecycleId: string; writeId: string } {
   const store = useTerminalStore.getState()
   const byId = store.terminals.find((terminal) => terminal.id === terminalId)
@@ -34,6 +29,11 @@ function terminalWriteIds(terminalId: string): { lifecycleId: string; writeId: s
   return { lifecycleId: resolveLifecycleTerminalId(terminalId) ?? terminalId, writeId: terminalId }
 }
 
+// [visible label, escape sequence, spoken name]. Speech engines misread the
+// bare glyphs ("leftwards arrow", "P G up"), so each key's accessible name is
+// a spoken form. Text keys keep their visible label at the start of the name
+// (WCAG 2.5.3); the three arrow keys are symbols, not text, so they get plain
+// word names instead.
 const KEYS = [
   ['Esc', '\u001b', 'Esc, escape'],
   ['Tab', '\t', 'Tab'],
@@ -50,6 +50,19 @@ export function MobileTerminalControls({
   terminalId
 }: MobileTerminalControlsProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(true)
+  const currentTerminal = useRef({ id: terminalId, generation: 0 })
+  if (currentTerminal.current.id !== terminalId) {
+    currentTerminal.current = {
+      id: terminalId,
+      generation: currentTerminal.current.generation + 1
+    }
+  }
+  useEffect(
+    () => () => {
+      currentTerminal.current.generation += 1
+    },
+    []
+  )
   const keyGroupId = useId()
   // The bar exists only on the mobile shell. It reports its top edge so a toast
   // clears the whole bar, one row or two (`useDockClearance`).
@@ -73,7 +86,9 @@ export function MobileTerminalControls({
   }
 
   const paste = async (): Promise<void> => {
+    const generation = currentTerminal.current.generation
     const result = await clipboardApi.readText()
+    if (currentTerminal.current.generation !== generation) return
     if (!result.success) {
       toast.error(`Clipboard read failed: ${result.error}`)
       return

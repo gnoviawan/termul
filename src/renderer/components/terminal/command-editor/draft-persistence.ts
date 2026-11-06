@@ -1,11 +1,13 @@
-import { ViewPlugin } from '@codemirror/view'
+import { type EditorView, ViewPlugin } from '@codemirror/view'
 import type { createCommandDraftStore } from '@/lib/command-lifecycle/draft-store'
 
 type DraftStore = ReturnType<typeof createCommandDraftStore>
 type EditContextHost = HTMLElement & { editContext?: EventTarget }
+type FlushableEditorView = EditorView & { observer?: { forceFlush?: () => void } }
 
 export function draftPersistence(terminalId: string, draftStore: DraftStore) {
   return ViewPlugin.define((view) => {
+    const invalidationVersion = draftStore.invalidationVersion(terminalId)
     let pending = false
     let destroyed = false
     let editContext: EventTarget | undefined
@@ -13,6 +15,10 @@ export function draftPersistence(terminalId: string, draftStore: DraftStore) {
 
     const storeIfIdle = () => {
       if (destroyed || view.composing || view.compositionStarted || !pending) return
+      if (draftStore.invalidationVersion(terminalId) !== invalidationVersion) {
+        pending = false
+        return
+      }
       pending = false
       draftStore.offer(terminalId, 'Editor', view.state.doc.toString())
     }
@@ -49,10 +55,19 @@ export function draftPersistence(terminalId: string, draftStore: DraftStore) {
         storeIfIdle()
       },
       destroy() {
-        destroyed = true
         win().cancelAnimationFrame(frame)
         view.dom.removeEventListener('compositionend', afterCompositionEnd)
         editContext?.removeEventListener('compositionend', afterCompositionEnd)
+        if (pending && !view.composing && !view.compositionStarted) {
+          // Android CodeMirror schedules the committed DOM mutation in an rAF;
+          // force its observer to reconcile it before this plugin is destroyed.
+          const observer = (view as FlushableEditorView).observer
+          if (observer?.forceFlush) {
+            observer.forceFlush()
+            storeIfIdle()
+          }
+        }
+        destroyed = true
       }
     }
   })

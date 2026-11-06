@@ -161,7 +161,7 @@ describe('canTerminalWriteToPty with sessionStore lifecycle', () => {
       source.indexOf('const handleTerminalData = useCallback('),
       source.indexOf('// Initialize terminal, set up IPC listeners')
     )
-    expect(handleData).toContain('canTerminalWriteToPty(')
+    expect(handleData).toMatch(/if \(!canTerminalWriteToPty\(/)
     const mobileShell = readFileSync('src/renderer/components/mobile/MobileChatShell.tsx', 'utf8')
     expect(mobileShell).toContain('terminalId={activeTerminal.id}')
     expect(mobileShell).not.toContain('terminalId={activeTerminal.ptyId}')

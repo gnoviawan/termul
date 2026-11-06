@@ -1,7 +1,8 @@
 import type { EditorView } from '@codemirror/view'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest'
-import { createCommandDraftStore } from '@/lib/command-lifecycle/draft-store'
+import { commandDraftStore, createCommandDraftStore } from '@/lib/command-lifecycle/draft-store'
+import { sessionStore } from '@/lib/command-lifecycle/session-store'
 
 const androidChrome126 =
   'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36'
@@ -41,6 +42,8 @@ afterAll(() => {
 
 afterEach(() => {
   cleanup()
+  sessionStore.reset()
+  commandDraftStore.processExited('ime')
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   Object.defineProperty(navigator, 'userAgent', {
@@ -225,7 +228,81 @@ it.each([
   expect(offer).toHaveBeenCalledTimes(2)
 })
 
-it('a destroyed editor stores nothing late', async () => {
+it('does not persist uncommitted IME preedit when the editor unmounts', async () => {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(androidChrome126)
+  vi.stubGlobal('EditContext', undefined)
+  const nextFrame = controlFrames()
+  const draftStore = createCommandDraftStore()
+  const { view, offer, unmount } = await mountEditor('ls', draftStore)
+
+  fireEvent.compositionStart(view.contentDOM)
+  act(() => replaceDOMText(view, 'lsにほん'))
+  await act(async () => {})
+  expect(view.composing).toBe(true)
+  expect(view.state.doc.toString()).toBe('lsにほん')
+  expect(draftStore.read('ime')).toBe('ls')
+
+  offer.mockClear()
+  unmount()
+  nextFrame()
+  expect(offer).not.toHaveBeenCalled()
+  expect(draftStore.read('ime')).toBe('ls')
+})
+
+it('does not restore a draft after process exit before editor teardown', async () => {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(androidChrome126)
+  vi.stubGlobal('EditContext', undefined)
+  const nextFrame = controlFrames()
+  // Session exit clears the shared store; the editor must observe that same store.
+  const draftStore = commandDraftStore
+  const { view, offer, unmount } = await mountEditor('ls', draftStore)
+
+  fireEvent.compositionStart(view.contentDOM)
+  act(() => replaceDOMText(view, 'lsにほん'))
+  await act(async () => {})
+  act(() => {
+    replaceDOMText(view, 'ls日本')
+    fireEvent.compositionEnd(view.contentDOM, { data: '日本' })
+  })
+  await act(async () => {})
+
+  offer.mockClear()
+  sessionStore.processExited('ime')
+  unmount()
+  nextFrame()
+
+  expect(offer).not.toHaveBeenCalled()
+  expect(draftStore.read('ime')).toBe('')
+})
+
+it('stores committed EditContext text when unmounting before the deferred flush', async () => {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(androidChrome126)
+  vi.stubGlobal('EditContext', TestEditContext)
+  const nextFrame = controlFrames()
+  const draftStore = createCommandDraftStore()
+  const { view, offer, unmount } = await mountEditor('ls ', draftStore)
+  const context = (view.contentDOM as HTMLElement & { editContext: TestEditContext }).editContext
+
+  act(() => {
+    context.dispatchEvent(new Event('compositionstart'))
+    context.textUpdate(3, 3, 'にほん')
+  })
+  act(() => {
+    context.textUpdate(3, 6, '日本')
+    context.dispatchEvent(new Event('compositionend'))
+  })
+  await act(async () => {})
+  expect(view.state.doc.toString()).toBe('ls 日本')
+  expect(draftStore.read('ime')).toBe('ls 日本')
+
+  offer.mockClear()
+  unmount()
+  nextFrame()
+  expect(offer).not.toHaveBeenCalled()
+  expect(draftStore.read('ime')).toBe('ls 日本')
+})
+
+it('stores committed IME text when the editor unmounts before the deferred flush', async () => {
   vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(androidChrome126)
   vi.stubGlobal('EditContext', undefined)
   const nextFrame = controlFrames()
@@ -247,10 +324,10 @@ it('a destroyed editor stores nothing late', async () => {
   offer.mockClear()
   unmount()
   nextFrame()
-  expect(offer).not.toHaveBeenCalled()
-  expect(draftStore.read('ime')).toBe('ls')
+  expect(offer).toHaveBeenCalledExactlyOnceWith('ime', 'Editor', 'ls日本')
+  expect(draftStore.read('ime')).toBe('ls日本')
 
   const remounted = await mountEditor('ls', draftStore, false)
-  expect(remounted.view.state.doc.toString()).toBe('ls')
-  expect(draftStore.read('ime')).toBe('ls')
+  expect(remounted.view.state.doc.toString()).toBe('ls日本')
+  expect(draftStore.read('ime')).toBe('ls日本')
 })

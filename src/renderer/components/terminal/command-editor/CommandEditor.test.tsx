@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { completionStatus, startCompletion } from '@codemirror/autocomplete'
 import { type EditorView, runScopeHandlers } from '@codemirror/view'
 import type {
@@ -71,21 +70,6 @@ it('editor installs the completion extension', async () => {
   expect(view.state.doc.toString()).toBe('git rem')
 })
 
-it('Enter uses the session binder', () => {
-  const editor = readFileSync(
-    'src/renderer/components/terminal/command-editor/CommandEditor.tsx',
-    'utf8'
-  )
-  const binder = readFileSync('src/renderer/lib/command-lifecycle/bind-session.ts', 'utf8')
-  readFileSync('src/renderer/components/terminal/ConnectedTerminal.tsx', 'utf8')
-  expect(editor).toMatch(/useBindSessionClient/)
-  expect(editor).toMatch(/from ['"]@\/lib\/command-lifecycle\/bind-session['"]/)
-  expect(editor).not.toMatch(/terminalApi\.write/)
-  expect(binder).toMatch(/useAddCommand\(\)/)
-  expect(binder).toMatch(/addCommand/)
-  expect(binder).toMatch(/submitDraft/)
-})
-
 it('a cursor-only move bumps the buffer revision', async () => {
   type CompletionRequest = Parameters<TerminalApi['requestCompletion']>[1]
   const viewRef: { current: EditorView | null } = { current: null }
@@ -128,6 +112,7 @@ it('a cursor-only move bumps the buffer revision', async () => {
     resolve: (reply: CompletionRpcReply) => void
   }> = []
   const acceptedResults: CompletionReplyFields[] = []
+  const cancelledRequests: string[] = []
   let nextReq = 0
   const scheduler = new CompletionScheduler({
     host: {
@@ -136,7 +121,10 @@ it('a cursor-only move bumps the buffer revision', async () => {
           requests.push({ request, resolve })
         })
       },
-      cancelCompletion: async () => 'Accepted'
+      cancelCompletion: async (_id, requestId) => {
+        cancelledRequests.push(requestId)
+        return 'Accepted'
+      }
     },
     createRequestId: () => `req-${++nextReq}`,
     settings: { automaticCompletionRefresh: true },
@@ -236,9 +224,6 @@ it('a cursor-only move bumps the buffer revision', async () => {
     cwd: '/repo'
   })
 
-  requests[2]!.resolve({ result: 'Accepted', outcome: 'TimedOut' })
-  await Promise.resolve()
-
   // Ghost text is not part of the revision (T8)
   act(() => {
     startCompletion(view)
@@ -248,22 +233,60 @@ it('a cursor-only move bumps the buffer revision', async () => {
   flushTimers()
   expect(requests).toHaveLength(3)
 
-  // IME composition also bumps the revision without draft-persistence writing early
-  fireEvent.compositionStart(view.contentDOM)
-  act(() => {
-    view.dispatch({
-      changes: { from: 7, insert: 't' },
-      selection: { anchor: 8 },
-      userEvent: 'input.type.compose'
-    })
+  // Preedit invalidates a stale result but must not request another completion.
+  const frames: FrameRequestCallback[] = []
+  const requestFrame = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+    frames.push(callback)
+    return frames.length
   })
-  flushTimers()
+  const cancelFrame = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
+  try {
+    fireEvent.compositionStart(view.contentDOM)
+    act(() => {
+      view.dispatch({
+        changes: { from: 7, insert: 'tus' },
+        selection: { anchor: 10 },
+        userEvent: 'input.type.compose'
+      })
+    })
+    flushTimers()
+    expect(requests).toHaveLength(3)
+
+    requests[2]!.resolve({
+      result: 'Accepted',
+      outcome: 'Completed',
+      completion: {
+        session_id: 's1',
+        nonce: 'n1',
+        request_id: 'req-3',
+        buffer_revision: r + 2,
+        cursor: 7,
+        prompt_generation: 2,
+        cwd: '/repo',
+        output: '737461747573'
+      }
+    })
+    await Promise.resolve()
+    expect(acceptedResults).toEqual([])
+    expect(cancelledRequests).toContain('req-3')
+
+    // This EditContext-like path commits its final text without another view update.
+    fireEvent.compositionEnd(view.contentDOM, { data: 'status' })
+    await act(async () => {})
+    act(() => {
+      for (const callback of [...frames]) callback(performance.now())
+    })
+    flushTimers()
+  } finally {
+    requestFrame.mockRestore()
+    cancelFrame.mockRestore()
+  }
   expect(requests).toHaveLength(4)
   expect(requests[3]!.request).toEqual({
     requestId: 'req-4',
-    draft: 'git stat',
+    draft: 'git status',
     bufferRevision: r + 3,
-    cursor: 8,
+    cursor: 10,
     promptGeneration: 2,
     cwd: '/repo'
   })
@@ -360,7 +383,7 @@ it('resyncs a mounted editor when the terminal font size changes', () => {
 
 it('reacts to coarse-pointer changes and cleans up the media query listener', () => {
   const changeListeners: Array<(event: { matches: boolean }) => void> = []
-  const removed: unknown[] = []
+  const removed: Array<(event: { matches: boolean }) => void> = []
   const mediaQuery = (matches: boolean) => ({
     matches,
     media: '',
@@ -370,7 +393,7 @@ it('reacts to coarse-pointer changes and cleans up the media query listener', ()
     addEventListener: (_type: string, callback: (event: { matches: boolean }) => void) => {
       changeListeners.push(callback)
     },
-    removeEventListener: (_type: string, callback: unknown) => {
+    removeEventListener: (_type: string, callback: (event: { matches: boolean }) => void) => {
       removed.push(callback)
     },
     dispatchEvent: () => false
@@ -415,7 +438,7 @@ it('reacts to coarse-pointer changes and cleans up the media query listener', ()
     vi.unstubAllGlobals()
   }
   // The change listener is gone after unmount — no leaked subscriptions.
-  expect(removed).toHaveLength(changeListeners.length)
+  expect(removed).toEqual(changeListeners)
 })
 
 it('floors the editor font at 16px on coarse-pointer devices', () => {

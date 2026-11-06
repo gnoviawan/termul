@@ -154,6 +154,12 @@ const editorPane: LeafNode = {
 }
 
 describe('PaneContent active terminal focus wiring', () => {
+  afterEach(() => {
+    paneStateRef.current = { activePaneId: 'pane-1', fullscreenPaneId: null, leafCount: 1 }
+    terminalStateRef.current = []
+    connectedTerminalProps.length = 0
+  })
+
   it('marks only the active pane terminal as focused across two visible splits', async () => {
     paneStateRef.current = {
       activePaneId: 'leaf-0',

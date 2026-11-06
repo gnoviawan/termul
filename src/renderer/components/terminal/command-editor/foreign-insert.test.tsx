@@ -4,6 +4,7 @@ import { fireEvent, render } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { commandDraftStore } from '@/lib/command-lifecycle/draft-store'
 import { sessionStore } from '@/lib/command-lifecycle/session-store'
+import * as frontendLog from '@/lib/log-api'
 import { completionView } from './completion-view'
 import { draftPersistence } from './draft-persistence'
 import { editorKeymap } from './editor-keys'
@@ -116,6 +117,25 @@ it('history text inserts into the editor', () => {
   expect(submit).not.toHaveBeenCalled()
 })
 
+it('logs mobile paste but not routine editor key routing', () => {
+  const write = vi.fn()
+  const view = mountEditor('git status', 4)
+  const logSpy = vi.spyOn(frontendLog, 'logFrontendError').mockResolvedValue()
+  const destination = target(view)
+
+  routeMobileKey(destination, 'key', '\x1b[D', write)
+  expect(logSpy).not.toHaveBeenCalled()
+
+  routeMobileKey(destination, 'paste', 'echo hi', write)
+  expect(logSpy).toHaveBeenCalledExactlyOnceWith({
+    level: 'info',
+    source: 'foreign-insert',
+    message: 'Mobile paste routed to editor'
+  })
+  expect(write).not.toHaveBeenCalled()
+  logSpy.mockRestore()
+})
+
 it('mobile bar edits the draft', () => {
   const write = vi.fn()
   let requests = 0
@@ -201,26 +221,57 @@ it('assist control characters are refused', () => {
   expect(errors).toHaveLength(66)
 })
 
-it('history control characters are refused', () => {
+it('Editor history permits multiline drafts but refuses other controls', () => {
   const write = vi.fn()
   const view = mountEditor('keep draft', 4)
   const errors: string[] = []
+  routeForeignInsert(target(view), 'history', 'echo hi\necho there\t--flag', write, (message) => {
+    errors.push(message)
+  })
+
+  expect(view.state.doc.toString()).toBe('echo hi\necho there\t--flag')
+  expect(commandDraftStore.read(terminalId)).toBe('echo hi\necho there\t--flag')
+  expect(write).not.toHaveBeenCalled()
+
+  routeForeignInsert(target(null), 'history', 'echo detached\necho still-safe\t--flag', write)
+  expect(view.state.doc.toString()).toBe('echo hi\necho there\t--flag')
+  expect(commandDraftStore.read(terminalId)).toBe('echo detached\necho still-safe\t--flag')
+  expect(write).not.toHaveBeenCalled()
+
   for (const destination of [target(view), target(null)]) {
     for (const text of [
-      'echo hi\necho there',
-      ...Array.from({ length: 32 }, (_, code) => `echo${String.fromCharCode(code)}hi`),
+      ...Array.from({ length: 32 }, (_, code) => code)
+        .filter((code) => code !== 9 && code !== 10)
+        .map((code) => `echo${String.fromCharCode(code)}hi`),
       'echo\x7fhi'
     ]) {
       routeForeignInsert(destination, 'history', text, write, (message) => {
         errors.push(message)
       })
-
-      expect(view.state.doc.toString()).toBe('keep draft')
-      expect(commandDraftStore.read(terminalId)).toBe('keep draft')
-      expect(write).not.toHaveBeenCalled()
     }
   }
-  expect(errors).toHaveLength(68)
+
+  expect(view.state.doc.toString()).toBe('echo hi\necho there\t--flag')
+  expect(commandDraftStore.read(terminalId)).toBe('echo detached\necho still-safe\t--flag')
+  expect(write).not.toHaveBeenCalled()
+  expect(errors).toHaveLength(62)
+})
+
+it('PTY history refuses control characters before writing, but permits ordinary commands', () => {
+  const write = vi.fn()
+  const onError = vi.fn()
+  const destination: EditorInputTarget = { ...target(null), mode: () => 'PTY' }
+
+  for (const text of ['echo first\necho second', 'echo\tsecond', 'echo\u009bsecond']) {
+    routeForeignInsert(destination, 'history', text, write, onError)
+  }
+
+  expect(write).not.toHaveBeenCalled()
+  expect(onError).toHaveBeenCalledTimes(3)
+  expect(onError).toHaveBeenCalledWith('Refused to insert a command containing control characters')
+
+  routeForeignInsert(destination, 'history', 'git status --short', write, onError)
+  expect(write).toHaveBeenCalledExactlyOnceWith('git status --short')
 })
 
 it('view-only client does not complete or submit', () => {

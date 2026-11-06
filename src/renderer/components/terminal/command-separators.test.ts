@@ -177,6 +177,46 @@ describe('command-separators', () => {
     expect(decSpy).toHaveBeenCalledTimes(1)
   })
 
+  it('disposes the separator marker when ED 0 erases its row', async () => {
+    const { terminal, write } = setupTerminal({ rows: 5 })
+    const decSpy = vi.spyOn(terminal, 'registerDecoration')
+    attachCommandSeparators(terminal)
+
+    await write('banner\r\n\r\n\x1b]133;A;termul\x07\r\ncommand\r\n')
+    expect(decSpy).toHaveBeenCalledOnce()
+    const marker = decSpy.mock.calls[0][0].marker
+    expect(marker.isDisposed).toBe(false)
+
+    await write('\x1b[H\x1b[J')
+
+    expect(marker.isDisposed).toBe(true)
+  })
+
+  it('ED 0 disposes a marker on the cursor row and preserves markers above it', async () => {
+    const { terminal, write } = setupTerminal({ rows: 10 })
+    const decSpy = vi.spyOn(terminal, 'registerDecoration')
+    attachCommandSeparators(terminal)
+
+    await write(
+      'banner one\r\n\r\n\x1b]133;A;termul\x07\r\ncmd one\r\nbanner two\r\n\r\n\x1b]133;A;termul\x07\r\ncmd two\r\n'
+    )
+    expect(decSpy).toHaveBeenCalledTimes(2)
+    const earlierMarker = decSpy.mock.calls[0][0].marker
+    const cursorMarker = decSpy.mock.calls[1][0].marker
+    const earlierDecoration = decSpy.mock.results[0]?.value
+    const cursorDecoration = decSpy.mock.results[1]?.value
+    expect(earlierDecoration).toBeDefined()
+    expect(cursorDecoration).toBeDefined()
+    expect(earlierMarker.line).toBeLessThan(cursorMarker.line)
+
+    await write(`\x1b[${cursorMarker.line + 1};1H\x1b[J`)
+
+    expect(cursorMarker.isDisposed).toBe(true)
+    expect(cursorDecoration?.isDisposed).toBe(true)
+    expect(earlierMarker.isDisposed).toBe(false)
+    expect(earlierDecoration?.isDisposed).toBe(false)
+  })
+
   it('disposes markers on scrollback trimming and dedupe ignores disposed markers', async () => {
     const { terminal, write } = setupTerminal({ rows: 5, scrollback: 5 })
     const decSpy = vi.spyOn(terminal, 'registerDecoration')
@@ -366,6 +406,7 @@ describe('command-separators', () => {
         }
       },
       parser: {
+        registerCsiHandler: () => ({ dispose: () => {} }),
         registerOscHandler: (ident: number, handler: (data: string) => boolean) => {
           if (ident === 133) {
             oscHandler = handler

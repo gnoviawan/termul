@@ -39,6 +39,9 @@ function branchMatches(
  * 2. The branch contains the target selector class as a whole token (e.g. `.cm-cursor` does not match `.cm-dropCursor`).
  * 3. When `selectorTarget` is `.cm-content`, the branch must end with `.cm-content` to prevent matching
  *    pseudo-elements or descendant tails like `.cm-content ::selection`.
+ *
+ * This returns the last matching declaration in stylesheet order, not the browser's computed value;
+ * it does not resolve specificity, cascade layers, or state-dependent selectors.
  */
 export function findThemeRuleValue(
   view: EditorView,

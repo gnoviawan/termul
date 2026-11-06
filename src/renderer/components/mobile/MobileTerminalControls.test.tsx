@@ -280,8 +280,42 @@ function openSubmittingSession(id: string): void {
   sessionStore.beginSubmit(id)
 }
 
+function openWritablePromptSession(id: string): void {
+  sessionStore.apply(id, { type: 'InitShell', session_id: 's1', nonce: 'n1' })
+  sessionStore.apply(id, {
+    type: 'PromptReady',
+    session_id: 's1',
+    nonce: 'n1',
+    prompt_generation: 1,
+    cwd: '/repo',
+    line_empty: true,
+    prompt_suppressed: false
+  })
+}
+
 describe('MobileTerminalControls lifecycle guard', () => {
-  it('does not write when no editor target is registered and the session is Editor or Submitting', () => {
+  it('drops a delayed clipboard result after the controls unmount', async () => {
+    useTerminalStore.getState().setTerminals([mockTerminal({ id: 'term-1', ptyId: 'pty-old' })])
+    openWritablePromptSession('term-1')
+    let releaseClipboard: (value: { success: true; data: string }) => void = () => {}
+    readTextMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseClipboard = resolve
+        })
+    )
+    const { unmount } = render(<MobileTerminalControls terminalId="pty-old" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Paste' }))
+    unmount()
+
+    await act(async () => {
+      releaseClipboard({ success: true, data: 'echo leaked' })
+    })
+
+    expect(writeMock).not.toHaveBeenCalled()
+  })
+
+  it('does not write when no editor target is registered and the session is Submitting', () => {
     useTerminalStore.getState().setTerminals([mockTerminal({ id: 'term-1', ptyId: 'pty-old' })])
     openSubmittingSession('term-1')
     render(<MobileTerminalControls terminalId="pty-old" />)
@@ -292,7 +326,7 @@ describe('MobileTerminalControls lifecycle guard', () => {
 
   it('does not write a delayed clipboard result to the old PTY after a pane switch', async () => {
     useTerminalStore.getState().setTerminals([mockTerminal({ id: 'term-1', ptyId: 'pty-old' })])
-    openSubmittingSession('term-1')
+    openWritablePromptSession('term-1')
     let releaseClipboard: (value: { success: true; data: string }) => void = () => {}
     readTextMock.mockImplementationOnce(
       () =>
@@ -309,6 +343,7 @@ describe('MobileTerminalControls lifecycle guard', () => {
         mockTerminal({ id: 'term-2', ptyId: 'pty-new' })
       ])
     rerender(<MobileTerminalControls terminalId="pty-new" />)
+    rerender(<MobileTerminalControls terminalId="pty-old" />)
     await act(async () => {
       releaseClipboard({ success: true, data: 'echo leaked' })
     })

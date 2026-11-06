@@ -364,23 +364,15 @@ function matchingRules(prefix: string): CSSStyleRule[] {
 function assertTooltipStyles(rules: CSSStyleRule[], prefix: string) {
   const tooltipRule = rules.find((r) => r.selectorText === `${prefix}.cm-tooltip`)
   expect(tooltipRule).toBeDefined()
-  const tooltipDecl = tooltipRule?.style.cssText ?? ''
-  expect(tooltipRule?.style.getPropertyValue('background-color') || tooltipDecl).toContain(
-    'var(--popover)'
-  )
-  expect(tooltipRule?.style.getPropertyValue('color') || tooltipDecl).toContain(
-    'var(--popover-foreground)'
-  )
-  expect(tooltipRule?.style.getPropertyValue('border') || tooltipDecl).toContain('var(--border)')
+  expect(tooltipRule?.style.getPropertyValue('background-color')).toContain('var(--popover)')
+  expect(tooltipRule?.style.getPropertyValue('color')).toContain('var(--popover-foreground)')
+  expect(tooltipRule?.style.getPropertyValue('border')).toContain('var(--border)')
 
   const selectedRowRule = rules.find((r) => r.selectorText.includes('li[aria-selected]'))
   expect(selectedRowRule).toBeDefined()
-  const selectedBg =
-    selectedRowRule?.style.getPropertyValue('background-color') ||
-    selectedRowRule?.style.cssText ||
-    ''
-  expect(selectedBg).toContain('var(--foreground)')
-  expect(selectedBg).toContain('0.06')
+  const selectedBackground = selectedRowRule?.style.getPropertyValue('background-color')
+  expect(selectedBackground).toContain('var(--foreground)')
+  expect(selectedBackground).toContain('0.06')
 
   const matchedTextRule = rules.find((r) => r.selectorText === `${prefix}.cm-completionMatchedText`)
   expect(matchedTextRule).toBeDefined()

@@ -42,9 +42,10 @@ describe('TerminalInputSurface', () => {
     const terminalInput = screen.getByRole('textbox', { name: 'Terminal input' })
     const slot = terminalInput.parentElement!
     let mouseDownReachedSurface = false
+    let defaultPreventedAtSurface = true
     container.addEventListener('mousedown', (event) => {
       mouseDownReachedSurface = true
-      expect(event.defaultPrevented).toBe(false)
+      defaultPreventedAtSurface = event.defaultPrevented
     })
 
     fireEvent.mouseDown(slot)
@@ -53,6 +54,7 @@ describe('TerminalInputSurface', () => {
     fireEvent.click(slot)
     expect(document.activeElement).toBe(composer)
     expect(mouseDownReachedSurface).toBe(true)
+    expect(defaultPreventedAtSurface).toBe(false)
 
     // xterm can focus its textarea from its own click handler.
     fireEvent.mouseDown(terminalInput)
@@ -122,6 +124,73 @@ describe('TerminalInputSurface', () => {
     )
 
     expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Command editor' }))
+  })
+
+  it('returns focus to the terminal when write admission is revoked', () => {
+    const focusTerminal = vi.fn()
+    const { rerender } = render(
+      <TerminalInputSurface
+        mode="Editor"
+        focused={true}
+        terminalId="terminal-a"
+        allowWrite={true}
+        focusTerminal={focusTerminal}
+      >
+        {null}
+      </TerminalInputSurface>
+    )
+    const composer = screen.getByRole('textbox', { name: 'Command editor' })
+    composer.focus()
+    expect(document.activeElement).toBe(composer)
+
+    rerender(
+      <TerminalInputSurface
+        mode="Editor"
+        focused={true}
+        terminalId="terminal-a"
+        allowWrite={false}
+        focusTerminal={focusTerminal}
+      >
+        {null}
+      </TerminalInputSurface>
+    )
+
+    expect(focusTerminal).toHaveBeenCalledOnce()
+  })
+
+  it('does not return focus to a terminal when another control was focused', () => {
+    const otherControl = document.createElement('input')
+    document.body.appendChild(otherControl)
+    otherControl.focus()
+    const focusTerminal = vi.fn()
+    const { rerender, unmount } = render(
+      <TerminalInputSurface
+        mode="Editor"
+        focused={false}
+        terminalId="terminal-a"
+        allowWrite={true}
+        focusTerminal={focusTerminal}
+      >
+        {null}
+      </TerminalInputSurface>
+    )
+
+    rerender(
+      <TerminalInputSurface
+        mode="Editor"
+        focused={false}
+        terminalId="terminal-a"
+        allowWrite={false}
+        focusTerminal={focusTerminal}
+      >
+        {null}
+      </TerminalInputSurface>
+    )
+
+    expect(focusTerminal).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(otherControl)
+    unmount()
+    otherControl.remove()
   })
 
   it('surface follows the mode', () => {

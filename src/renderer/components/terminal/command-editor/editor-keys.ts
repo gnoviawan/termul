@@ -25,7 +25,14 @@ export function sanitizeEditorPaste(text: string): string {
     .replaceAll('\x1b[201~', '')
     .replace(/\r\n?/g, '\n')
   return Array.from(normalized)
-    .filter((char) => char === '\n' || char === '\t' || !containsDisallowedControls(char))
+    .filter(
+      (char) =>
+        char === '\n' ||
+        char === '\t' ||
+        char === '\u200c' ||
+        char === '\u200d' ||
+        !containsDisallowedControls(char)
+    )
     .join('')
 }
 

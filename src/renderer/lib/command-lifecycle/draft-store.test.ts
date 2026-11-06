@@ -20,6 +20,17 @@ it('process exit drops the stored draft', () => {
   expect(store.read('terminal-b')).toBe('keep this')
 })
 
+it('invalidates outstanding persistence snapshots when drafts are cleared', () => {
+  const store = createCommandDraftStore()
+  expect(store.invalidationVersion('terminal-a')).toBe(0)
+
+  store.submitAccepted('terminal-a')
+  expect(store.invalidationVersion('terminal-a')).toBe(1)
+
+  store.processExited('terminal-a')
+  expect(store.invalidationVersion('terminal-a')).toBe(2)
+})
+
 it('accepted submit clears the stored draft', () => {
   const store = createCommandDraftStore()
   store.offer('terminal-a', 'Editor', 'git sta')
