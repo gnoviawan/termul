@@ -163,6 +163,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     emptyPendingLauncherOptions
   )
   const launchInFlightRef = useRef(false)
+  // Which launch owns the in-flight flag: a launch releases it only while it
+  // is still the latest, so an earlier launch finishing late cannot clear a
+  // newer one's guard.
+  const launchGenerationRef = useRef(0)
+  // Set once the latest launch reset the composer and opened its chat tab.
+  const launchHandedOffRef = useRef(false)
   const menuRef = useRef<SlashMenuHandle>(null)
   const editorRef = useRef<Editor | null>(null)
   // Set when an agent pick happens INSIDE the open selector popover (the only
@@ -278,6 +284,22 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // not just the resolved default.
   const [branches, setBranches] = useState<string[]>([])
   const [worktreeCreating, setWorktreeCreating] = useState(false)
+  // New chat inside the exit window restores this exiting instance. When its
+  // last launch already handed off to a chat tab, that launch can still hold
+  // the in-flight flag (a claimed warm session holds it until the first turn
+  // ends) and its worktree progress, which would make the re-shown launcher
+  // ignore Enter. Start a new generation so the old launch stops touching
+  // either. A launch that has not handed off keeps its guard.
+  const wasPresentRef = useRef(isPresent)
+  useEffect(() => {
+    if (isPresent && !wasPresentRef.current && launchHandedOffRef.current) {
+      launchGenerationRef.current += 1
+      launchHandedOffRef.current = false
+      launchInFlightRef.current = false
+      setWorktreeCreating(false)
+    }
+    wasPresentRef.current = isPresent
+  }, [isPresent])
   // Skills live at {project.path}/.agents/skills/ which is gitignored and
   // excluded from worktree symlinks, so resolve against the main project root
   // — not the worktree CWD which has no .agents/skills/.
@@ -355,6 +377,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         // detaches any process with live chats, so those chats keep running
         // the old version while this new chat uses the applied version.
         if (isolationMode === 'worktree' && canUseWorktree) {
+          // Own the worktree flag for this restart only. A newer launch bumps
+          // launchGenerationRef and must not inherit this restart's progress or
+          // failure recovery.
+          const restartGeneration = launchGenerationRef.current
+          const isCurrentRestart = (): boolean => launchGenerationRef.current === restartGeneration
           await launchChat({
             configId,
             projectId: activeProjectId,
@@ -362,8 +389,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             checkout: { launchCwd: projectRoot },
             newWorktree: { projectRoot, baseBranch },
             onOpened: () => useWorkspaceStore.getState().hideAgentLauncher(),
-            onWorktreeCreating: setWorktreeCreating,
-            onWorktreeFailed: () => useWorkspaceStore.getState().showAgentLauncher(paneId)
+            onWorktreeCreating: (creating) => {
+              if (isCurrentRestart()) setWorktreeCreating(creating)
+            },
+            onWorktreeFailed: () => {
+              if (isCurrentRestart()) {
+                useWorkspaceStore.getState().showAgentLauncher(paneId)
+              }
+            }
           }).started
         } else {
           let launchCwd = projectRoot
@@ -1305,6 +1338,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     if (!selectedConfig || selectedEntry?.status !== 'ready' || launchInFlightRef.current) return
 
     launchInFlightRef.current = true
+    const generation = ++launchGenerationRef.current
+    launchHandedOffRef.current = false
+    const isCurrentLaunch = (): boolean => launchGenerationRef.current === generation
+    const releaseLaunch = (): void => {
+      if (isCurrentLaunch()) launchInFlightRef.current = false
+    }
     const attachmentsSnapshot = [...attachments]
     const appOwnedPaths = appOwnedTempPaths(attachmentsSnapshot)
     const modelsSnapshot = effectiveModels
@@ -1352,7 +1391,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       parts = buildPromptParts(contexts ? await holdComposer(() => contexts) : undefined)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
-      launchInFlightRef.current = false
+      releaseLaunch()
       return
     }
     const { wireWithCommand, displayWithCommand, fileBlocks, contextBlocks } = parts
@@ -1378,7 +1417,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         )
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'That worktree is no longer available.')
-        launchInFlightRef.current = false
+        releaseLaunch()
         return
       }
     }
@@ -1395,6 +1434,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       clearAttachments(attachmentsSnapshot)
       resetMentions()
       setPrompt('')
+      if (isCurrentLaunch()) launchHandedOffRef.current = true
     }
 
     // Runs once the checkout is ready: persist the picks, then build the wire
@@ -1463,11 +1503,17 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           initialUserBlocks: syncBlocks.length > 0 ? syncBlocks : undefined
         },
         onOpened: resetComposer,
-        onWorktreeCreating: setWorktreeCreating,
-        // Roll back to the launcher: the tab closes and the launcher reappears.
+        onWorktreeCreating: (creating) => {
+          if (isCurrentLaunch()) setWorktreeCreating(creating)
+        },
+        // Roll back to the launcher only when this launch is still current.
+        // launch-chat always rolls back the placeholder; a stale failure must
+        // not reopen the launcher over a newer chat.
         onWorktreeFailed: () => {
           worktreeFailed = true
-          useWorkspaceStore.getState().showAgentLauncher(paneSnapshot)
+          if (isCurrentLaunch()) {
+            useWorkspaceStore.getState().showAgentLauncher(paneSnapshot)
+          }
         },
         beforeStart: async () => {
           const { wireBlocks, pendingPayload } = await prepareFirstTurn()
@@ -1483,7 +1529,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           toast.error(err instanceof Error ? err.message : fallback)
         })
         .finally(() => {
-          launchInFlightRef.current = false
+          releaseLaunch()
         })
       return
     }
@@ -1515,7 +1561,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
       } finally {
-        launchInFlightRef.current = false
+        releaseLaunch()
       }
     })()
   }, [

@@ -70,7 +70,7 @@ export interface CanvasBridgeOptions {
 
 /** Method namespaces the editor answers; anything else is `UNKNOWN_METHOD`
  * without a round trip (`event.*` are editor → host only). */
-const FORWARDED_NAMESPACES = new Set(['engine', 'document', 'node', 'ui', 'host'])
+const FORWARDED_NAMESPACES = new Set(['engine', 'document', 'node', 'ui', 'host', 'events'])
 
 const BRIDGE_ERROR_CODES: ReadonlySet<string> = new Set(CANVAS_BRIDGE_ERROR_CODES)
 

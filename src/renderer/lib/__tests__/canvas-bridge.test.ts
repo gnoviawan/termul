@@ -186,6 +186,19 @@ describe('createCanvasBridge', () => {
     await expect(reply).resolves.toEqual({ ok: true, result: '"current"' })
   })
 
+  it('forwards the events.poll behind wait_for_changes to the editor', async () => {
+    editor.ready()
+    const reply = bridge.call('events.poll', asJsonText('{"after":3,"timeoutMs":20000}'))
+    expect(editor.lastRequest()).toEqual({
+      id: 1,
+      method: 'events.poll',
+      params: '{"after":3,"timeoutMs":20000}',
+      mountSeq: MOUNT_SEQ
+    })
+    editor.send({ id: 1, ok: true, result: '{"cursor":4,"events":[]}', mountSeq: MOUNT_SEQ })
+    await expect(reply).resolves.toEqual({ ok: true, result: '{"cursor":4,"events":[]}' })
+  })
+
   it('answers UNKNOWN_METHOD locally for methods outside the protocol', async () => {
     editor.ready()
     for (const method of ['event.ready', 'app.quit', 'window.close', 'bogus', 'engine.']) {

@@ -1,13 +1,14 @@
 [package]
 name = "termul-manager"
-version = "0.4.52"
+version = "0.4.60"
 description = "Project-aware terminal that treats workspaces as first-class citizens"
 authors = ["gnoviawan", "mannnrachman (Tauri port)"]
 edition = "2021"
 # ACP 1.3.0 is edition 2024 and requires Rust ≥ 1.88; `std::fs::File::try_lock`
-# (data-dir locks, AD-14) stabilised in 1.89. The floor is 1.95 to match the
-# toolchain the pinned figcraft fork builds with (spine AD-24).
-rust-version = "1.95"
+# (data-dir locks, AD-14) stabilised in 1.89. The floor follows the pinned
+# figcraft fork (spine AD-24): its v0.15 code uses `usize::isolate_lowest_one`
+# (crates/pathops), which 1.95 lacks; 1.97.1 is the oldest toolchain checked.
+rust-version = "1.97"
 # Two binaries live in this crate: the desktop app (`termul-manager`, the
 # implicit src/main.rs) and the standalone headless server (`termul-server`).
 # Pin `cargo run` / `tauri dev` to the desktop app so Cargo doesn't error on
@@ -154,7 +155,11 @@ rmcp = { version = "3.5.0", features = [
 # `Headless` or `Attached` backends or a figcraft `Session` (AD-17). Pinned by
 # the fork's `termul-*` release tag, which `scripts/canvas/check-figcraft-pin.mjs`
 # compares with canvas/figcraft.pin.
-figcraft-mcp = { git = "https://github.com/gnoviawan/figcraft", tag = "termul-v0.5.0" }
+figcraft-mcp = { git = "https://github.com/gnoviawan/figcraft", tag = "termul-v0.6.0" }
+# figcraft-mcp's engine, for its default key bindings: the canvas policy routes
+# a `ui.key` call as the command its key runs (`acp/host_mcp/canvas_policy.rs`).
+# Same tag as figcraft-mcp; a test checks the lock holds one figcraft-engine.
+figcraft-engine = { git = "https://github.com/gnoviawan/figcraft", tag = "termul-v0.6.0" }
 # OAuth2 — needed for the `TokenResponse` trait used by the MCP OAuth flow
 # (rmcp's `auth` feature pulls this transitively, but we use it directly).
 oauth2 = "5.0"

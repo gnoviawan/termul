@@ -27,6 +27,9 @@ on:
       - 'src/renderer/stores/acp-store.ts'
       - 'src/renderer/components/chat/**'
       - 'src-tauri/src/server_main.rs'
+      - 'src-tauri/build.rs'
+      - 'canvas/figcraft.pin'
+      - 'scripts/canvas/**'
   schedule:
     - cron: '0 19 * * *'
   workflow_dispatch:
@@ -88,6 +91,15 @@ jobs:
 
       - name: Assert dist-web/index.html exists
         run: test -f dist-web/index.html && test -s dist-web/index.html
+
+      # A release build without the figcraft canvas bundle fails to compile
+      # (canvas_bundle_missing in src-tauri/build.rs), so fetch it as
+      # release.yml does.
+      - name: Check figcraft pin
+        run: bun scripts/canvas/check-figcraft-pin.mjs
+
+      - name: Fetch and verify figcraft bundle (canvas/bundle/)
+        run: bun scripts/canvas/fetch-figcraft-bundle.mjs
 
       - name: Build termul-server (release)
         working-directory: src-tauri

@@ -35,6 +35,17 @@ compile_error!(
      release binary (rust-embed embeds the Vite bundle at cargo-build time)"
 );
 
+// Release builds without the figcraft canvas bundle fail here too (set by
+// `build.rs` via the `canvas_bundle_missing` cfg), so no release binary ships
+// a canvas that answers BUNDLE_MISSING. `build.rs` sets the cfg only for the
+// release profile, so dev builds stay green.
+#[cfg(canvas_bundle_missing)]
+compile_error!(
+    "canvas/bundle/ is missing: run `bun scripts/canvas/fetch-figcraft-bundle.mjs` before \
+     building a release binary (rust-embed embeds the figcraft canvas at cargo-build time), \
+     or set TERMUL_ALLOW_MISSING_CANVAS_BUNDLE=1 to build without the canvas"
+);
+
 /// The SPA entry served for any non-asset path (the hash-router client).
 const INDEX_HTML: &str = "index.html";
 
@@ -415,9 +426,10 @@ fn read_bundle_file(path: &str) -> Option<BundleFile> {
 }
 
 /// Whether the active bundle source (the dev override directory, else the
-/// embedded set) holds an `index.html`.
+/// embedded set) holds a non-empty `index.html`. An empty one would serve a
+/// blank canvas, so it counts as missing.
 pub fn canvas_bundle_available() -> bool {
-    read_bundle_file(INDEX_HTML).is_some()
+    read_bundle_file(INDEX_HTML).is_some_and(|file| !file.data.is_empty())
 }
 
 /// Typed 503 for a request that reaches a build without the bundle.
@@ -437,6 +449,11 @@ pub fn canvas_bundle_missing_response() -> Response {
 /// the bundle. GET and HEAD only. Every response is `private, no-cache` with
 /// a content-hash `ETag`: the bundle sits behind a per-canvas credential, so
 /// it must revalidate rather than be replayed from a shared cache.
+///
+/// HEAD gets the full body, like [`serve_embedded`]: the axum route sets
+/// `Content-Length` from it and then drops the body, so HEAD reports the
+/// same length as GET (RFC 9110 §9.3.2). An empty body here would make
+/// that `Content-Length: 0` (#1728).
 pub fn canvas_bundle_response(method: &Method, path: &str, request: &HeaderMap) -> Response {
     if !matches!(*method, Method::GET | Method::HEAD) {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
@@ -449,14 +466,9 @@ pub fn canvas_bundle_response(method: &Method, path: &str, request: &HeaderMap) 
     let mut response = if if_none_match_names(request, &opaque) {
         StatusCode::NOT_MODIFIED.into_response()
     } else {
-        let body = if *method == Method::HEAD {
-            Body::empty()
-        } else {
-            Body::from(file.data)
-        };
         (
             [(header::CONTENT_TYPE, HeaderValue::from_static(file.mime))],
-            body,
+            Body::from(file.data),
         )
             .into_response()
     };

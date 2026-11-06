@@ -8,7 +8,8 @@ use sha2::{Digest, Sha256};
 use super::convert::{McpCatalogReason, OptionKind, Runner};
 use super::search::{item_status, McpCatalogDefaultOption, McpCatalogState, RunnerAvailability};
 use super::snapshot::{
-    item_from_row, load, load_embedded, load_or_empty, RegistryStatus, SnapshotError,
+    embedded_source, item_from_row, load, load_embedded, load_or_empty, RegistryStatus,
+    SnapshotError,
 };
 
 const ALL_RUNNERS: RunnerAvailability = RunnerAvailability {
@@ -317,8 +318,8 @@ fn a_row_that_does_not_parse_is_unsupported_without_failing_the_load() {
     let names: Vec<String> = load(&gz, &meta)
         .unwrap()
         .items
-        .into_iter()
-        .map(|item| item.name)
+        .iter()
+        .map(|item| item.name.clone())
         .collect();
     assert_eq!(names, ["io.example/ok"]);
 }
@@ -365,4 +366,57 @@ fn the_fixture_picks_one_https_logo_for_each_server_that_lists_icons() {
         Some("https://cejel.dev/brand-icon.png")
     );
     assert_eq!(icon("to.hooka/mcp"), None);
+}
+
+#[test]
+fn embedded_metadata_matches_the_snapshot_source() {
+    let source = embedded_source();
+    assert_eq!(
+        source.updated_at.as_deref(),
+        Some("2026-10-31T10:35:51.229Z")
+    );
+    assert!(source.sample);
+    assert_eq!(source, load_embedded().source);
+}
+
+#[test]
+fn parsing_a_snapshot_retains_every_rows_text() {
+    let description = "d".repeat(800);
+    let servers: Vec<_> = (0..200)
+        .map(|index| {
+            json!({
+                "server": {
+                    "name": format!("io.example/server-{index}"),
+                    "description": description,
+                    "version": "1.2.3"
+                },
+                "_meta": {
+                    "io.modelcontextprotocol.registry/official": {
+                        "status": "active",
+                        "isLatest": true
+                    }
+                }
+            })
+        })
+        .collect();
+    let (gz, meta) = snapshot(json!({ "formatVersion": 1, "servers": servers }));
+    let catalog = load(&gz, &meta).unwrap();
+    let text: usize = catalog
+        .items
+        .iter()
+        .map(|item| {
+            item.description.len()
+                + item
+                    .parsed
+                    .as_ref()
+                    .map(|parsed| parsed.server.description.len())
+                    .unwrap_or(0)
+        })
+        .sum();
+    assert_eq!(catalog.items.len(), 200);
+    // Each description is owned twice: on the row and again on the parsed server.
+    assert!(
+        text >= 200 * 800 * 2,
+        "parsed rows keep their text, got {text}"
+    );
 }
