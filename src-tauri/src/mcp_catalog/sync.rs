@@ -31,7 +31,8 @@ const REQUEST_ATTEMPTS: u32 = 3;
 const CACHE_FORMAT_VERSION: u32 = 2;
 const CONFIG_SCHEMA_VERSION: u32 = 1;
 const CACHE_FILE: &str = "registry-cache.json.gz";
-/// `update_cache` returns this when `Since` has a stamp but no extendable cache.
+/// `update_cache` returns this when `Since` has no extendable cache and a stamp
+/// at or after the snapshot, so the cache that stamp describes went missing.
 const CACHE_UNAVAILABLE: &str = "registry cache missing or invalid";
 /// Cursor and `full` flag, so the next sync can plan without parsing `CACHE_FILE`.
 const STAMP_FILE: &str = "registry-cursor.json";
@@ -73,12 +74,8 @@ pub(crate) enum SyncPlan {
 
 impl SyncPlan {
     pub(crate) fn for_catalog(source: &McpCatalogSource) -> Self {
-        match source
-            .updated_at
-            .as_deref()
-            .map(DateTime::parse_from_rfc3339)
-        {
-            Some(Ok(at)) if !source.sample => Self::Since(at.with_timezone(&Utc)),
+        match source_cursor(source) {
+            Some(at) if !source.sample => Self::Since(at),
             _ => Self::Full,
         }
     }
@@ -384,6 +381,11 @@ fn rfc3339(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+fn source_cursor(source: &McpCatalogSource) -> Option<DateTime<Utc>> {
+    let at = DateTime::parse_from_rfc3339(source.updated_at.as_deref()?).ok()?;
+    Some(at.with_timezone(&Utc))
+}
+
 pub(crate) fn read_cache(dir: &Path, snapshot: &McpCatalogSource) -> Option<RegistryCache> {
     let path = dir.join(CACHE_FILE);
     let file = match fs::File::open(&path) {
@@ -409,11 +411,7 @@ pub(crate) fn read_cache(dir: &Path, snapshot: &McpCatalogSource) -> Option<Regi
         );
         return None;
     }
-    let snapshot_at = snapshot
-        .updated_at
-        .as_deref()
-        .and_then(|at| DateTime::parse_from_rfc3339(at).ok());
-    if snapshot_at.is_some_and(|at| cache.cursor < at) {
+    if source_cursor(snapshot).is_some_and(|at| cache.cursor < at) {
         log::info!(
             "[mcp-catalog] sync cache cursor={} is older than the snapshot, discarding it",
             rfc3339(cache.cursor)
@@ -472,26 +470,29 @@ struct CacheStamp {
     full: bool,
 }
 
-fn read_stamp(dir: &Path, snapshot: &McpCatalogSource) -> Option<McpCatalogSource> {
-    let bytes = fs::read(dir.join(STAMP_FILE)).ok()?;
-    let stamp: CacheStamp = match serde_json::from_slice(&bytes) {
-        Ok(stamp) => stamp,
+/// `Ok(None)` when there is no stamp, `Err` when it is unreadable or invalid.
+fn load_stamp(dir: &Path) -> Result<Option<CacheStamp>, ()> {
+    let bytes = match fs::read(dir.join(STAMP_FILE)) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
-            log::warn!(
-                "[mcp-catalog] sync cursor stamp is invalid ({:?} at {}:{}), ignoring it",
-                error.classify(),
-                error.line(),
-                error.column()
-            );
-            return None;
+            log::warn!("[mcp-catalog] sync cursor stamp unreadable: {error}");
+            return Err(());
         }
     };
-    let snapshot_at = snapshot
-        .updated_at
-        .as_deref()
-        .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
-        .map(|at| at.with_timezone(&Utc));
-    if snapshot_at.is_some_and(|at| stamp.cursor < at) {
+    serde_json::from_slice(&bytes).map(Some).map_err(|error| {
+        log::warn!(
+            "[mcp-catalog] sync cursor stamp is invalid ({:?} at {}:{}), ignoring it",
+            error.classify(),
+            error.line(),
+            error.column()
+        );
+    })
+}
+
+fn read_stamp(dir: &Path, snapshot: &McpCatalogSource) -> Option<McpCatalogSource> {
+    let stamp = load_stamp(dir).ok().flatten()?;
+    if source_cursor(snapshot).is_some_and(|at| stamp.cursor < at) {
         log::info!(
             "[mcp-catalog] sync cursor stamp {} is older than the snapshot, ignoring it",
             rfc3339(stamp.cursor)
@@ -547,6 +548,19 @@ fn stored_source(dir: &Path, snapshot: &McpCatalogSource) -> McpCatalogSource {
         .unwrap_or_else(|| snapshot.clone())
 }
 
+/// Whether an incremental sync with no extendable cache may start a delta-only
+/// one. Yes on the first sync (no stamp), and when the stamp predates the
+/// snapshot the crawl starts from: an upgrade shipped a newer snapshot, so the
+/// delta since it is complete. A stamp at or after the snapshot means its cache
+/// went missing or invalid, and a delta-only cache would drop what it held.
+fn may_start_delta_cache(dir: &Path, source: &McpCatalogSource, from: DateTime<Utc>) -> bool {
+    match load_stamp(dir) {
+        Ok(None) => true,
+        Ok(Some(stamp)) => source_cursor(source).is_some_and(|at| stamp.cursor < at && from <= at),
+        Err(()) => false,
+    }
+}
+
 /// Writes the registry delta. Does not parse rows into catalog items.
 fn update_cache(
     dir: &Path,
@@ -557,12 +571,15 @@ fn update_cache(
 ) -> io::Result<RegistryCache> {
     let mut cache = match plan {
         SyncPlan::Full => RegistryCache::new(started_at, true),
-        SyncPlan::Since(_) => match read_cache(dir, source) {
+        SyncPlan::Since(from) => match read_cache(dir, source) {
             Some(cache) => cache,
-            // The first incremental sync has no stamp and no cache. Later
-            // failures (a stamp whose cache is missing, invalid, or older than
-            // the snapshot) must not invent a delta-only cache.
-            None if !dir.join(STAMP_FILE).exists() => RegistryCache::new(started_at, false),
+            None if may_start_delta_cache(dir, source, from) => {
+                log::info!(
+                    "[mcp-catalog] sync starting a fresh delta cache from cursor={}",
+                    rfc3339(from)
+                );
+                RegistryCache::new(started_at, false)
+            }
             None => {
                 log::warn!("[mcp-catalog] incremental sync cannot extend the registry cache");
                 return Err(io::Error::other(CACHE_UNAVAILABLE));
