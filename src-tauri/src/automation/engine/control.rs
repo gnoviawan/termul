@@ -137,11 +137,11 @@ fn park(scope: &NodeScope<'_>, duration_ms: u64, output: Option<Value>) -> NodeE
     // Parking without a stored `waiting` row would leave nothing to resume.
     if let Err(error) = scope.run.engine.store.upsert_step(&row) {
         log::error!(
-            "[Automation] run {} wait {} not recorded: {error}",
+            "[Automation] run {} park at {} not recorded: {error}",
             scope.run.run.id,
             scope.node_id
         );
-        return NodeError::failed(format!("wait_not_recorded: {error}"));
+        return NodeError::failed(format!("park_not_recorded: {error}"));
     }
     log::info!(
         "[Automation] run {} parked at {}{} until {wait_until}",

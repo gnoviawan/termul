@@ -349,3 +349,22 @@ async fn a_step_result_the_store_refuses_stops_the_run_before_the_approval_parks
     assert!(!f.te.engine.decide(&run.id, &node_id("gate"), true).unwrap());
     assert!(f.seen.posts.lock().is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_approval_the_store_cannot_park_fails_with_a_park_code() {
+    let f = fixture().await;
+    let a = manual(&f.te, gated_graph(&f, false));
+    f.te.store.fail_step_writes("gate", "waiting");
+
+    let run = f.te.engine.start_run(&a, RunTrigger::Manual, 1_000).unwrap();
+    let run = settled(&f.te.store, &run.id).await;
+
+    assert_eq!((run.status, run.parked), (RunStatus::Failed, None));
+    assert!(
+        run.stop_reason
+            .as_deref()
+            .is_some_and(|r| r.starts_with("gate: park_not_recorded: ")),
+        "{:?}",
+        run.stop_reason
+    );
+}
