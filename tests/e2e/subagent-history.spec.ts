@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { expect, type Page, test } from 'playwright/test'
 import { chatCard, chatTab, launchChat, openWorkspace, selectColumnTab, selectProject } from './ui'
 
@@ -20,6 +21,17 @@ test.beforeEach(async ({ page }) => {
   await openWorkspace(page)
   await selectProject(page, 'proj-c')
 })
+
+/**
+ * A chat title unique to this run. Chats outlive a test (the server and
+ * workspace are shared by the whole suite), so under `--repeat-each` a fixed
+ * title would match the previous repeat's still-open tab too: the reopen
+ * would close one tab and wait forever for the other to disappear. The
+ * fixed-length suffix also keeps one title from prefix-matching another.
+ */
+function uniqueTitle(base: string): string {
+  return `${base} ${randomUUID().slice(0, 8)}`
+}
 
 function paneOf(page: Page, title: string) {
   return page.locator('[data-pane-content]').filter({ has: chatTab(page, title) })
@@ -60,7 +72,7 @@ async function reopenFromHistory(page: Page, title: string): Promise<void> {
 test('RFD subagents stay in the transcript after the turn, a reload and a reopen', async ({
   page
 }) => {
-  const title = 'history rfd'
+  const title = uniqueTitle('history rfd')
   await launchChat(page, `${title} [SUBAGENTS:4] [BG_TAIL:8]`)
   const pane = paneOf(page, title)
   await expect(pane.getByText('I am waiting for them.').filter({ visible: true })).toBeVisible()
@@ -83,7 +95,7 @@ test('RFD subagents stay in the transcript after the turn, a reload and a reopen
 })
 
 test('legacy Claude background subagents keep their activity across a reload', async ({ page }) => {
-  const title = 'history legacy'
+  const title = uniqueTitle('history legacy')
   await launchChat(page, `${title} [SUBAGENTS:3]`)
   const pane = paneOf(page, title)
   await expect(pane.getByText('Both reviewers finished.').filter({ visible: true })).toBeVisible()
