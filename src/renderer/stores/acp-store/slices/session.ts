@@ -358,6 +358,12 @@ let sessionIndexAppliedGeneration = 0
  * Dedupes concurrent Retry clicks so only one reopen+send runs per session. */
 const inFlightCrashedRetries = new Set<SessionId>()
 
+/** Sessions with an in-flight `deleteHistorySession`. `retryFailedLaunch`
+ * refuses them: a retry started before the durable delete settles would see
+ * no cancellation tombstone and re-send the deleted chat's first turn
+ * (gh-1741). Cleared when the delete settles, so a failed delete can retry. */
+const pendingHistoryDeletes = new Set<SessionId>()
+
 const RESTORE_PRELOAD_MIN_MS = 400
 
 type RestorePreloadTracker = {
@@ -2029,6 +2035,14 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     // Dedupe concurrent Retry clicks (shared set with retryCrashedSession so a
     // click storm across banners can never run two relaunches for one session).
     if (inFlightCrashedRetries.has(sessionId)) return
+    if (pendingHistoryDeletes.has(sessionId)) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.retryFailedLaunch.deletePending',
+        message: `Ignored retry for session ${sessionId}: its deletion is pending`
+      })
+      return
+    }
     inFlightCrashedRetries.add(sessionId)
     // Durable boundary logs (AGENTS.md): every retry outcome is recorded.
     // Safe context only — session id + operation, never prompts, env values,
@@ -2128,76 +2142,83 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
   },
 
   deleteHistorySession: async (id) => {
-    invalidateSessionReopen(id)
-    forgetAgentWorkingReports(id)
-    inFlightHistoryOpens.delete(id)
-    inFlightDiscoveredOpens.delete(id)
-    invalidateRestorePreload(set, id)
-    // Launch cancellation tombstone: deleting a chat whose launch/retry is
-    // still in flight (startChat unresolved) revokes that launch —
-    // finalizeChatLaunch checks this after startChat resolves and tears the
-    // late session down instead of merging the transcript + sending the
-    // prompt. Guarded on the launching flag so a post-merge delete cannot
-    // leave a stale tombstone behind.
-    if (get().launchingSessionIds[id]) {
-      cancelledChatLaunches.add(id)
-    }
-    const live = get().sessions[id]
-    const indexEntry = get().sessionIndex.find((entry) => entry.id === id)
-    const agentId = live?.agentId ?? indexEntry?.agentId
-    const agent = agentId ? get().agents[agentId] : undefined
-    const deleteAdvertised = Boolean(agent?.capabilities?.sessionCapabilities?.delete)
-    if (agentId && (deleteAdvertised || (!live && !agent?.capabilities))) {
+    // Retry guard: set before the cancellation tombstone below so no retry
+    // can start in the window before it (gh-1741).
+    pendingHistoryDeletes.add(id)
+    try {
+      invalidateSessionReopen(id)
+      forgetAgentWorkingReports(id)
+      inFlightHistoryOpens.delete(id)
+      inFlightDiscoveredOpens.delete(id)
+      invalidateRestorePreload(set, id)
+      // Launch cancellation tombstone: deleting a chat whose launch/retry is
+      // still in flight (startChat unresolved) revokes that launch —
+      // finalizeChatLaunch checks this after startChat resolves and tears the
+      // late session down instead of merging the transcript + sending the
+      // prompt. Guarded on the launching flag so a post-merge delete cannot
+      // leave a stale tombstone behind.
+      if (get().launchingSessionIds[id]) {
+        cancelledChatLaunches.add(id)
+      }
+      const live = get().sessions[id]
+      const indexEntry = get().sessionIndex.find((entry) => entry.id === id)
+      const agentId = live?.agentId ?? indexEntry?.agentId
+      const agent = agentId ? get().agents[agentId] : undefined
+      const deleteAdvertised = Boolean(agent?.capabilities?.sessionCapabilities?.delete)
+      if (agentId && (deleteAdvertised || (!live && !agent?.capabilities))) {
+        try {
+          await acpApi.deleteAgentSession(agentId, id)
+        } catch (error) {
+          void logFrontendError({
+            level: 'warn',
+            source: 'acp.deleteHistorySession',
+            message: `session/delete failed for ${id}: ${error instanceof Error ? error.message : String(error)}`
+          })
+        }
+      }
       try {
-        await acpApi.deleteAgentSession(agentId, id)
-      } catch (error) {
+        await queueSessionPayloadDelete(id)
+        set((s) => {
+          // Only publish deletion after the Rust store confirms the durable
+          // payload/index removal, so a failed delete cannot diverge on restart.
+          const sessions = { ...s.sessions }
+          if (sessions[id]) {
+            sessions[id] = {
+              ...sessions[id],
+              status: 'closed',
+              activeTurn: false,
+              openTurnId: null,
+              replaying: null,
+              // A deleted chat can never be retried: drop the saved first turn
+              // so its prompt does not outlive the deletion (gh-1741).
+              launchFirstTurnBlocks: null
+            }
+          }
+          return {
+            sessionIndex: s.sessionIndex.filter((e) => e.id !== id),
+            sessions,
+            preparedSessions: dropPreparedSlots(s.preparedSessions, (sid) => sid === id),
+            openingHistoryIds: dropRecordKey(s.openingHistoryIds, id),
+            discoveredReopenContexts: dropRecordKey(s.discoveredReopenContexts, id),
+            ...dropSessionTranscriptState(s, id)
+          }
+        })
+        // Close the session's workspace tab if one is open (removeTab no-ops
+        // otherwise) so deleting a chat — e.g. an open failed launch — fully
+        // discards it instead of leaving a locked-composer pane behind.
+        useWorkspaceStore.getState().removeTab(agentChatTabId(id))
+        // Reclaim any app-owned temp files staged for this session.
+        void deleteSessionTempFiles(id)
+      } catch {
+        // Same console-vs-log-api rationale as loadAgentConfigs.
         void logFrontendError({
           level: 'warn',
           source: 'acp.deleteHistorySession',
-          message: `session/delete failed for ${id}: ${error instanceof Error ? error.message : String(error)}`
+          message: 'failed to delete session history'
         })
       }
-    }
-    try {
-      await queueSessionPayloadDelete(id)
-      set((s) => {
-        // Only publish deletion after the Rust store confirms the durable
-        // payload/index removal, so a failed delete cannot diverge on restart.
-        const sessions = { ...s.sessions }
-        if (sessions[id]) {
-          sessions[id] = {
-            ...sessions[id],
-            status: 'closed',
-            activeTurn: false,
-            openTurnId: null,
-            replaying: null,
-            // A deleted chat can never be retried: drop the saved first turn
-            // so its prompt does not outlive the deletion (gh-1741).
-            launchFirstTurnBlocks: null
-          }
-        }
-        return {
-          sessionIndex: s.sessionIndex.filter((e) => e.id !== id),
-          sessions,
-          preparedSessions: dropPreparedSlots(s.preparedSessions, (sid) => sid === id),
-          openingHistoryIds: dropRecordKey(s.openingHistoryIds, id),
-          discoveredReopenContexts: dropRecordKey(s.discoveredReopenContexts, id),
-          ...dropSessionTranscriptState(s, id)
-        }
-      })
-      // Close the session's workspace tab if one is open (removeTab no-ops
-      // otherwise) so deleting a chat — e.g. an open failed launch — fully
-      // discards it instead of leaving a locked-composer pane behind.
-      useWorkspaceStore.getState().removeTab(agentChatTabId(id))
-      // Reclaim any app-owned temp files staged for this session.
-      void deleteSessionTempFiles(id)
-    } catch {
-      // Same console-vs-log-api rationale as loadAgentConfigs.
-      void logFrontendError({
-        level: 'warn',
-        source: 'acp.deleteHistorySession',
-        message: 'failed to delete session history'
-      })
+    } finally {
+      pendingHistoryDeletes.delete(id)
     }
   },
 
