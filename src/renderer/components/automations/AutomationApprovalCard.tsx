@@ -13,8 +13,11 @@ interface AutomationApprovalCardProps {
   nodeId: NodeId
   label: string
   until: number
-  /** The rendered message; `null` while the steps load, empty when it has none. */
+  /** The rendered message; `null` until the steps load, empty when it has none. */
   message: string | null
+  /** The steps failed to load, so `message` stays `null` until a retry succeeds. */
+  messageFailed: boolean
+  onRetry: () => void
   onDecided: () => void
 }
 
@@ -24,6 +27,8 @@ export function AutomationApprovalCard({
   label,
   until,
   message,
+  messageFailed,
+  onRetry,
   onDecided
 }: AutomationApprovalCardProps): React.JSX.Element {
   const titleId = useId()
@@ -53,7 +58,14 @@ export function AutomationApprovalCard({
           Expires {formatDateTime(until)}
         </span>
       </header>
-      {message === null ? (
+      {message === null && messageFailed ? (
+        <div className="flex flex-wrap items-center gap-x-2 px-4 py-3 text-sm text-muted-foreground">
+          <p>The message did not load, so it cannot be approved yet.</p>
+          <Button variant="link" size="xs" className="px-0" onClick={onRetry}>
+            Try again
+          </Button>
+        </div>
+      ) : message === null ? (
         <p className="px-4 py-3 text-sm text-muted-foreground">Loading the message…</p>
       ) : (
         message && (

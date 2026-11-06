@@ -104,6 +104,8 @@ export function AutomationRunDetail({
           label={approval.node.label}
           until={approval.until}
           message={approvalMessage(approval, steps)}
+          messageFailed={steps === null && error !== null}
+          onRetry={reload}
           onDecided={() => {
             reload()
             onChanged()

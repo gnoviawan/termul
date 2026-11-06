@@ -147,6 +147,31 @@ describe('a run parked on an approval', () => {
     expect(card.getByRole('button', { name: 'Reject' })).toBeEnabled()
   })
 
+  it('says when the message failed to load and retries it, still holding Approve', async () => {
+    api.getAutomationRunSteps.mockResolvedValueOnce({
+      success: false,
+      error: 'host offline',
+      code: 'NETWORK'
+    })
+    renderRun(parkedRun())
+
+    const card = within(await screen.findByRole('region', { name: 'Ship it?' }))
+    await waitFor(() =>
+      expect(
+        card.getByText('The message did not load, so it cannot be approved yet.')
+      ).toBeInTheDocument()
+    )
+    expect(card.queryByText('Loading the message…')).not.toBeInTheDocument()
+    expect(card.getByRole('button', { name: 'Approve' })).toBeDisabled()
+    expect(card.getByRole('button', { name: 'Reject' })).toBeEnabled()
+
+    fireEvent.click(card.getByRole('button', { name: 'Try again' }))
+
+    await waitFor(() => expect(card.getByText(/Deploy manual\?/)).toBeInTheDocument())
+    expect(api.getAutomationRunSteps).toHaveBeenCalledTimes(2)
+    expect(card.getByRole('button', { name: 'Approve' })).toBeEnabled()
+  })
+
   it('says so when the run had already moved on, and refreshes', async () => {
     api.decideAutomationApproval.mockResolvedValue(ok(false))
     const onChanged = renderRun(parkedRun())
