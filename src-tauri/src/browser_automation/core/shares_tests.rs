@@ -55,7 +55,7 @@ async fn a_share_view_has_the_renderer_contract_shape_and_a_token_apart_from_its
     let h = with_user_tab(FakeEngine::new(webview2_like()), PAGE).await;
     let view = h
         .host
-        .create_share(request(&["console_errors", "content", "content"]))
+        .create_share(request(&["content", "content"]))
         .unwrap();
     let wire = serde_json::to_value(&view).unwrap();
     let mut keys: Vec<&str> = wire
@@ -80,11 +80,7 @@ async fn a_share_view_has_the_renderer_contract_shape_and_a_token_apart_from_its
     );
     assert_eq!(wire["origin"], ORIGIN);
     assert_eq!(wire["status"], "active");
-    assert_eq!(
-        wire["scopes"],
-        json!(["content"]),
-        "console errors are not observed on user tabs"
-    );
+    assert_eq!(wire["scopes"], json!(["content"]));
     assert_eq!(
         wire["reference"]["name"],
         "Browser page (https://app.example.com)"
@@ -145,14 +141,19 @@ async fn create_refuses_what_the_host_cannot_vouch_for() {
         code(request(&["console_errors", "network_failures"])),
         "SCOPE_UNAVAILABLE"
     );
-    let view = h
-        .host
-        .create_share(request(&["content", "screenshot"]))
-        .unwrap();
     assert_eq!(
-        view.scopes,
-        [ShareScope::Content],
+        code(request(&["content", "console_errors"])),
+        "SCOPE_UNAVAILABLE",
+        "user tabs carry no console observer: refused, never dropped"
+    );
+    assert_eq!(
+        code(request(&["content", "screenshot"])),
+        "SCOPE_UNAVAILABLE",
         "no screenshot where the engine takes none"
+    );
+    assert!(
+        h.pane.shares.lock().is_empty(),
+        "no refused share was announced"
     );
 }
 
@@ -428,4 +429,70 @@ fn the_prompt_record_keeps_share_links_without_their_token() {
             other
         ]
     );
+}
+
+#[tokio::test]
+async fn a_share_that_ends_while_the_page_is_read_yields_nothing() {
+    let h = with_user_tab(FakeEngine::new(webview2_like()), PAGE).await;
+    let view = h.host.create_share(request(&["content"])).unwrap();
+    let host = std::sync::Arc::downgrade(&h.host);
+    let share_id = view.share_id.clone();
+    *h.engine.during_snapshot.lock() = Some(Box::new(move || {
+        host.upgrade().unwrap().revoke_share(&share_id).unwrap();
+    }));
+    let out = h.host.resolve_share_blocks("s1", vec![link(&view)]).await;
+    assert!(unavailable(&out), "revoked mid-read: {out:?}");
+    assert_eq!(last_status(&h), Some(ShareStatus::Revoked));
+}
+
+#[tokio::test]
+async fn a_tab_rebuilt_under_the_same_label_is_not_the_shared_tab() {
+    let h = with_user_tab(FakeEngine::new(webview2_like()), PAGE).await;
+    let view = h.host.create_share(request(&["content"])).unwrap();
+    let host = std::sync::Arc::downgrade(&h.host);
+    // Same label, same epoch, same origin; only the record differs. No tab
+    // event runs, so nothing ended the share on its own.
+    *h.engine.during_snapshot.lock() = Some(Box::new(move || {
+        let host = host.upgrade().unwrap();
+        let mut registry = host.registry.lock();
+        let shared_epoch = registry.get(USER_TAB).unwrap().epoch;
+        registry.remove(USER_TAB);
+        registry.begin_create(USER_TAB, PAGE).unwrap();
+        assert!(registry.finish_create(USER_TAB));
+        let record = registry.get_mut(USER_TAB).unwrap();
+        record.epoch = shared_epoch;
+        record.url = PAGE.to_string();
+    }));
+    let out = h.host.resolve_share_blocks("s1", vec![link(&view)]).await;
+    assert!(unavailable(&out), "read from a replacement tab: {out:?}");
+    assert_eq!(last_status(&h), Some(ShareStatus::Navigated));
+    assert!(h.host.share_list().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_navigation_between_check_and_commit_refuses_the_share_unannounced() {
+    let h = with_user_tab(FakeEngine::new(webview2_like()), PAGE).await;
+    let now = 1_000;
+    let grant = h.host.prepare_share(request(&["content"]), now).unwrap();
+    h.pane
+        .user_navigates(USER_TAB, "https://app.example.com/next");
+    h.settle_events().await;
+    assert_eq!(
+        h.host.commit_share(grant, now).unwrap_err().code,
+        "ORIGIN_CHANGED"
+    );
+    assert!(
+        h.pane.shares.lock().is_empty(),
+        "the renderer never heard of it"
+    );
+    assert!(h.host.share_list().unwrap().is_empty());
+
+    let grant = h.host.prepare_share(request(&["content"]), now).unwrap();
+    h.host.destroy_tab(USER_TAB).await;
+    h.settle_events().await;
+    assert_eq!(
+        h.host.commit_share(grant, now).unwrap_err().code,
+        "ORIGIN_CHANGED"
+    );
+    assert!(h.pane.shares.lock().is_empty());
 }

@@ -236,6 +236,8 @@ pub(super) struct FakeEngine {
     files_set: Mutex<Vec<FilesSet>>,
     /// Items the snapshot helper reports after its buttons.
     pub(super) snapshot_extra: Mutex<Vec<Value>>,
+    /// Runs once while the snapshot helper is in flight.
+    pub(super) during_snapshot: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl FakeEngine {
@@ -301,6 +303,7 @@ impl FakeEngine {
             focused_frame: Mutex::new(Value::Null),
             files_set: Mutex::new(Vec::new()),
             snapshot_extra: Mutex::new(Vec::new()),
+            during_snapshot: Mutex::new(None),
         }
     }
 }
@@ -316,6 +319,9 @@ impl BrowserEngine for FakeEngine {
         let out = match script.helper.name {
             "ready_state" => json!("complete"),
             "snapshot" => {
+                if let Some(during) = self.during_snapshot.lock().take() {
+                    during();
+                }
                 let removed = *self.removed_buttons.lock();
                 let items: Vec<Value> = self
                     .snapshot_buttons

@@ -185,6 +185,11 @@ impl TabRecord {
         self.life == Lifecycle::Live
     }
 
+    /// Unique per record: a tab built again under the same label differs.
+    pub fn opened(&self) -> u64 {
+        self.opened
+    }
+
     fn wait(&mut self) -> oneshot::Receiver<NavOutcome> {
         let (tx, rx) = oneshot::channel();
         self.waiters.push(NavWaiter {

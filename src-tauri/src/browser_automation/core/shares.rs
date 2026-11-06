@@ -151,17 +151,20 @@ impl ShareError {
 }
 
 #[derive(Debug, Clone)]
-struct Grant {
+pub(super) struct Grant {
     view: ShareView,
     read_token: String,
     origin: CanonicalOrigin,
-    /// The tab's document epoch when the user shared it.
+    /// The tab record and its document epoch when the user shared it.
+    tab: u64,
     epoch: u64,
 }
 
 /// What the registry says about a shared tab now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TabNow {
+    /// [`super::tabs::TabRecord::opened`]: which record holds the label.
+    pub tab: u64,
     pub epoch: u64,
     pub origin: Option<CanonicalOrigin>,
 }
@@ -251,7 +254,7 @@ impl ShareBook {
 
 /// Whether the tab still shows the document the grant was given for.
 fn shows(grant: &Grant, now: &TabNow) -> bool {
-    now.epoch == grant.epoch && now.origin.as_ref() == Some(&grant.origin)
+    now.tab == grant.tab && now.epoch == grant.epoch && now.origin.as_ref() == Some(&grant.origin)
 }
 
 fn now_ms() -> u64 {
@@ -323,26 +326,26 @@ impl DesktopBrowserHost {
             && record.owner == Owner::User
             && record.is_live())
         .then(|| TabNow {
+            tab: record.opened(),
             epoch: record.epoch,
             origin: CanonicalOrigin::parse(&record.url).ok(),
         })
     }
 
     pub(super) fn create_share(&self, req: ShareRequest) -> Result<ShareView, ShareError> {
-        self.create_share_at(req, now_ms())
+        let now_ms = now_ms();
+        let grant = self.prepare_share(req, now_ms)?;
+        self.commit_share(grant, now_ms)
     }
 
-    pub(super) fn create_share_at(
+    /// Check a request against the tab as the registry shows it now.
+    pub(super) fn prepare_share(
         &self,
         req: ShareRequest,
         now_ms: u64,
-    ) -> Result<ShareView, ShareError> {
+    ) -> Result<Grant, ShareError> {
         if !valid_session_id(&req.session_id) {
             return Err(ShareError::INVALID);
-        }
-        let mut scopes = Vec::with_capacity(req.scopes.len());
-        for name in &req.scopes {
-            scopes.push(ShareScope::parse(name).ok_or(ShareError::INVALID)?);
         }
         let screenshot = !matches!(
             self.engine
@@ -351,15 +354,23 @@ impl DesktopBrowserHost {
                 .get(CapabilityId::Screenshot),
             Support::Unavailable(_)
         );
+        let mut scopes = Vec::with_capacity(req.scopes.len());
+        for name in &req.scopes {
+            let scope = ShareScope::parse(name).ok_or(ShareError::INVALID)?;
+            // Refused, never dropped: the user must see exactly what is shared.
+            if !served(scope, screenshot) {
+                return Err(ShareError::NO_SCOPE);
+            }
+            scopes.push(scope);
+        }
         scopes.sort_unstable();
         scopes.dedup();
-        scopes.retain(|s| served(*s, screenshot));
         if scopes.is_empty() {
             return Err(ShareError::NO_SCOPE);
         }
         let expected =
             CanonicalOrigin::parse(&req.expected_origin).map_err(|_| ShareError::INVALID)?;
-        let (epoch, url) = {
+        let (tab, epoch, url) = {
             let registry = self.registry.lock();
             let record = registry
                 .get(&req.tab_id)
@@ -369,7 +380,7 @@ impl DesktopBrowserHost {
                         && r.is_live()
                 })
                 .ok_or(ShareError::TAB_NOT_FOUND)?;
-            (record.epoch, record.url.clone())
+            (record.opened(), record.epoch, record.url.clone())
         };
         let parsed: Url = url.parse().map_err(|_| ShareError::NOT_SHAREABLE)?;
         if matches!(
@@ -383,37 +394,54 @@ impl DesktopBrowserHost {
             return Err(ShareError::ORIGIN_CHANGED);
         }
         let read_token = mint_token();
-        let view = ShareView {
-            share_id: format!("share-{}", Uuid::new_v4()),
-            session_id: req.session_id,
-            tab_id: req.tab_id,
-            origin: origin.as_str().to_string(),
-            scopes,
-            expires_at_ms: now_ms
-                .saturating_add(u64::try_from(SHARE_TTL.as_millis()).unwrap_or(u64::MAX)),
-            status: ShareStatus::Active,
-            reference: ShareReference {
-                uri: format!("{SHARE_URI_PREFIX}{read_token}"),
-                name: format!("Browser page ({})", origin.as_str()),
+        Ok(Grant {
+            view: ShareView {
+                share_id: format!("share-{}", Uuid::new_v4()),
+                session_id: req.session_id,
+                tab_id: req.tab_id,
+                origin: origin.as_str().to_string(),
+                scopes,
+                expires_at_ms: now_ms
+                    .saturating_add(u64::try_from(SHARE_TTL.as_millis()).unwrap_or(u64::MAX)),
+                status: ShareStatus::Active,
+                reference: ShareReference {
+                    uri: format!("{SHARE_URI_PREFIX}{read_token}"),
+                    name: format!("Browser page ({})", origin.as_str()),
+                },
             },
+            read_token,
+            origin,
+            tab,
+            epoch,
+        })
+    }
+
+    /// Add a prepared grant if its tab still shows the checked document.
+    /// The check, the insert and the announcement run under the book's
+    /// lock, so a navigation either refuses the grant here or ends it in a
+    /// later `sync_shares`, whose announcement then follows this one.
+    pub(super) fn commit_share(&self, grant: Grant, now_ms: u64) -> Result<ShareView, ShareError> {
+        let view = grant.view.clone();
+        let mut shares = self.shares.lock();
+        let mut changed = shares.expire(now_ms);
+        let refusal = if shares.len() >= MAX_SHARES {
+            Some(ShareError::LIMIT)
+        } else if !self
+            .tab_now(&view.tab_id)
+            .is_some_and(|now| shows(&grant, &now))
+        {
+            Some(ShareError::ORIGIN_CHANGED)
+        } else {
+            None
         };
-        let mut changed = {
-            let mut shares = self.shares.lock();
-            let mut ended = shares.expire(now_ms);
-            if shares.len() >= MAX_SHARES {
-                self.publish_shares(&ended);
-                return Err(ShareError::LIMIT);
-            }
-            ended.extend(shares.insert(Grant {
-                view: view.clone(),
-                read_token,
-                origin,
-                epoch,
-            }));
-            ended
-        };
+        if let Some(refusal) = refusal {
+            self.publish_shares(&changed);
+            return Err(refusal);
+        }
+        changed.extend(shares.insert(grant));
         changed.push(view.clone());
         self.publish_shares(&changed);
+        drop(shares);
         log::info!(
             "[browser-share] share created tab={} scopes={} session={}",
             label_prefix(&view.tab_id),
@@ -421,8 +449,6 @@ impl DesktopBrowserHost {
             crate::logging::redact_session_id(&view.session_id)
         );
         self.schedule_expiry();
-        // A navigation that committed while the grant was being built.
-        self.sync_shares(&view.tab_id);
         Ok(view)
     }
 
@@ -567,7 +593,20 @@ impl DesktopBrowserHost {
         } else {
             None
         };
-        // The reads ran on whatever document the tab held meanwhile.
+        // The reads ran on whatever document the tab held meanwhile, and
+        // the share may have ended while they ran.
+        let live = self
+            .shares
+            .lock()
+            .by_token(token)
+            .is_some_and(|g| g.view.share_id == grant.view.share_id);
+        if !live {
+            log::info!(
+                "[browser-share] share read discarded tab={} reason=ended_during_read",
+                label_prefix(&label)
+            );
+            return vec![unavailable_note("the share ended")];
+        }
         match self.tab_now(&label) {
             None => return self.refuse_read(token, ShareStatus::Closed),
             Some(now) if !shows(&grant, &now) => {
