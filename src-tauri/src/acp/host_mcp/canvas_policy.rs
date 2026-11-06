@@ -8,7 +8,8 @@
 //! format from the path's extension when none is given, so without the path
 //! Termul names the format itself. Every other command or method that reads
 //! or writes a path is refused with `UNSUPPORTED_IN_KIOSK`, and so is every
-//! command that would leave the project's one document behind ([`Why`]).
+//! command that would leave the project's one document behind or make the
+//! editor contact a server ([`Why`]).
 
 use std::path::{Component, Path, PathBuf};
 
@@ -80,6 +81,17 @@ const OTHER_DOCUMENT: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::OtherDo
 const LEAVES_TERMUL: CommandPolicy =
     outside("shares the document outside Termul, with a server or a live session");
 const PLUGIN_CODE: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::PluginCode);
+/// The kiosk has no live sessions or online files, and their commands ask
+/// sharing servers for files, links and people (`collab.files` with
+/// `refresh` asks the server `pref.publishServer` names).
+const LIVE_SESSIONS: CommandPolicy =
+    outside("is for live sessions and files kept on a sharing server outside Termul");
+/// Loading a linked library asks a team library's server for it, or reads a
+/// library file outside the project.
+const LINKED_LIBRARIES: CommandPolicy = outside(
+    "loads the document's linked libraries, which contacts the servers of its team libraries \
+     and reads library files outside the project",
+);
 
 const fn outside(does: &'static str) -> CommandPolicy {
     CommandPolicy::Refuse(ALWAYS, Why::Outside(does))
@@ -162,6 +174,28 @@ const COMMANDS: &[(&str, CommandPolicy)] = &[
     ("collab.join", OTHER_DOCUMENT),
     ("collab.openFile", OTHER_DOCUMENT),
     ("collab.recoverFile", OTHER_DOCUMENT),
+    ("collab.cursor", LIVE_SESSIONS),
+    ("collab.cursorChat", LIVE_SESSIONS),
+    ("collab.diff", LIVE_SESSIONS),
+    ("collab.files", LIVE_SESSIONS),
+    ("collab.follow", LIVE_SESSIONS),
+    ("collab.forgetFile", LIVE_SESSIONS),
+    ("collab.leave", LIVE_SESSIONS),
+    ("collab.manageFile", LIVE_SESSIONS),
+    ("collab.peers", LIVE_SESSIONS),
+    ("collab.removePerson", LIVE_SESSIONS),
+    ("collab.report", LIVE_SESSIONS),
+    ("collab.serverInfo", LIVE_SESSIONS),
+    ("collab.spotlight", LIVE_SESSIONS),
+    ("collab.stop", LIVE_SESSIONS),
+    (
+        "collab.registerLinks",
+        outside("makes this app the opener of figcraft:// invite links on this machine"),
+    ),
+    (
+        "pref.publishServer",
+        outside("sets the sharing server the editor contacts for online files and join codes"),
+    ),
     ("window.new", OTHER_DOCUMENT),
     (
         "file.markSaved",
@@ -173,22 +207,44 @@ const COMMANDS: &[(&str, CommandPolicy)] = &[
     ("collab.share", LEAVES_TERMUL),
     ("text.openLink", outside("opens a link in a web browser")),
     (
+        "help.page",
+        outside("opens FigCraft's help page in a web browser"),
+    ),
+    (
         "library.check",
         outside(
             "contacts the servers of the document's team libraries, and lets the editor contact \
              them by itself from then on",
         ),
     ),
+    ("library.list", LINKED_LIBRARIES),
+    ("library.updates", LINKED_LIBRARIES),
+    ("library.usage", LINKED_LIBRARIES),
+    ("library.acceptUpdates", LINKED_LIBRARIES),
+    ("library.place", LINKED_LIBRARIES),
+    ("library.import", LINKED_LIBRARIES),
+    ("library.swap", LINKED_LIBRARIES),
+    ("library.swapAt", LINKED_LIBRARIES),
+    ("library.applyStyle", LINKED_LIBRARIES),
+    ("library.importVariable", LINKED_LIBRARIES),
+    ("library.bindVariable", LINKED_LIBRARIES),
+    ("library.aliasVariable", LINKED_LIBRARIES),
+    ("library.setVariableMode", LINKED_LIBRARIES),
+    ("library.extendCollection", LINKED_LIBRARIES),
     (
         "font.download",
         outside("downloads a font family and installs it into this machine's shared font folder"),
     ),
-    // Listing plugins and running, using or closing an installed one stay
-    // allowed: they bring in no code.
+    // Listing installed plugins and running, using or closing one stay
+    // allowed: they bring in no code and contact no server.
     ("plugin.directory.install", PLUGIN_CODE),
     ("plugin.import", PLUGIN_CODE),
     ("plugin.directory.publish", PLUGIN_CODE),
     ("plugin.directory.unpublish", PLUGIN_CODE),
+    (
+        "plugin.directory.list",
+        outside("asks a plugin directory server for its plugins"),
+    ),
 ];
 
 /// Control methods other than `engine.execute` that can name a file.

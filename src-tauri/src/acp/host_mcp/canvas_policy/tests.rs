@@ -419,7 +419,6 @@ const PLUGIN_CODE: &[(&str, &str)] = &[
 /// running, using or closing a plugin that is already installed.
 const PLUGIN_KEPT: &[(&str, &str)] = &[
     ("plugin.list", "{}"),
-    ("plugin.directory.list", r#"{"server": "ws://host:47900/"}"#),
     ("plugin.run", r#"{"id": "x.y"}"#),
     ("plugin.ui", "{}"),
     ("plugin.event", r#"{"id": "x.y", "control": "go"}"#),
@@ -464,10 +463,229 @@ fn every_plugin_command_the_pinned_engine_runs_is_refused_or_known_to_bring_in_n
         .iter()
         .chain(PLUGIN_KEPT)
         .map(|(command, _)| *command)
+        .chain(
+            REACHES_A_SERVER
+                .iter()
+                .map(|(command, ..)| *command)
+                .filter(|command| command.starts_with("plugin.")),
+        )
         .collect();
     sorted.sort_unstable();
     sorted.dedup();
     assert_eq!(engine, sorted);
+}
+
+const SESSIONS: &str = "is for live sessions and files kept on a sharing server outside Termul";
+const LIBRARIES: &str = "loads the document's linked libraries, which contacts the servers of its \
+                         team libraries and reads library files outside the project";
+
+/// Commands that make the editor contact a server, set the server it
+/// contacts, or open a page outside Termul, each with what its refusal says
+/// it does.
+const REACHES_A_SERVER: &[(&str, &str, &str)] = &[
+    (
+        "pref.publishServer",
+        r#"{"url": "ws://127.0.0.1:9/agent-chosen-path/"}"#,
+        "sets the sharing server the editor contacts for online files and join codes",
+    ),
+    ("collab.files", r#"{"refresh": true}"#, SESSIONS),
+    ("collab.files", "{}", SESSIONS),
+    (
+        "collab.serverInfo",
+        r#"{"server": "ws://127.0.0.1:9/"}"#,
+        SESSIONS,
+    ),
+    (
+        "collab.manageFile",
+        r#"{"file": "f", "server": "ws://127.0.0.1:9/", "owner": "o", "action": "links"}"#,
+        SESSIONS,
+    ),
+    ("collab.removePerson", r#"{"client": 2}"#, SESSIONS),
+    ("collab.report", r#"{"reason": "spam"}"#, SESSIONS),
+    ("collab.stop", "{}", SESSIONS),
+    ("collab.leave", "{}", SESSIONS),
+    ("collab.peers", "{}", SESSIONS),
+    ("collab.diff", "{}", SESSIONS),
+    ("collab.forgetFile", r#"{"file": "f"}"#, SESSIONS),
+    ("collab.follow", "{}", SESSIONS),
+    ("collab.cursor", r#"{"x": 1, "y": 2}"#, SESSIONS),
+    ("collab.cursorChat", r#"{"text": "hi"}"#, SESSIONS),
+    ("collab.spotlight", "{}", SESSIONS),
+    (
+        "collab.registerLinks",
+        r#"{"on": true}"#,
+        "makes this app the opener of figcraft:// invite links on this machine",
+    ),
+    (
+        "plugin.directory.list",
+        r#"{"server": "ws://127.0.0.1:9/"}"#,
+        "asks a plugin directory server for its plugins",
+    ),
+    (
+        "help.page",
+        "{}",
+        "opens FigCraft's help page in a web browser",
+    ),
+    ("library.list", r#"{"assets": true}"#, LIBRARIES),
+    ("library.updates", "{}", LIBRARIES),
+    ("library.usage", r#"{"library": "Brand"}"#, LIBRARIES),
+    ("library.acceptUpdates", "{}", LIBRARIES),
+    (
+        "library.place",
+        r#"{"library": "Brand", "component": "Button"}"#,
+        LIBRARIES,
+    ),
+    (
+        "library.import",
+        r#"{"library": "Brand", "component": "Button"}"#,
+        LIBRARIES,
+    ),
+    (
+        "library.swap",
+        r#"{"from": "Brand", "to": "Brand 2"}"#,
+        LIBRARIES,
+    ),
+    (
+        "library.swapAt",
+        r#"{"library": "Brand", "component": "Button"}"#,
+        LIBRARIES,
+    ),
+    (
+        "library.applyStyle",
+        r#"{"library": "Brand", "style": "Primary"}"#,
+        LIBRARIES,
+    ),
+    (
+        "library.importVariable",
+        r#"{"library": "Brand", "variable": "space/1"}"#,
+        LIBRARIES,
+    ),
+    (
+        "library.bindVariable",
+        r#"{"library": "Brand", "variable": "space/1"}"#,
+        LIBRARIES,
+    ),
+    (
+        "library.aliasVariable",
+        r#"{"library": "Brand", "variable": "gap", "alias": "space/1"}"#,
+        LIBRARIES,
+    ),
+    (
+        "library.setVariableMode",
+        r#"{"library": "Brand", "collection": "Theme"}"#,
+        LIBRARIES,
+    ),
+    (
+        "library.extendCollection",
+        r#"{"library": "Brand", "collection": "Theme"}"#,
+        LIBRARIES,
+    ),
+];
+
+#[test]
+fn reaching_a_server_or_choosing_the_server_the_editor_contacts_is_refused() {
+    for (command, params, does) in REACHES_A_SERVER {
+        let params: Value = serde_json::from_str(params).unwrap();
+        assert_eq!(
+            refusal("engine.execute", &execute(command, params.clone())).message,
+            format!("`{command}` {does}, which the Termul canvas does not allow"),
+            "{command} {params}"
+        );
+    }
+}
+
+/// The figcraft audit's probe, sent through the policy the way the gateway
+/// sends calls: an agent points the editor's sharing server at a listener and
+/// asks it to refresh the online files, which made the engine open a
+/// WebSocket to the agent's path. Headless installs the engine's network
+/// link, so a forwarded call would really connect.
+#[test]
+fn an_agent_cannot_point_the_editor_at_its_own_server_and_make_it_connect() {
+    use figcraft_mcp::Backend as _;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("ws://{}/agent-chosen-path/", listener.local_addr().unwrap());
+    let mut editor = figcraft_mcp::Headless::new();
+    let mut refusals = Vec::new();
+    for call in [
+        execute("pref.publishServer", json!({"url": url})),
+        execute("collab.files", json!({"refresh": true})),
+    ] {
+        match route("engine.execute", &call) {
+            CanvasRoute::Forward => {
+                let _ = editor.call("engine.execute", call);
+            }
+            CanvasRoute::Refuse(error) => refusals.push(error.message),
+            other => panic!("{call}: {other:?}"),
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    if let Ok((mut stream, _)) = listener.accept() {
+        stream.set_nonblocking(false).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+        let mut request = [0u8; 256];
+        let read = std::io::Read::read(&mut stream, &mut request).unwrap_or(0);
+        panic!(
+            "the editor connected to the agent's server: {}",
+            String::from_utf8_lossy(&request[..read])
+        );
+    }
+    assert_eq!(
+        refusals,
+        [
+            "`pref.publishServer` sets the sharing server the editor contacts for online files \
+             and join codes, which the Termul canvas does not allow",
+            "`collab.files` is for live sessions and files kept on a sharing server outside \
+             Termul, which the Termul canvas does not allow",
+        ]
+    );
+}
+
+/// Engine command families that reach servers or open links. The reviewed
+/// command list only catches new ids, not an existing command that starts
+/// contacting a server, so every command in these families is refused
+/// unless it is listed in `CONTACTS_NO_SERVER`.
+const SERVER_PREFIXES: &[&str] = &["collab.", "library.", "libraries.", "plugin.directory."];
+const SERVER_WORDS: &[&str] = &[
+    "server", "publish", "download", "upload", "share", "link", "url", "fetch", "online",
+];
+
+/// Commands in those families reviewed against the pinned engine to contact
+/// no server and open nothing outside the canvas.
+const CONTACTS_NO_SERVER: &[&str] = &[
+    // Copies a comment's link.
+    "comment.link",
+    // Marks a layer to leave out of a published library.
+    "component.hideWhenPublishing",
+    // Lists this session's font downloads.
+    "font.downloads",
+    // Open the Libraries panel and its publish form.
+    "libraries.open",
+    "libraries.publish",
+    // Publishes the document's library inside the document.
+    "library.publish",
+    // Removes a library link from the document.
+    "library.remove",
+    // Shows the prototype link notice again.
+    "proto.linkNotice",
+    // Sets a text range's link.
+    "text.link",
+];
+
+#[test]
+fn every_command_in_a_server_family_is_refused_unless_reviewed_to_contact_none() {
+    let forwarded: Vec<String> = engine_commands()
+        .into_iter()
+        .filter(|id| {
+            let lower = id.to_ascii_lowercase();
+            SERVER_PREFIXES.iter().any(|prefix| id.starts_with(prefix))
+                || SERVER_WORDS.iter().any(|word| lower.contains(word))
+        })
+        .filter(|id| !refused(&route("engine.execute", &execute(id, json!({})))))
+        .collect();
+    assert_eq!(forwarded, CONTACTS_NO_SERVER);
 }
 
 #[test]
