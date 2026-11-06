@@ -388,9 +388,20 @@ export async function runPromptTurn(
     // repoints `agentId` at the resolved live agent, dispatching would hit the
     // old (possibly dead) agent with `unknown agent`. Queue here; the open's
     // finally flushes once agentId is repointed and the transcript installed.
+    //
+    // Also queue when this session already has prompts waiting (including a
+    // busy-rejected launch prompt sitting on the ~2s retry ladder). The host
+    // may call the session idle while that retry is pending, and a follow-up
+    // send must not overtake the recovered prompt (#1726).
     const isUnboundLaunchPlaceholder = !current.agentId
     const awaitingAgent = s.openingHistoryIds[sessionId] || isUnboundLaunchPlaceholder
-    if ((sessionTurnBusy(current) || awaitingAgent) && !skipUserAppend) {
+    // `queuedOrigin` is a dequeue/send-now flush of an item already pulled off
+    // the queue — it must start even while siblings remain queued or a busy
+    // retry timer is still armed. Only brand-new sends honour queuePending.
+    const queuePending =
+      (s.promptQueues[sessionId] ?? []).length > 0 || busyQueueRetries.has(sessionId)
+    const holdForPriorQueue = !queuedOrigin && queuePending
+    if ((sessionTurnBusy(current) || awaitingAgent || holdForPriorQueue) && !skipUserAppend) {
       enqueued = true
       if (queuedOrigin) {
         return {

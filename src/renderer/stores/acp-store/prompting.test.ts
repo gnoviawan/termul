@@ -686,6 +686,51 @@ describe('acp-store', () => {
     }
   })
 
+  it('issue #1726: a follow-up during busy-retry does not overtake the recovered launch prompt', async () => {
+    // #1594/#1677 leave the busy-rejected first prompt on the queue with a ~2s
+    // busy retry. A SECOND send in that window used to bypass the queue because
+    // the session looked idle (no openTurnId / activeTurn). It must append so
+    // FIRST is delivered before SECOND.
+    vi.useFakeTimers()
+    try {
+      seedSession('s1', 'agent-1', false)
+      const first: ContentBlock[] = [{ type: 'text', text: 'FIRST' }]
+      const second: ContentBlock[] = [{ type: 'text', text: 'SECOND' }]
+      useAcpStore.getState().seedLaunchUserMessage('s1', first)
+      const sendPromptBlocks = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new AcpTransportError('rate_limited', 'ACP_TURN_IN_PROGRESS: session s1')
+        )
+        .mockReturnValue(new Promise(() => {}))
+      _setAcpTransportForTests({
+        sendPrompt: sendPromptBlocks,
+        sendPromptBlocks,
+        dispose: vi.fn()
+      } as unknown as AcpTransport)
+
+      await useAcpStore.getState().sendPromptBlocks('s1', first, { skipUserAppend: true })
+      expect(useAcpStore.getState().promptQueues['s1'].map((q) => q.blocks)).toEqual([first])
+
+      // Follow-up while the busy retry is pending and the session is idle.
+      await useAcpStore.getState().sendPromptBlocks('s1', second)
+      expect(useAcpStore.getState().promptQueues['s1'].map((q) => q.blocks)).toEqual([
+        first,
+        second
+      ])
+      expect(sendPromptBlocks).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(COMMAND_RESEND_DELAYS_MS[0])
+
+      expect(sendPromptBlocks).toHaveBeenCalledTimes(2)
+      expect(sendPromptBlocks.mock.calls[1][2]).toEqual(first)
+      expect(useAcpStore.getState().promptQueues['s1'].map((q) => q.blocks)).toEqual([second])
+      expect(useAcpStore.getState().messages['s1'].map((m) => m.blocks)).toEqual([first])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('queues a prompt sent while a history reopen is in flight, then flushes onto the repointed agent', async () => {
     // Mid-reopen shape: the install stamps status 'closed' while
     // `openingHistoryIds` marks the open in flight. A send typed in that
