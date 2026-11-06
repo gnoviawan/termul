@@ -1,7 +1,11 @@
-import { cleanup, renderHook } from '@testing-library/react'
+import { cleanup, render, renderHook } from '@testing-library/react'
+import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { TERMINAL_LINE_HEIGHT } from '@/components/terminal/terminal-config'
 
 const mocks = vi.hoisted(() => {
+  const ctorOptions: unknown[] = []
+
   const mockTerminalInstance = {
     loadAddon: vi.fn(),
     open: vi.fn(),
@@ -33,6 +37,7 @@ const mocks = vi.hoisted(() => {
   }
 
   return {
+    ctorOptions,
     mockTerminalInstance,
     mockFitAddonInstance,
     mockWebglAddonInstance,
@@ -42,6 +47,9 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class MockTerminal {
+    constructor(opts: unknown) {
+      mocks.ctorOptions.push(opts)
+    }
     loadAddon = mocks.mockTerminalInstance.loadAddon
     open = mocks.mockTerminalInstance.open
     onData = mocks.mockTerminalInstance.onData
@@ -83,10 +91,35 @@ import { useXterm } from './use-xterm'
 describe('useXterm', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.ctorOptions.length = 0
   })
 
   afterEach(() => {
     cleanup()
+  })
+
+  it('should construct terminal with TERMINAL_LINE_HEIGHT', () => {
+    function Wrapper() {
+      const { containerRef } = useXterm()
+      return React.createElement('div', { ref: containerRef })
+    }
+
+    render(React.createElement(Wrapper))
+    expect(mocks.ctorOptions.at(-1)).toMatchObject({
+      lineHeight: TERMINAL_LINE_HEIGHT
+    })
+  })
+
+  it('should construct terminal with cursorInactiveStyle set to none', () => {
+    function Wrapper() {
+      const { containerRef } = useXterm()
+      return React.createElement('div', { ref: containerRef })
+    }
+
+    render(React.createElement(Wrapper))
+    expect(mocks.ctorOptions.at(-1)).toMatchObject({
+      cursorInactiveStyle: 'none'
+    })
   })
 
   it('should return terminal ref', () => {
