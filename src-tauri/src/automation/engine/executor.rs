@@ -230,7 +230,8 @@ impl<'a> Walk<'a> {
 
     /// Records `node` skipped; a skipped for_each skips its body too.
     fn skip(&self, node: &Node, iteration: Option<u32>) {
-        self.record(self.row(&node.id, iteration, StepStatus::Skipped));
+        // A lost skipped row costs only history: a resume skips the node again.
+        let _ = self.record(self.row(&node.id, iteration, StepStatus::Skipped));
         if node.spec.kind() == NodeKind::ForEach {
             self.skip_body(&node.id);
         }
@@ -240,7 +241,7 @@ impl<'a> Walk<'a> {
     /// no iteration.
     pub(super) fn skip_body(&self, loop_id: &NodeId) {
         for node in self.body(loop_id) {
-            self.record(self.row(&node.id, None, StepStatus::Skipped));
+            let _ = self.record(self.row(&node.id, None, StepStatus::Skipped));
         }
     }
 
@@ -260,7 +261,7 @@ impl<'a> Walk<'a> {
         let started_at = self.scope.engine.now_ms();
         let mut row = self.row(id, iteration, StepStatus::Running);
         row.started_at = Some(started_at);
-        self.record(row);
+        let _ = self.record(row);
         log::info!(
             "[Automation] run {} step {id}{} ({:?}) started",
             self.scope.run.id,
@@ -290,7 +291,11 @@ impl<'a> Walk<'a> {
         row.output = output;
         row.error = error;
         row.started_at = Some(started_at);
-        self.record(row);
+        // A result that is not stored would make a resume run the node again,
+        // so the walk stops here rather than reach a later park.
+        if let Err(error) = self.record(row) {
+            return Err(NodeError::Halt(format!("{id}: step_not_recorded: {error}")));
+        }
         log::info!(
             "[Automation] run {} step {id}{} {}",
             self.scope.run.id,
@@ -315,14 +320,16 @@ impl<'a> Walk<'a> {
         }
     }
 
-    pub(super) fn record(&self, step: Step) {
+    pub(super) fn record(&self, step: Step) -> Result<(), String> {
         if let Err(error) = self.scope.engine.store.upsert_step(&step) {
             log::error!(
                 "[Automation] run {} step {} not recorded: {error}",
                 self.scope.run.id,
                 step.node_id
             );
+            return Err(error.to_string());
         }
+        Ok(())
     }
 }
 
