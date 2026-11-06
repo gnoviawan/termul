@@ -12,6 +12,7 @@ import {
   type ComposerAddHandle,
   ComposerAddSheet
 } from '@/components/chat/composer/ComposerAddSheet'
+import { useTermulTools } from '@/components/chat/composer/use-termul-tools'
 import { ArrowUp } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
@@ -120,6 +121,7 @@ export function LauncherToolbar({
    */
   onSelectorCloseAutoFocus?: (event: Event) => void
 }): React.JSX.Element {
+  const termulTools = useTermulTools(activeProjectId || null)
   const claudeProjectId =
     selectedEntry?.configId === CLAUDE_AGENT_CONFIG_ID && activeProjectId ? activeProjectId : null
   const mcpListProps = {
@@ -204,7 +206,12 @@ export function LauncherToolbar({
         data-composer-toolbar={toolbarMode}
       >
         <div className="flex min-w-0 flex-1 items-center gap-2" data-composer-toolbar-row="mobile">
-          <ComposerAddSheet handle={addHandle} disabled={!addHandle.canPick} {...mcpListProps} />
+          <ComposerAddSheet
+            handle={addHandle}
+            disabled={!addHandle.canPick}
+            termulTools={termulTools}
+            {...mcpListProps}
+          />
           {selector({
             modes: optionsInteractive ? (modePreviewSession?.modes ?? null) : null,
             onSetMode: handleSetMode,
@@ -230,6 +237,7 @@ export function LauncherToolbar({
           disabled={!addHandle.canPick}
           connectors={mcpListProps}
           connectorsHost="launcher"
+          termulTools={termulTools}
         />
         {claudeProjectId ? <ProjectClaudeAccountChip projectId={claudeProjectId} /> : null}
       </div>

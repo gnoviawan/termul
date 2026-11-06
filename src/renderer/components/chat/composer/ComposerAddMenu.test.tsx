@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { TERMUL_TOOLS } from '@/lib/composer/termul-tools'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { ComposerAddMenu } from './ComposerAddMenu'
 import type { ComposerAddHandle } from './ComposerAddSheet'
@@ -21,7 +22,8 @@ function makeHandle(): ComposerAddHandle {
     pickFiles: vi.fn(async () => undefined),
     insertTrigger: vi.fn(() => true),
     blurEditor: vi.fn(),
-    focusEditor: vi.fn()
+    focusEditor: vi.fn(),
+    insertTool: vi.fn(() => true)
   }
 }
 
@@ -38,6 +40,10 @@ function renderMenu(
         handle={handle}
         disabled={false}
         connectorsHost={host}
+        termulTools={TERMUL_TOOLS.map((tool) => ({
+          tool,
+          state: tool.state({ canvasReady: false })
+        }))}
         connectors={{
           count: 2,
           servers,
@@ -82,8 +88,32 @@ describe('ComposerAddMenu', () => {
       'Add files or photos',
       '@Mention@',
       '/Slash commands/',
+      'Termul tools',
       'Connectors2 on'
     ])
+  })
+
+  it('lists the Termul tools, marks a closed canvas, and inserts the picked tool after closing', async () => {
+    const { handle } = renderMenu('chat-current')
+    await openMenu()
+    const trigger = screen.getByRole('menuitem', { name: 'Termul tools' })
+    act(() => trigger.focus())
+    fireEvent.keyDown(trigger, { key: 'ArrowRight' })
+    await screen.findByText('Ask the agent to use')
+    const rows = screen
+      .getAllByRole('menuitem')
+      .filter(
+        (item) =>
+          item.closest('[data-radix-menu-content]') !== trigger.closest('[data-radix-menu-content]')
+      )
+      .map((item) => item.textContent)
+    expect(rows).toEqual([
+      'BrowserOpen, click and read pages',
+      'CanvasDesign on the project canvasClosed',
+      'AutomationsSchedule background work'
+    ])
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Browser/ }))
+    await waitFor(() => expect(handle.insertTool).toHaveBeenCalledWith('browser'))
   })
 
   it('inserts the @ trigger once the menu has closed', async () => {

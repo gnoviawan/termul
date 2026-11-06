@@ -18,6 +18,7 @@
  */
 import { fileUrlToPath } from '@/components/chat/chat-attachments'
 import { selectionContextsToDisplay } from '@/lib/composer/selection-context'
+import { restoreToolTokens } from '@/lib/composer/tool-tokens'
 import { parseConversationEnvelope, restoreConversationLabels } from '@/lib/conversation-envelope'
 import {
   commandToken,
@@ -215,7 +216,7 @@ export function wireBlocksToDisplay<T extends WireBlock>(blocks: T[] | null | un
       .map((s) =>
         s.kind === 'conversation'
           ? conversationToken(s.title, s.sessionId)
-          : restoreFileTokens(s.text, filePaths)
+          : restoreFileTokens(restoreToolTokens(s.text), filePaths)
       )
       .join('')
     if (text === block.text) return block

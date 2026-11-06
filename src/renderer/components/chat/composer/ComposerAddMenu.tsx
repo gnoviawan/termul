@@ -1,9 +1,10 @@
 import { useRef } from 'react'
-import { Network, Paperclip, Plus, RefreshCw, Search, Settings2 } from '@/components/icons'
+import { Paperclip, Plus, RefreshCw, Search, Server, Settings2, Wrench } from '@/components/icons'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuSub,
@@ -17,8 +18,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { logFrontendError } from '@/lib/log-api'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import type { McpServerListProps } from '../McpServerList'
+import { TERMUL_TOOL_ICONS } from '../ToolChip'
 import type { ComposerAddHandle } from './ComposerAddSheet'
 import { type ConnectorsHost, connectorsMenuModel } from './connectors-menu-model'
+import type { TermulToolRow } from './use-termul-tools'
 
 const LOG_SOURCE = 'composer-add-menu'
 const ICON = 'mr-2 shrink-0 text-muted-foreground'
@@ -30,6 +33,7 @@ interface ComposerAddMenuProps {
   disabled: boolean
   connectors: Omit<McpServerListProps, 'listClassName'>
   connectorsHost: ConnectorsHost
+  termulTools: TermulToolRow[]
 }
 
 function openConnectorSettings(): void {
@@ -37,14 +41,15 @@ function openConnectorSettings(): void {
 }
 
 /**
- * The desktop composer's `+`: attach, mention, slash commands, and the
- * project's connectors (MCP servers). The phone shell uses `ComposerAddSheet`.
+ * The desktop composer's `+`: attach, mention, slash commands, Termul's own
+ * tools, and the project's connectors (MCP servers). The phone shell uses `ComposerAddSheet`.
  */
 export function ComposerAddMenu({
   handle,
   disabled,
   connectors,
-  connectorsHost
+  connectorsHost,
+  termulTools
 }: ComposerAddMenuProps): React.JSX.Element {
   const model = connectorsMenuModel(connectors.servers, connectors.probeStatus, connectorsHost)
   // What to do once the menu has closed. Radix traps focus while the menu is
@@ -126,8 +131,39 @@ export function ComposerAddMenu({
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuSub>
+          <DropdownMenuSubTrigger disabled={disabled}>
+            <Wrench size={14} aria-hidden="true" className={ICON} />
+            Termul tools
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-64">
+            <DropdownMenuLabel>Ask the agent to use</DropdownMenuLabel>
+            {termulTools.map(({ tool, state }) => {
+              const Icon = TERMUL_TOOL_ICONS[tool.id]
+              return (
+                <DropdownMenuItem
+                  key={tool.id}
+                  onSelect={() => {
+                    afterCloseRef.current = () => handle.insertTool(tool.id)
+                  }}
+                >
+                  <span aria-hidden="true" className={`${ICON} self-start pt-0.5`}>
+                    <Icon size={14} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{tool.label}</span>
+                    <span className="block truncate text-2xs text-muted-foreground">
+                      {tool.description}
+                    </span>
+                  </span>
+                  {state === 'closed' ? <span className={MENU_SHORTCUT_CLASS}>Closed</span> : null}
+                </DropdownMenuItem>
+              )
+            })}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
           <DropdownMenuSubTrigger trailing={`${model.onCount} on`}>
-            <Network size={14} aria-hidden="true" className={ICON} />
+            <Server size={14} aria-hidden="true" className={ICON} />
             Connectors
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="max-h-[min(26rem,var(--radix-dropdown-menu-content-available-height))] w-64 overflow-y-auto">

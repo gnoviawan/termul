@@ -721,6 +721,7 @@ describe('ChatInputBar + menu', () => {
       'Add files',
       '@Mention@',
       '/Slash commands/',
+      'Termul tools',
       'Connectors2 on'
     ])
   })

@@ -12,6 +12,8 @@ import {
   type SelectionContextSegment,
   serializeSelectionContexts
 } from '@/lib/composer/selection-context'
+import type { TermulToolEntry } from '@/lib/composer/termul-tools'
+import { parseToolSegments } from '@/lib/composer/tool-tokens'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import {
   isFolderTokenPath,
@@ -42,6 +44,7 @@ import {
 } from './MessageActions'
 import { SelectionContextChip } from './SelectionContextChip'
 import { CommandChipLink, SkillChipLink } from './skill-file-links'
+import { ToolChip } from './ToolChip'
 
 // The markdown renderer moved to `chat-agent-prose.tsx` to keep this file under
 // the ~800-line limit. Re-exported so existing importers keep their paths.
@@ -64,6 +67,7 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
     | { kind: 'command'; name: string }
     | { kind: 'context'; context: SelectionContext; index: number }
     | { kind: 'conversation'; title: string }
+    | { kind: 'tool'; tool: TermulToolEntry }
   const flat: FlatSeg[] = []
   let hasPills = false
   let contextCount = 0
@@ -72,8 +76,11 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
       if (cseg.kind === 'conversation') {
         flat.push({ kind: 'conversation', title: cseg.title })
         hasPills = true
-      } else {
-        flat.push({ kind: 'text', text: cseg.text })
+        continue
+      }
+      for (const tseg of parseToolSegments(cseg.text)) {
+        flat.push(tseg)
+        if (tseg.kind === 'tool') hasPills = true
       }
     }
   }
@@ -143,6 +150,8 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
               <FileChip key={`file-${i}`} name={seg.display} kind={seg.dir ? 'dir' : 'file'} />
             ) : seg.kind === 'conversation' ? (
               <ConversationChip key={`conversation-${i}`} title={seg.title} />
+            ) : seg.kind === 'tool' ? (
+              <ToolChip key={`tool-${i}`} tool={seg.tool} />
             ) : seg.kind === 'context' ? (
               <SelectionContextChip
                 key={`context-${i}`}

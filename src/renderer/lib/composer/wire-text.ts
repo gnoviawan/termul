@@ -7,6 +7,7 @@ import {
 } from '@/lib/skill-tokens'
 import { type FramedSkill, formatPromptWithSkills } from '@/lib/skills-prompt'
 import { serializeSelectionContexts } from './selection-context'
+import { replaceToolTokensInline } from './tool-tokens'
 
 /**
  * The text the agent receives for a composer value (sentinel-token format).
@@ -34,5 +35,5 @@ export function composerWireText(
         contexts === undefined ? 'unavailable' : (contexts.gaps.get(sessionId) ?? null)
       )
   )
-  return formatPromptWithSkills(skills, plain)
+  return formatPromptWithSkills(skills, replaceToolTokensInline(plain))
 }

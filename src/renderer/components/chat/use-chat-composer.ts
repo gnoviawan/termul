@@ -10,6 +10,7 @@ import type {
 } from '@/lib/acp-api'
 import { docOffsetToDisplayOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { hasSelectionContexts, serializeSelectionContexts } from '@/lib/composer/selection-context'
+import { hasToolTokens } from '@/lib/composer/tool-tokens'
 import { composerWireText } from '@/lib/composer/wire-text'
 import {
   type ConversationContexts,
@@ -154,6 +155,8 @@ export interface ChatPromptParts {
    */
   fileBlocks: ContentBlock[]
   hasConversations: boolean
+  /** True when the value carries Termul tool pills (display keeps the tokens). */
+  hasTools: boolean
   contextBlocks: ContentBlock[]
 }
 
@@ -439,6 +442,7 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         displayTrimmed: displayWithCommand.trim(),
         fileBlocks,
         hasConversations: conversationRefs.length > 0,
+        hasTools: hasToolTokens(value),
         contextBlocks: contexts?.blocks ?? []
       }
     },

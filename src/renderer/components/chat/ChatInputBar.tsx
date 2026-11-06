@@ -18,6 +18,7 @@ import type {
   SessionModeState
 } from '@/lib/acp-api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import type { TermulToolId } from '@/lib/composer/termul-tools'
 import { cn } from '@/lib/utils'
 import type { AcpSession, PendingPermission, QueuedPrompt } from '@/stores/acp-store'
 import {
@@ -48,11 +49,13 @@ import { ComposerAddMenu } from './composer/ComposerAddMenu'
 import { ComposerAddSheet } from './composer/ComposerAddSheet'
 import { ComposerSendButton } from './composer/ComposerSendButton'
 import { blurComposerEditor, insertComposerTrigger } from './composer/insert-composer-trigger'
+import { insertComposerTool } from './composer/insert-pill'
 import {
   type SelectionContextInsertRequest,
   useSelectionContextInsertRequest
 } from './composer/insert-selection-context'
 import { useChatConnectors } from './composer/use-chat-connectors'
+import { useTermulTools } from './composer/use-termul-tools'
 import { buildComposerSend } from './composer-send-blocks'
 import { FileMentionMenu } from './FileMentionMenu'
 import { PermissionPrompt } from './PermissionPrompt'
@@ -221,6 +224,7 @@ export function ChatInputBar({
   const agentTemplateId = useAgentTemplateId(session.agentId, glyphConfigId)
   const agentIcon = useAgentIcon(session.agentId, glyphConfigId)
   const { connectors, host: connectorsHost } = useChatConnectors(session)
+  const termulTools = useTermulTools(session.projectId)
   const [value, setValue] = useComposerDraft({
     projectId: session.projectId,
     sessionId: session.id,
@@ -515,7 +519,8 @@ export function ChatInputBar({
       pickFiles,
       insertTrigger: (trigger: '@' | '/') => insertComposerTrigger(editorRef.current, trigger),
       blurEditor: () => blurComposerEditor(editorRef.current),
-      focusEditor: () => editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
+      focusEditor: () => editorRef.current?.commands.focus(undefined, { scrollIntoView: false }),
+      insertTool: (id: TermulToolId) => insertComposerTool(editorRef.current, id)
     }),
     [canPick, canPickImages, pickFiles]
   )
@@ -666,6 +671,7 @@ export function ChatInputBar({
                   <ComposerAddSheet
                     handle={composerAddHandle}
                     disabled={disabled || sending}
+                    termulTools={termulTools}
                     {...connectors}
                   />
                   {modelSelector}
@@ -688,6 +694,7 @@ export function ChatInputBar({
                       disabled={disabled || sending}
                       connectors={connectors}
                       connectorsHost={connectorsHost}
+                      termulTools={termulTools}
                     />
                     <ClaudeAccountChip sessionId={session.id} />
                   </div>
