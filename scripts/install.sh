@@ -312,9 +312,9 @@ if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
     _candidates=("$TERMUL_WAYLAND_CLIENT_LIB")
   else
     _candidates=(
-      /usr/lib/libwayland-client.so.0
       /usr/lib64/libwayland-client.so.0
       /usr/lib/x86_64-linux-gnu/libwayland-client.so.0
+      /usr/lib/libwayland-client.so.0
     )
   fi
   for _lib in "${_candidates[@]}"; do
@@ -330,7 +330,7 @@ if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
   done
 fi
 
-_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 exec "${_dir}/termul-manager.AppImage" "$@"
 LAUNCHER
     chmod 755 "$target_path" || exit 1

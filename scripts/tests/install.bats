@@ -402,6 +402,17 @@ run_launcher() {
   [ "$output" = "LD_PRELOAD=<unset> marker=<unset> args=<--flag two words>" ]
 }
 
+@test "linux launcher finds the AppImage when started through a symlink" {
+  install_linux_launcher
+  mkdir -p "$TERMUL_TEST_TMP_DIR/elsewhere"
+  ln -s "$TERMUL_INSTALL_BIN_DIR/termul-manager" "$TERMUL_TEST_TMP_DIR/elsewhere/termul"
+
+  run --separate-stderr env -u LD_PRELOAD -u WAYLAND_DISPLAY "$TERMUL_TEST_TMP_DIR/elsewhere/termul" --flag
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<unset> marker=<unset> args=<--flag>" ]
+}
+
 @test "main happy macOS path reaches hdiutil once" {
   stub_uname Darwin arm64
   stub_common_tools
