@@ -13,7 +13,22 @@ import type { SessionId } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
 import { useReloadConfirmStore } from '@/stores/reload-confirm-store'
 
-/** Confirm for a reload while background agents of this chat still run. */
+/** What a reload stops, as the confirm says it. */
+function stoppedWorkText(agents: number, commands: number): string {
+  const agentCount = agents === 1 ? '1 background agent' : `${agents} background agents`
+  const commandCount = commands === 1 ? '1 command' : `${commands} commands`
+  if (commands === 0) {
+    return `${agentCount} ${agents === 1 ? 'is' : 'are'} still running. A reload starts a new agent process, and the running agents stop. Their reports do not come back to this chat.`
+  }
+  if (agents === 0) {
+    return commands === 1
+      ? `${commandCount} is still running in the background. A reload starts a new agent process, and the command stops. Its output does not come back to this chat.`
+      : `${commandCount} are still running in the background. A reload starts a new agent process, and the commands stop. Their output does not come back to this chat.`
+  }
+  return `${agentCount} and ${commandCount} are still running. A reload starts a new agent process, and they stop. Their results do not come back to this chat.`
+}
+
+/** Confirm for a reload while background agents or commands of this chat still run. */
 export function ReloadChatConfirmDialog({
   sessionId
 }: {
@@ -24,8 +39,7 @@ export function ReloadChatConfirmDialog({
   )
   const clear = useReloadConfirmStore((s) => s.clear)
   if (!request) return null
-  const count = request.backgroundAgents
-  const agents = count === 1 ? '1 background agent is' : `${count} background agents are`
+  const running = `${request.backgroundAgents} background agents and ${request.backgroundCommands} background commands running`
   return (
     <AlertDialog
       open
@@ -36,7 +50,7 @@ export function ReloadChatConfirmDialog({
         void logFrontendError({
           level: 'info',
           source: 'acp.reloadChat',
-          message: `Reload of chat ${sessionId} cancelled: ${count} background agents running`
+          message: `Reload of chat ${sessionId} cancelled: ${running}`
         })
       }}
     >
@@ -44,8 +58,7 @@ export function ReloadChatConfirmDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Reload this chat?</AlertDialogTitle>
           <AlertDialogDescription>
-            {agents} still running. A reload starts a new agent process, and the running agents
-            stop. Their reports do not come back to this chat.
+            {stoppedWorkText(request.backgroundAgents, request.backgroundCommands)}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -57,7 +70,7 @@ export function ReloadChatConfirmDialog({
               void logFrontendError({
                 level: 'info',
                 source: 'acp.reloadChat',
-                message: `Reload of chat ${sessionId} confirmed with ${count} background agents running`
+                message: `Reload of chat ${sessionId} confirmed with ${running}`
               })
               runReloadChat(sessionId)
             }}

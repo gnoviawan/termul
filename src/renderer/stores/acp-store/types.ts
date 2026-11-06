@@ -24,7 +24,7 @@ import type {
   AuthMethod,
   AvailableCommand,
   acpApi,
-  BackgroundCommand,
+  BackgroundCommandList,
   BackgroundCommandsEvent,
   BrowserAgentTabEvent,
   BrowserOpenRequestEvent,
@@ -190,6 +190,11 @@ export interface OpenHistoryOptions {
   forceNewAgent?: boolean
 }
 
+/** A session's background commands as the agent that reported them listed them. */
+export interface HeldBackgroundCommands extends BackgroundCommandList {
+  agentId: AgentId
+}
+
 export interface AcpSession {
   id: SessionId
   agentId: AgentId
@@ -221,7 +226,7 @@ export interface AcpSession {
    * event), stamped with the agent that reported them: a list from an agent
    * the chat no longer runs on is stale. Ephemeral.
    */
-  backgroundCommands?: { agentId: AgentId; commands: BackgroundCommand[] }
+  backgroundCommands?: HeldBackgroundCommands
   /** Project-scoped MCP attachments active for this session when known. */
   mcpServerCount?: number
   /**

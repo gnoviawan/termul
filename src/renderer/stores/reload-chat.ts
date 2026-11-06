@@ -4,7 +4,8 @@
  * Termul MCP is sent on the reopen. A new process rereads CLI agent config
  * (MCP, skills, plugins). Other open chats keep the old process.
  * The control stays disabled while a reply, queue, or question is open.
- * Running background agents ask for a confirm instead (`use-reload-chat`).
+ * Running background agents and commands ask for a confirm instead
+ * (`use-reload-chat`).
  */
 
 import { runningBackgroundSubagents } from '@/components/chat/subagent-strip'
@@ -56,7 +57,8 @@ export function reloadChatBlockedReason(state: AcpState, sessionId: SessionId): 
     },
     sessionId
   )
-  // Background agents alone do not block: the reload asks to stop them first.
+  // Background agents and commands alone do not block: the reload asks to
+  // stop them first.
   if (blocked && !isBackgroundWorkBlock(blocked)) {
     return runningBackgroundSubagents(state.toolCalls?.[sessionId], state.messages?.[sessionId])
       .length > 0

@@ -151,6 +151,7 @@ impl AcpManager {
                                 &sinks,
                                 &driver_agent_id,
                                 &session_id,
+                                None,
                             );
                             let _ = reply.send(Ok(()));
                         } else {

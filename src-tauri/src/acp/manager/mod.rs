@@ -288,9 +288,7 @@ enum AcpCommand {
     /// The commands the agent left running, per owned session that lists any
     /// (`session::background_commands`).
     BackgroundCommands {
-        reply: oneshot::Sender<
-            Result<HashMap<String, Vec<crate::acp::session::BackgroundCommand>>, String>,
-        >,
+        reply: oneshot::Sender<Result<crate::acp::session::BackgroundCommandsSnapshot, String>>,
     },
     /// The canonical workspace root of every session registered on this
     /// agent's driver (`(session id, root)`), for the destructive-operation
@@ -433,7 +431,7 @@ pub struct AgentSummary {
     pub working_sessions: Vec<String>,
     /// The commands the agent left running, by owned session, so a client
     /// that opens the chat later lists them. Always serialized.
-    pub background_commands: HashMap<String, Vec<crate::acp::session::BackgroundCommand>>,
+    pub background_commands: crate::acp::session::BackgroundCommandsSnapshot,
     /// The `commandId` of the `spawn_agent` that created this agent. In-process
     /// only: never serialized to clients.
     #[serde(skip)]
@@ -997,7 +995,7 @@ impl AcpManager {
                 capabilities: entry.capabilities.clone(),
                 owns_session: Vec::new(),
                 working_sessions: Vec::new(),
-                background_commands: HashMap::new(),
+                background_commands: Default::default(),
                 command_id: entry.stamp.command_id.clone(),
             })
             .collect()

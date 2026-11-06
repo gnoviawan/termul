@@ -4,6 +4,7 @@
 //! `session_closed`.
 
 use super::*;
+use crate::acp::session::BackgroundCommandList;
 
 /// How long a close waits for the cancelled turn to reach its terminator.
 const TURN_TERMINATOR_WAIT: Duration = Duration::from_millis(5_250);
@@ -29,14 +30,15 @@ pub(super) async fn await_turn_terminator(
 /// Forget a closing session locally: drop its workspace root and marks, finish
 /// any turn bookkeeping, resolve its pending permissions, questions and
 /// elicitations as cancelled, and evict its host-plan registration. Returns
-/// whether the session was ephemeral (captured before the marks clear).
+/// whether the session was ephemeral (captured before the marks clear) and
+/// its emptied command list for [`announce_session_closed`].
 pub(super) fn close_session_locally(
     state: &Mutex<DriverState>,
     plan_server: &crate::acp::host_mcp::parent::HostPlanServer,
     session_id: &str,
-) -> bool {
-    let (was_ephemeral, pending) = state.lock().begin_close_session(session_id);
-    for permission in pending {
+) -> (bool, Option<BackgroundCommandList>) {
+    let closing = state.lock().begin_close_session(session_id);
+    for permission in closing.pending {
         let _ = permission.responder.respond(RequestPermissionResponse::new(
             RequestPermissionOutcome::Cancelled,
         ));
@@ -53,15 +55,20 @@ pub(super) fn close_session_locally(
         cancel_elicitation(elicitation);
     }
     plan_server.unregister_session(session_id);
-    was_ephemeral
+    (closing.was_ephemeral, closing.cleared_commands)
 }
 
-/// Tell every sink the session was closed on request.
+/// Tell every sink the session was closed on request, after clearing the
+/// commands it listed.
 pub(super) fn announce_session_closed(
     sinks: &[Arc<dyn EventSink>],
     agent_id: &AgentId,
     session_id: &SessionId,
+    cleared_commands: Option<BackgroundCommandList>,
 ) {
+    if let Some(cleared) = cleared_commands {
+        events::emit_background_commands(sinks, agent_id, &session_id.0, cleared);
+    }
     let event = SessionClosedEvent {
         agent_id: agent_id.clone(),
         session_id: session_id.clone(),

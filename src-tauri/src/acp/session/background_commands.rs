@@ -16,10 +16,13 @@
 //! Subagent traffic never counts. Nothing expires on a timer: an agent that
 //! never reports the end keeps the row until the session closes. An ended row
 //! stays until the next prompt turn of its session starts.
+//!
+//! Every change stamps the session's list with the agent's next revision, so
+//! a client that hears two lists out of order keeps the newer one.
 
 use std::collections::HashMap;
 
-use agent_client_protocol::schema::v1::{Meta, SessionUpdate, ToolCallStatus};
+use agent_client_protocol::schema::v1::{Meta, SessionUpdate, StopReason, ToolCallStatus};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -49,6 +52,47 @@ pub enum CommandState {
     },
 }
 
+/// One session's commands as of `revision`, which grows with every change on
+/// the agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundCommandList {
+    pub revision: u64,
+    pub commands: Vec<BackgroundCommand>,
+}
+
+/// Every session's commands on one agent as of `revision`. A session left
+/// out lists none.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundCommandsSnapshot {
+    pub revision: u64,
+    pub sessions: HashMap<String, Vec<BackgroundCommand>>,
+}
+
+/// How a prompt turn ended, which decides what its open tool calls are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TurnEnd {
+    /// The agent ended the turn itself.
+    Stopped,
+    /// The turn was cancelled. A shell the agent already runs can outlive
+    /// the cancel (Codex); a call that never started cannot.
+    Cancelled,
+    /// The prompt failed or timed out: the agent may be wedged, and its open
+    /// calls say nothing about what runs.
+    Failed,
+}
+
+impl TurnEnd {
+    pub(crate) fn of<E>(outcome: &Result<StopReason, E>) -> Self {
+        match outcome {
+            Ok(StopReason::Cancelled) => Self::Cancelled,
+            Ok(_) => Self::Stopped,
+            Err(_) => Self::Failed,
+        }
+    }
+}
+
 /// What ends a running command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EndSignal {
@@ -69,8 +113,11 @@ struct Tracked {
 #[derive(Debug, Default)]
 struct Seen {
     first_seen_ms: u64,
-    open: bool,
+    status: Option<ToolCallStatus>,
     terminal: bool,
+    /// The host cancelled the permission this call waited on, so it never
+    /// runs.
+    permission_cancelled: bool,
     exited: bool,
     title: Option<String>,
     description: Option<String>,
@@ -78,6 +125,18 @@ struct Seen {
 }
 
 impl Seen {
+    /// Whether the call keeps running after its turn ended as `turn`.
+    fn outlives(&self, turn: TurnEnd) -> bool {
+        if self.permission_cancelled {
+            return false;
+        }
+        match turn {
+            TurnEnd::Stopped => self.status.is_some_and(is_open),
+            TurnEnd::Cancelled => self.terminal && self.status == Some(ToolCallStatus::InProgress),
+            TurnEnd::Failed => false,
+        }
+    }
+
     fn into_running(self, tool_call_id: String, end: EndSignal) -> Tracked {
         Tracked {
             command: BackgroundCommand {
@@ -174,13 +233,24 @@ fn is_open(status: ToolCallStatus) -> bool {
 #[derive(Debug, Default)]
 pub(crate) struct BackgroundCommands {
     sessions: HashMap<String, SessionCommands>,
+    revision: u64,
 }
 
 impl BackgroundCommands {
     /// Record an update of `session_id`, in or out of a prompt turn. The
-    /// caller drops subagent dispatches and replayed history. Returns true
-    /// when the session's list changed.
-    pub(crate) fn note(&mut self, session_id: &str, update: &SessionUpdate, now_ms: u64) -> bool {
+    /// caller drops subagent dispatches and replayed history. Returns the
+    /// session's new list when it changed.
+    pub(crate) fn note(
+        &mut self,
+        session_id: &str,
+        update: &SessionUpdate,
+        now_ms: u64,
+    ) -> Option<BackgroundCommandList> {
+        self.apply(session_id, update, now_ms)
+            .then(|| self.changed(session_id))
+    }
+
+    fn apply(&mut self, session_id: &str, update: &SessionUpdate, now_ms: u64) -> bool {
         if is_subagent_update(update) {
             return false;
         }
@@ -239,8 +309,8 @@ impl BackgroundCommands {
         let Some(status) = facts.status else {
             return false;
         };
-        seen.open = is_open(status);
-        if seen.open {
+        seen.status = Some(status);
+        if is_open(status) {
             return false;
         }
         let backgrounded = seen.terminal && !seen.exited;
@@ -258,25 +328,27 @@ impl BackgroundCommands {
         true
     }
 
-    /// A prompt turn of `session_id` ended (any stop reason): every tool call
-    /// still open keeps running in the background, except a subagent
-    /// dispatch (`is_dispatch`) the registry learned of after its first
-    /// update. Returns true when the session's list changed.
+    /// A prompt turn of `session_id` ended as `turn`: the tool calls that
+    /// outlive it keep running in the background, except a subagent dispatch
+    /// (`is_dispatch`) the registry learned of after its first update. Every
+    /// other open call is forgotten. Returns the session's new list when it
+    /// changed.
     pub(crate) fn end_turn(
         &mut self,
         session_id: &str,
+        turn: TurnEnd,
         is_dispatch: impl Fn(&str) -> bool,
-    ) -> bool {
-        let Some(session) = self.sessions.get_mut(session_id) else {
-            return false;
-        };
+    ) -> Option<BackgroundCommandList> {
+        let session = self.sessions.get_mut(session_id)?;
         let mut open: Vec<(String, Seen)> = session
             .seen
             .drain()
-            .filter(|(id, seen)| seen.open && !is_dispatch(id))
+            .filter(|(id, seen)| seen.outlives(turn) && !is_dispatch(id))
             .collect();
+        if open.is_empty() {
+            return None;
+        }
         open.sort_by_key(|(id, seen)| (seen.first_seen_ms, id.clone()));
-        let changed = !open.is_empty();
         for (id, seen) in open {
             log::info!(
                 "[acp] session {}: tool call {} still runs after its turn ended",
@@ -287,28 +359,40 @@ impl BackgroundCommands {
                 .commands
                 .push(seen.into_running(id, EndSignal::FinalStatus));
         }
-        changed
+        Some(self.changed(session_id))
     }
 
-    /// A prompt turn of `session_id` starts: drop its ended commands. Returns
-    /// true when the session's list changed.
-    pub(crate) fn begin_turn(&mut self, session_id: &str) -> bool {
-        let Some(session) = self.sessions.get_mut(session_id) else {
-            return false;
-        };
+    /// The host cancelled the permission `tool_call_id` of `session_id`
+    /// waited on: the call never runs, so no turn end lists it.
+    pub(crate) fn permission_cancelled(&mut self, session_id: &str, tool_call_id: &str) {
+        let session = self.sessions.entry(session_id.to_string()).or_default();
+        session
+            .seen
+            .entry(tool_call_id.to_string())
+            .or_default()
+            .permission_cancelled = true;
+    }
+
+    /// A prompt turn of `session_id` starts: drop its ended commands, and
+    /// forget the calls opened since the last turn ended, which belong to no
+    /// turn. Returns the session's new list when it changed.
+    pub(crate) fn begin_turn(&mut self, session_id: &str) -> Option<BackgroundCommandList> {
+        let session = self.sessions.get_mut(session_id)?;
+        session.seen.clear();
         let before = session.commands.len();
         session
             .commands
             .retain(|tracked| tracked.command.state == CommandState::Running);
-        session.commands.len() != before
+        (session.commands.len() != before).then(|| self.changed(session_id))
     }
 
-    /// Forget a closed or deleted session. Returns whether it listed any
-    /// command.
-    pub(crate) fn forget(&mut self, session_id: &str) -> bool {
+    /// Forget a closed or deleted session. Returns its new, empty list when
+    /// it listed any command.
+    pub(crate) fn forget(&mut self, session_id: &str) -> Option<BackgroundCommandList> {
         self.sessions
             .remove(session_id)
-            .is_some_and(|session| !session.commands.is_empty())
+            .filter(|session| !session.commands.is_empty())
+            .map(|_| self.changed(session_id))
     }
 
     /// The commands of `session_id`, in start order.
@@ -325,13 +409,25 @@ impl BackgroundCommands {
             .unwrap_or_default()
     }
 
-    /// Every session that lists a command.
-    pub(crate) fn by_session(&self) -> HashMap<String, Vec<BackgroundCommand>> {
-        self.sessions
-            .keys()
-            .map(|id| (id.clone(), self.list(id)))
-            .filter(|(_, commands)| !commands.is_empty())
-            .collect()
+    /// Every session that lists a command, as of the current revision.
+    pub(crate) fn snapshot(&self) -> BackgroundCommandsSnapshot {
+        BackgroundCommandsSnapshot {
+            revision: self.revision,
+            sessions: self
+                .sessions
+                .keys()
+                .map(|id| (id.clone(), self.list(id)))
+                .filter(|(_, commands)| !commands.is_empty())
+                .collect(),
+        }
+    }
+
+    fn changed(&mut self, session_id: &str) -> BackgroundCommandList {
+        self.revision += 1;
+        BackgroundCommandList {
+            revision: self.revision,
+            commands: self.list(session_id),
+        }
     }
 
     /// Commands still running, across sessions.
