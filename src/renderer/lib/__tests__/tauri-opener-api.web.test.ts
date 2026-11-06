@@ -191,6 +191,7 @@ describe('revealInFileManager (web branch: WEB_UNSUPPORTED)', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    mockPlatform.mockReturnValue('windows')
   })
 
   it('web: returns WEB_UNSUPPORTED without calling the Tauri plugin', async () => {
@@ -250,7 +251,6 @@ describe('revealInFileManager (web branch: WEB_UNSUPPORTED)', () => {
 
     expect(mockRevealItemInDir).toHaveBeenCalledWith('//?/C:/project/readme.md')
     expect(mockOpenPath).toHaveBeenCalledWith('//?/notes.txt')
-    mockPlatform.mockReturnValue('windows')
   })
 
   it('desktop: keeps the prefix on a name only the verbatim form can reach', async () => {
