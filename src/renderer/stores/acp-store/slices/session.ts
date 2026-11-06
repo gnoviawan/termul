@@ -2060,7 +2060,9 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       // Re-send the failed launch's first prompt: the optimistic user message
       // is still in the transcript, and finalizeChatLaunch's hadOptimisticUser
       // check skips the duplicate append (same as the original launch). A
-      // launch without a first prompt relaunches without re-sending.
+      // launch whose first turn was never painted (a GitHub hand-off) re-sends
+      // the recorded first turn instead (gh-1741). A launch without a first
+      // prompt relaunches without re-sending.
       const msgs = get().messages[sessionId] ?? []
       let lastUserBlocks: ContentBlock[] | null = null
       for (let i = msgs.length - 1; i >= 0; i--) {
@@ -2084,7 +2086,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         // registry defaults.
         pending: failed.pendingLauncherOptions ?? null,
         initialText: null,
-        initialBlocks: lastUserBlocks,
+        initialBlocks: lastUserBlocks ?? failed.launchFirstTurnBlocks ?? null,
         adoptSession: (from, to) => {
           // Only remap when the tab is still open: remapAgentChatSession's
           // no-pane fallback would ADD an uninvited new tab for a session the

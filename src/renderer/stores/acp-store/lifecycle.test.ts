@@ -622,6 +622,52 @@ describe('failed session lifecycle (story 5)', () => {
     expect(useAcpStore.getState().sessionIndex.some((e) => e.id === placeholderId)).toBe(false)
   })
 
+  it('gh-1741: retrying an unpainted launch re-sends its first turn ahead of queued follow-ups', async () => {
+    // A GitHub hand-off (Fix CI / Resolve comments) launches with no
+    // optimistic first message: its first turn exists only as initialBlocks.
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    const placeholderId = useAcpStore
+      .getState()
+      .createLaunchPlaceholder({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
+    await useAcpStore.getState().sendPrompt(placeholderId, 'also check the lint job')
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn boom'))
+    await expect(
+      useAcpStore.getState().finalizeChatLaunch({
+        placeholderId,
+        configId: 'cfg-1',
+        cwd: '/work',
+        projectId: 'p1',
+        initialBlocks: [{ type: 'text', text: 'fix the failing CI checks' }]
+      })
+    ).rejects.toBeTruthy()
+
+    const sentTexts: string[] = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
+      async (command: string, args?: { text?: string }) => {
+        if (command === 'acp_spawn_agent')
+          return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+        if (command === 'acp_new_session') return { sessionId: 'sess-handoff-retry' }
+        if (command === 'acp_send_prompt') {
+          sentTexts.push(args?.text ?? '')
+          return 'end_turn'
+        }
+        throw new Error(`unexpected invoke command: ${command}`)
+      }
+    )
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+
+    const state = useAcpStore.getState()
+    expect(sentTexts).toEqual(['fix the failing CI checks'])
+    expect(
+      state.messages['sess-handoff-retry'].filter((m) => m.role === 'user').map((m) => m.blocks)
+    ).toEqual([[{ type: 'text', text: 'fix the failing CI checks' }]])
+    expect(state.promptQueues['sess-handoff-retry']?.map((q) => q.blocks)).toEqual([
+      [{ type: 'text', text: 'also check the lint job' }]
+    ])
+  })
+
   it('retryFailedLaunch rejects when no failed launch is recorded for the session', async () => {
     seedSession('s1', 'agent-1', false)
     await expect(useAcpStore.getState().retryFailedLaunch('s1')).rejects.toThrow(
