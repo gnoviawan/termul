@@ -325,6 +325,9 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   grep -q "releases/download/v1.2.3/Termul.Manager_1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
   ! grep -q "Termul.Manager_v1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
   [ -x "$TERMUL_INSTALL_BIN_DIR/termul-manager" ]
+  [ -x "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage" ]
+  grep -q "LD_PRELOAD" "$TERMUL_INSTALL_BIN_DIR/termul-manager"
+  grep -q "termul-manager.AppImage" "$TERMUL_INSTALL_BIN_DIR/termul-manager"
   [ -f "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop" ]
   grep -q "Exec=$TERMUL_INSTALL_BIN_DIR/termul-manager" "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
   [[ "$output" == *"not in PATH"* ]]

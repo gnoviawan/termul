@@ -269,6 +269,7 @@ install_linux() {
   local bin_dir="${TERMUL_INSTALL_BIN_DIR:-${HOME}/.local/bin}"
   local desktop_dir="${TERMUL_INSTALL_DESKTOP_DIR:-${HOME}/.local/share/applications}"
   local target_path="${bin_dir}/termul-manager"
+  local appimage_target="${bin_dir}/termul-manager.AppImage"
   local desktop_path="${desktop_dir}/termul-manager.desktop"
 
   if [[ "$arch" != "x86_64" ]]; then
@@ -295,7 +296,29 @@ install_linux() {
     verify_sha256 "$appimage_path" "$asset_name" "$sums_file" || exit 1
 
     mkdir -p "$bin_dir" "$desktop_dir" || exit 1
-    cp "$appimage_path" "$target_path" || exit 1
+    cp "$appimage_path" "$appimage_target" || exit 1
+    chmod 755 "$appimage_target" || exit 1
+    cat >"$target_path" <<'LAUNCHER'
+#!/usr/bin/env bash
+set -e
+
+# Preload host libwayland-client if present to prevent WebKitGTK/Mesa Wayland crash in AppImage
+if [[ -z "${LD_PRELOAD:-}" ]]; then
+  for _lib in \
+    /usr/lib/libwayland-client.so.0 \
+    /usr/lib64/libwayland-client.so.0 \
+    /usr/lib/x86_64-linux-gnu/libwayland-client.so.0
+  do
+    if [[ -f "$_lib" ]]; then
+      export LD_PRELOAD="$_lib"
+      break
+    fi
+  done
+fi
+
+_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "${_dir}/termul-manager.AppImage" "$@"
+LAUNCHER
     chmod 755 "$target_path" || exit 1
     cat >"$desktop_path" <<DESKTOP
 [Desktop Entry]
