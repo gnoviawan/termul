@@ -4,6 +4,7 @@ import {
   blankRow,
   draftFromServer,
   draftToConfig,
+  draftToUncheckedConfig,
   emptyDraft,
   joinCommandLine,
   liftEnvPrefix,
@@ -247,6 +248,22 @@ describe('draftFromServer', () => {
       transport: 'http',
       transportPinned: false,
       auth: 'token'
+    })
+  })
+})
+
+describe('draftToUncheckedConfig', () => {
+  it('closes an open quote and keeps named rows without a value', () => {
+    const draft = localDraft('npx "@scope/pkg --flag', [
+      blankRow('API_KEY', ''),
+      blankRow('', 'orphan')
+    ])
+    expect(draftToUncheckedConfig(draft)).toEqual({
+      type: 'stdio',
+      name: 'github',
+      command: 'npx',
+      args: ['@scope/pkg --flag'],
+      env: [{ name: 'API_KEY', value: '' }]
     })
   })
 })

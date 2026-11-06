@@ -805,6 +805,21 @@ describe('McpServersSettings', () => {
       })
     })
 
+    it('shows an add draft holding only an env row as JSON', () => {
+      render(<McpServersSettings />)
+      openAddForm()
+      fireEvent.click(screen.getByRole('radio', { name: /on this computer/i }))
+      type('Environment variable 1 name', 'API_KEY')
+      fireEvent.click(screen.getByRole('button', { name: 'Import JSON instead' }))
+      expect(editorJson()).toEqual({
+        type: 'stdio',
+        name: '',
+        command: '',
+        env: { API_KEY: '' },
+        enabled: true
+      })
+    })
+
     it('edits a server in the form, keeping its id, enabled state and catalog provenance', async () => {
       const catalog = {
         source: 'mcp-registry' as const,

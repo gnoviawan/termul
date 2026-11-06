@@ -81,7 +81,7 @@ const DOUBLE_QUOTE_ESCAPES = new Set(['"', '\\'])
 
 const UNQUOTED_ESCAPES = /^[\s'"]$/
 
-function scanTokens(line: string): Token[] | null {
+function scanTokens(line: string, closeOpenQuote = false): Token[] | null {
   const tokens: Token[] = []
   let value = ''
   let start = -1
@@ -112,7 +112,7 @@ function scanTokens(line: string): Token[] | null {
       else value += char
     }
   }
-  if (quote) return null
+  if (quote && !closeOpenQuote) return null
   if (start !== -1) tokens.push({ value, start })
   return tokens
 }
@@ -175,10 +175,20 @@ function firstRowProblem(rows: KeyValueRow[]): DraftErrors['env'] {
   return undefined
 }
 
-function buildConfig(draft: McpServerDraft): { config: McpServerConfig; errors: DraftErrors } {
+function namedPairs(rows: KeyValueRow[]): McpEnvVar[] {
+  return rows
+    .filter((row) => row.name.trim() !== '')
+    .map((row) => ({ name: row.name.trim(), value: row.value }))
+}
+
+function buildConfig(
+  draft: McpServerDraft,
+  unchecked = false
+): { config: McpServerConfig; errors: DraftErrors } {
   const name = draft.name.trim()
+  const pairs = unchecked ? namedPairs : filledPairs
   if (draft.kind === 'remote') {
-    const headers = filledPairs(draft.remote.headers)
+    const headers = pairs(draft.remote.headers)
     const problem = firstRowProblem(draft.remote.headers)
     return {
       config: {
@@ -191,9 +201,9 @@ function buildConfig(draft: McpServerDraft): { config: McpServerConfig; errors: 
     }
   }
   const local = liftEnvPrefix(draft.local)
-  const tokens = tokenizeCommandLine(local.commandLine)
-  const [command = '', ...args] = tokens ?? [local.commandLine.trim()]
-  const env = filledPairs(local.env)
+  const tokens = scanTokens(local.commandLine, unchecked)?.map((token) => token.value)
+  const [command = '', ...args] = tokens ?? []
+  const env = pairs(local.env)
   const problem = firstRowProblem(local.env)
   return {
     config: {
@@ -211,7 +221,7 @@ function buildConfig(draft: McpServerDraft): { config: McpServerConfig; errors: 
 }
 
 export function draftToUncheckedConfig(draft: McpServerDraft): McpServerConfig {
-  return buildConfig(draft).config
+  return buildConfig(draft, true).config
 }
 
 export function draftToConfig(draft: McpServerDraft): DraftResult {

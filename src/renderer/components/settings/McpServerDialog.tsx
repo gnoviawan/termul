@@ -63,10 +63,14 @@ function logMcpJsonRejection(errors: string[]): void {
 const FORM_NEEDS_ONE_SERVER = 'The form holds one valid server. Fix the JSON, or save it from here.'
 
 function isBlankDraft(draft: McpServerDraft): boolean {
+  const hasRowText = (rows: McpServerDraft['local']['env']): boolean =>
+    rows.some((row) => row.name.trim() !== '' || row.value.trim() !== '')
   return (
     draft.name.trim() === '' &&
     draft.remote.url.trim() === '' &&
-    draft.local.commandLine.trim() === ''
+    draft.local.commandLine.trim() === '' &&
+    !hasRowText(draft.remote.headers) &&
+    !hasRowText(draft.local.env)
   )
 }
 
