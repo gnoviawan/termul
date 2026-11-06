@@ -39,6 +39,17 @@ pub fn strip_verbatim_prefix(path: &str) -> Cow<'_, str> {
     Cow::Borrowed(path)
 }
 
+/// Path form safe to hand to `git` / `git.exe`.
+///
+/// Windows `canonicalize` yields `\\?\…` paths that git rejects (`fatal: could
+/// not create leading directories …: Invalid argument`). Call this at every git
+/// boundary (cwd and path-valued argv) so worktree/temp fixtures and production
+/// callers stay tool-friendly. No-op when the path has no verbatim prefix.
+#[inline]
+pub fn git_path(path: &str) -> Cow<'_, str> {
+    strip_verbatim_prefix(path)
+}
+
 /// A Windows path a client sent, in plain backslash form: separators become
 /// `\` and a verbatim prefix is dropped, whatever slashes it was spelled
 /// with (`\\?\D:\p`, `//?/D:/p`, `\\?\D:\p/doc`). Clients echo the registry's

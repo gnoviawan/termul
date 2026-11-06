@@ -98,8 +98,12 @@ impl WorktreeManager {
         target_path: Option<&str>,
         on_progress: Option<&mut dyn FnMut(&str)>,
     ) -> Result<GitWorktreeEntry, WorktreeError> {
+        // git.exe rejects Windows verbatim (`\\?\…`) paths. Normalize before
+        // building the default target or invoking git (see #1724).
+        let project_path_owned = crate::path_validation::git_path(project_path).into_owned();
+        let project_path = project_path_owned.as_str();
         let target = match target_path {
-            Some(p) => Some(p.to_string()),
+            Some(p) => Some(crate::path_validation::git_path(p).into_owned()),
             None if is_only_plain_folder_names(name) => Some(format!(
                 "{}/.termul/worktrees/{}/",
                 project_path.trim_end_matches('/'),

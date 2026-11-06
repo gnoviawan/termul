@@ -148,6 +148,17 @@ pub struct GitTracker {
     cwd_poll_states: Arc<RwLock<HashMap<String, CwdPollState>>>,
 }
 
+fn scrub_git_str_arg(arg: &str) -> std::borrow::Cow<'_, str> {
+    crate::path_validation::git_path(arg)
+}
+
+fn scrub_git_os_arg(arg: &std::ffi::OsStr) -> std::ffi::OsString {
+    match arg.to_str() {
+        Some(s) => std::ffi::OsString::from(scrub_git_str_arg(s).as_ref()),
+        None => arg.to_os_string(),
+    }
+}
+
 impl GitTracker {
     /// Create a new GitTracker without a CwdTracker; terminal cwds are only
     /// synced once one is attached via [`Self::with_cwd_tracker`].
@@ -480,7 +491,10 @@ impl GitTracker {
         timeout_ms: u64,
     ) -> Option<std::process::Output> {
         let mut git = git_exec::git_command(cwd);
-        git.command.args(args.iter().map(|a| a.as_ref()));
+        // Path-valued argv (e.g. `git worktree add <path>`) can also carry a
+        // Windows verbatim prefix from `canonicalize`; strip those so git.exe
+        // accepts the path. Non-path args are unchanged (prefix never matches).
+        git.command.args(args.iter().map(|a| scrub_git_os_arg(a.as_ref())));
         Self::spawn_and_wait(git, args, cwd, timeout_ms)
     }
 
@@ -490,7 +504,7 @@ impl GitTracker {
     pub fn run_git_push(cwd: &str, args: &[&str], timeout_ms: u64) -> Option<std::process::Output> {
         let mut git = git_exec::git_command(cwd);
         git.command
-            .args(args)
+            .args(args.iter().copied().map(|a| scrub_git_os_arg(a.as_ref())))
             .env("GIT_TERMINAL_PROMPT", "0")
             .stdin(Stdio::null());
         Self::spawn_and_wait(git, args, cwd, timeout_ms)
