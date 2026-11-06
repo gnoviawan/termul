@@ -224,3 +224,48 @@ pub async fn browser_stop(session_id: String, webview: Webview) -> Result<IpcRes
         None => IpcResult::error("browser automation is not running", "BROWSER_STOP_UNAVAILABLE"),
     })
 }
+
+fn share_reply<T>(result: Result<T, crate::browser_automation::ShareError>) -> IpcResult<T> {
+    match result {
+        Ok(data) => IpcResult::success(data),
+        Err(e) => IpcResult::error(e.message, e.code),
+    }
+}
+
+/// Share to chat: grant one chat session a read-only view of one user
+/// tab. Main window only: a tab webview must not share itself or another
+/// tab. The host checks the tab, its committed origin and the scopes.
+#[tauri::command]
+pub async fn browser_share_create(
+    tab_id: String,
+    session_id: String,
+    scopes: Vec<String>,
+    expected_origin: String,
+    webview: Webview,
+) -> Result<IpcResult<crate::browser_automation::ShareView>, String> {
+    require_main_webview(&webview, "browser_share_create")?;
+    Ok(share_reply(crate::browser_automation::share_create(
+        crate::browser_automation::ShareRequest {
+            tab_id,
+            session_id,
+            scopes,
+            expected_origin,
+        },
+    )))
+}
+
+/// Every live share, for a reloaded renderer.
+#[tauri::command]
+pub async fn browser_share_list(
+    webview: Webview,
+) -> Result<IpcResult<Vec<crate::browser_automation::ShareView>>, String> {
+    require_main_webview(&webview, "browser_share_list")?;
+    Ok(share_reply(crate::browser_automation::share_list()))
+}
+
+/// End a share; its read token resolves nothing from then on.
+#[tauri::command]
+pub async fn browser_share_revoke(share_id: String, webview: Webview) -> Result<IpcResult<()>, String> {
+    require_main_webview(&webview, "browser_share_revoke")?;
+    Ok(share_reply(crate::browser_automation::share_revoke(&share_id)))
+}

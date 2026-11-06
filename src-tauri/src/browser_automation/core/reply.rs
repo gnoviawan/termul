@@ -519,7 +519,7 @@ const UNREACHABLE_FRAME: &str = "(cross-origin frame, not readable on this engin
 /// start a line of its own. Text that reads like a ref (`@e12`, or `@e+12`,
 /// which ref parsing also accepts) gets a space after the `@`, so the refs
 /// the host minted are the only ref tokens in the outline.
-fn outline_text(text: &str) -> String {
+pub(super) fn outline_text(text: &str) -> String {
     let flat = text
         .split(|c: char| c.is_whitespace() || c.is_control())
         .filter(|word| !word.is_empty())

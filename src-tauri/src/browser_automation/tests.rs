@@ -35,6 +35,28 @@ fn dispatch_without_host_fails_closed() {
 }
 
 #[test]
+fn without_a_host_share_links_reach_no_agent_and_no_record() {
+    use agent_client_protocol::schema::v1::{ResourceLink, TextContent};
+    let _g = HOST_LOCK.lock().unwrap();
+    clear_browser_host();
+    assert_eq!(share_list().unwrap_err().code, "UNSUPPORTED");
+    let link = ContentBlock::ResourceLink(ResourceLink::new("Browser page", "termul-browser-share://tok"));
+    let text = ContentBlock::Text(TextContent::new("hi"));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (agent, record) = rt.block_on(resolve_prompt_shares(
+        "sess",
+        vec![text.clone(), link.clone()],
+        vec![text.clone(), link],
+    ));
+    assert!(serde_json::to_string(&agent).unwrap().find("tok").is_none(), "{agent:?}");
+    assert_eq!(agent.len(), 2);
+    assert!(serde_json::to_string(&record).unwrap().find("://tok").is_none(), "{record:?}");
+
+    let plain = vec![text];
+    assert_eq!(rt.block_on(resolve_prompt_shares("sess", plain.clone(), plain.clone())), (plain.clone(), plain));
+}
+
+#[test]
 fn hooks_without_host_are_noops() {
     let _g = HOST_LOCK.lock().unwrap();
     clear_browser_host();

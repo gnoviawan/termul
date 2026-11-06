@@ -73,6 +73,7 @@ impl DesktopBrowserHost {
         let redacted = crate::logging::redact_session_id(session_id);
         self.registry.lock().begin_session_teardown(session_id);
         self.gate.end_session(session_id);
+        self.end_session_shares(session_id);
         self.downloads.forget(session_id);
         let tabs = self.registry.lock().session_tabs(session_id);
         for label in &tabs {

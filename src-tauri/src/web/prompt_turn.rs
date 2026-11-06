@@ -185,6 +185,11 @@ pub async fn accept_prompt_turn(
         Err(error) => return Err(PromptTurnError::Failed(error)),
     }
 
+    // Browser share links become host-framed page content for the agent;
+    // the durable record keeps each link without its read token.
+    let (content, record_content) =
+        crate::browser_automation::resolve_prompt_shares(&session_id.0, content, record_content).await;
+
     // After a host restart the completed turns exist only on disk: restore
     // them before claiming, or a resend of a completed turn would run again.
     if turn_id.is_some() {

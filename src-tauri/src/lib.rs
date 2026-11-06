@@ -2133,6 +2133,9 @@ pub fn run() {
             // Agent browser automation (host consent tickets, Stop)
             commands::browser_ticket_respond,
             commands::browser_stop,
+            commands::browser_share_create,
+            commands::browser_share_list,
+            commands::browser_share_revoke,
             // Worktree commands
             commands::worktree_list,
             commands::worktree_create,

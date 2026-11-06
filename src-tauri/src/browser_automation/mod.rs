@@ -22,6 +22,7 @@ pub mod engine;
 #[cfg(test)]
 pub use self::core::boundary::BROWSER_CALL_FAILED_PREFIX;
 pub use self::core::boundary::{boundary_arg_keys, boundary_failure_line};
+pub use self::core::shares::{ShareError, ShareRequest, ShareView};
 pub use self::core::{
     expected_args_text, BrowserError, DesktopBrowserHost, HostServices, Success, TabView,
     ToolSchema,
@@ -41,6 +42,7 @@ use engine::EngineFacts;
 
 use crate::browser_tab_manager::BrowserBounds;
 
+use agent_client_protocol::schema::v1::ContentBlock;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -99,6 +101,72 @@ pub trait BrowserHost: Send + Sync {
     fn user_turn(&self, _session_id: &str) {}
     /// The registered engine's frozen capability table and traits.
     fn engine_facts(&self) -> EngineFacts;
+    /// `browser_share_create`: grant one session a read-only view of one
+    /// user tab.
+    fn share_create(&self, _request: ShareRequest) -> Result<ShareView, ShareError> {
+        Err(ShareError::UNAVAILABLE)
+    }
+    fn share_list(&self) -> Result<Vec<ShareView>, ShareError> {
+        Err(ShareError::UNAVAILABLE)
+    }
+    fn share_revoke(&self, _share_id: &str) -> Result<(), ShareError> {
+        Err(ShareError::UNAVAILABLE)
+    }
+    /// Replace the share links in a prompt of `session_id` with what their
+    /// grants allow the agent to read now.
+    fn resolve_shares<'a>(
+        &'a self,
+        _session_id: &'a str,
+        content: Vec<ContentBlock>,
+    ) -> HostFuture<'a, Vec<ContentBlock>> {
+        Box::pin(async move { neutralize_share_links(content) })
+    }
+}
+
+/// Every share link replaced by a note: what a host that keeps no grants
+/// sends, so a read token never reaches an agent.
+fn neutralize_share_links(content: Vec<ContentBlock>) -> Vec<ContentBlock> {
+    content
+        .into_iter()
+        .map(|block| match block {
+            ContentBlock::ResourceLink(link) if link.uri.starts_with(self::core::shares::SHARE_URI_PREFIX) => {
+                self::core::shares::unavailable_note("browser sharing needs the desktop app")
+            }
+            block => block,
+        })
+        .collect()
+}
+
+pub fn share_create(request: ShareRequest) -> Result<ShareView, ShareError> {
+    browser_host().map_or(Err(ShareError::UNAVAILABLE), |host| host.share_create(request))
+}
+
+pub fn share_list() -> Result<Vec<ShareView>, ShareError> {
+    browser_host().map_or(Err(ShareError::UNAVAILABLE), |host| host.share_list())
+}
+
+pub fn share_revoke(share_id: &str) -> Result<(), ShareError> {
+    browser_host().map_or(Err(ShareError::UNAVAILABLE), |host| host.share_revoke(share_id))
+}
+
+/// The prompt content an agent receives and the content the durable
+/// prompt record keeps, for a prompt of `session_id`. Share links resolve
+/// to page content for the agent only; the record keeps each link without
+/// its read token. Content without share links passes untouched.
+pub async fn resolve_prompt_shares(
+    session_id: &str,
+    content: Vec<ContentBlock>,
+    record: Vec<ContentBlock>,
+) -> (Vec<ContentBlock>, Vec<ContentBlock>) {
+    use self::core::shares::{has_share_link, redact_share_links};
+    if !has_share_link(&content) && !has_share_link(&record) {
+        return (content, record);
+    }
+    let resolved = match browser_host() {
+        Some(host) => host.resolve_shares(session_id, content).await,
+        None => neutralize_share_links(content),
+    };
+    (resolved, redact_share_links(record))
 }
 
 static BROWSER_HOST: RwLock<Option<Arc<dyn BrowserHost>>> = RwLock::new(None);

@@ -159,6 +159,17 @@ Answers a browser consent ticket (`host:` request id) from the desktop `main` we
 ### `browser_stop`
 Stops agent browsing for `{sessionId}` from the desktop `main` webview: queued and in-flight browser calls end, pending tickets are withdrawn, session grants are revoked, and every later call returns `confirmation_required` with reason `stopped_by_user` until the user's next prompt. Returns `IpcResult<()>`.
 
+### `browser_share_create`
+Share to chat, from the desktop `main` webview only: grants one chat session a read-only view of one user tab. Arguments `{tabId, sessionId, scopes, expectedOrigin}`; `scopes` is a subset of `content`, `screenshot`, `console_errors`, `network_failures`. Returns `IpcResult<BrowserShareView>`: `{shareId, sessionId, tabId, origin, scopes, expiresAtMs, status, reference: {uri, name}}`, with `status` one of `active`, `expired`, `revoked`, `navigated`, `closed`. The host keeps only the scopes it serves: `content` always, `screenshot` where the engine takes screenshots; user tabs carry no console or network observer, so `console_errors` and `network_failures` are never granted. A share lasts 10 minutes, at most 16 are live, and sharing the same tab to the same session again replaces the earlier share. Error codes: `TAB_NOT_FOUND` (not an open user tab, agent tabs included), `ORIGIN_CHANGED` (the tab's committed origin is not `expectedOrigin`), `ORIGIN_NOT_SHAREABLE` (a non-http(s) page or an origin the agent browser denies), `SCOPE_UNAVAILABLE`, `SHARE_LIMIT`, `INVALID_REQUEST`, `UNSUPPORTED` (no browser host).
+
+`reference.uri` is `termul-browser-share://<read token>`; the token is not the `shareId`. The composer sends the reference as a `resource_link` block. When a prompt turn starts, the host replaces each such link with a host-framed text block (verified origin, page URL without query or fragment, page title and outline marked untrusted, links cut to origin and path, no form field values, no refs) and, for `screenshot`, a PNG image block. It does so only while the share is active, belongs to the prompt's session, and the tab still shows the shared document; otherwise the link becomes a short "share unavailable" note. The durable prompt record keeps the link with the token replaced by `termul-browser-share://shared`. Hosts without the browser (`termul-server`) replace every share link with the note.
+
+### `browser_share_list`
+Every live share, from the `main` webview, as `IpcResult<BrowserShareView[]>`.
+
+### `browser_share_revoke`
+Ends `{shareId}` from the `main` webview; its read token resolves nothing from then on. Returns `IpcResult<()>`; `NOT_FOUND` when the share already ended.
+
 Pages in tab webviews report nothing through commands. Tab URL, title, loading state and document epoch come from engine navigation and title events (see Browser Event Flow).
 
 ## Automation Commands and Routes
@@ -308,6 +319,7 @@ The host tab registry owns every browser tab. It emits these Tauri events to the
 
 - `browser_tab_updated`: `{ tabId, url, title, loading, agentControlled, epoch }` after every navigation start, commit, title change and load finish, whoever started it. `epoch` counts the new documents the tab committed.
 - `browser_tab_closed`: `{ tabId }` after the engine destroyed the webview.
+- `browser_share_changed`: a `BrowserShareView` when a share starts and once when it ends: revoke, expiry, Stop, session end, a new document in the tab (`navigated`, same origin included) or the tab's close (`closed`). Main webview only; it never goes down a session stream.
 
 Each navigation hop of a tab, redirects included, is decided once in the navigation hook the tab webview is built with: the host perimeter for every tab, then the session's Stop state and origin authorization for an agent tab. A refused hop never commits, so the tab keeps its URL and title.
 

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, Url};
 
 use super::events::TabProjection;
+use super::shares::{ShareView, EVENT_SHARE_CHANGED};
 use crate::browser_automation::engine::events::TabEvents;
 use crate::browser_automation::engine::profile::{self, DataStore};
 use crate::browser_automation::engine::Support;
@@ -45,6 +46,9 @@ pub trait TabSurface: Send + Sync {
     /// close was published on the tab's event stream.
     fn close<'a>(&'a self, tab: &'a str) -> SurfaceFuture<'a, ()>;
     fn publish(&self, projection: &TabProjection);
+    /// A share changed status. Main window only: no tab webview or remote
+    /// client learns a share id or read token.
+    fn publish_share(&self, view: &ShareView);
     /// A user tab finished loading a page.
     fn user_page_loaded(&self, tab: &str);
     /// Where screenshots are written.
@@ -123,6 +127,12 @@ impl TabSurface for PaneSurface {
         };
         if sent.is_err() {
             log::warn!("[browser-tab] {} not delivered to the renderer", projection.event_name());
+        }
+    }
+
+    fn publish_share(&self, view: &ShareView) {
+        if self.app.emit_to(MAIN_WEBVIEW, EVENT_SHARE_CHANGED, view).is_err() {
+            log::warn!("[browser-share] {EVENT_SHARE_CHANGED} not delivered to the renderer");
         }
     }
 

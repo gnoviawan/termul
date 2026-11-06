@@ -222,6 +222,11 @@ pub(super) async fn consume(
             }
             Applied::Ignored => {}
         }
+        if !matches!(kind, "console" | "network") {
+            if let Some(host) = host.upgrade() {
+                host.sync_shares(&label);
+            }
+        }
     }
 }
 

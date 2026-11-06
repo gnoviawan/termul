@@ -44,6 +44,8 @@ pub(super) struct FakePane {
     /// `wipe open=<tabs still open>` per global profile wipe, in order.
     pub(super) closes: Mutex<Vec<String>>,
     published: Mutex<Vec<TabProjection>>,
+    /// Every share status change, in order.
+    pub(super) shares: Mutex<Vec<super::shares::ShareView>>,
     /// The data store each tab was built on, by label.
     pub(super) stores: Mutex<HashMap<String, DataStore>>,
     persistent_profile: Support,
@@ -90,7 +92,7 @@ impl FakePane {
     }
 
     /// The user clicks a link inside the tab: a navigation no verb asked for.
-    fn user_navigates(&self, tab: &str, url: &str) {
+    pub(super) fn user_navigates(&self, tab: &str, url: &str) {
         let mut tabs = self.tabs.lock();
         let fake = tabs.get_mut(tab).unwrap();
         let Some(landed) = load(&fake.events, url) else {
@@ -170,6 +172,9 @@ impl TabSurface for FakePane {
     fn publish(&self, projection: &TabProjection) {
         self.published.lock().push(projection.clone());
     }
+    fn publish_share(&self, view: &super::shares::ShareView) {
+        self.shares.lock().push(view.clone());
+    }
     fn user_page_loaded(&self, _tab: &str) {}
     fn artifacts_root(&self) -> Result<PathBuf, String> {
         Ok(self.artifacts.clone())
@@ -229,6 +234,8 @@ pub(super) struct FakeEngine {
     pub(super) focused_frame: Mutex<Value>,
     /// Every `set_input_files` call.
     files_set: Mutex<Vec<FilesSet>>,
+    /// Items the snapshot helper reports after its buttons.
+    pub(super) snapshot_extra: Mutex<Vec<Value>>,
 }
 
 impl FakeEngine {
@@ -293,6 +300,7 @@ impl FakeEngine {
             frame_card_fields: Mutex::new(false),
             focused_frame: Mutex::new(Value::Null),
             files_set: Mutex::new(Vec::new()),
+            snapshot_extra: Mutex::new(Vec::new()),
         }
     }
 }
@@ -323,6 +331,7 @@ impl BrowserEngine for FakeEngine {
                             "path": format!("html>body>button:nth-of-type({})~{}", i + 1, i + removed + 1)
                         })
                     })
+                    .chain(self.snapshot_extra.lock().iter().cloned())
                     .collect();
                 let items = super::frames::tests::with_frame_items(items, !self.frames.lock().is_empty());
                 json!({
@@ -489,7 +498,7 @@ impl EventSink for AutoMountSink {
     }
 }
 
-fn bounds() -> BrowserBounds {
+pub(super) fn bounds() -> BrowserBounds {
     BrowserBounds {
         x: 0.0,
         y: 0.0,
@@ -549,6 +558,7 @@ pub(super) fn harness_parts(
         fail_create,
         closes: Mutex::new(Vec::new()),
         published: Mutex::new(Vec::new()),
+        shares: Mutex::new(Vec::new()),
         stores: Mutex::new(HashMap::new()),
         persistent_profile,
     });
@@ -587,7 +597,7 @@ pub(super) fn webview2_like() -> CapabilityTable {
         .with(CapabilityId::NetworkObserve, Support::Trusted)
 }
 
-fn webkit_like() -> CapabilityTable {
+pub(super) fn webkit_like() -> CapabilityTable {
     webview2_like()
         .with(CapabilityId::PointerClick, Support::Synthetic)
         .with(CapabilityId::Screenshot, Support::Unavailable("no screenshots here"))

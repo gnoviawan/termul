@@ -19,6 +19,7 @@ pub mod ports;
 mod profile;
 mod reply;
 mod sensitive_gate;
+pub mod shares;
 pub mod sensitivity;
 mod stop;
 mod surface;
@@ -93,6 +94,7 @@ pub struct DesktopBrowserHost {
     root_of: RootResolver,
     downloads: downloads::Downloads,
     registry: Arc<Mutex<TabRegistry>>,
+    shares: Mutex<shares::ShareBook>,
     events: UnboundedSender<(String, TabEvent)>,
     nav_policy: Arc<dyn NavPolicy>,
 }
@@ -140,6 +142,7 @@ impl DesktopBrowserHost {
             root_of: services.root_of,
             downloads: downloads::Downloads::default(),
             registry,
+            shares: Mutex::new(shares::ShareBook::default()),
             events: tx,
         });
         let (registry, surface, sinks) = consumer;
@@ -421,6 +424,7 @@ impl BrowserHost for DesktopBrowserHost {
     fn stop(&self, session_id: &str) -> bool {
         let first = self.gate.stop(session_id);
         self.forget_observations(session_id);
+        self.end_session_shares(session_id);
         log::info!(
             "[browser-agent] stopped by user session={}",
             crate::logging::redact_session_id(session_id)
@@ -434,6 +438,26 @@ impl BrowserHost for DesktopBrowserHost {
             me.close_popups(session_id);
         }
         first
+    }
+
+    fn share_create(&self, request: super::ShareRequest) -> Result<shares::ShareView, shares::ShareError> {
+        self.create_share(request)
+    }
+
+    fn share_list(&self) -> Result<Vec<shares::ShareView>, shares::ShareError> {
+        Ok(self.list_shares())
+    }
+
+    fn share_revoke(&self, share_id: &str) -> Result<(), shares::ShareError> {
+        self.revoke_share(share_id)
+    }
+
+    fn resolve_shares<'a>(
+        &'a self,
+        session_id: &'a str,
+        content: Vec<agent_client_protocol::schema::v1::ContentBlock>,
+    ) -> HostFuture<'a, Vec<agent_client_protocol::schema::v1::ContentBlock>> {
+        Box::pin(self.resolve_share_blocks(session_id, content))
     }
 
     fn user_turn(&self, session_id: &str) {
