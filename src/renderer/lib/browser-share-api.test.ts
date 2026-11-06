@@ -63,6 +63,15 @@ describe('browserShareCreate', () => {
     expect(await browserShareCreate(REQUEST)).toEqual({ success: false, code: 'UNAVAILABLE' })
   })
 
+  it.each([
+    'SCOPE_UNAVAILABLE',
+    'ORIGIN_NOT_SHAREABLE',
+    'SHARE_LIMIT'
+  ])('keeps the host refusal %s', async (code) => {
+    vi.mocked(invoke).mockResolvedValue({ success: false, code, error: 'x' })
+    expect(await browserShareCreate(REQUEST)).toEqual({ success: false, code })
+  })
+
   it('maps an unknown host code to FAILED', async () => {
     vi.mocked(invoke).mockResolvedValue({ success: false, code: 'WHATEVER', error: 'x' })
     expect(await browserShareCreate(REQUEST)).toEqual({ success: false, code: 'FAILED' })

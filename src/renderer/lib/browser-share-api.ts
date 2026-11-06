@@ -62,6 +62,9 @@ export type BrowserShareErrorCode =
   | 'UNSUPPORTED'
   | 'UNAVAILABLE'
   | 'ORIGIN_CHANGED'
+  | 'ORIGIN_NOT_SHAREABLE'
+  | 'SCOPE_UNAVAILABLE'
+  | 'SHARE_LIMIT'
   | 'TAB_NOT_FOUND'
   | 'NOT_FOUND'
   | 'INVALID_RESPONSE'
@@ -71,7 +74,14 @@ export type BrowserShareResult<T> =
   | { success: true; data: T }
   | { success: false; code: BrowserShareErrorCode }
 
-const KNOWN_CODES = new Set<string>(['ORIGIN_CHANGED', 'TAB_NOT_FOUND', 'NOT_FOUND'])
+const KNOWN_CODES = new Set<string>([
+  'ORIGIN_CHANGED',
+  'ORIGIN_NOT_SHAREABLE',
+  'SCOPE_UNAVAILABLE',
+  'SHARE_LIMIT',
+  'TAB_NOT_FOUND',
+  'NOT_FOUND'
+])
 const STATUSES = new Set<string>(['active', 'expired', 'revoked', 'navigated', 'closed'])
 const SCOPES = new Set<string>(BROWSER_SHARE_SCOPES)
 
