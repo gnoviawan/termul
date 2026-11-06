@@ -521,7 +521,7 @@ pub(super) fn harness_with(engine: FakeEngine) -> Harness {
     harness_full(engine, false, Arc::new(AllowSession))
 }
 
-fn harness_answering(engine: FakeEngine, permissions: Arc<dyn PermissionRequest>) -> Harness {
+pub(super) fn harness_answering(engine: FakeEngine, permissions: Arc<dyn PermissionRequest>) -> Harness {
     harness_full(engine, false, permissions)
 }
 

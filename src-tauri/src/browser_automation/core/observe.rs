@@ -100,10 +100,25 @@ impl<T: Serialize> ObservedLog<T> {
     }
 }
 
+impl<T> ObservedLog<T> {
+    /// Drop every entry. `seq` keeps counting, so a reader's cursor reports
+    /// the dropped entries under `dropped`.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
 #[derive(Default)]
 pub struct Observations {
     pub console: ObservedLog<ConsoleEntry>,
     pub network: ObservedLog<NetworkEntry>,
+}
+
+impl Observations {
+    pub fn clear(&mut self) {
+        self.console.clear();
+        self.network.clear();
+    }
 }
 
 /// `cursor` (default 0: the oldest kept entry) and `limit` (default 50,
@@ -119,6 +134,17 @@ fn page_args(args: &Value) -> Result<(u64, usize), BrowserError> {
 }
 
 impl DesktopBrowserHost {
+    /// Drop what the session's tabs observed. Entries were read under the
+    /// origin grants Stop revokes, so none stays readable after it.
+    pub(super) fn forget_observations(&self, session_id: &str) {
+        let mut registry = self.registry.lock();
+        for label in registry.session_tabs(session_id) {
+            if let Some(record) = registry.get_mut(&label) {
+                record.observed.clear();
+            }
+        }
+    }
+
     pub(super) async fn observe(&self, session_id: &str, verb: Verb, args: &Value) -> Result<Success, BrowserError> {
         let label = self.resolve_tab(session_id, args)?;
         let (cursor, limit) = page_args(args)?;

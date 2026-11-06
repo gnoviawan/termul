@@ -420,6 +420,7 @@ impl BrowserHost for DesktopBrowserHost {
 
     fn stop(&self, session_id: &str) -> bool {
         let first = self.gate.stop(session_id);
+        self.forget_observations(session_id);
         log::info!(
             "[browser-agent] stopped by user session={}",
             crate::logging::redact_session_id(session_id)

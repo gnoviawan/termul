@@ -1,8 +1,11 @@
 use serde_json::json;
 
 use super::*;
-use crate::browser_automation::core::tests::{harness_with, tab_of, webview2_like, FakeEngine};
+use crate::browser_automation::core::ports::{ConsentOption, TicketOutcome};
+use crate::browser_automation::core::test_support::ScriptedPermissions;
+use crate::browser_automation::core::tests::{harness_answering, harness_with, tab_of, webview2_like, FakeEngine};
 use crate::browser_automation::engine::events::TabEvent;
+use crate::browser_automation::BrowserHost;
 use crate::browser_automation::engine::observe::ConsoleLevel;
 
 fn console(text: &str) -> ConsoleEntry {
@@ -106,6 +109,40 @@ async fn an_engine_without_the_capability_withdraws_the_verb() {
         (reply["code"].as_str(), reply["reason"].as_str()),
         (Some("capability_unavailable"), Some("network_observe"))
     );
+}
+
+#[tokio::test]
+async fn stop_drops_what_the_revoked_origins_logged() {
+    let perms = std::sync::Arc::new(ScriptedPermissions::answering([TicketOutcome::Answered(
+        ConsentOption::AllowSession,
+    )]));
+    let h = harness_answering(FakeEngine::new(webview2_like()), perms.clone());
+    let tab = tab_of(&h.call_as("s1", "navigate", json!({ "url": "https://bank.example.com/account" })).await);
+    let events = h.pane.events(&tab);
+    events.publish(TabEvent::Console(console("balance 1234")));
+    events.publish(TabEvent::Network(NetworkEntry {
+        method: "GET".into(),
+        url: "https://bank.example.com/api/statements".into(),
+        status: Some(200),
+        resource: Some("fetch".into()),
+        duration_ms: Some(5),
+        failed: false,
+    }));
+    h.settle_events().await;
+
+    assert!(h.host.stop("s1"));
+    h.host.user_turn("s1");
+    let revisit = h.call_as("s1", "console", json!({ "tabId": tab })).await;
+    assert_eq!(revisit["code"], "confirmation_required", "the revoked origin asks again: {revisit}");
+
+    let local = h.call_as("s1", "navigate", json!({ "url": "http://localhost:5191/", "tabId": tab })).await;
+    assert_eq!(local["ok"], true, "{local}");
+    let console_read = h.call_as("s1", "console", json!({ "tabId": tab })).await;
+    assert_eq!(console_read["page"]["console"], json!([]), "{console_read}");
+    assert_eq!(console_read["data"]["dropped"], 1);
+    let network_read = h.call_as("s1", "network", json!({ "tabId": tab })).await;
+    assert_eq!(network_read["page"]["network"], json!([]), "{network_read}");
+    assert_eq!(perms.requests.lock().len(), 2, "only the first visit and the refused revisit asked");
 }
 
 #[tokio::test]
