@@ -4,7 +4,9 @@
 //! no such event except the `auth_required` handshake frame.
 
 use serde_json::Value;
+use tracing::debug;
 
+use crate::acp::session_persistence::TitleSource;
 use crate::web::watch::{
     publish_agent_event, publish_chat_history, publish_worktree_branch_renamed,
     AGENT_ROSTER_EVENTS, AGENT_TRANSIENT_EVENTS,
@@ -36,6 +38,44 @@ impl WsRelaySink {
         {
             let changed: Vec<&str> = sid.into_iter().collect();
             publish_chat_history(self, &changed);
+        }
+    }
+
+    /// Issue #1727: whether `sid`'s durable index entry has no title yet, so
+    /// the next `user_prompt` the writer appends derives it. `false` without
+    /// persistence or for a session the catalog does not know.
+    pub fn index_title_unset(&self, sid: &str) -> bool {
+        self.persistence()
+            .and_then(|persistence| persistence.metadata(sid).ok())
+            .is_some_and(|metadata| metadata.title.is_none())
+    }
+
+    /// Issue #1727: the first `user_prompt` titles the session when the
+    /// writer appends it, which is not an event `notify_history_for` sees.
+    /// Call after the `flush_prompt_record` attempt, also when it failed (the
+    /// writer may already have applied the prompt), with `was_untitled` read
+    /// by [`Self::index_title_unset`] before the prompt was recorded. Publishes
+    /// one `chat_history` delta only when the index already holds a title that
+    /// went from unset to one derived from this prompt, so later prompts never
+    /// nudge the watchers and a concurrent `session_info_update` or
+    /// `local_title_generated` (which publishes its own delta) is not doubled.
+    pub fn notify_prompt_title(&self, sid: &str, was_untitled: bool) {
+        if !was_untitled {
+            return;
+        }
+        let titled = self
+            .persistence()
+            .and_then(|persistence| persistence.metadata(sid).ok())
+            .is_some_and(|metadata| {
+                metadata.title.is_some()
+                    && metadata.title_source == Some(TitleSource::DerivedFirstMessage)
+            });
+        if titled {
+            debug!(
+                "[history] first prompt titled session {}; notifying chat_history",
+                crate::logging::redact_session_id(sid)
+            );
+            publish_chat_history(self, &[sid]);
         }
     }
 

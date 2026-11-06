@@ -4,6 +4,7 @@ import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { SettingsRow, settingsDescriptionId } from '@/components/settings/SettingsRow'
 import { SettingsSelect } from '@/components/settings/SettingsSelect'
 import { SettingsStepper } from '@/components/settings/SettingsStepper'
+import { TERMINAL_LINE_HEIGHT } from '@/components/terminal/terminal-config'
 import { Switch } from '@/components/ui/switch'
 import { MONO_STACK } from '@/lib/font-stacks'
 import {
@@ -19,11 +20,13 @@ interface AppearanceSectionProps {
   bufferSize: number
   terminalRenderer: AppSettings['terminalRenderer']
   screenReaderMode: boolean
+  automaticCompletionRefresh: boolean
   terminalUrlOpenMode: TerminalUrlOpenMode
   handleFontSizeChange: (value: number) => void
   handleBufferSizeChange: (value: number) => void
   handleRendererChange: (value: string) => void
   handleScreenReaderModeChange: (enabled: boolean) => void
+  handleAutomaticCompletionRefreshChange: (enabled: boolean) => void
   handleTerminalUrlOpenModeChange: (value: string) => void
 }
 
@@ -40,11 +43,13 @@ export function AppearanceSection({
   bufferSize,
   terminalRenderer,
   screenReaderMode,
+  automaticCompletionRefresh,
   terminalUrlOpenMode,
   handleFontSizeChange,
   handleBufferSizeChange,
   handleRendererChange,
   handleScreenReaderModeChange,
+  handleAutomaticCompletionRefreshChange,
   handleTerminalUrlOpenModeChange
 }: AppearanceSectionProps): React.JSX.Element {
   return (
@@ -120,6 +125,23 @@ export function AppearanceSection({
               onCheckedChange={handleScreenReaderModeChange}
             />
           </SettingsRow>
+          <SettingsRow
+            id={rowId('terminal-automatic-completion-refresh')}
+            htmlFor="terminal-automatic-completion-refresh"
+            label="Automatic completion refresh"
+            /* The scheduler reads this setting live per request (bind-session
+               passes a getter over the store), so flips take effect at once —
+               unlike xterm options, which only apply to new terminals. */
+            description="Updates command suggestions while you type. When off, press Tab to ask for suggestions. Applies immediately."
+            layout="inline"
+          >
+            <Switch
+              id="terminal-automatic-completion-refresh"
+              aria-describedby={settingsDescriptionId('terminal-automatic-completion-refresh')}
+              checked={automaticCompletionRefresh}
+              onCheckedChange={handleAutomaticCompletionRefreshChange}
+            />
+          </SettingsRow>
         </SettingsCard>
       </SettingsGroup>
 
@@ -145,7 +167,11 @@ export function AppearanceSection({
       <SettingsGroup title="Preview">
         <div
           className="rounded-lg border border-border bg-terminal-bg p-4 text-terminal-fg"
-          style={{ fontFamily: MONO_STACK, fontSize: `${fontSize}px`, lineHeight: 1.2 }}
+          style={{
+            fontFamily: MONO_STACK,
+            fontSize: `${fontSize}px`,
+            lineHeight: TERMINAL_LINE_HEIGHT
+          }}
         >
           <div>$ echo "Hello, World!"</div>
           <div>Hello, World!</div>
