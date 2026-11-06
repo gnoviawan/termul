@@ -302,17 +302,31 @@ install_linux() {
 #!/usr/bin/env bash
 set -e
 
-# Preload host libwayland-client if present to prevent WebKitGTK/Mesa Wayland crash in AppImage
-if [[ -z "${LD_PRELOAD:-}" ]]; then
-  for _lib in \
-    /usr/lib/libwayland-client.so.0 \
-    /usr/lib64/libwayland-client.so.0 \
-    /usr/lib/x86_64-linux-gnu/libwayland-client.so.0
-  do
-    if [[ -f "$_lib" ]]; then
-      export LD_PRELOAD="$_lib"
-      break
-    fi
+# The AppImage bundles a libwayland-client that Mesa 25 and later cannot create
+# an EGL display with, which leaves the window blank on Wayland (#1682).
+# Preloading the host copy fixes it. TERMUL_LAUNCHER_PRELOAD records the entry
+# added here so Termul removes exactly that entry from its terminals.
+unset TERMUL_LAUNCHER_PRELOAD
+if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+  if [[ -n "${TERMUL_WAYLAND_CLIENT_LIB:-}" ]]; then
+    _candidates=("$TERMUL_WAYLAND_CLIENT_LIB")
+  else
+    _candidates=(
+      /usr/lib/libwayland-client.so.0
+      /usr/lib64/libwayland-client.so.0
+      /usr/lib/x86_64-linux-gnu/libwayland-client.so.0
+    )
+  fi
+  for _lib in "${_candidates[@]}"; do
+    [[ -f "$_lib" ]] || continue
+    case " ${LD_PRELOAD//:/ } " in
+      *" ${_lib} "*) ;;
+      *)
+        export LD_PRELOAD="${LD_PRELOAD:+${LD_PRELOAD}:}${_lib}"
+        export TERMUL_LAUNCHER_PRELOAD="$_lib"
+        ;;
+    esac
+    break
   done
 fi
 

@@ -61,7 +61,8 @@ curl -fsSL https://raw.githubusercontent.com/gnoviawan/termul/v0.4.21/scripts/in
 
 The script downloads the latest AppImage and checks it against the release checksums. Then it does these things:
 
-- It saves the app as `~/.local/bin/termul-manager`.
+- It saves the AppImage as `~/.local/bin/termul-manager.AppImage`.
+- It adds the `~/.local/bin/termul-manager` command, which starts the AppImage. On Wayland, this command also loads your system's `libwayland-client` library so that the window is not blank with Mesa 25 or later. Terminals in Termul do not get that setting.
 - It adds a **Termul Manager** entry to your application menu.
 - It warns you if `~/.local/bin` is not on your `PATH`. Add that folder to your `PATH` to start Termul from a shell with `termul-manager`.
 
