@@ -368,3 +368,26 @@ async fn an_approval_the_store_cannot_park_fails_with_a_park_code() {
         run.stop_reason
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approving_a_run_of_a_deleted_automation_cancels_it_instead() {
+    let f = fixture().await;
+    let a = manual(&f.te, gated_graph(&f, true));
+    let run = f.te.engine.start_run(&a, RunTrigger::Manual, 1_000).unwrap();
+    parked(&f.te, &a, &run.id).await;
+    // Deleted without the engine's cancel, as when that cancel fails.
+    assert!(f.te.store.soft_delete(&a.id, 2_000).unwrap());
+
+    assert!(!f.te.engine.decide(&run.id, &node_id("gate"), true).unwrap());
+    let run = settled(&f.te.store, &run.id).await;
+
+    assert_eq!(run.status, RunStatus::Cancelled);
+    assert!(f.seen.posts.lock().is_empty());
+    assert_eq!(
+        rows(&f.te.store, &run.id),
+        vec![
+            row("fetch", None, StepStatus::Succeeded),
+            failed("gate", "cancelled"),
+        ]
+    );
+}
