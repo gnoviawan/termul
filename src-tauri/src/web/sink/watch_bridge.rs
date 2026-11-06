@@ -6,6 +6,7 @@
 use serde_json::Value;
 use tracing::debug;
 
+use crate::acp::session_persistence::TitleSource;
 use crate::web::watch::{
     publish_agent_event, publish_chat_history, publish_worktree_branch_renamed,
     AGENT_ROSTER_EVENTS, AGENT_TRANSIENT_EVENTS,
@@ -54,7 +55,9 @@ impl WsRelaySink {
     /// Call once that prompt is durable (after `flush_prompt_record`), with
     /// `was_untitled` read by [`Self::index_title_unset`] before the prompt
     /// was recorded. Publishes one `chat_history` delta only when the title
-    /// went from unset to set, so later prompts never nudge the watchers.
+    /// went from unset to one derived from this prompt, so later prompts never
+    /// nudge the watchers and a concurrent `session_info_update` or
+    /// `local_title_generated` (which publishes its own delta) is not doubled.
     pub fn notify_prompt_title(&self, sid: &str, was_untitled: bool) {
         if !was_untitled {
             return;
@@ -62,7 +65,10 @@ impl WsRelaySink {
         let titled = self
             .persistence()
             .and_then(|persistence| persistence.metadata(sid).ok())
-            .is_some_and(|metadata| metadata.title.is_some());
+            .is_some_and(|metadata| {
+                metadata.title.is_some()
+                    && metadata.title_source == Some(TitleSource::DerivedFirstMessage)
+            });
         if titled {
             debug!(
                 "[history] first prompt titled session {}; notifying chat_history",

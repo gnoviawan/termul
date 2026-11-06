@@ -327,11 +327,11 @@ async fn start_claimed_prompt(
                 "[prompt] failed to flush accepted user_prompt for session {}",
                 crate::logging::redact_session_id(&session_id.0)
             );
-        } else {
-            // The durable index now holds the derived title: tell the other
-            // clients' chat lists to refetch it.
-            relay.notify_prompt_title(&session_id.0, was_untitled);
         }
+        // Also after a failed flush: the writer may have applied the prompt
+        // before the failure (e.g. only the index write failed), and the
+        // check below publishes only when this prompt's derived title is set.
+        relay.notify_prompt_title(&session_id.0, was_untitled);
     }
     Ok(RunningPrompt { started, claim })
 }
