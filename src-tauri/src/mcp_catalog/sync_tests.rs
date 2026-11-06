@@ -971,15 +971,17 @@ async fn assert_full_crawl_survives_restart(
     service: &McpCatalogService,
     expected: &[(&str, &str)],
 ) {
-    let status = until(service, idle).await;
+    // The phase starts out idle, so wait for the full crawl's request too:
+    // idle alone can pass before the attach has crawled anything.
+    let status = until(service, |status| {
+        idle(status)
+            && mock
+                .requests()
+                .iter()
+                .any(|request| request.contains("version=latest"))
+    })
+    .await;
     assert!(!status.source.sample);
-    let requests = mock.requests();
-    assert!(
-        requests
-            .iter()
-            .any(|request| request.contains("version=latest")),
-        "recovery must crawl the whole registry: {requests:?}"
-    );
     assert_named(&rows(service).await, expected);
 
     write_setting(dir, false);
