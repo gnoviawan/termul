@@ -121,6 +121,13 @@ fn a_file_tool_is_allowed_only_inside_the_working_directory_and_off_protected_pa
     {
         std::os::unix::fs::symlink("/etc", root.join("docs/escape")).unwrap();
         assert_eq!(answer("read", root.join("docs/escape/passwd")), "no");
+        // The OS follows `link` before `..`, so this names `outside/secret.txt`.
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(outside.path().join("sub")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("sub"), root.join("docs/link")).unwrap();
+        assert_eq!(answer("read", root.join("docs/link/../secret.txt")), "no");
+        assert_eq!(answer("edit", root.join("docs/link/../new.md")), "no");
+        assert_eq!(answer("read", root.join("docs/link/../../x")), "no");
     }
     assert_eq!(answer("read", root.join(".env.local")), "no");
     assert_eq!(answer("edit", root.join(".git/hooks/pre-commit")), "no");
