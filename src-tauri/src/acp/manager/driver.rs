@@ -1,6 +1,7 @@
 use super::exit::announced_reason;
 use super::*;
 use crate::acp::agent_process::TreeKillAgent;
+use crate::acp::session::RequestElicitationRoute;
 
 /// Entry point for an agent's dedicated driver thread.
 ///
@@ -313,19 +314,47 @@ pub(super) async fn handle_session_notification(
     if is_replayed_history(&notification.update) && state.lock().note_replayed_update(&session_id) {
         return Ok(());
     }
-    let tool_call_id = match &notification.update {
-        agent_client_protocol::schema::v1::SessionUpdate::ToolCall(tool_call) => {
-            Some(tool_call.tool_call_id.0.to_string())
-        }
-        agent_client_protocol::schema::v1::SessionUpdate::ToolCallUpdate(update) => {
-            Some(update.tool_call_id.0.to_string())
-        }
+    let paths = |locations: &[agent_client_protocol::schema::v1::ToolCallLocation]| {
+        locations.iter().map(|l| l.path.clone()).collect::<Vec<_>>()
+    };
+    let tool_call = match &notification.update {
+        agent_client_protocol::schema::v1::SessionUpdate::ToolCall(tool_call) => Some((
+            tool_call.tool_call_id.0.to_string(),
+            Some(tool_call.kind),
+            Some(paths(&tool_call.locations)),
+        )),
+        agent_client_protocol::schema::v1::SessionUpdate::ToolCallUpdate(update) => Some((
+            update.tool_call_id.0.to_string(),
+            update.fields.kind,
+            update.fields.locations.as_deref().map(paths),
+        )),
         _ => None,
     };
-    if let Some(tool_call_id) = tool_call_id {
-        state
-            .lock()
-            .bind_tool_call(tool_call_id, session_id.clone());
+    // An update while no prompt turn runs is the agent working on its own
+    // (`session::unprompted`). `sweep_unprompted_work` reports its end. Only a
+    // session the driver holds counts, and a subagent dispatch never does:
+    // the host stamps only changed dispatch records, so the registry decides.
+    let started_working = {
+        let mut state = state.lock();
+        let is_dispatch = tool_call
+            .as_ref()
+            .is_some_and(|(call, _, _)| state.subagent_records().get(&session_id, call).is_some());
+        !is_dispatch
+            && !state.is_turn_active(&session_id)
+            && state.session_root(&session_id).is_some()
+            && state.unprompted().note(
+                &session_id,
+                &notification.update,
+                tokio::time::Instant::now(),
+            )
+    };
+    if started_working {
+        crate::acp::events::emit_agent_working(sinks, agent_id, &session_id, true);
+    }
+    if let Some((tool_call_id, kind, paths)) = tool_call {
+        let mut state = state.lock();
+        state.note_tool_call(&session_id, &tool_call_id, kind, paths);
+        state.bind_tool_call(tool_call_id, session_id.clone());
     }
     // AD-8: gate native `session_info_update` fan-out. When the host already
     // owns a higher-precedence title (`BackgroundGenerated` from a prior
@@ -385,6 +414,37 @@ fn session_info_notices(
             crate::acp::events::opencode_notices(info.meta.as_ref())
         }
         _ => crate::acp::events::OpenCodeNotices::default(),
+    }
+}
+
+/// Report the end of agent work outside a prompt turn
+/// (`session::unprompted`): sleep until a working session can go quiet, then
+/// tell every sink which sessions did. Waits without a timer while no session
+/// can go quiet.
+pub(super) async fn sweep_unprompted_work(
+    state: Arc<Mutex<DriverState>>,
+    sinks: Vec<Arc<dyn EventSink>>,
+    agent_id: AgentId,
+) {
+    let wake = state.lock().unprompted().wake();
+    loop {
+        let deadline = state.lock().unprompted().next_deadline();
+        match deadline {
+            None => wake.notified().await,
+            Some(deadline) => {
+                tokio::select! {
+                    () = tokio::time::sleep_until(deadline) => {}
+                    () = wake.notified() => {}
+                }
+            }
+        }
+        let quiet = state
+            .lock()
+            .unprompted()
+            .take_quiet(tokio::time::Instant::now());
+        for session_id in quiet {
+            crate::acp::events::emit_agent_working(&sinks, &agent_id, &session_id, false);
+        }
     }
 }
 
@@ -493,12 +553,24 @@ pub(super) async fn drive_connection(
     let notif_sinks = sinks.clone();
     let notif_agent_id = agent_id.clone();
     let notif_state = driver_state.clone();
+    // Lives as long as this connection: dropping the handle aborts it.
+    let _unprompted_sweeper = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+        sweep_unprompted_work(driver_state.clone(), sinks.clone(), agent_id.clone()),
+    ));
     // AD-8: capture persistence into the notification closure so the host can
     // gate `session_info_update` fan-out on `title_source`. When a background
     // title (`BackgroundGenerated`) or a future local alias (`LocalAlias`) owns
     // the title, a native agent `session_info_update` is suppressed here (the
     // durable defense in `append_record` is the second layer).
     let notif_persistence = persistence.clone();
+    let raw_sinks = sinks.clone();
+    let raw_agent_id = agent_id.clone();
+    let raw_state = driver_state.clone();
+    let raw_persistence = persistence.clone();
+    let cursor_sinks = sinks.clone();
+    let cursor_agent_id = agent_id.clone();
+    let cursor_state = driver_state.clone();
+    let cursor_persistence = persistence.clone();
     let perm_sinks = sinks.clone();
     let perm_agent_id = agent_id.clone();
     let perm_state = driver_state.clone();
@@ -508,6 +580,9 @@ pub(super) async fn drive_connection(
     let elicit_sinks = sinks.clone();
     let elicit_agent_id = agent_id.clone();
     let elicit_state = driver_state.clone();
+    let complete_sinks = sinks.clone();
+    let complete_agent_id = agent_id.clone();
+    let complete_state = driver_state.clone();
     let read_state = driver_state.clone();
     let write_state = driver_state.clone();
 
@@ -540,6 +615,29 @@ pub(super) async fn drive_connection(
     let connection_result = Client
         .builder()
         .name(format!("termul-acp-{agent_id}"))
+        // Before the typed handler, for every agent: subagent session traffic
+        // is claimed and re-addressed to its chat, and tool calls get their
+        // subagent records; everything else passes on unchanged.
+        .on_receive_notification(
+            async move |raw: super::native_subagents::RawSessionUpdate, cx| {
+                let claimed = super::native_subagents::deliver_session_update(
+                    &raw_state,
+                    raw_persistence.as_ref(),
+                    &raw_sinks,
+                    &raw_agent_id,
+                    &raw.0,
+                )
+                .await?;
+                if claimed {
+                    return Ok(agent_client_protocol::Handled::Yes);
+                }
+                Ok(agent_client_protocol::Handled::No {
+                    message: (raw, cx),
+                    retry: false,
+                })
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
         .on_receive_notification(
             async move |notification: agent_client_protocol::schema::v1::SessionNotification,
                         _cx| {
@@ -554,6 +652,19 @@ pub(super) async fn drive_connection(
             },
             agent_client_protocol::on_receive_notification!(),
         )
+        .on_receive_notification(
+            async move |notification: agent_client_protocol::schema::v1::CompleteElicitationNotification,
+                        _cx| {
+                super::sign_in::complete_sign_in(
+                    &complete_state,
+                    &complete_sinks,
+                    &complete_agent_id,
+                    &notification,
+                );
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
         .on_receive_request(
             async move |request: agent_client_protocol::schema::v1::RequestPermissionRequest,
                         responder,
@@ -564,24 +675,42 @@ pub(super) async fn drive_connection(
                     options,
                     ..
                 } = request;
-                let session_string = session_id.0.to_string();
+                let session_string = perm_state.lock().chat_session_for(session_id.0.as_ref());
                 if perm_state.lock().is_ephemeral(&session_string) {
-                    let _ = responder.respond(RequestPermissionResponse::new(
-                        RequestPermissionOutcome::Cancelled,
-                    ));
+                    let decision =
+                        perm_state
+                            .lock()
+                            .answer_permission(&session_string, &tool_call, &options);
+                    let outcome = match decision {
+                        Some(decision) => {
+                            log::info!(
+                                "[acp] {perm_agent_id} headless session {}: {} {:?} tool call {}",
+                                crate::logging::redact_session_id(&session_string),
+                                if decision.allowed { "allowed" } else { "refused" },
+                                decision.kind,
+                                tool_call.tool_call_id.0
+                            );
+                            decision.outcome
+                        }
+                        None => RequestPermissionOutcome::Cancelled,
+                    };
+                    let _ = responder.respond(RequestPermissionResponse::new(outcome));
                     return Ok(());
                 }
                 // A permission request is agent activity — the turn is waiting
                 // on user input, not wedged. Nudge the idle deadline so a
                 // user-input wait doesn't false-fire the idle timeout.
                 perm_state.lock().signal_idle(&session_string);
-                let request_id = {
+                let (request_id, turn_id) = {
                     let mut state = perm_state.lock();
                     state.bind_tool_call(
                         tool_call.tool_call_id.0.to_string(),
                         session_string.clone(),
                     );
-                    state.register_permission(session_string.clone(), responder)
+                    (
+                        state.register_permission(session_string.clone(), responder),
+                        state.active_turn_id(&session_string),
+                    )
                 };
                 let event = events::PermissionRequestEvent {
                     agent_id: perm_agent_id.clone(),
@@ -589,6 +718,7 @@ pub(super) async fn drive_connection(
                     request_id,
                     tool_call,
                     options,
+                    turn_id,
                 };
                 events::fan_out(
                     &perm_sinks,
@@ -601,12 +731,27 @@ pub(super) async fn drive_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: CursorTaskRequest, responder, _cx| {
+                let delivered = super::native_subagents::deliver_cursor_task(
+                    &cursor_state,
+                    cursor_persistence.as_ref(),
+                    &cursor_sinks,
+                    &cursor_agent_id,
+                    &request.0,
+                )
+                .await;
+                let _ = responder.respond(serde_json::json!({}));
+                delivered
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: AskUserQuestionRequest, responder, _cx| {
                 // Issue #411: a structured question from the agent. Register the
                 // parked `Responder<serde_json::Value>` (mirroring permissions),
                 // fan out `acp:question_request`, and resolve the responder when
                 // the user answers via `acp_answer_question` / `answer_question`.
-                let session_string = request.session_id.clone();
+                let session_string = question_state.lock().chat_session_for(&request.session_id);
                 if question_state.lock().is_ephemeral(&session_string) {
                     let _ = responder.respond(serde_json::json!({
                         "cancelled": true,
@@ -657,18 +802,42 @@ pub(super) async fn drive_connection(
                     CreateElicitationResponse, ElicitationAction, ElicitationMode, ElicitationScope,
                 };
                 let session_string = match request.scope() {
-                    ElicitationScope::Session(session) => session.session_id.0.to_string(),
+                    ElicitationScope::Session(session) => {
+                        elicit_state.lock().chat_session_for(session.session_id.0.as_ref())
+                    }
                     ElicitationScope::Request(_) => {
-                        let Some(session_id) = elicit_state.lock().sole_active_turn_session() else {
-                            log::warn!(
-                                "[acp] request-scoped elicitation is not tied to one active turn; cancelling"
-                            );
-                            let _ = responder.respond(CreateElicitationResponse::new(
-                                ElicitationAction::Cancel,
-                            ));
-                            return Ok(());
+                        let url_mode = match &request.mode {
+                            ElicitationMode::Url(url_mode) => Some(url_mode),
+                            _ => None,
                         };
-                        session_id
+                        let route = {
+                            let mut state = elicit_state.lock();
+                            let sole_turn = state.sole_active_turn_session();
+                            state.sign_in().route(url_mode.is_some(), sole_turn)
+                        };
+                        match (route, url_mode) {
+                            (RequestElicitationRoute::SignIn, Some(url_mode)) => {
+                                super::sign_in::hold_sign_in(
+                                    &elicit_state,
+                                    &elicit_sinks,
+                                    &elicit_agent_id,
+                                    url_mode,
+                                    request.message.clone(),
+                                    responder,
+                                );
+                                return Ok(());
+                            }
+                            (RequestElicitationRoute::Session(session_id), _) => session_id,
+                            _ => {
+                                log::warn!(
+                                    "[acp] request-scoped elicitation is not tied to one active turn; cancelling"
+                                );
+                                let _ = responder.respond(CreateElicitationResponse::new(
+                                    ElicitationAction::Cancel,
+                                ));
+                                return Ok(());
+                            }
+                        }
                     }
                     _ => {
                         log::warn!("[acp] elicitation scope is unsupported; cancelling");

@@ -137,7 +137,7 @@ pub(super) fn git_command(cwd: &str) -> GitCommand {
     command.into()
 }
 
-pub(super) struct GitChild {
+pub(crate) struct GitChild {
     child: std::process::Child,
     min_wait_ms: u64,
     #[cfg(windows)]
@@ -147,14 +147,14 @@ pub(super) struct GitChild {
 }
 
 #[derive(Debug)]
-pub(super) enum GitWaitError {
+pub(crate) enum GitWaitError {
     TimedOut,
     Io(std::io::Error),
 }
 
 /// Spawn `command` with stdout and stderr drained on helper threads, so
 /// output past the pipe buffer never blocks git, keeping stdout per `cap`.
-pub(super) fn spawn_git(command: &mut Command, cap: StdoutCap) -> std::io::Result<GitChild> {
+pub(crate) fn spawn_git(command: &mut Command, cap: StdoutCap) -> std::io::Result<GitChild> {
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -180,11 +180,11 @@ pub(super) fn spawn_git(command: &mut Command, cap: StdoutCap) -> std::io::Resul
 }
 
 impl GitChild {
-    pub(super) fn take_stdin(&mut self) -> Option<std::process::ChildStdin> {
+    pub(crate) fn take_stdin(&mut self) -> Option<std::process::ChildStdin> {
         self.child.stdin.take()
     }
 
-    pub(super) fn wait(mut self, timeout_ms: u64) -> Result<std::process::Output, GitWaitError> {
+    pub(crate) fn wait(mut self, timeout_ms: u64) -> Result<std::process::Output, GitWaitError> {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(self.min_wait_ms));
         let status = loop {
             match self.child.try_wait() {
@@ -236,7 +236,7 @@ impl GitChild {
 
 /// How much of a child's stdout to retain while it is drained.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum StdoutCap {
+pub(crate) enum StdoutCap {
     /// Keep everything.
     Unbounded,
     /// Keep only the first N NUL-terminated paths (`-z` listings); the rest is
@@ -245,6 +245,8 @@ pub(super) enum StdoutCap {
     /// Keep only the first N bytes; the rest is read and discarded. Callers
     /// that must tell "exactly N" from "more than N" ask for one byte extra.
     Bytes(usize),
+    /// Keep only the last N bytes, delivered when the pipe reaches EOF.
+    TailBytes(usize),
 }
 
 /// A pipe being drained on a helper thread: the retained chunks arrive in
@@ -284,12 +286,20 @@ pub(super) fn drain_capped<R: Read + Send + 'static>(pipe: Option<R>, cap: Stdou
         let mut kept = 0usize;
         let mut paths = 0usize;
         let mut discard = false;
+        let mut tail = Vec::new();
         loop {
             let n = match pipe.read(&mut chunk) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => n,
             };
             if discard {
+                continue;
+            }
+            if let StdoutCap::TailBytes(max) = cap {
+                tail.extend_from_slice(&chunk[..n]);
+                if tail.len() > max.saturating_mul(2) {
+                    tail.drain(..tail.len() - max);
+                }
                 continue;
             }
             let end = match cap {
@@ -313,6 +323,7 @@ pub(super) fn drain_capped<R: Read + Send + 'static>(pipe: Option<R>, cap: Stdou
                     discard = kept + take >= max;
                     take
                 }
+                StdoutCap::TailBytes(_) => unreachable!("tail mode is handled above"),
             };
             kept += end;
             // Once the waiter has gone, keep reading so a process still
@@ -320,6 +331,10 @@ pub(super) fn drain_capped<R: Read + Send + 'static>(pipe: Option<R>, cap: Stdou
             if end > 0 && sender.send(chunk[..end].to_vec()).is_err() {
                 discard = true;
             }
+        }
+        if let StdoutCap::TailBytes(max) = cap {
+            let cut = tail.len().saturating_sub(max);
+            let _ = sender.send(tail.split_off(cut));
         }
     });
     Drain(receiver)

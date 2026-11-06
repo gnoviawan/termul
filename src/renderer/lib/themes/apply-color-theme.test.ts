@@ -96,9 +96,18 @@ describe('apply-color-theme', () => {
       expect(cssVarToHex('--secondary')).toBe('#161718')
       expect(cssVarToHex('--popover')).toBe('#161718')
       expect(cssVarToHex('--foreground')).toBe('#e5e5e6')
-      expect(cssVarToHex('--primary-fill')).toBe(oklchComponentsToHex('0.551 0.188 259.9'))
-      expect(BUNDLED_COLOR_THEMES.termul.dark.palette.primary).toBe('#3b82f6')
-      expect(BUNDLED_COLOR_THEMES.termul.dark.palette.accent).toBe('#3b82f6')
+      expect(cssVarToHex('--primary-fill')).toBe('#0d74ce')
+      expect(cssVarToHex('--accent')).toBe('#0d74ce')
+      expect(cssVarToHex('--primary-foreground')).toBe('#ffffff')
+      expect(BUNDLED_COLOR_THEMES.termul.dark.palette.primary).toBe('#3b9eff')
+      expect(BUNDLED_COLOR_THEMES.termul.dark.palette.accent).toBe('#3b9eff')
+      expect(cssVarToHex('--primary')).toBe('#3b9eff')
+      const style = document.documentElement.style
+      expect(style.getPropertyValue('--primary-fill-hover')).toBe('#0e6abe')
+      expect(style.getPropertyValue('--primary-fill-active')).toBe('#0e60ae')
+      for (const fill of ['#0d74ce', '#0e6abe', '#0e60ae']) {
+        expect(contrastRatio('#ffffff', fill)).toBeGreaterThanOrEqual(4.5)
+      }
       expect(
         contrastRatio(cssVarToHex('--foreground'), cssVarToHex('--background'))
       ).toBeGreaterThanOrEqual(4.5)
@@ -110,16 +119,35 @@ describe('apply-color-theme', () => {
       ).toBeGreaterThanOrEqual(4.5)
     })
 
-    it('paints Termul light as paper with a mist sidebar and drops the flat flag on dark', () => {
+    it('paints Termul light with Interfere grays and an exact #fcfcfc page', () => {
       applyColorTheme('termul-light')
-      expect(cssVarToHex('--background')).toBe('#f9f9f9')
-      expect(cssVarToHex('--terminal-bg')).toBe('#f9f9f9')
+      expect(cssVarToHex('--background')).toBe('#fcfcfc')
+      expect(cssVarToHex('--terminal-bg')).toBe('#fcfcfc')
+      expect(resolveThemeForTest(BUNDLED_COLOR_THEMES['termul-light']).xterm.background).toBe(
+        '#fcfcfc'
+      )
       expect(cssVarToHex('--card')).toBe('#ffffff')
-      expect(cssVarToHex('--foreground')).toBe('#0d0d0d')
-      expect(cssVarToHex('--sidebar-background')).toBe('#f9f9f9')
-      expect(cssVarToHex('--border')).toBe('#e5e5e5')
-      expect(document.documentElement.dataset.flatElevation).toBe('true')
-      expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.primary).toBe('#3b82f6')
+      expect(cssVarToHex('--foreground')).toBe('#202020')
+      expect(cssVarToHex('--sidebar-background')).toBe('#f6f6f6')
+      expect(cssVarToHex('--border')).toBe('#ededed')
+      expect(cssVarToHex('--input')).toBe('#d9d9d9')
+      expect(cssVarToHex('--muted-foreground')).toBe('#646464')
+      // QA 1: ghost/outline hover label on the hover wash.
+      expect(document.documentElement.style.getPropertyValue('--ghost-hover-foreground')).toBe(
+        'oklch(var(--foreground))'
+      )
+      expect(
+        contrastRatio(cssVarToHex('--foreground'), cssVarToHex('--secondary'))
+      ).toBeGreaterThanOrEqual(4.5)
+      // QA 3: icon actions rest at muted-foreground on the shell.
+      expect(
+        contrastRatio(cssVarToHex('--muted-foreground'), cssVarToHex('--sidebar-background'))
+      ).toBeGreaterThanOrEqual(4.5)
+      expect(document.documentElement.dataset.flatElevation).toBeUndefined()
+      expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.primary).toBe('#0d74ce')
+      expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.accent).toBe('#0d74ce')
+      expect(cssVarToHex('--accent')).toBe('#0d74ce')
+      expect(cssVarToHex('--accent-foreground')).toBe('#ffffff')
       const lightFill = cssVarToHex('--primary-fill')
       applyColorTheme('termul')
       expect(cssVarToHex('--primary-fill')).toBe(lightFill)
@@ -129,7 +157,6 @@ describe('apply-color-theme', () => {
       ).toBeGreaterThanOrEqual(4.5)
 
       applyColorTheme('nord')
-      expect(document.documentElement.dataset.flatElevation).toBeUndefined()
       expect(cssVarToHex('--background')).not.toBe('#ffffff')
     })
   })
@@ -324,24 +351,24 @@ describe('apply-color-theme', () => {
       const css = readFileSync(cssPath, 'utf8')
       const match = css.match(/@layer base \{\s*:root \{([\s\S]*?)\n {2}\}\n\}/)
       expect(match, 'index.css :root block').toBeTruthy()
+      // Biome wraps long values (shadow lists) across lines; compare collapsed.
+      const normalize = (value: string) =>
+        value
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/\s+/g, ' ')
+          .replace(/\(\s+/g, '(')
+          .replace(/\s+\)/g, ')')
+          .trim()
       const declared = new Map<string, string>()
-      for (const line of match?.[1].split('\n') ?? []) {
-        const token = line.trim().match(/^(--[\w-]+):\s*([^;]+);/)
-        if (!token) continue
-        declared.set(
-          token[1],
-          token[2]
-            .trim()
-            .replace(/\s+\/\*.*$/, '')
-            .trim()
-        )
+      for (const token of (match?.[1] ?? '').matchAll(/(--[\w-]+):\s*([^;]+);/g)) {
+        declared.set(token[1], normalize(token[2]))
       }
       const mismatches: Array<{ key: string; css: string | undefined; js: string }> = []
       const style = document.documentElement.style
       for (let i = 0; i < style.length; i++) {
         const key = style.item(i)
         if (!key.startsWith('--')) continue
-        const emitted = style.getPropertyValue(key).trim()
+        const emitted = normalize(style.getPropertyValue(key))
         if (declared.get(key) !== emitted) {
           mismatches.push({ key, css: declared.get(key), js: emitted })
         }

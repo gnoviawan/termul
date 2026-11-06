@@ -51,6 +51,7 @@ pub enum McpOAuthError {
     Keychain(String),
     Http(String),
     InvalidConfig(String),
+    UnsafeUrl(crate::acp::safe_url::UnsafeUrl),
 }
 
 impl std::fmt::Display for McpOAuthError {
@@ -66,6 +67,7 @@ impl std::fmt::Display for McpOAuthError {
             Self::Keychain(m) => write!(f, "Keychain: {m}"),
             Self::Http(m) => write!(f, "HTTP: {m}"),
             Self::InvalidConfig(m) => write!(f, "Invalid config: {m}"),
+            Self::UnsafeUrl(refused) => write!(f, "{refused}"),
         }
     }
 }

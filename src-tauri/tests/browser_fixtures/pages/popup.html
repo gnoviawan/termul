@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Popup fixture</title>
+</head>
+<body>
+<main>
+<h1>Popup fixture</h1>
+<button id="open" type="button">Open popup</button>
+<a id="blank" href="/popup-target.html?via=link" target="_blank">Open in new tab</a>
+<p id="result">Result: none</p>
+</main>
+<script>
+document.getElementById('open').addEventListener('click', function () {
+  var w = window.open('/popup-target.html?via=script');
+  document.getElementById('result').textContent = 'Result: window.open returned ' + (w ? 'a window' : 'null');
+});
+</script>
+</body>
+</html>

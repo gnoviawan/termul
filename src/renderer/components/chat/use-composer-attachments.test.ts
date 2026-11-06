@@ -55,3 +55,26 @@ describe('useComposerAttachments size/type guards (spec-bug-report-dialog matrix
     expect(result.current.attachments[0].mimeType).toBe('image/png')
   })
 })
+
+describe('useComposerAttachments send reset', () => {
+  it('keeps an attachment that finished reading while the send was in flight', async () => {
+    const { result } = renderHook(() =>
+      useComposerAttachments({ imageCapable: true, embedCapable: false, disabled: false })
+    )
+    await act(async () => {
+      await result.current.addFiles([fakeImage(64)])
+    })
+    const sent = result.current.attachments
+    await act(async () => {
+      await result.current.addFiles([
+        new File([new Uint8Array(32)], 'late.png', { type: 'image/png' })
+      ])
+    })
+
+    act(() => result.current.clearAttachments(sent))
+    expect(result.current.attachments.map((a) => a.name)).toEqual(['late.png'])
+
+    act(() => result.current.clearAttachments())
+    expect(result.current.attachments).toEqual([])
+  })
+})

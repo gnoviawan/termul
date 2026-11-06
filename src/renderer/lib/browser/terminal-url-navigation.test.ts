@@ -14,11 +14,7 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
-import {
-  openTerminalUrl,
-  openTerminalUrlInDedicatedBrowser,
-  TERMINAL_DEDICATED_BROWSER_TAB_ID
-} from './terminal-url-navigation'
+import { openTerminalUrl, openTerminalUrlInDedicatedBrowser } from './terminal-url-navigation'
 
 describe('terminal-url-navigation', () => {
   beforeEach(() => {
@@ -101,16 +97,14 @@ describe('terminal-url-navigation', () => {
     expect(useBrowserSessionStore.getState().tabs.size).toBe(0)
   })
 
-  it('always creates a dedicated Termul browser tab helper tab id', async () => {
+  it('opens a user tab under a label the host registry accepts', async () => {
     const randomUuidSpy = vi
       .spyOn(globalThis.crypto, 'randomUUID')
       .mockReturnValue('00000000-0000-4000-8000-000000000001')
 
     await openTerminalUrlInDedicatedBrowser('https://example.com')
 
-    const tab = useBrowserSessionStore
-      .getState()
-      .getTab(`${TERMINAL_DEDICATED_BROWSER_TAB_ID}-00000000-0000-4000-8000-000000000001`)
+    const tab = useBrowserSessionStore.getState().getTab('tab-00000000-0000-4000-8000-000000000001')
 
     expect(tab?.url).toBe('https://example.com')
     randomUuidSpy.mockRestore()

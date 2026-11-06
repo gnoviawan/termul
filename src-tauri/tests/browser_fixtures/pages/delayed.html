@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Delayed element</title>
+</head>
+<body>
+<main>
+<h1>Delayed element</h1>
+<p id="status">Waiting for the late element</p>
+</main>
+<script>
+setTimeout(function () {
+  var p = document.createElement('p');
+  p.id = 'late';
+  p.textContent = 'Late element ready';
+  document.querySelector('main').appendChild(p);
+}, 1500);
+</script>
+</body>
+</html>

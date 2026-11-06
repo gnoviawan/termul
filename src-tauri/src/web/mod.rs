@@ -21,10 +21,13 @@ mod agent_reaper_tests;
 pub mod acp_api;
 pub mod assets;
 pub mod auth;
+pub mod automation_api;
+pub mod browser_policy_api;
 pub mod canvas_api;
 pub mod canvas_persistence_api;
 pub mod capabilities;
 pub mod catalog_api;
+pub mod chat_activity;
 pub mod chat_reads;
 pub mod command_ledger;
 pub mod config;
@@ -36,13 +39,17 @@ pub mod git_api;
 pub mod git_diff_stat_api;
 pub mod git_history_api;
 pub mod git_hunk_api;
+pub mod github_api;
+pub mod host_allow;
 pub mod install_api;
 pub mod log_api;
+pub mod mcp_catalog_api;
 #[cfg(test)]
 pub(crate) mod log_capture;
 pub mod mcp_oauth_api;
 pub mod mcp_probe_api;
 pub mod mcp_servers_api;
+pub mod openapi;
 pub mod origin;
 pub mod permissions;
 pub mod presence;
@@ -55,6 +62,8 @@ mod prompt_turn_tests;
 pub mod route_deadline;
 pub mod router;
 pub mod search_api;
+pub mod server_config_file;
+pub mod setup;
 pub mod sink;
 pub mod skills_api;
 pub mod store;
@@ -89,7 +98,7 @@ use crate::web::store::WebStore;
 pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
     let events = TerminalEventHub::standalone();
     let cwd = Arc::new(CwdTracker::new(events.clone()));
-    let git = Arc::new(GitTracker::new(None, events.clone()));
+    let git = Arc::new(GitTracker::new(events.clone()));
     let exit = Arc::new(ExitCodeTracker::new(events.clone()));
     Arc::new(PtyManager::new(events, cwd, git, exit))
 }
@@ -169,6 +178,50 @@ pub async fn serve(
         }),
     );
 
+    // The automation engine, like the reaper, belongs to this process and
+    // not to `serve_router`. Its data lives in the locked state dir.
+    let automation_engine = {
+        let roots_registry = registry.clone();
+        let project_roots: crate::automation::engine::ProjectRoots =
+            Arc::new(move |project_id| roots_registry.canonical_root(project_id));
+        let mcp_servers = crate::automation::mcp::project_file_servers(project_roots.clone());
+        match crate::automation::service::AutomationService::open(
+            &cfg.service_account_state_dir(),
+            acp.clone(),
+            project_roots,
+            mcp_servers,
+        ) {
+            Ok(service) => {
+                let service = Arc::new(service);
+                let engine = service
+                    .engine()
+                    .start(&tokio::runtime::Handle::current());
+                tokio::spawn(crate::web::automation_api::forward_changes(
+                    service.subscribe(),
+                    ws_relay.clone(),
+                ));
+                crate::automation::service::install(service);
+                Some(engine)
+            }
+            Err(e) => {
+                error!("automations unavailable: {e}");
+                None
+            }
+        }
+    };
+
+    let host_allow = if web_auth.is_some() {
+        host_allow::HostAllowList::any()
+    } else {
+        info!("No bearer token: answering only IP literals, localhost and --allowed-origins hosts");
+        host_allow::HostAllowList::from_origins(&cfg.allowed_origins)
+    };
+
+    // gh-1105: the standalone `termul-server` exposes the `/server/config`
+    // reconfigure routes + the `/health` `setupRequired` flag — build the
+    // admin context BEFORE `cfg` is moved into `serve_router`. The desktop
+    // shared-live host calls `serve_router` directly and passes `None`.
+    let server_admin = Some(server_config_file::ServerAdminContext::from_config(&cfg));
     let (_addr, handle) = serve_router(
         acp.clone(),
         pty.clone(),
@@ -179,6 +232,7 @@ pub async fn serve(
         ws_relay,
         registry,
         cfg,
+        host_allow,
         // Figcraft canvases save through their renderer's socket (AD-31), so
         // they flush before the sockets are told to close.
         async {
@@ -192,6 +246,7 @@ pub async fn serve(
         // `--allow-remote-writes` opt-in, not a deployment-mode deny.
         false,
         web_auth,
+        server_admin,
     )
     .await?;
 
@@ -202,6 +257,9 @@ pub async fn serve(
     // task past serve's own cleanup path.
     let _ = reaper_stop_tx.send(());
     let _ = reaper_handle.await;
+    if let Some(engine) = &automation_engine {
+        engine.stop().await;
+    }
 
     // Cleanup: always attempt ALL resource cleanup even if one step fails.
     // PTY cleanup must not be skipped because ACP persistence errored.
@@ -265,6 +323,14 @@ pub async fn serve(
 /// `/terminal/ws`. `None` keeps every endpoint ungated (loopback-only hosts);
 /// the desktop shared-live host passes `Some` whenever it advertises a tunnel
 /// or binds beyond loopback (AD-3).
+///
+/// `host_allow` is the `Host` allow-list the router enforces.
+///
+/// `server_admin` is the standalone server's host-administration context
+/// (gh-1105): `Some` enables the `/server/config` reconfigure routes and the
+/// `/health` `setupRequired` probe. `web::serve` builds it from the merged
+/// config; the desktop shared-live host (`remote/host.rs`) passes `None` so
+/// those routes are never registered.
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_router(
     acp: Arc<AcpManager>,
@@ -276,12 +342,14 @@ pub async fn serve_router(
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<crate::web::project_registry::ProjectRegistry>,
     cfg: ServerConfig,
+    host_allow: host_allow::HostAllowList,
     shutdown: impl Future<Output = ()> + Send + 'static,
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
     store: Arc<WebStore>,
     shared_live_writes_denied: bool,
     web_auth: Option<Arc<auth::WebAuth>>,
+    server_admin: Option<server_config_file::ServerAdminContext>,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     let bind_addr = cfg.bind_addr().ok_or_else(|| {
         format!(
@@ -292,6 +360,7 @@ pub async fn serve_router(
 
     let listener = TcpListener::bind(bind_addr).await?;
     let addr = listener.local_addr()?;
+    let owned_port = crate::host_perimeter::OwnedPort::claim(addr.port());
     info!("ACP web server listening on http://{}", addr);
 
     if !assets::dist_web_ready() {
@@ -362,13 +431,16 @@ pub async fn serve_router(
         format!("http://{}", addr),
         web_auth,
         cfg.allowed_origins.clone(),
+        host_allow,
         connections,
+        server_admin,
     );
 
     // Stale device partitions are swept daily while this host serves; the
     // task stops with it (the desktop shared-live host starts and stops).
     let store_gc = store::spawn_gc_task(store_for_gc, Arc::clone(ws_relay.presence()));
     let handle = tokio::spawn(async move {
+        let _owned_port = owned_port;
         // Patch D: `into_make_service_with_connect_info::<SocketAddr>()` so
         // the fs WRITE routes can extract `ConnectInfo<SocketAddr>` for the
         // localhost-only guard. Read routes and `/ws` are unaffected.

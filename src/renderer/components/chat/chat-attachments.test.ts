@@ -11,7 +11,6 @@ import {
   guessMimeType,
   humanizeAttachmentName,
   isImageMime,
-  isLocalFileUri,
   isOpaqueAttachmentName,
   isTextLike,
   type PendingAttachment,
@@ -237,21 +236,6 @@ describe('fileUrlToPath', () => {
   it('returns non-file URIs unchanged', () => {
     expect(fileUrlToPath('attachment:///note.md')).toBe('attachment:///note.md')
     expect(fileUrlToPath('data:image/png;base64,abc')).toBe('data:image/png;base64,abc')
-  })
-})
-
-describe('isLocalFileUri', () => {
-  it('accepts file://, bare drive, and unix absolute paths', () => {
-    expect(isLocalFileUri('file:///D:/a/b.ts')).toBe(true)
-    expect(isLocalFileUri('D:\\a\\b.ts')).toBe(true)
-    expect(isLocalFileUri('/home/x/a.ts')).toBe(true)
-  })
-
-  it('rejects data:, attachment:, http:, and undefined', () => {
-    expect(isLocalFileUri('data:image/png;base64,abc')).toBe(false)
-    expect(isLocalFileUri('attachment:///note.md')).toBe(false)
-    expect(isLocalFileUri('http://x/y')).toBe(false)
-    expect(isLocalFileUri(undefined)).toBe(false)
   })
 })
 

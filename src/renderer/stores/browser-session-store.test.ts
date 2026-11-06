@@ -1,38 +1,53 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useBrowserSessionStore } from './browser-session-store'
 
+const TAB = 'tab-0b7c2d1e-5f60-4a1b-9c2d-3e4f5a6b7c8d'
+
 describe('browser-session-store', () => {
   beforeEach(() => {
     useBrowserSessionStore.setState({ tabs: new Map() })
   })
 
   it('creates a tab with default values', () => {
-    const tab = useBrowserSessionStore.getState().createTab('tab-1', 'https://example.com')
-    expect(tab.id).toBe('tab-1')
-    expect(tab.url).toBe('https://example.com')
-    expect(tab.loading).toBe(true)
-    expect(tab.canGoBack).toBe(false)
-    expect(tab.canGoForward).toBe(false)
+    const tab = useBrowserSessionStore.getState().createTab(TAB, 'https://example.com')
+    expect(tab).toEqual({
+      id: TAB,
+      url: 'https://example.com',
+      title: '',
+      loading: true,
+      canGoBack: false,
+      canGoForward: false
+    })
   })
 
-  it('ensureTab reuses existing tab and updates URL', () => {
+  it('mirrors the host registry view of a tab it knows', () => {
     const store = useBrowserSessionStore.getState()
-    store.createTab('tab-1', 'https://old.example.com')
-
-    const ensured = store.ensureTab('tab-1', 'https://new.example.com')
-
-    expect(ensured.id).toBe('tab-1')
-    expect(useBrowserSessionStore.getState().getTab('tab-1')?.url).toBe('https://new.example.com')
-    expect(useBrowserSessionStore.getState().tabs.size).toBe(1)
+    store.createTab(TAB, 'https://example.com')
+    store.applyView({
+      tabId: TAB,
+      url: 'https://example.com/clicked',
+      title: 'Clicked',
+      loading: false,
+      agentControlled: true,
+      epoch: 2
+    })
+    expect(useBrowserSessionStore.getState().getTab(TAB)).toMatchObject({
+      url: 'https://example.com/clicked',
+      title: 'Clicked',
+      loading: false,
+      agentControlled: true
+    })
   })
 
-  it('ensureTab creates tab when missing', () => {
-    const store = useBrowserSessionStore.getState()
-
-    const ensured = store.ensureTab('tab-2', 'https://example.com')
-
-    expect(ensured.id).toBe('tab-2')
-    expect(useBrowserSessionStore.getState().getTab('tab-2')?.url).toBe('https://example.com')
-    expect(useBrowserSessionStore.getState().tabs.size).toBe(1)
+  it('ignores a view of a tab this window does not show', () => {
+    useBrowserSessionStore.getState().applyView({
+      tabId: TAB,
+      url: 'https://example.com',
+      title: '',
+      loading: false,
+      agentControlled: false,
+      epoch: 1
+    })
+    expect(useBrowserSessionStore.getState().tabs.size).toBe(0)
   })
 })

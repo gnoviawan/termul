@@ -1,6 +1,7 @@
 import { Archive } from '@/components/icons'
 import { ProjectIcon } from '@/components/ProjectIcon'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import type { Project } from '@/types/project'
@@ -31,7 +32,7 @@ export function ArchivedProjectItem({
         <button
           onClick={onClick}
           onContextMenu={onContextMenu}
-          className="group flex h-8 w-full items-center gap-1.5 rounded-md pl-1 pr-1.5 text-left text-xs opacity-60 transition-[opacity,background-color] duration-150 ease-out hover:bg-foreground/[0.03] hover:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className={`group flex h-8 w-full items-center gap-1.5 rounded-md pl-1 pr-1.5 text-left text-xs opacity-60 transition-[opacity,background-color] duration-150 ease-out hover:bg-foreground/[0.03] hover:opacity-100 focus-visible:ring-inset ${FOCUS_RING_CLASS}`}
           aria-label={`Archived project: ${project.name}`}
           data-testid={`archived-project-item-${project.id}`}
         >

@@ -40,6 +40,17 @@ fn drain_capped_bytes_keeps_the_first_n_bytes_across_chunks() {
 }
 
 #[test]
+fn drain_capped_tail_bytes_keeps_the_last_n_bytes_across_chunks() {
+    let data: Vec<u8> = (0..50_000u32).map(|i| (i % 251) as u8).collect();
+    assert_eq!(
+        drain_all(&data, StdoutCap::TailBytes(20_000)),
+        data[30_000..]
+    );
+    assert_eq!(drain_all(&data, StdoutCap::TailBytes(60_000)), data);
+    assert!(drain_all(&data, StdoutCap::TailBytes(0)).is_empty());
+}
+
+#[test]
 fn empty_tree_matches_the_object_format() {
     assert_eq!(empty_tree_for(40), EMPTY_TREE);
     assert_eq!(empty_tree_for(64).len(), 64);

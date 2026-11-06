@@ -1,6 +1,6 @@
 import type { Editor } from '@tiptap/core'
 import { useReducedMotion } from 'framer-motion'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { toast } from 'sonner'
 import { ClaudeAccountChip } from '@/components/chat/claude-account/ClaudeAccountChip'
 import { ClaudeLimitWarning } from '@/components/chat/claude-account/ClaudeLimitWarning'
@@ -28,6 +28,7 @@ import {
   useAgentTemplateId,
   useSessionUsage
 } from '@/stores/acp-store'
+import type { OptionValues } from '@/stores/acp-store/composer-options'
 import { ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
@@ -36,19 +37,24 @@ import { useCurrentAgentConfigId } from './agent-model-selector/use-agent-switch
 import { ChatContextStrip } from './ChatContextStrip'
 import { ComposerBeamShell } from './ComposerBeamShell'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
-import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
+import { appOwnedTempPaths } from './chat-attachments'
 import {
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
   partitionConfigOptions,
   resolveModelOption
 } from './chat-input-bar-config'
-import { CHAT_COMPACT_LABEL, CHAT_GUTTER_X, useComposerToolbarMode } from './chat-layout'
-import { ChatComposerEditor } from './composer/ChatComposerEditor'
+import { CHAT_GUTTER_X, COMPOSER_CARD_CLASS, useComposerToolbarMode } from './chat-layout'
+import { ChatComposerEditor, focusComposerFromRowPress } from './composer/ChatComposerEditor'
 import { ComposerAddSheet } from './composer/ComposerAddSheet'
 import { ComposerSendButton } from './composer/ComposerSendButton'
 import { blurComposerEditor, insertComposerTrigger } from './composer/insert-composer-trigger'
-import { FileMentionMenu, MENTION_EMPTY_LABEL, MENTION_SEARCHING_LABEL } from './FileMentionMenu'
+import {
+  type SelectionContextInsertRequest,
+  useSelectionContextInsertRequest
+} from './composer/insert-selection-context'
+import { buildComposerSend } from './composer-send-blocks'
+import { FileMentionMenu } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PromptQueuePanel } from './PromptQueuePanel'
@@ -60,6 +66,7 @@ import { useComposerCaretRestore, useComposerMentionSelect } from './use-compose
 import { useComposerDraft } from './use-composer-draft'
 import { useComposerDraftStart } from './use-composer-draft-start'
 import { useComposerMentions } from './use-composer-mentions'
+import { useComposerSendLock } from './use-composer-send-lock'
 
 interface ChatInputBarProps {
   /** Active session — drives selector chips. */
@@ -100,20 +107,23 @@ interface ChatInputBarProps {
   onSetConfig: (configId: string, valueId: string | boolean) => void | Promise<void>
   /** Apply a legacy mode immediately. May return a Promise for chip pending UI. */
   onSetMode: (modeId: string) => void | Promise<void>
-  /** Apply a native ACP model selection immediately. May return a Promise for chip pending UI. */
-  onSetModel: (modelId: string) => void | Promise<void>
+  /**
+   * Apply a model pick, then its option values (`values`: a favorite's
+   * snapshot). May return a Promise for chip pending UI.
+   */
+  onSetModel: (modelId: string, values?: OptionValues) => void | Promise<void>
   /** External text to load into the composer (edit a message / pick a suggestion). */
   seedText?: string
   /** Bump to re-apply `seedText` even if the text is unchanged. */
   seedNonce?: number
+  /** Add a selection context chip at the composer caret (from the message list). */
+  selectionContextInsert?: SelectionContextInsertRequest
   /** Pending prompts shown above the composer. */
   queue?: QueuedPrompt[]
   /** Approval request currently waiting for the user. */
   permission?: PendingPermission | null
   onRemoveQueued?: (queueId: string) => void
   onSendQueuedNow?: (queueId: string) => void
-  /** When true, removes top padding so the changed-files panel sits flush behind the chatbox. */
-  compactTop?: boolean
   /**
    * Whether the host chat panel's tab is the pane's active tab. While false,
    * the per-flush `useAcpMessages` re-render is frozen (same render gate as
@@ -151,11 +161,11 @@ export function ChatInputBar({
   onSetModel,
   seedText,
   seedNonce,
+  selectionContextInsert,
   queue = [],
   permission,
   onRemoveQueued,
   onSendQueuedNow,
-  compactTop = false,
   isVisible = true,
   onDraftStart
 }: ChatInputBarProps): React.JSX.Element {
@@ -175,6 +185,20 @@ export function ChatInputBar({
   )
   const { skills: availableSkills } = useAgentSkills(projectRoot ?? session.cwd)
   const sessionUsage = useSessionUsage(session.id)
+  // Compact shows only when the agent lists `/compact`; it sends the command as a prompt.
+  const hasCompactCommand = commands.some((command) => command.name === 'compact')
+  const onCompact = useMemo(
+    () => (hasCompactCommand ? () => onSend('/compact') : undefined),
+    [hasCompactCommand, onSend]
+  )
+  const compactSignals = useMemo(
+    () => ({
+      connected: session.status === 'active',
+      activeTurn: session.activeTurn,
+      compaction: session.opencodeNotice?.compaction ?? null
+    }),
+    [session.status, session.activeTurn, session.opencodeNotice?.compaction]
+  )
   // Render gate (multi-project perf): the live subscription stays, but the
   // derived value freezes while the host panel is hidden (the composer only
   // reads `messages` for the context-usage ring's bootstrap filter).
@@ -192,8 +216,11 @@ export function ChatInputBar({
   const modeAgentName = useAcpStore(
     (s) => s.agentConfigs?.find((c) => c.id === (armedConfigId ?? currentAgentConfigId))?.name
   )
-  const agentTemplateId = useAgentTemplateId(session.agentId, armedConfigId)
-  const agentIcon = useAgentIcon(session.agentId, armedConfigId)
+  // A launch placeholder has no agent yet, so resolve by config id: the armed
+  // target, else the chat's own config (the launching one before spawn).
+  const glyphConfigId = armedConfigId ?? currentAgentConfigId ?? undefined
+  const agentTemplateId = useAgentTemplateId(session.agentId, glyphConfigId)
+  const agentIcon = useAgentIcon(session.agentId, glyphConfigId)
   // Prefer project/session-scoped MCP context. Older/local sessions without a
   // recorded count retain the existing global-registry fallback.
   const globalMcpCount = useAcpStore((s) => s.mcpServers.length)
@@ -214,7 +241,7 @@ export function ChatInputBar({
     sessionId: session.id,
     seedNonce
   })
-  const [sending, setSending] = useState(false)
+  const { locked: sending, hold: holdComposer } = useComposerSendLock()
   const reduced = useReducedMotion() ?? false
   // Story 5.3: OSK awareness on mobile web. On Tauri desktop, the hook returns
   // a no-OSK default (no `visualViewport` thrash — desktop non-regression).
@@ -232,10 +259,10 @@ export function ChatInputBar({
     handlePaste,
     removeAttachment,
     clearAttachments,
-    appOwnedTempPaths,
     canPick,
+    canPickImages,
     canDropPaste
-  } = useComposerAttachments({ imageCapable, embedCapable, disabled })
+  } = useComposerAttachments({ imageCapable, embedCapable, disabled: disabled || sending })
   // Drag feedback for the attachment drop zone (shared with AgentLauncher):
   // depth-counted dragenter/dragleave pairs; the overlay stays local.
   const { dragActive, dropProps } = useAttachmentDropZone({ canDropPaste, addFiles })
@@ -251,6 +278,8 @@ export function ChatInputBar({
   )
   const mentions = useComposerMentions({
     rootPath: session.cwd,
+    projectId: session.projectId,
+    currentSessionId: session.id,
     disabled,
     recents: mentionRecents,
     onStageFileRef: (m) => {
@@ -272,9 +301,7 @@ export function ChatInputBar({
   const updateMentionsStable = useCallback((v: string, c: number) => {
     mentionsRef.current.update(v, c)
   }, [])
-  const mentionSections = mentions.sections
   const mentionMenuRef = mentions.menuRef
-  const emptyLabel = mentions.loading ? MENTION_SEARCHING_LABEL : MENTION_EMPTY_LABEL
   const resetMentions = mentions.reset
   const onMentionSelect = useComposerMentionSelect({
     value,
@@ -291,7 +318,8 @@ export function ChatInputBar({
     skillPathsRef,
     handleSelect,
     onSlashOrMentionKeyDown,
-    buildPromptParts
+    buildPromptParts,
+    conversationContexts
   } = useChatComposer({
     value,
     setValue,
@@ -310,8 +338,8 @@ export function ChatInputBar({
     mentions,
     scheduleRestoreCaret
   })
-  const slashOpen = composerSlashOpen
-  const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
+  const slashOpen = composerSlashOpen && !sending
+  const mentionMenuOpen = mentions.menuOpen && !disabled && !sending && !slashOpen
 
   const { handleValueChange, handleComposerPaste } = useComposerDraftStart({
     draftEmpty: value.length === 0 && attachments.length === 0,
@@ -328,112 +356,45 @@ export function ChatInputBar({
     const hasText = value.trim().length > 0
     if ((!hasText && !hasAttachments) || disabled || sending) return
 
-    setSending(true)
-    try {
-      // Build the wire/display text parts from the current value, resolved
-      // skill paths, and inline command token. Throws `Skill '<name>' is
-      // missing a path` when a selected skill has no resolvable path (Block If)
-      // — caught below.
-      const {
-        hasSkills,
-        hasCommand,
-        wireWithCommand,
-        displayWithCommand,
-        wireTrimmed,
-        displayTrimmed,
-        fileBlocks
-      } = buildPromptParts()
-      const hasFileRefs = fileBlocks.length > 0
-      if (!wireTrimmed && !hasAttachments && !hasFileRefs) return
-
-      if (hasAttachments) {
-        const wireBlocks: ContentBlock[] = []
-        if (wireTrimmed) wireBlocks.push({ type: 'text', text: wireWithCommand })
-        for (const a of attachments) wireBlocks.push(attachmentToBlock(a))
-        wireBlocks.push(...fileBlocks)
-        const wire = dedupeAttachmentBlocks(wireBlocks)
-        // Split display from wire when skills, file-mention pills, OR a
-        // command token are present: skills carry framing tokens, file
-        // mentions carry inline pill tokens, commands carry the
-        // `\uE004<name>\uE005` token — all need the display to keep the raw
-        // token text so the timeline renders inline chips. Without either,
-        // display == wire.
-        if (hasSkills || hasFileRefs || hasCommand) {
-          const displayBlocks: ContentBlock[] = []
-          if (displayTrimmed) displayBlocks.push({ type: 'text', text: displayWithCommand })
-          for (const a of attachments) displayBlocks.push(attachmentToBlock(a))
-          const display = dedupeAttachmentBlocks(displayBlocks)
-          onSendBlocks(wire, display)
-        } else {
-          onSendBlocks(wire)
-        }
-      } else if (hasSkills) {
-        // Skills (tokens) present: split display (tokens) from wire (framing).
-        // File-mention `resource_link` blocks append to the wire only — the
-        // display keeps the raw token text so the timeline renders inline
-        // file pills.
-        const wireBlocks: ContentBlock[] = wireTrimmed
-          ? [{ type: 'text', text: wireWithCommand }]
-          : []
-        wireBlocks.push(...fileBlocks)
-        onSendBlocks(
-          dedupeAttachmentBlocks(wireBlocks),
-          displayTrimmed ? [{ type: 'text', text: displayWithCommand }] : []
-        )
-      } else if (hasFileRefs) {
-        // File-mention pills present (no skills, no attachments): the wire
-        // carries the text (tokens → `(display)`) + `resource_link` blocks for
-        // each unique file. Display keeps the token text so the timeline
-        // renders inline file pills.
-        const wireBlocks: ContentBlock[] = wireTrimmed
-          ? [{ type: 'text', text: wireWithCommand }]
-          : []
-        wireBlocks.push(...fileBlocks)
-        onSendBlocks(
-          dedupeAttachmentBlocks(wireBlocks),
-          displayTrimmed ? [{ type: 'text', text: displayWithCommand }] : []
-        )
-      } else if (hasCommand) {
-        // Command pill present (no skills, files, or attachments): the wire
-        // keeps `/<name>` where the user typed it. The display keeps the raw
-        // token in that same place so the timeline renders the command chip.
-        onSendBlocks(
-          wireTrimmed ? [{ type: 'text', text: wireTrimmed }] : [],
-          displayTrimmed ? [{ type: 'text', text: displayTrimmed }] : []
-        )
-      } else {
-        // Plain text-only path: display == wire (no separate display blocks).
-        onSend(wireTrimmed)
-      }
+    await holdComposer(async () => {
+      const contexts = conversationContexts()
+      const send = buildComposerSend(
+        buildPromptParts(contexts ? await contexts : undefined),
+        attachments
+      )
+      if (!send) return
+      if (send.kind === 'text') onSend(send.text)
+      else if (send.display) onSendBlocks(send.wire, send.display)
+      else onSendBlocks(send.wire)
       // Register app-owned temp files (pasted screenshots) with the session so
       // they are deleted when the session closes; clearAttachments drops state
       // without deleting because the agent reads them by path during the turn.
-      registerSessionTempFiles(session.id, appOwnedTempPaths())
-      setValue('')
+      registerSessionTempFiles(session.id, appOwnedTempPaths(attachments))
+      // A remap to another chat mid-await hydrates that chat's draft; keep it.
+      setValue((current) => (current === value ? '' : current))
       skillPathsRef.current = {}
-      clearAttachments()
+      clearAttachments(attachments)
       resetMentions()
-    } catch (err) {
+    }).catch((err: unknown) => {
       // Skill path resolution throws a specific user-facing message — keep it.
       const msg = err instanceof Error ? err.message : ''
       toast.error(msg.includes('missing a path') ? msg : 'Could not send your message. Try again.')
-    } finally {
-      setSending(false)
-    }
+    })
   }, [
     value,
     attachments,
     disabled,
     sending,
     clearAttachments,
-    appOwnedTempPaths,
     onSend,
     onSendBlocks,
     resetMentions,
     session.id,
     buildPromptParts,
+    conversationContexts,
     skillPathsRef,
-    setValue
+    setValue,
+    holdComposer
   ])
 
   const handleKeyDown = useCallback(
@@ -484,10 +445,14 @@ export function ChatInputBar({
     // throws against a destroyed editor.
     scheduleRestoreCaret(next.length)
   }, [seedNonce, scheduleRestoreCaret, updateMentionsStable, setValue])
+  useSelectionContextInsertRequest(editorRef, selectionContextInsert, disabled)
 
   // Story 5.3 (T2.3): on mobile web, scroll the editor into view once per
   // OSK-open window so iOS Safari doesn't leave the input under the keyboard.
   // rAF-deferred to let layout settle; fires once per OSK-open window.
+  // `nearest` scrolls only as far as needed to show the editor (iOS) and not
+  // at all when it already shows above the keyboard (Android resizes the
+  // layout onto it); `center` slid the composer up and left it there.
   useEffect(() => {
     const wasOpen = prevOskOpenRef.current
     prevOskOpenRef.current = osk.isOskOpen
@@ -495,7 +460,7 @@ export function ChatInputBar({
       const ed = editorRef.current
       const el = ed?.view.dom ?? null
       if (el) {
-        requestAnimationFrame(() => el.scrollIntoView({ block: 'center' }))
+        requestAnimationFrame(() => el.scrollIntoView({ block: 'nearest' }))
       }
     }
   }, [osk.isOskOpen, isMobileShell])
@@ -506,17 +471,13 @@ export function ChatInputBar({
   // gates flow from the composer's props. The launcher places its agent
   // picker left-most in the equivalent cluster — mirror that placement.
   // Narrow-mode row 1 gates on a CHEAP session-derived boolean (the live
-  // agent id OR the session-index agentConfigId), NOT the picker's presence
-  // callback: `agentSwitchChip` renders inside row 1, so keying row 1 on a
-  // value only the mounted picker can set true is circular — a
-  // mode-less/model-less session would never mount it. The index fallback
-  // covers the reopen window where openHistorySession installs the restored
-  // session (agentConfigId present, runtime agentId not yet) — the picker
-  // resolves the indexed config, so the toolbar must mount then too.
-  const indexedAgentConfigId = useAcpStore(
-    (s) => s.sessionIndex?.find((e) => e.id === session.id)?.agentConfigId
-  )
-  const agentControlMounted = Boolean(session.agentId) || Boolean(indexedAgentConfigId)
+  // agent id OR the chat's config id), NOT the picker's presence callback:
+  // `agentSwitchChip` renders inside row 1, so keying row 1 on a value only
+  // the mounted picker can set true is circular — a mode-less/model-less
+  // session would never mount it. The config id covers a launch placeholder
+  // before its agent spawns and the reopen window where openHistorySession
+  // installs the restored session before its agent reconnects.
+  const agentControlMounted = Boolean(session.agentId) || Boolean(currentAgentConfigId)
   const selectorMounted =
     agentControlMounted ||
     Boolean(modelOption) ||
@@ -541,10 +502,18 @@ export function ChatInputBar({
       agentIcon={agentIcon}
       onSetConfig={onSetConfig}
       onSetModel={onSetModel}
+      phone={
+        isMobileShell
+          ? {
+              modes: session.modes,
+              onSetMode,
+              compact: { onCompact, signals: compactSignals }
+            }
+          : undefined
+      }
     />
   ) : null
 
-  // Mobile one-row toolbar: the mode label goes icon-only on a narrow pane.
   const agentModeChip = (
     <ModeChip
       session={session}
@@ -552,8 +521,6 @@ export function ChatInputBar({
       onSelect={onSetMode}
       label="Agent"
       agentName={modeAgentName}
-      className={isMobileShell ? 'shrink-0' : undefined}
-      labelClassName={isMobileShell ? CHAT_COMPACT_LABEL : undefined}
     />
   )
   // One set of MCP props for the desktop badge popover and the mobile + sheet.
@@ -580,11 +547,12 @@ export function ChatInputBar({
   const composerAddHandle = useMemo(
     () => ({
       canPick,
+      canPickImages,
       pickFiles,
       insertTrigger: (trigger: '@' | '/') => insertComposerTrigger(editorRef.current, trigger),
       blurEditor: () => blurComposerEditor(editorRef.current)
     }),
-    [canPick, pickFiles]
+    [canPick, canPickImages, pickFiles]
   )
   const sendButton = (
     <ComposerSendButton
@@ -601,10 +569,10 @@ export function ChatInputBar({
       ref={rootRef}
       className={cn(
         CHAT_GUTTER_X,
-        compactTop ? 'pb-4 pt-0' : 'pb-6 pt-3',
+        'pb-6 pt-3',
         // The slash/mention menu overflows upward into the message list; lift
         // it above the list's jump-to-latest button (z-20).
-        slashOpen || mentionMenuOpen ? 'relative z-30' : compactTop && 'relative z-10'
+        (slashOpen || mentionMenuOpen) && 'relative z-30'
       )}
     >
       <div className="relative mx-auto w-full max-w-3xl">
@@ -635,9 +603,9 @@ export function ChatInputBar({
         {mentionMenuOpen && (
           <FileMentionMenu
             ref={mentionMenuRef}
-            sections={mentionSections}
+            menu={mentions.view}
             onSelect={onMentionSelect}
-            emptyLabel={emptyLabel}
+            onBack={mentions.back}
             inputRef={composerInputRef}
           />
         )}
@@ -649,8 +617,8 @@ export function ChatInputBar({
             // the editor (and the OSK), after an approval prompt resolves.
             tabIndex={isMobileShell ? -1 : undefined}
             className={cn(
-              'relative rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
-              'focus-within:border-border focus-within:ring-1 focus-within:ring-inset focus-within:ring-foreground/20',
+              'relative',
+              COMPOSER_CARD_CLASS,
               dragActive && 'border-primary/70',
               isMobileShell && 'outline-none'
             )}
@@ -671,9 +639,14 @@ export function ChatInputBar({
             <AttachmentPreviewGroup
               attachments={attachments}
               onRemove={removeAttachment}
-              removeDisabled={disabled}
+              removeDisabled={disabled || sending}
             />
-            <div className="flex items-start gap-1 px-4 pb-1.5 pt-3.5">
+            {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only focus aid for the padding; the editor is the accessible target */}
+            <div
+              data-composer-row
+              className="flex items-start gap-1 px-4 pb-1.5 pt-3.5"
+              onMouseDown={(event) => focusComposerFromRowPress(event, editorRef.current)}
+            >
               {/* Tiptap rich-text editor — the skill "pill" is a real inline
                   DOM node (a Tiptap `NodeView`), so the caret sits flush
                   against the pill's right edge by construction. No transparent
@@ -700,7 +673,7 @@ export function ChatInputBar({
                       ? 'Composer unavailable'
                       : hasCommandToken
                         ? 'Add a message (optional)…'
-                        : 'Ask anything… (/ for commands, @ for files)'
+                        : 'Ask anything… (/ for commands, @ for files and chats)'
                   }
                 />
               </SkillFilesProvider>
@@ -711,6 +684,8 @@ export function ChatInputBar({
                   usage={sessionUsage}
                   messages={messages}
                   className="-mr-2 -my-[3px]"
+                  onCompact={onCompact}
+                  compactSignals={compactSignals}
                 />
               )}
             </div>
@@ -725,14 +700,17 @@ export function ChatInputBar({
                 >
                   <ComposerAddSheet
                     handle={composerAddHandle}
-                    disabled={disabled}
+                    disabled={disabled || sending}
                     {...mcpListProps}
                   />
                   {modelSelector}
-                  {agentModeChip}
                   <div className="flex-1" />
-                  <ClaudeAccountChip sessionId={session.id} compact />
-                  <ContextUsageIndicator usage={sessionUsage} messages={messages} />
+                  <ContextUsageIndicator
+                    usage={sessionUsage}
+                    messages={messages}
+                    onCompact={onCompact}
+                    compactSignals={compactSignals}
+                  />
                   {sendButton}
                 </div>
               ) : (

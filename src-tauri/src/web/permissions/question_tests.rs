@@ -32,12 +32,13 @@ fn question_first_response_wins_second_is_rejected_already_resolved() {
     let rdz = test_question_rendezvous();
     let client = ClientId::new();
     block_on(async {
-        rdz.register(
-            "q-1".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a", "plan-b"]),
-        );
+        rdz.register_event(&json!({
+            "agentId": "a1",
+            "sessionId": "sess-1",
+            "questionId": "q-1",
+            "question": "Which plan?",
+            "options": question_options_value(&["plan-a", "plan-b"]),
+        }));
         let first = rdz
             .try_respond(client, "q-1", Some(&["plan-a".to_string()]))
             .await;
@@ -61,12 +62,13 @@ fn question_toctou_invalid_value_is_rejected() {
     let rdz = test_question_rendezvous();
     let client = ClientId::new();
     block_on(async {
-        rdz.register(
-            "q-toctou".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a", "plan-b"]),
-        );
+        rdz.register_event(&json!({
+            "agentId": "a1",
+            "sessionId": "sess-1",
+            "questionId": "q-toctou",
+            "question": "Which plan?",
+            "options": question_options_value(&["plan-a", "plan-b"]),
+        }));
         let outcome = rdz
             .try_respond(client, "q-toctou", Some(&["escalate".to_string()]))
             .await;
@@ -90,12 +92,13 @@ fn question_cardinality_single_rejects_multiple_values() {
     let rdz = test_question_rendezvous();
     let client = ClientId::new();
     block_on(async {
-        rdz.register(
-            "q-single".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a", "plan-b"]),
-        );
+        rdz.register_event(&json!({
+            "agentId": "a1",
+            "sessionId": "sess-1",
+            "questionId": "q-single",
+            "question": "Which plan?",
+            "options": question_options_value(&["plan-a", "plan-b"]),
+        }));
         let rejected = rdz
             .try_respond(
                 client,
@@ -105,15 +108,16 @@ fn question_cardinality_single_rejects_multiple_values() {
             .await;
         assert_eq!(rejected, Err(QuestionRespondError::InvalidOption));
         // multi-select accepts several valid values
-        rdz.register(
-            "q-multi".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            serde_json::json!([
+        rdz.register_event(&json!({
+            "agentId": "a1",
+            "sessionId": "sess-1",
+            "questionId": "q-multi",
+            "question": "Which plan?",
+            "options": [
                 { "value": "a", "label": "A", "cardinality": "multi" },
                 { "value": "b", "label": "B", "cardinality": "multi" },
-            ]),
-        );
+            ],
+        }));
         let ok = rdz
             .try_respond(client, "q-multi", Some(&["a".to_string(), "b".to_string()]))
             .await;
@@ -128,12 +132,13 @@ fn question_empty_values_array_is_rejected() {
     let rdz = test_question_rendezvous();
     let client = ClientId::new();
     block_on(async {
-        rdz.register(
-            "q-empty".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a"]),
-        );
+        rdz.register_event(&json!({
+            "agentId": "a1",
+            "sessionId": "sess-1",
+            "questionId": "q-empty",
+            "question": "Which plan?",
+            "options": question_options_value(&["plan-a"]),
+        }));
         let rejected = rdz.try_respond(client, "q-empty", Some(&[])).await;
         assert_eq!(rejected, Err(QuestionRespondError::InvalidOption));
         // Ticket stays outstanding; a real answer still works.
@@ -151,12 +156,13 @@ fn question_cancel_none_resolves_and_evicts() {
     let rdz = test_question_rendezvous();
     let client = ClientId::new();
     block_on(async {
-        rdz.register(
-            "q-cancel".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a"]),
-        );
+        rdz.register_event(&json!({
+            "agentId": "a1",
+            "sessionId": "sess-1",
+            "questionId": "q-cancel",
+            "question": "Which plan?",
+            "options": question_options_value(&["plan-a"]),
+        }));
         let outcome = rdz.try_respond(client, "q-cancel", None).await;
         assert_eq!(outcome, Ok(QuestionRespondOutcome::Resolved));
         assert!(!rdz.is_outstanding("q-cancel"));
@@ -172,12 +178,13 @@ fn question_same_client_double_respond_is_rejected() {
     let rdz = test_question_rendezvous();
     let client = ClientId::new();
     block_on(async {
-        rdz.register(
-            "q-dup".to_string(),
-            AgentId("a1".to_string()),
-            "sess-dup".to_string(),
-            question_options_value(&["plan-a"]),
-        );
+        rdz.register_event(&json!({
+            "agentId": "a1",
+            "sessionId": "sess-dup",
+            "questionId": "q-dup",
+            "question": "Which plan?",
+            "options": question_options_value(&["plan-a"]),
+        }));
         let answer = vec!["plan-a".to_string()];
         let (a, b) = tokio::join!(
             rdz.try_respond(client, "q-dup", Some(&answer)),
@@ -200,12 +207,13 @@ fn agent_reported_unknown_question_leaves_a_tombstone() {
         acp.install_test_agent_without_responders(AgentId("a1".to_string()));
 
         let questions = Arc::new(QuestionRendezvous::new(Arc::clone(&acp)));
-        questions.register(
-            "q-gone".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a"]),
-        );
+        questions.register_event(&json!({
+            "agentId": "a1",
+            "sessionId": "sess-1",
+            "questionId": "q-gone",
+            "question": "Which plan?",
+            "options": question_options_value(&["plan-a"]),
+        }));
         let answer = vec!["plan-a".to_string()];
         assert_eq!(
             questions.try_respond(ClientId::new(), "q-gone", Some(&answer)).await,
@@ -225,24 +233,25 @@ fn question_free_text_is_accepted_only_when_the_agent_offered_it() {
     let rdz = test_question_rendezvous();
     let client = ClientId::new();
     block_on(async {
-        rdz.register(
-            "q-closed".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["Yes", "No"]),
-        );
+        rdz.register_event(&json!({
+            "agentId": "a1",
+            "sessionId": "sess-1",
+            "questionId": "q-closed",
+            "question": "Which plan?",
+            "options": question_options_value(&["Yes", "No"]),
+        }));
         let rejected = rdz
             .try_respond(client, "q-closed", Some(&["custom".to_string()]))
             .await;
         assert_eq!(rejected, Err(QuestionRespondError::InvalidOption));
 
-        rdz.register(
-            "q-open".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["Yes", "No"]),
-        );
-        rdz.allow_free_text("q-open");
+        rdz.register_event(&json!({
+            "agentId": "a1",
+            "sessionId": "sess-1",
+            "questionId": "q-open",
+            "options": question_options_value(&["Yes", "No"]),
+            "allowFreeText": true,
+        }));
         let accepted = rdz
             .try_respond(client, "q-open", Some(&["custom answer".to_string()]))
             .await;
@@ -257,13 +266,13 @@ fn question_free_text_allows_one_value_and_rejects_blank_text() {
     let rdz = test_question_rendezvous();
     let client = ClientId::new();
     block_on(async {
-        rdz.register(
-            "q-multi".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["Yes", "No"]),
-        );
-        rdz.allow_free_text("q-multi");
+        rdz.register_event(&json!({
+            "agentId": "a1",
+            "sessionId": "sess-1",
+            "questionId": "q-multi",
+            "options": question_options_value(&["Yes", "No"]),
+            "allowFreeText": true,
+        }));
         let two_free = rdz
             .try_respond(
                 client,
@@ -282,4 +291,44 @@ fn question_free_text_allows_one_value_and_rejects_blank_text() {
             .await;
         assert_eq!(valid, Ok(QuestionRespondOutcome::Resolved));
     });
+}
+
+/// A reconnecting client renders pending questions from these payloads, so
+/// they are the published payloads verbatim, oldest first, and an answered
+/// question is gone.
+#[test]
+fn pending_questions_list_their_published_payloads_until_answered() {
+    let rdz = test_question_rendezvous();
+    let request = |question_id: &str| {
+        json!({
+            "agentId": "a1",
+            "sessionId": "sess-1",
+            "questionId": question_id,
+            "question": "Which plan?",
+            "options": question_options_value(&["plan-a", "plan-b"]),
+            "allowFreeText": true,
+            "multiSelect": false,
+        })
+    };
+    for question_id in ["q-3", "q-1", "q-2"] {
+        rdz.register_event(&request(question_id));
+    }
+    rdz.register_event(&json!({
+        "agentId": "a1",
+        "sessionId": "sess-other",
+        "questionId": "q-elsewhere",
+        "options": [],
+    }));
+    assert_eq!(
+        rdz.pending_requests("sess-1"),
+        vec![request("q-3"), request("q-1"), request("q-2")]
+    );
+
+    let answered = block_on(rdz.try_respond(ClientId::new(), "q-1", None));
+    assert_eq!(answered, Ok(QuestionRespondOutcome::Resolved));
+    assert_eq!(
+        rdz.pending_requests("sess-1"),
+        vec![request("q-3"), request("q-2")]
+    );
+    assert!(rdz.pending_requests("sess-unknown").is_empty());
 }

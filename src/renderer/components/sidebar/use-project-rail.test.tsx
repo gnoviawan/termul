@@ -9,8 +9,7 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   signals: vi.fn(),
   activity: new Set<string>(),
-  errors: new Set<string>(),
-  agentChats: [] as string[]
+  errors: new Set<string>()
 }))
 
 vi.mock('react-router-dom', async () => ({
@@ -23,9 +22,6 @@ vi.mock('@/hooks/use-agent-chat-attention', () => ({
 vi.mock('@/stores/terminal-store', () => ({
   useProjectsWithActivity: () => [...mocks.activity],
   useProjectsWithErrors: () => mocks.errors
-}))
-vi.mock('@/stores/acp-store', () => ({
-  useProjectsWithActiveAgentChat: () => mocks.agentChats
 }))
 
 const addAgentChatTab = vi.fn()
@@ -42,10 +38,11 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.activity = new Set()
   mocks.errors = new Set()
-  mocks.agentChats = []
   mocks.signals.mockReturnValue({
     attentionCounts: { p2: 2 },
     firstNeedsYouSessionId: { p1: 's1', p2: 's2' },
+    needsYouChats: new Map(),
+    workingProjectIds: new Set(['p4']),
     runningProjectIds: new Set(['p3'])
   })
   useWorkspaceStore.setState({ addAgentChatTab } as never)
@@ -65,6 +62,7 @@ describe('useProjectRail', () => {
     expect(status('p1')).toEqual({ live: 'activity', attentionCount: 0, crashed: false })
     expect(status('p2')).toEqual({ live: null, attentionCount: 2, crashed: true })
     expect(status('p3')).toEqual({ live: 'idle-agent', attentionCount: 0, crashed: false })
+    expect(status('p4')).toEqual({ live: 'activity', attentionCount: 0, crashed: false })
   })
 
   it('opens a project: selects it and goes to the workspace', () => {

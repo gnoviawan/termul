@@ -15,7 +15,7 @@ use crate::web::ws::AppState;
 use crate::worktree::{GitignoreDir, SymlinkResult, WorktreeManager};
 
 /// `POST /worktree/{create,ensure}-symlinks { projectPath, worktreePath, symlinkDirs }` body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeSymlinksRequest {
     pub project_path: String,

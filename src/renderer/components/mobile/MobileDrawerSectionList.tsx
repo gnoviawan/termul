@@ -1,6 +1,16 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
-import { Edit2, FileDiff, GitBranch, Globe, Pencil, TerminalSquare, X } from '@/components/icons'
+import { githubItemTabLabel } from '@/components/github/github-status'
+import {
+  Edit2,
+  FileDiff,
+  GitBranch,
+  Github,
+  Globe,
+  Pencil,
+  TerminalSquare,
+  X
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { sectionForTab } from '@/hooks/use-mobile-section'
@@ -18,6 +28,9 @@ import type { WorkspaceTab } from '@/stores/workspace-store'
 
 /** Inline row actions (close, rename) hold the 44px touch floor. */
 const INLINE_ACTION_BUTTON = 'size-11 shrink-0 rounded-full'
+
+/** An empty section's message, centred in the drawer's free height. */
+const EMPTY_MESSAGE_CLASS = 'my-auto px-4 py-6 text-center text-sm text-muted-foreground'
 
 /**
  * Claude-style row select button: borderless 16px label, the active row a
@@ -68,10 +81,13 @@ function findByDataValue(
   return Array.from(matches).find((element) => element.getAttribute(attribute) === value) ?? null
 }
 
-/** Every tab the Editors list shows (a stray canvas tab included, for exhaustiveness). */
+/**
+ * Every tab the Editors list shows (a stray canvas tab included, for
+ * exhaustiveness), and the open GitHub items the GitHub section shows.
+ */
 type EditorKindTab = Extract<
   WorkspaceTab,
-  { type: 'editor' | 'git' | 'diff' | 'commit-diff' | 'browser' | 'canvas' }
+  { type: 'editor' | 'git' | 'diff' | 'commit-diff' | 'browser' | 'canvas' | 'github-item' }
 >
 
 /** An Editors row's label (also the name of its close button). */
@@ -92,6 +108,8 @@ function editorTabLabel(
       return browserLabel(tab.browserTabId)
     case 'canvas':
       return basename(tab.docPath)
+    case 'github-item':
+      return githubItemTabLabel(tab.number, tab.title)
     default: {
       // Exhaustiveness guard (as in WorkspaceTabBar): a new tab kind fails to
       // compile here instead of rendering a blank row.
@@ -102,13 +120,13 @@ function editorTabLabel(
   }
 }
 
-function isEditorKindTab(tab: WorkspaceTab): tab is EditorKindTab {
-  return sectionForTab(tab) === 'editors'
+function isListedTab(tab: WorkspaceTab, section: 'editors' | 'github'): tab is EditorKindTab {
+  return sectionForTab(tab) === section
 }
 
 interface MobileDrawerSectionListProps {
   /** Which section's open tabs to list. */
-  section: 'terminals' | 'editors'
+  section: 'terminals' | 'editors' | 'github'
   /** Id of the drawer's section heading: labels the group, and the focus fallback. */
   headingId: string
   /** The active pane's active tab id: that row is `aria-current="page"`. */
@@ -128,10 +146,11 @@ interface MobileDrawerSectionListProps {
 }
 
 /**
- * The drawer's contextual list for the Terminals and Editors sections: the
- * open tabs of that kind, each with a guarded close (terminals also rename
- * inline). On mobile the WorkspaceTabBar is hidden, so these rows are how a
- * tab is reached and closed.
+ * The drawer's contextual list for the Terminals, Editors and GitHub
+ * sections: the open tabs of that kind, each with a guarded close (terminals
+ * also rename inline). On mobile the WorkspaceTabBar is hidden, so these rows
+ * are how a tab is reached and closed, including a GitHub item the list's
+ * filter no longer shows.
  */
 export function MobileDrawerSectionList({
   section,
@@ -142,7 +161,7 @@ export function MobileDrawerSectionList({
   onRenameTerminal,
   onCloseEditorTab,
   onConfirmOpened
-}: MobileDrawerSectionListProps): React.JSX.Element {
+}: MobileDrawerSectionListProps): React.JSX.Element | null {
   const rootRef = useRef<HTMLDivElement>(null)
   const pendingFocusRef = useRef<PendingFocus | null>(null)
   // Set when a rename ends; the input's own blur (fired when it unmounts) must
@@ -160,8 +179,13 @@ export function MobileDrawerSectionList({
     [paneTabs]
   )
   const editorTabs = useMemo(
-    () => paneTabs.flatMap(({ tab, paneId }) => (isEditorKindTab(tab) ? [{ tab, paneId }] : [])),
-    [paneTabs]
+    () =>
+      section === 'terminals'
+        ? []
+        : paneTabs.flatMap(({ tab, paneId }) =>
+            isListedTab(tab, section) ? [{ tab, paneId }] : []
+          ),
+    [paneTabs, section]
   )
 
   const terminals = useTerminalStore((s) => s.terminals)
@@ -274,9 +298,9 @@ export function MobileDrawerSectionList({
 
   if (section === 'terminals') {
     return (
-      <div ref={rootRef} tabIndex={-1} className="px-2 pb-2 outline-none">
+      <div ref={rootRef} tabIndex={-1} className="flex flex-1 flex-col px-2 pb-2 outline-none">
         {terminalTabs.length === 0 ? (
-          <p className="px-4 py-2 text-sm text-muted-foreground">No open terminals</p>
+          <p className={EMPTY_MESSAGE_CLASS}>No open terminals</p>
         ) : (
           <div role="group" aria-labelledby={headingId} className="flex flex-col gap-0.5">
             {terminalTabs.map(({ tab, paneId }) => {
@@ -354,10 +378,18 @@ export function MobileDrawerSectionList({
     )
   }
 
+  // The GitHub section's list follows: its open tabs are rows only when there are some.
+  if (section === 'github' && editorTabs.length === 0) return null
+
   return (
-    <div ref={rootRef} tabIndex={-1} className="px-2 pb-2 outline-none">
+    <div
+      ref={rootRef}
+      tabIndex={-1}
+      // On GitHub these rows sit above the list: they keep their own height.
+      className={cn('flex flex-col px-2 pb-2 outline-none', section !== 'github' && 'flex-1')}
+    >
       {editorTabs.length === 0 ? (
-        <p className="px-4 py-2 text-sm text-muted-foreground">No open editors</p>
+        <p className={EMPTY_MESSAGE_CLASS}>No open editors</p>
       ) : (
         <div role="group" aria-labelledby={headingId} className="flex flex-col gap-0.5">
           {editorTabs.map(({ tab, paneId }) => {
@@ -389,6 +421,7 @@ export function MobileDrawerSectionList({
                   {(tab.type === 'diff' || tab.type === 'commit-diff') && <FileDiff size={16} />}
                   {tab.type === 'browser' && <Globe size={16} />}
                   {tab.type === 'canvas' && <Edit2 size={16} />}
+                  {tab.type === 'github-item' && <Github size={16} />}
                   <span className="min-w-0 flex-1 truncate text-left">{rowLabel}</span>
                   {dirty && (
                     <>

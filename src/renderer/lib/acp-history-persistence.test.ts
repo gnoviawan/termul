@@ -194,6 +194,43 @@ describe('pure history helpers', () => {
     expect(scopeSessionIndex(entries, '', '/a')).toEqual([])
   })
 
+  it('groups and orders by created time when asked, ignoring later activity', () => {
+    const now = new Date('2026-05-30T12:00:00').getTime()
+    const at = (iso: string): number => new Date(iso).getTime()
+    const sessions = [
+      // Created last week, continued today: Earlier by creation.
+      entry('old-but-busy', {
+        createdAt: at('2026-05-20T09:00:00'),
+        lastActivityAt: at('2026-05-30T11:30:00')
+      }),
+      entry('made-today-early', {
+        createdAt: at('2026-05-30T08:00:00'),
+        lastActivityAt: at('2026-05-30T08:05:00')
+      }),
+      entry('made-today-late', {
+        createdAt: at('2026-05-30T10:00:00'),
+        lastActivityAt: at('2026-05-30T10:01:00')
+      }),
+      entry('made-yesterday', {
+        createdAt: at('2026-05-29T10:00:00'),
+        lastActivityAt: at('2026-05-30T11:59:00')
+      })
+    ]
+
+    const byCreated = groupSessionsByRecency(sessions, now, 'createdAt')
+    expect(byCreated.map(({ group, entries }) => [group, entries.map(({ id }) => id)])).toEqual([
+      ['Today', ['made-today-late', 'made-today-early']],
+      ['Yesterday', ['made-yesterday']],
+      ['Earlier', ['old-but-busy']]
+    ])
+
+    // The default key stays last activity (the desktop History).
+    const byActivity = groupSessionsByRecency(sessions, now)
+    expect(byActivity.map(({ group, entries }) => [group, entries.map(({ id }) => id)])).toEqual([
+      ['Today', ['made-yesterday', 'old-but-busy', 'made-today-late', 'made-today-early']]
+    ])
+  })
+
   it('scopes with worktree-inclusive reachability from the root view', () => {
     // Root view (no worktree picked): activeCwd is the project root. The
     // sidebar must list root-cwd sessions AND the project's worktree-cwd

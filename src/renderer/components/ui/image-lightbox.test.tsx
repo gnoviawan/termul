@@ -11,9 +11,11 @@ import { ImageLightbox } from './image-lightbox'
 
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 
-function renderLightbox(): HTMLElement {
+const IMAGE = { src: '/full.png', alt: 'Diagram', fileName: 'diagram.png' }
+
+function renderLightbox(onDownload = vi.fn()): HTMLElement {
   render(
-    <ImageLightbox src="/full.png" alt="Diagram">
+    <ImageLightbox image={IMAGE} onDownload={onDownload}>
       <img src="/thumb.png" alt="Diagram" />
     </ImageLightbox>
   )
@@ -82,6 +84,19 @@ describe('ui/image-lightbox overlay back stack', () => {
 
       await waitForSentinelDepth(0)
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('viewer', () => {
+    it('shows the full image with download and no counter', () => {
+      const onDownload = vi.fn()
+      fireEvent.click(renderLightbox(onDownload))
+
+      const dialog = screen.getByRole('dialog')
+      expect(dialog.querySelector('img')).toHaveAttribute('src', '/full.png')
+      expect(screen.queryByText(/ of /)).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Download diagram.png' }))
+      expect(onDownload).toHaveBeenCalledWith(IMAGE)
     })
   })
 

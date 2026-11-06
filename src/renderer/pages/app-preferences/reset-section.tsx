@@ -1,9 +1,9 @@
 import type { Dispatch, SetStateAction } from 'react'
+import { rowId } from '@/components/settings/row-id'
 import { SettingsGroup } from '@/components/settings/SettingsGroup'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { SettingsRow } from '@/components/settings/SettingsRow'
 import { Button } from '@/components/ui/button'
-import { rowId } from './categories'
 
 interface ResetSectionProps {
   setIsResetDialogOpen: Dispatch<SetStateAction<boolean>>

@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { randomUUID } from '@/lib/uuid'
+
 export interface BrowserBounds {
   x: number
   y: number
@@ -16,18 +18,15 @@ export interface BrowserTabInfo {
   agentControlled: boolean
 }
 
-export interface BrowserTabNavigatedPayload {
-  browserTabId: string
+/** One tab as the host's tab registry reports it, from engine events. */
+export interface BrowserTabView {
+  tabId: string
   url: string
-}
-
-export interface BrowserTabLoadedPayload {
-  browserTabId: string
-}
-
-export interface BrowserTabTitleChangedPayload {
-  browserTabId: string
   title: string
+  loading: boolean
+  agentControlled: boolean
+  /** Bumped on every new document the tab commits. */
+  epoch: number
 }
 
 export interface BrowserEventSubscription {
@@ -37,6 +36,18 @@ export interface BrowserEventSubscription {
 export type IpcResult<T> =
   | { success: true; data: T }
   | { success: false; error: string; code: string }
+
+const USER_TAB_LABEL = /^tab-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/** A label the host registry accepts for a tab the user opens. Agent tab
+ *  labels are minted by the host only. */
+export function newUserBrowserTabId(): string {
+  return `tab-${randomUUID().toLowerCase()}`
+}
+
+export function isUserBrowserTabId(id: string): boolean {
+  return USER_TAB_LABEL.test(id)
+}
 
 export async function browserTabCreate(
   tabId: string,
@@ -110,20 +121,10 @@ function createBrowserEventSubscription<T>(
   }
 }
 
-export function onBrowserTabNavigated(
-  callback: (payload: BrowserTabNavigatedPayload) => void
+/** Every change the host registry makes to a tab's URL, title, loading
+ *  state or document epoch. */
+export function onBrowserTabUpdated(
+  callback: (view: BrowserTabView) => void
 ): BrowserEventSubscription {
-  return createBrowserEventSubscription('browser-tab-navigated', callback)
-}
-
-export function onBrowserTabLoaded(
-  callback: (payload: BrowserTabLoadedPayload) => void
-): BrowserEventSubscription {
-  return createBrowserEventSubscription('browser-tab-loaded', callback)
-}
-
-export function onBrowserTabTitleChanged(
-  callback: (payload: BrowserTabTitleChangedPayload) => void
-): BrowserEventSubscription {
-  return createBrowserEventSubscription('browser-tab-title-changed', callback)
+  return createBrowserEventSubscription('browser_tab_updated', callback)
 }

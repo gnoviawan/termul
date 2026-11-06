@@ -118,7 +118,7 @@ impl TerminalRegistry {
         // bare names on PATH natively). Mirrors the agent-spawn path.
         let resolved = crate::trackers::git_tracker::resolve_executable(command);
         let mut cmd = Command::new(resolved);
-        crate::process_util::hide_console(&mut cmd);
+        crate::process_util::background_command_hygiene(&mut cmd);
         cmd.args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

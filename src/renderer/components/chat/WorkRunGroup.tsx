@@ -3,7 +3,6 @@ import { memo, useState } from 'react'
 import { ChevronRight } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import type { ToolCall } from '@/lib/acp-api'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import { CHAT_ROW_MIN_H } from './chat-layout'
@@ -43,15 +42,12 @@ interface WorkRunGroupProps {
   items: WorkRunItem[]
   /** Categorized rollup on the trigger line — "Thought 2 times, ran 3 commands". */
   summary: ToolActivitySummary
-  /** The parent turn is still running. */
-  active: boolean
   /** True while this run owns the turn's last timeline item: the label shimmers and its trailing thought streams. */
   isLiveTail: boolean
   /** A call failed: the trigger reads red. */
   failed: boolean
   enter: EnterTracker
   filePathContext?: FilePathResolutionContext
-  onOpenSubagent: (toolCall: ToolCall) => void
 }
 
 /**
@@ -63,12 +59,10 @@ interface WorkRunGroupProps {
 function WorkRunGroupComponent({
   items,
   summary,
-  active,
   isLiveTail,
   failed,
   enter,
-  filePathContext,
-  onOpenSubagent
+  filePathContext
 }: WorkRunGroupProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   const [open, setOpen] = useState(false)
@@ -78,7 +72,7 @@ function WorkRunGroupComponent({
       <CollapsibleTrigger
         data-press-feedback="off"
         className={cn(
-          'flex w-full cursor-pointer items-center gap-1.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+          'flex w-full cursor-pointer items-center gap-1.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
           CHAT_ROW_MIN_H,
           failed && 'text-destructive'
         )}
@@ -124,12 +118,7 @@ function WorkRunGroupComponent({
                   animate={enter.animate(id)}
                   staggerIndex={enter.staggerIndex(id)}
                 >
-                  <ToolCallCard
-                    toolCall={item.tool}
-                    filePathContext={filePathContext}
-                    parentTurnActive={active}
-                    onOpenSubagent={onOpenSubagent}
-                  />
+                  <ToolCallCard toolCall={item.tool} filePathContext={filePathContext} />
                 </RowReveal>
               )
             })}

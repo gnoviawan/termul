@@ -98,7 +98,6 @@ impl GitTracker {
         let is_visible = self.is_visible.clone();
         #[cfg(target_os = "windows")]
         let cwd_poll_states = self.cwd_poll_states.clone();
-        let app_handle = self.app_handle.clone();
         let cwd_tracker = self.cwd_tracker.clone();
         let events = self.events.clone();
         let poll_handle = self.poll_handle.clone();
@@ -153,8 +152,6 @@ impl GitTracker {
 
                 if let Some(cwd_tracker) = &cwd_tracker {
                     Self::sync_terminal_cwds_from_tracker_direct(cwd_tracker, &states);
-                } else if let Some(app_handle) = &app_handle {
-                    Self::sync_terminal_cwds_from_tracker(app_handle, &states);
                 }
                 #[cfg(target_os = "windows")]
                 Self::prune_unused_cwd_poll_states(&states, &cwd_poll_states);

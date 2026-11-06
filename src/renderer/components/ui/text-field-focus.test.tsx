@@ -24,9 +24,9 @@ import { Textarea } from './textarea'
 window.HTMLElement.prototype.scrollIntoView = vi.fn()
 
 /**
- * Text fields show keyboard focus one way, in the neutral `ring` token
- * (docs/design/colors.md): a bordered field's hairline turns `ring`, a
- * borderless filled field gets a 1px `ring` edge, and a field inside a search
+ * Text fields show keyboard focus one way, in the `--focus-ring` token
+ * (solved per theme in apply-color-theme.ts): a bordered field's hairline turns `--focus-ring` with
+ * a 1px ring outside it, a borderless filled field gets a 2px ring, and a field inside a search
  * band leaves the edge to the band's hairline. Each uses `focus-visible` with
  * `outline-hidden`, so forced-colors mode still draws a system outline.
  */
@@ -34,16 +34,22 @@ const classes = (value: string | null): string[] => (value ?? '').split(/\s+/).f
 const classOf = (element: Element): string[] => classes(element.getAttribute('class'))
 
 describe('field focus constants', () => {
-  it('use the neutral ring token on focus-visible and keep a forced-colors outline', () => {
+  it('use the --focus-ring token on focus-visible and keep a forced-colors outline', () => {
     for (const value of [FIELD_FOCUS_CLASS, FOCUS_RING_CLASS, INNER_FIELD_FOCUS_CLASS]) {
       expect(classes(value)).toContain('focus-visible:outline-hidden')
       expect(value).not.toMatch(/primary|outline-none|(?<![\w-])focus:/)
     }
-    expect(classes(FIELD_FOCUS_CLASS)).toContain('focus-visible:border-ring')
-    expect(classes(FOCUS_RING_CLASS)).toEqual(
-      expect.arrayContaining(['focus-visible:ring-1', 'focus-visible:ring-ring'])
+    expect(classes(FIELD_FOCUS_CLASS)).toEqual(
+      expect.arrayContaining([
+        'focus-visible:border-focus-ring',
+        'focus-visible:ring-1',
+        'focus-visible:ring-focus-ring'
+      ])
     )
-    expect(classes(BAND_FOCUS_CLASS)).toEqual(['focus-within:border-ring'])
+    expect(classes(FOCUS_RING_CLASS)).toEqual(
+      expect.arrayContaining(['focus-visible:ring-2', 'focus-visible:ring-focus-ring'])
+    )
+    expect(classes(BAND_FOCUS_CLASS)).toEqual(['focus-within:border-focus-ring'])
   })
 
   it('panel field takes the bordered field focus', () => {
@@ -177,11 +183,14 @@ describe('raw text fields in the renderer', () => {
   })
 })
 
-/** A focus ring, border or outline in a status or brand colour instead of the neutral `ring`. */
+/**
+ * A focus ring, border or outline in a status or brand colour, or in the
+ * full-strength `ring` ink, instead of the dim `--focus-ring` token.
+ */
 const FOCUS_COLOR =
   'primary|accent|destructive|success|warning|slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|black|white'
 const COLORED_FOCUS = new RegExp(
-  `(?<![\\w-])focus(?:-visible|-within)?:(?:ring|border|outline)-(?:${FOCUS_COLOR})(?:-\\d+)?(?![\\w-])`
+  `(?<![\\w-])focus(?:-visible|-within)?:(?:ring|border|outline)-(?:(?:${FOCUS_COLOR})(?:-\\d+)?(?![\\w-])|ring(?![\\w/-]))`
 )
 
 describe('focus colour on every control', () => {
@@ -189,11 +198,14 @@ describe('focus colour on every control', () => {
     expect(COLORED_FOCUS.test('focus-visible:ring-primary/60')).toBe(true)
     expect(COLORED_FOCUS.test('focus-visible:ring-destructive')).toBe(true)
     expect(COLORED_FOCUS.test('focus-within:border-primary')).toBe(true)
-    expect(COLORED_FOCUS.test('focus-visible:ring-ring')).toBe(false)
+    expect(COLORED_FOCUS.test('focus-visible:ring-focus-ring')).toBe(false)
     expect(COLORED_FOCUS.test('focus-visible:ring-primary-foreground/40')).toBe(false)
     expect(COLORED_FOCUS.test('focus-visible:ring-red-500')).toBe(true)
     expect(COLORED_FOCUS.test('focus:border-blue-500')).toBe(true)
     expect(COLORED_FOCUS.test('focus-visible:ring-white')).toBe(true)
+    expect(COLORED_FOCUS.test('focus-visible:ring-ring')).toBe(true)
+    expect(COLORED_FOCUS.test('focus:ring-ring focus:ring-offset-2')).toBe(true)
+    expect(COLORED_FOCUS.test('focus-visible:ring-ring/25')).toBe(false)
   })
 
   it('no renderer source uses a coloured focus state', () => {
@@ -209,7 +221,7 @@ describe('focus colour on every control', () => {
     }
     expect(
       report,
-      `Focus is the neutral ring token (docs/design/colors.md). Use focus-visible:ring-ring:\n${report.join('\n')}`
+      `Focus is the dim --focus-ring token (docs/design/colors.md). Use focus-visible:ring-focus-ring:\n${report.join('\n')}`
     ).toEqual([])
   })
 })

@@ -16,7 +16,6 @@ import {
   ProjectContextMenuContent
 } from './sidebar/project-context-menu'
 import { ProjectList } from './sidebar/project-list'
-import { ProjectSettingsDialog } from './sidebar/project-settings-dialog'
 import { layoutRailProjects } from './sidebar/rail-project-order'
 import { SSHResizableSection } from './sidebar/ssh-section'
 import type { ColorPickerState, ProjectSidebarProps } from './sidebar/types'
@@ -46,7 +45,6 @@ export function ProjectSidebar({
   activeSSHProfileId
 }: ProjectSidebarProps): React.JSX.Element {
   const {
-    selectProject,
     addProject,
     addGroup,
     removeGroup,
@@ -89,7 +87,6 @@ export function ProjectSidebar({
   // Dialog targets: each dialog is open while its target is non-null.
   const [colorPicker, setColorPicker] = useState<ColorPickerState | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null)
-  const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null)
   const [worktreeProjectId, setWorktreeProjectId] = useState<string | null>(null)
 
   const handleOpenColorPicker = useCallback(
@@ -261,9 +258,7 @@ export function ProjectSidebar({
         project={project}
         groups={groups}
         availableShells={availableShells}
-        selectProject={selectProject}
         onStartRename={handleStartRename}
-        onOpenSettings={setSettingsProjectId}
         onOpenColorPicker={handleOpenColorPicker}
         onUpdateProject={onUpdateProject}
         moveProjectToGroup={moveProjectToGroup}
@@ -279,7 +274,6 @@ export function ProjectSidebar({
       handleOpenColorPicker,
       onUpdateProject,
       onArchiveProject,
-      selectProject,
       groups,
       moveProjectToGroup
     ]
@@ -371,7 +365,6 @@ export function ProjectSidebar({
         renderProjectContextMenu={renderProjectContextMenu}
         openNeedsYou={openNeedsYou}
         openProject={openProject}
-        selectProject={selectProject}
         onReorderProjects={onReorderProjects}
         archivedProjects={archivedProjects}
         showArchived={showArchived}
@@ -415,15 +408,6 @@ export function ProjectSidebar({
           onClose={closeColorPicker}
         />
       )}
-
-      {/* Project Settings Dialog */}
-      <ProjectSettingsDialog
-        projectId={settingsProjectId}
-        projects={projects}
-        availableShells={availableShells}
-        onUpdateProject={onUpdateProject}
-        onClose={() => setSettingsProjectId(null)}
-      />
 
       {/* Delete Confirmation Dialog */}
       <ConfirmDialog

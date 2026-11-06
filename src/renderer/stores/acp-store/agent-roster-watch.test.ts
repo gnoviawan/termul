@@ -1,6 +1,8 @@
 import type { AgentsWatchDelta, WsAgentSummary } from '@shared/types/web-protocol.types'
 import { describe, expect, it, vi } from 'vitest'
 import type { WatchClient, WatchHandlers } from '@/lib/acp-transport/watch-client'
+import { onAutomationChanged } from '@/lib/automation-api'
+import { onBrowserPolicyChanged, onBrowserPolicyResync } from '@/lib/browser-policy-api'
 import { attachAgentRosterWatch } from './agent-roster-watch'
 import type { AcpState } from './types'
 
@@ -23,7 +25,9 @@ function setup(held: { agents?: string[]; connected?: string[] } = {}) {
     _onAgentCrashed: vi.fn(),
     _onAgentError: vi.fn(),
     _onAgentDisconnected: vi.fn(),
-    _onBrowserOpenRequest: vi.fn()
+    _onBrowserOpenRequest: vi.fn(),
+    _onAgentSignInRequest: vi.fn(),
+    _onAgentSignInResolved: vi.fn()
   }
   let handlers: WatchHandlers<WsAgentSummary[], AgentsWatchDelta> | null = null
   const watches = {
@@ -73,6 +77,90 @@ describe('attachAgentRosterWatch', () => {
     })
     expect(state._onAgentSpawned).not.toHaveBeenCalled()
     expect(state._onAgentDisconnected).not.toHaveBeenCalled()
+  })
+
+  it('routes sign-in prompt deltas to the sign-in reducers', () => {
+    const { state, handlers } = setup()
+    const request = {
+      agentId: 'a1',
+      requestId: 'signin-1',
+      url: 'https://auth.example/device',
+      message: 'Enter this code: ABCD-1234'
+    }
+    handlers().onDelta?.({ event: 'agent_sign_in_request', payload: request })
+    handlers().onDelta?.({
+      event: 'agent_sign_in_resolved',
+      payload: { agentId: 'a1', requestId: 'signin-1' }
+    })
+
+    expect(state._onAgentSignInRequest).toHaveBeenCalledWith(request)
+    expect(state._onAgentSignInResolved).toHaveBeenCalledWith({
+      agentId: 'a1',
+      requestId: 'signin-1'
+    })
+    expect(state._onAgentSpawned).not.toHaveBeenCalled()
+  })
+
+  it('hands a browser_policy_changed delta to the policy subscribers, not the roster', () => {
+    const { state, handlers } = setup()
+    const seen: unknown[] = []
+    const stop = onBrowserPolicyChanged((change) => seen.push(change))
+
+    handlers().onDelta?.({
+      event: 'browser_policy_changed',
+      payload: { scope: 'project', projectId: 'p1', revision: 3 }
+    })
+    handlers().onDelta?.({
+      event: 'browser_policy_changed',
+      payload: { scope: 'app', revision: 4 }
+    })
+    stop()
+
+    expect(seen).toEqual([
+      { scope: 'project', projectId: 'p1', revision: 3 },
+      { scope: 'app', revision: 4 }
+    ])
+    expect(state._onAgentSpawned).not.toHaveBeenCalled()
+    expect(state._onAgentDisconnected).not.toHaveBeenCalled()
+  })
+
+  it('asks policy views to re-read whenever the agents watch resyncs', () => {
+    const { handlers } = setup()
+    const resync = vi.fn()
+    const stop = onBrowserPolicyResync(resync)
+    handlers().onState([])
+    handlers().onState([])
+    stop()
+    handlers().onState([])
+    expect(resync).toHaveBeenCalledTimes(2)
+  })
+
+  it('hands an automation_changed delta to automation subscribers and a resync as null', () => {
+    const { state, handlers } = setup()
+    const seen: unknown[] = []
+    const stop = onAutomationChanged((change) => seen.push(change))
+
+    handlers().onDelta?.({
+      event: 'automation_changed',
+      payload: { project_id: 'p1', automation_id: 'auto-1' }
+    })
+    handlers().onState([])
+    stop()
+
+    expect(seen).toEqual([{ project_id: 'p1', automation_id: 'auto-1' }, null])
+    expect(state._onAgentSpawned).not.toHaveBeenCalled()
+  })
+
+  it('turns an automation_resync delta into a resync for automation subscribers', () => {
+    const { state, handlers } = setup()
+    const seen: unknown[] = []
+    const stop = onAutomationChanged((change) => seen.push(change))
+
+    handlers().onDelta?.({ event: 'automation_resync', payload: { missed: 3 } })
+    stop()
+
+    expect(seen).toEqual([null])
+    expect(state._onAgentSpawned).not.toHaveBeenCalled()
   })
 
   it('reconciles the full state: spawns the unknown, disconnects the connected agent the host dropped', () => {

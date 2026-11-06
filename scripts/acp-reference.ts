@@ -79,7 +79,9 @@ function acpEvents(root: string): string[] {
 }
 
 function httpRoutes(root: string): string[] {
-  const router = withoutCommentLines(read(root, 'src-tauri/src/web/router.rs'))
+  const router = ['mod.rs', 'host_routes.rs']
+    .map((file) => withoutCommentLines(read(root, `src-tauri/src/web/router/${file}`)))
+    .join('\n')
   return sortedUnique(capture(router, /\.route\(\s*"(\/acp\/[^"]*|\/host\/agent-idle-window)"/g))
 }
 

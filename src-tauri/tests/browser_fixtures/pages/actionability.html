@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Actionability fixture</title>
+<style>
+  body { font: 14px sans-serif; }
+  .slot { position: relative; height: 60px; }
+  #overlay { position: absolute; left: 0; top: 0; width: 240px; height: 50px; background: #888; }
+  @keyframes slide { from { transform: translateX(0); } to { transform: translateX(200px); } }
+  #moving { animation: slide 0.6s linear infinite alternate; }
+</style>
+</head>
+<body>
+<h1>Actionability fixture</h1>
+<div class="slot">
+  <button id="covered" type="button" aria-label="Covered target">Covered target</button>
+  <div id="overlay"></div>
+</div>
+<div class="slot"><button id="moving" type="button" aria-label="Moving target">Moving target</button></div>
+<div class="slot">
+  <button id="hidden" type="button" aria-label="Hidden target">Hidden target</button>
+  <button id="hide" type="button">Hide it</button>
+</div>
+<div class="slot"><button id="ready" type="button">Ready target</button></div>
+<p id="log">Clicks: none</p>
+<script>
+var clicks = [];
+function note(id) {
+  clicks.push(id);
+  document.getElementById('log').textContent = 'Clicks: ' + clicks.join(',');
+}
+['covered', 'moving', 'hidden', 'ready', 'overlay'].forEach(function (id) {
+  document.getElementById(id).addEventListener('click', function () { note(id); });
+});
+document.getElementById('hide').addEventListener('click', function () {
+  document.getElementById('hidden').style.visibility = 'hidden';
+  note('hide');
+});
+</script>
+</body>
+</html>

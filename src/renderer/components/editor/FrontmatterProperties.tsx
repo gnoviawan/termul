@@ -186,7 +186,7 @@ export function FrontmatterProperties({
                           </span>
                           <button
                             type="button"
-                            className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                            className="inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                             aria-label={`Remove ${item} from ${key}`}
                             onClick={() => removeArrayItem(key, index)}
                           >

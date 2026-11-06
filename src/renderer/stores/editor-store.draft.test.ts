@@ -29,6 +29,7 @@ function makeFile(overrides: Partial<EditorFileState> = {}): EditorFileState {
   return {
     filePath: path,
     content: 'disk',
+    kind: 'text',
     originalContent: 'disk',
     isDirty: false,
     language: 'typescript',

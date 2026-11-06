@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rows fixture</title>
+</head>
+<body>
+<main>
+<h1>Rows fixture</h1>
+<table>
+<tbody id="rows">
+<tr><td>Ada</td><td><button type="button">Delete</button></td></tr>
+<tr><td>Bob</td><td><button type="button">Delete</button></td></tr>
+<tr><td>Carol</td><td><button type="button">Delete</button></td></tr>
+</tbody>
+</table>
+<p id="left">Left: Ada Bob Carol</p>
+</main>
+<script>
+var rows = document.getElementById('rows');
+rows.addEventListener('click', function (e) {
+  var button = e.target.closest('button');
+  if (!button) return;
+  button.closest('tr').remove();
+  var names = Array.prototype.map.call(rows.querySelectorAll('td:first-child'), function (td) {
+    return td.textContent;
+  });
+  document.getElementById('left').textContent = 'Left: ' + names.join(' ');
+});
+</script>
+</body>
+</html>

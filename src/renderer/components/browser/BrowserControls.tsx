@@ -96,7 +96,7 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
         >
           <RotateCcw size={14} />
         </button>
-        <div className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-2 transition-shadow duration-150 ease-out focus-within:ring-1 focus-within:ring-ring">
+        <div className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-2 transition-shadow duration-150 ease-out focus-within:ring-1 focus-within:ring-focus-ring">
           {tabLoading ? (
             <Spinner size={14} decorative className="text-primary" />
           ) : (

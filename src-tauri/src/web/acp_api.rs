@@ -17,13 +17,13 @@ use crate::web::fs_api::check_local_only;
 use crate::web::ws::AppState;
 
 /// `GET /acp/factory-key` response body.
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 pub(crate) struct FactoryKeyStatus {
     configured: bool,
 }
 
 /// `POST /acp/factory-key` request body.
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 pub(crate) struct FactoryKeySave {
     config: crate::acp::AgentConfig,
     key: String,

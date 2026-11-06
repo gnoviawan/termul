@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for Termul Manager Tauri POC - Fase 3 Persistence & UI",
-  "windows": ["main"],
+  "description": "Main app webview only. Browser tab webviews match no capability.",
+  "webviews": ["main"],
   "permissions": [
     "core:default",
     "os:default",
@@ -15,6 +15,7 @@
     "core:window:allow-destroy",
     "core:window:allow-start-dragging",
     "core:window:allow-start-resize-dragging",
+    "core:window:allow-hide",
     "core:window:allow-show",
     "core:window:allow-is-maximized",
     "core:window:allow-set-position",

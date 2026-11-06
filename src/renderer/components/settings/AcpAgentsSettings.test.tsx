@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { mockRegistryCatalog, mockListCatalog } = vi.hoisted(() => ({
@@ -247,5 +247,64 @@ describe('AcpAgentsSettings Check for updates', () => {
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('All agents are up to date.'))
     expect(toast.warning).not.toHaveBeenCalled()
+  })
+})
+
+describe('AcpAgentsSettings custom agent removal (#1503)', () => {
+  const customConfig: StoredAgentConfig = {
+    id: 'custom-my-agent',
+    templateId: 'custom',
+    configId: 'custom-my-agent',
+    name: 'My Custom Agent',
+    command: '/usr/local/bin/my-agent',
+    args: ['acp'],
+    env: {},
+    allowTerminal: false
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useAcpStore.setState({ agentConfigs: [customConfig] })
+    seedCatalog()
+  })
+
+  it('removes a custom agent only after confirmation', async () => {
+    render(<AcpAgentsSettings />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }))
+    expect(useAcpStore.getState().agentConfigs.map((c) => c.id)).toEqual(['custom-my-agent'])
+
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
+
+    await waitFor(() => {
+      expect(useAcpStore.getState().agentConfigs).toEqual([])
+    })
+    expect(toast.success).toHaveBeenCalledWith('My Custom Agent removed')
+  })
+
+  it('keeps the custom agent when the removal is cancelled', async () => {
+    render(<AcpAgentsSettings />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).toBeNull()
+    })
+    expect(useAcpStore.getState().agentConfigs.map((c) => c.id)).toEqual(['custom-my-agent'])
+  })
+
+  it('offers no Remove or Clear saved path on bundled registry rows', async () => {
+    useAcpStore.setState({
+      agentConfigs: [{ ...persistedDroidConfig('0.219.0') }]
+    })
+
+    render(<AcpAgentsSettings />)
+
+    await screen.findByText('Factory Droid')
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Clear saved path' })).toBeNull()
   })
 })

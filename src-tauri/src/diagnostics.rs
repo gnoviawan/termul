@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::acp::manager::stderr_ring::redact_line;
-use crate::process_util::hide_console;
+use crate::process_util::background_command_hygiene;
 
 /// Most bytes of log tail attached to a report.
 const LOG_TAIL_BYTES: usize = 64 * 1024;
@@ -47,31 +47,38 @@ const GH_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// Diagnostics bundle collected when the bug-report dialog opens. Nothing in
 /// this struct is secret: `log_tail` is already redacted. camelCase wire
 /// shape mirrors `src/shared/types/bug-report.types.ts`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"Diagnostics collected when the bug-report dialog opens. Nothing here is secret: `logTail` is already redacted."#)]
 pub struct BugReportContext {
     /// `env!("CARGO_PKG_VERSION")` of the host build.
+    #[schemars(description = r#"The host build's version."#)]
     pub app_version: String,
     /// `std::env::consts::OS`.
+    #[schemars(description = r#"The host operating system (`linux`, `macos`, `windows`)."#)]
     pub os: String,
     /// `std::env::consts::ARCH`.
+    #[schemars(description = r#"The host CPU architecture (`x86_64`, `aarch64`)."#)]
     pub arch: String,
     /// Build channel: `debug` or `release`.
     pub channel: String,
     /// Per-run host correlation id ([`crate::logging::run_id`]).
+    #[schemars(description = r#"Correlation id of the host's current run, as printed in its startup log banner."#)]
     pub run_id: String,
     /// RFC 3339 timestamp of the collect.
     pub collected_at: String,
     /// False when the log file was missing/unreadable — a note, not an error.
     pub log_available: bool,
     /// True when the tail was cut to [`LOG_TAIL_BYTES`] and the start dropped.
+    #[schemars(description = r#"True when the log was over 64 KiB and `logTail` holds only its last 64 KiB."#)]
     pub log_truncated: bool,
     /// Bounded redacted log tail; empty when `log_available` is false.
+    #[schemars(description = r#"The end of the host log, redacted. Empty when `logAvailable` is false."#)]
     pub log_tail: String,
 }
 
 /// Report fields the user previews/edits before anything leaves the host.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BugReportSubmitRequest {
     pub title: String,
@@ -82,7 +89,7 @@ pub struct BugReportSubmitRequest {
 /// the process could not spawn) sends the caller down the clipboard +
 /// prefilled-URL fallback; `Failed` is a real submission error worth
 /// surfacing. `kind` is the serde tag.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -248,7 +255,7 @@ fn gh_output(args: &[&OsStr], timeout: Duration) -> io::Result<Output> {
 /// to `Unavailable` like any other `Err`.
 fn run_with_timeout(program: &str, args: &[&OsStr], timeout: Duration) -> io::Result<Output> {
     let mut command = Command::new(program);
-    hide_console(&mut command);
+    background_command_hygiene(&mut command);
     let mut child = command
         .args(args)
         .stdin(Stdio::null())

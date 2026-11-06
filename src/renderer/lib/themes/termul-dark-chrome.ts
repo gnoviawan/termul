@@ -1,5 +1,6 @@
 import { hexToOklch, oklchToHex } from './color-utils'
 import type { DerivedSurfaces } from './derive-surfaces'
+import { TERMUL_BLUE, TERMUL_DARK_BRAND_TOKENS } from './termul-brand'
 import type { ThemeChrome } from './types'
 
 /** Linear void. Page canvas. */
@@ -37,7 +38,9 @@ function termulDarkChrome(): ThemeChrome {
     border: holdHue(VOID, graphiteL),
     foreground: BONE,
     secondaryForeground: MIST,
-    mutedForeground: FOG
+    mutedForeground: FOG,
+    brandFill: TERMUL_BLUE.fill,
+    tokens: TERMUL_DARK_BRAND_TOKENS
   }
 }
 

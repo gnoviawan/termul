@@ -56,6 +56,7 @@ fn replay_name(replay: Replay) -> &'static str {
         Replay::Payload => "payload",
         Replay::Entity => "entity",
         Replay::ReceiptOnly => "receipt-only",
+        Replay::Never => "never",
     }
 }
 
@@ -138,6 +139,8 @@ fn only_creates_and_non_prompt_commands_enter_the_ledger() {
             "install_acp_agent",
             "acp_deliver_auth_redirect",
             "record_agent_switch",
+            "add_claude_account",
+            "finish_claude_link_login",
         ])
     );
     assert!(!class_of("send_prompt").unwrap().1.ledgered(), "TurnWatermark owns prompts");
@@ -145,7 +148,12 @@ fn only_creates_and_non_prompt_commands_enter_the_ledger() {
 
 #[test]
 fn credential_bearing_kinds_are_receipt_only() {
-    for name in ["authenticate_agent", "respond_elicitation", "acp_deliver_auth_redirect"] {
+    for name in [
+        "authenticate_agent",
+        "respond_elicitation",
+        "acp_deliver_auth_redirect",
+        "finish_claude_link_login",
+    ] {
         assert!(!class_of(name).unwrap().1.stores_payload(), "{name}");
     }
 }
@@ -206,6 +214,15 @@ fn a_fingerprint_never_derives_from_args_env_text_or_credentials() {
         )
     };
     assert_eq!(switch("one"), switch("another summary"));
+
+    let finish = |account: &str, code: &str| {
+        Fingerprint::of(
+            "finish_claude_link_login",
+            &json!({"accountId": account, "code": code}),
+        )
+    };
+    assert_eq!(finish("ab12", "one#code"), finish("ab12", "other#code"));
+    assert_ne!(finish("ab12", "one#code"), finish("cd34", "one#code"));
 }
 
 #[test]
@@ -237,4 +254,13 @@ fn blank_and_padded_ids_normalize_like_the_handlers_do() {
     assert_eq!(print(json!("   ")), absent, "a blank projectId is no projectId");
     assert_eq!(print(json!(" p1 ")), print(json!("p1")));
     assert_ne!(print(json!("p1")), print(json!("p2")));
+}
+
+#[test]
+fn the_mcp_install_commit_is_a_command_kept_out_of_the_ledger() {
+    let (_, class) = class_of("commit_mcp_install").unwrap();
+    assert_eq!(
+        (class.kind, class.replay, class.ledgered(), class.stores_payload()),
+        (ClassKind::Command, Some(Replay::Never), false, false)
+    );
 }

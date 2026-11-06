@@ -100,7 +100,7 @@ fn opencode_candidates() -> Vec<PathBuf> {
 
 fn read_version(path: &Path) -> Result<String, &'static str> {
     let mut command = Command::new(path);
-    crate::process_util::hide_console(&mut command);
+    crate::process_util::background_command_hygiene(&mut command);
     let mut child = command
         .arg("--version")
         .stdin(Stdio::null())

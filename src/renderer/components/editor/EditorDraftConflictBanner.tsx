@@ -16,9 +16,10 @@ interface EditorDraftConflictBannerProps {
 export function EditorDraftConflictBanner({
   filePath
 }: EditorDraftConflictBannerProps): null | React.ReactElement {
-  const hasConflict = useEditorStore((state) =>
-    Boolean(state.openFiles.get(filePath)?.draftConflict)
-  )
+  const hasConflict = useEditorStore((state) => {
+    const file = state.openFiles.get(filePath)
+    return file?.kind === 'text' && file.draftConflict !== undefined
+  })
 
   const handleKeepDraft = useCallback(() => {
     useEditorStore.getState().resolveDraftConflict(filePath, 'draft')

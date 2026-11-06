@@ -47,7 +47,7 @@ pub(super) fn now_ms() -> u64 {
 }
 
 /// Edits the crashed editor held that were not on disk.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LostChanges {
     /// `contentVersion - savedVersion`, at least 1.
@@ -56,7 +56,7 @@ pub struct LostChanges {
     pub since_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Remount {
     pub previous_mount_seq: u64,

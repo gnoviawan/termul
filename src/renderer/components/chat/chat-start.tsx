@@ -122,7 +122,7 @@ export function ChatStarters({
           animate={{ opacity: 1, y: 0 }}
           transition={enter(i)}
           data-press-feedback="off"
-          className="inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-sm text-muted-foreground transition-[background-color,color,transform] duration-150 ease-out hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10 focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring active:scale-[0.96] motion-reduce:active:scale-100"
+          className="inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-sm text-muted-foreground transition-[background-color,color,transform] duration-150 ease-out hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10 focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring active:scale-[0.96] motion-reduce:active:scale-100"
         >
           <starter.icon className="size-3.5 shrink-0" />
           {starter.label}

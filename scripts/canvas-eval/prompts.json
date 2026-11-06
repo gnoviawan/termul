@@ -1,0 +1,54 @@
+[
+  {
+    "id": "landing-toko-roti",
+    "lang": "id",
+    "domain": "landing-page",
+    "prompt": "landing page toko roti"
+  },
+  { "id": "dashboard-gym", "lang": "id", "domain": "dashboard", "prompt": "dashboard gym" },
+  { "id": "app-login", "lang": "en", "domain": "mobile-app", "prompt": "app login screen" },
+  {
+    "id": "pitch-startup",
+    "lang": "id",
+    "domain": "slides",
+    "prompt": "slide pitch startup 5 halaman"
+  },
+  {
+    "id": "ig-promo-kopi",
+    "lang": "id",
+    "domain": "social-post",
+    "prompt": "poster instagram promo kopi"
+  },
+  {
+    "id": "portfolio-fotografer",
+    "lang": "id",
+    "domain": "landing-page",
+    "prompt": "portfolio fotografer"
+  },
+  { "id": "pricing-saas", "lang": "en", "domain": "landing-page", "prompt": "pricing page saas" },
+  {
+    "id": "profil-sekolah",
+    "lang": "id",
+    "domain": "landing-page",
+    "prompt": "halaman profil sekolah"
+  },
+  {
+    "id": "yoga-website",
+    "lang": "en",
+    "domain": "landing-page",
+    "prompt": "website for my yoga studio"
+  },
+  { "id": "app-laundry", "lang": "id", "domain": "mobile-app", "prompt": "aplikasi pesan laundry" },
+  {
+    "id": "shop-admin",
+    "lang": "en",
+    "domain": "web-app",
+    "prompt": "admin panel for an online shop"
+  },
+  {
+    "id": "ds-fintech",
+    "lang": "id",
+    "domain": "design-system",
+    "prompt": "design system untuk startup fintech"
+  }
+]

@@ -14,7 +14,7 @@
 export const SHELL_LAYOUT_VERSION = 2
 
 /** Tabs the Side panel remembers per project. SSH is a mode, never a last tab. */
-export const SHELL_LAST_COLUMN_TABS = ['chats', 'explorer', 'changes'] as const
+export const SHELL_LAST_COLUMN_TABS = ['chats', 'explorer', 'changes', 'github'] as const
 export type ShellLastColumnTab = (typeof SHELL_LAST_COLUMN_TABS)[number]
 
 export interface ShellLayoutBounds {

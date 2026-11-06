@@ -1,21 +1,53 @@
-import { escapeHtmlAttribute } from './chat-markdown-file-links'
+import { parseMarkdownIntoBlocks } from 'streamdown'
+import { mediaKindForPath } from '@/lib/media-kind'
+import { escapeHtmlAttribute, localLinkPath } from './chat-markdown-file-links'
 
 type MarkdownNode = {
   type: string
   url?: string
   alt?: string | null
+  value?: string
   identifier?: string
   children?: MarkdownNode[]
 }
 
-/** Whether a markdown image URL keeps streamdown's default https? pipeline. */
-function isHttpUrl(url: string): boolean {
-  return /^https?:/i.test(url)
+export function termulMediaTag(url: string, alt: string, linkPreview = false): string {
+  const preview = linkPreview ? ' data-link-preview="true"' : ''
+  return `<termul-media data-url="${escapeHtmlAttribute(url)}" data-alt="${escapeHtmlAttribute(alt)}"${preview}></termul-media>`
 }
 
-/** Raw HTML for the custom image element the sanitizer keeps and harden ignores. */
-export function termulImageTag(url: string, alt: string): string {
-  return `<termul-image data-url="${escapeHtmlAttribute(url)}" data-alt="${escapeHtmlAttribute(alt)}"></termul-image>`
+const HTTPS_URL_RE = /^https:/i
+const DATA_URL_MIME_RE = /^data:([^;,]*)(?:;[^;,]*)*,/
+
+/** The path of an https URL without its query or fragment; any other URL as is. */
+export function urlPathPart(url: string): string {
+  if (!HTTPS_URL_RE.test(url)) return url
+  try {
+    return new URL(url).pathname
+  } catch {
+    return url
+  }
+}
+
+/** What a markdown image destination renders as; anything unrecognised is an image. */
+export function markdownMediaKind(url: string): 'image' | 'video' | 'audio' {
+  const trimmed = url.trim()
+  const dataMime = DATA_URL_MIME_RE.exec(trimmed)?.[1]
+  if (dataMime === undefined) {
+    return mediaKindForPath(urlPathPart(trimmed)) === 'video' ? 'video' : 'image'
+  }
+  if (dataMime.startsWith('video/')) return 'video'
+  if (dataMime.startsWith('audio/')) return 'audio'
+  return 'image'
+}
+
+export interface GalleryItem {
+  url: string
+  alt: string
+}
+
+export function termulGalleryTag(items: GalleryItem[]): string {
+  return `<termul-gallery data-items="${escapeHtmlAttribute(JSON.stringify(items))}"></termul-gallery>`
 }
 
 /** The first definition wins, per CommonMark. */
@@ -39,31 +71,162 @@ function imageUrl(node: MarkdownNode, definitions: Map<string, string>): string 
   return undefined
 }
 
-function transformChildren(node: MarkdownNode, definitions: Map<string, string>): void {
+function containsImage(node: MarkdownNode): boolean {
+  return (
+    node.type === 'image' ||
+    node.type === 'imageReference' ||
+    (node.children ?? []).some(containsImage)
+  )
+}
+
+function nodeText(node: MarkdownNode): string {
+  if (node.type === 'text' || node.type === 'inlineCode') return node.value ?? ''
+  return (node.children ?? []).map(nodeText).join('')
+}
+
+interface LinkPreview {
+  path: string
+  tag: string
+}
+
+function linkUrl(node: MarkdownNode, definitions: Map<string, string>): string | undefined {
+  if (node.type === 'link') return node.url
+  if (node.type === 'linkReference' && node.identifier !== undefined) {
+    return definitions.get(node.identifier)
+  }
+  return undefined
+}
+
+function mediaLinkPreview(
+  node: MarkdownNode,
+  definitions: Map<string, string>
+): LinkPreview | null {
+  const url = linkUrl(node, definitions)
+  if (url === undefined || containsImage(node)) return null
+  const path = localLinkPath(url)
+  const kind = path === null ? null : mediaKindForPath(path)
+  if (path === null || (kind !== 'image' && kind !== 'video')) return null
+  const target = url.trim().replace(/[?#][\s\S]*$/, '')
+  return { path, tag: termulMediaTag(target, nodeText(node).trim() || path, true) }
+}
+
+/** Streamdown's stand-in for an image whose destination is still streaming. */
+const INCOMPLETE_IMAGE_PREFIX = 'streamdown:'
+
+/**
+ * The images of a paragraph that holds only still images and whitespace, else
+ * null. A video keeps its own player and an empty destination its alt chip, so
+ * either breaks the run. A still-streaming image neither counts nor breaks it.
+ */
+function imageOnlyParagraph(
+  node: MarkdownNode,
+  definitions: Map<string, string>
+): GalleryItem[] | null {
+  if (node.type !== 'paragraph' || !node.children) return null
+  const items: GalleryItem[] = []
+  let sawImage = false
+  for (const child of node.children) {
+    const url = imageUrl(child, definitions)
+    if (url?.startsWith(INCOMPLETE_IMAGE_PREFIX)) {
+      sawImage = true
+    } else if (url?.trim() && markdownMediaKind(url) === 'image') {
+      sawImage = true
+      items.push({ url, alt: child.alt ?? '' })
+    } else if (child.type !== 'break' && !(child.type === 'text' && !child.value?.trim())) {
+      return null
+    }
+  }
+  return sawImage ? items : null
+}
+
+/** A run of image-only paragraphs holding two or more images becomes one gallery strip. */
+function groupImageRuns(node: MarkdownNode, definitions: Map<string, string>): void {
   if (!node.children) return
+  const grouped: MarkdownNode[] = []
+  let items: GalleryItem[] = []
+  let run: MarkdownNode[] = []
+  const flush = (): void => {
+    if (items.length >= 2) grouped.push({ type: 'html', value: termulGalleryTag(items) })
+    else grouped.push(...run)
+    items = []
+    run = []
+  }
+  for (const child of node.children) {
+    const images = imageOnlyParagraph(child, definitions)
+    if (images) {
+      items.push(...images)
+      run.push(child)
+    } else {
+      flush()
+      grouped.push(child)
+    }
+  }
+  flush()
+  node.children = grouped
+}
+
+/** Previews of media links render after the paragraph or heading, so the sentence stays whole. */
+const PREVIEW_HOSTS: ReadonlySet<string> = new Set(['paragraph', 'heading'])
+
+function transformChildren(node: MarkdownNode, definitions: Map<string, string>): LinkPreview[] {
+  if (!node.children) return []
+  groupImageRuns(node, definitions)
+  const bubbled: LinkPreview[] = []
   node.children = node.children.flatMap((child) => {
     // `url !== undefined` also rewrites empty destinations (`![]()`), which
     // would otherwise render `[Image blocked: ]` on the default pipeline.
     const url = imageUrl(child, definitions)
-    if (url !== undefined && !isHttpUrl(url)) {
-      return [{ type: 'html', value: termulImageTag(url, child.alt ?? '') }]
+    if (url !== undefined) {
+      return [{ type: 'html', value: termulMediaTag(url, child.alt ?? '') }]
     }
-    transformChildren(child, definitions)
-    return [child]
+    const preview = mediaLinkPreview(child, definitions)
+    if (preview !== null) {
+      bubbled.push(preview)
+      return [child]
+    }
+    const previews = transformChildren(child, definitions)
+    if (!PREVIEW_HOSTS.has(child.type)) {
+      bubbled.push(...previews)
+      return [child]
+    }
+    const seen = new Set<string>()
+    const unique = previews.filter(({ path }) => !seen.has(path) && seen.add(path))
+    return [child, ...unique.map(({ tag }) => ({ type: 'html', value: tag }))]
   })
+  return bubbled
 }
 
 /**
- * Streamdown's `rehype-harden` turns non-`https?` images into
- * `[Image blocked: …]`; `<termul-image>` survives `rehype-sanitize` because it
- * is registered via the `allowedTags` prop.
+ * `<termul-media>` and `<termul-gallery>` survive `rehype-sanitize` only
+ * because they are registered via the `allowedTags` prop; `rehype-harden`
+ * ignores them.
  */
-export function remarkTermulImages(): (tree: MarkdownNode) => void {
+export function remarkTermulMedia(): (tree: MarkdownNode) => void {
   return (tree) => {
     const definitions = new Map<string, string>()
     collectDefinitions(tree, definitions)
     transformChildren(tree, definitions)
   }
+}
+
+const IMAGE_ONLY_BLOCK_RE = /^\s*(?:!\[[^\]\n]*\]\((?:[^()\n]|\([^()\n]*\))*\)\s*)+$/
+
+/**
+ * Streamdown renders each block separately while streaming, so consecutive
+ * image-only blocks are joined here for `remarkTermulMedia` to see them as
+ * one run.
+ */
+export function parseChatMarkdownBlocks(markdown: string): string[] {
+  const blocks: string[] = []
+  for (const block of parseMarkdownIntoBlocks(markdown)) {
+    const last = blocks.length - 1
+    if (last >= 0 && IMAGE_ONLY_BLOCK_RE.test(block) && IMAGE_ONLY_BLOCK_RE.test(blocks[last])) {
+      blocks[last] += block
+    } else {
+      blocks.push(block)
+    }
+  }
+  return blocks
 }
 
 const URI_SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/
@@ -119,7 +282,7 @@ function canonicalizeAbsolutePath(p: string): string {
 
 /**
  * Resolve a `file://` or relative markdown image URL against the chat cwd into
- * an absolute OS path for the brokered `readAttachmentBytes` read. The URL is
+ * an absolute OS path for the `readMediaBytes` read. The URL is
  * percent-decoded first (markdown destinations keep %-encoding). Returns null
  * so the caller can fall back to the alt-text chip when the URL is not
  * locally readable: malformed percent escapes, protocol-relative `//host/…`,

@@ -55,7 +55,7 @@ describe('agent prose path links with #L line fragments', () => {
       data: { path, size: 1, modifiedAt: 1, type: 'file', isReadOnly: false, isBinary: false }
     }))
     mocks.openFile.mockReset().mockImplementation(async (path: string) => {
-      mocks.openFiles.set(path, {})
+      mocks.openFiles.set(path, { kind: 'text' })
     })
     mocks.updateCursorPosition.mockReset()
     mocks.addEditorTab.mockReset()

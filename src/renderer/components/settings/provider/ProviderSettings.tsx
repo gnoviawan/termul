@@ -4,18 +4,25 @@ import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Info, KeyRound, Monitor, Plus, RotateCcw, WifiOff } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { useClaudeAccounts } from '@/hooks/use-claude-accounts'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { claudeAccountsApi, isClaudeLoginCancelled } from '@/lib/claude-accounts-api'
 import { getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
+import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
+import { applyProjectClaudeAccount } from '@/stores/claude-account-switch'
 import { useProjectStore } from '@/stores/project-store'
 import type { ProjectColor } from '@/types/project'
+import { SettingsCard } from '../SettingsGroup'
+import { SettingsRow, settingsDescriptionId } from '../SettingsRow'
 import { AccountNameDialog } from './AccountNameDialog'
 import { AddAccountDialog } from './AddAccountDialog'
 import { toastAccountChoiceError } from './account-choice-error'
 import { accountReadiness } from './account-status'
 import { ClaudeAccountActions } from './ClaudeAccountActions'
 import { ClaudeAccountRow, isAccountSignedOut } from './ClaudeAccountRow'
+import { LinkSignInDialog } from './LinkSignInDialog'
 import { oldestCheck, ProviderGroupHeader } from './ProviderGroupHeader'
 
 const errorText = (error: unknown): string =>
@@ -42,20 +49,24 @@ function SkeletonRow(): React.JSX.Element {
 
 /**
  * Settings → Provider: the Claude Accounts of this host as flat rows, with
- * each Account's main usage meter. Desktop can add, sign in, rename and remove
- * Accounts; the web client can view them and choose the default.
+ * each Account's main usage meter. A connection that can make changes can
+ * add, rename and remove an Account and sign it in; desktop signs in through
+ * the host's browser, the web client with a sign-in link.
  */
 export function ProviderSettings(): React.JSX.Element {
   const { snapshot, usage, loading, error, refreshingUsage, reload, refreshUsage } =
     useClaudeAccounts()
-  const canManage = claudeAccountsApi.canManageAccounts()
+  const flow = claudeAccountsApi.signInFlow()
+  const canManage = useServerAdmitsRemoteWrites()
   const projects = useProjectStore((s) => s.projects)
   const [addOpen, setAddOpen] = useState(false)
   const [renaming, setRenaming] = useState<ClaudeAccountView | null>(null)
   const [removing, setRemoving] = useState<ClaudeAccountView | null>(null)
   const [removeBusy, setRemoveBusy] = useState(false)
   const [signingInId, setSigningInId] = useState<string | null>(null)
+  const [linkSignIn, setLinkSignIn] = useState<ClaudeAccountView | null>(null)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [savingAutoSwitch, setSavingAutoSwitch] = useState(false)
 
   const projectsByAccount = useMemo(() => {
     const byAccount: Record<string, { id: string; name: string; color: ProjectColor }[]> = {}
@@ -68,13 +79,21 @@ export function ProviderSettings(): React.JSX.Element {
     return byAccount
   }, [snapshot, projects])
 
+  const signedIn = async (account: ClaudeAccountView): Promise<void> => {
+    toast.success(`${account.name} is signed in`)
+    await reload()
+    await refreshUsage(true)
+  }
+
   const signIn = async (account: ClaudeAccountView): Promise<void> => {
+    if (flow === 'link') {
+      setLinkSignIn(account)
+      return
+    }
     setSigningInId(account.id)
     try {
       await claudeAccountsApi.login(account.id)
-      toast.success(`${account.name} is signed in`)
-      await reload()
-      await refreshUsage(true)
+      await signedIn(account)
     } catch (err) {
       if (!isClaudeLoginCancelled(err)) toast.error(`Sign-in did not finish: ${errorText(err)}`)
     } finally {
@@ -93,12 +112,33 @@ export function ProviderSettings(): React.JSX.Element {
     }
   }
 
+  const setAutoSwitch = async (enabled: boolean): Promise<void> => {
+    setSavingAutoSwitch(true)
+    try {
+      await claudeAccountsApi.setAutoSwitch(enabled)
+    } catch (err) {
+      toast.error(`Could not change automatic switching: ${errorText(err)}`)
+    } finally {
+      await reload()
+      setSavingAutoSwitch(false)
+    }
+  }
+
   const confirmRemove = async (): Promise<void> => {
-    if (!removing) return
+    if (!removing || !snapshot) return
     const account = removing
+    // Removing the default moves the Projects that follow it as well.
+    const followers =
+      account.id === snapshot.defaultAccountId
+        ? projects.filter((p) => !(p.id in snapshot.projectAccounts)).map((p) => p.id)
+        : []
     setRemoveBusy(true)
     try {
-      await claudeAccountsApi.remove(account.id)
+      const moved = await claudeAccountsApi.remove(account.id)
+      // Their open Claude chats still run on the removed Account.
+      for (const projectId of new Set([...moved, ...followers])) {
+        void applyProjectClaudeAccount(projectId)
+      }
       setRemoving(null)
       await reload()
       toast.success(`${account.name} was removed`)
@@ -199,6 +239,25 @@ export function ProviderSettings(): React.JSX.Element {
         </div>
       )}
 
+      {!loading && !failed && snapshot && (
+        <SettingsCard className="mt-3">
+          <SettingsRow
+            htmlFor="claude-auto-switch"
+            label="Switch accounts automatically"
+            description="When a chat reaches its account's limit, continue it on the signed-in account with the most room."
+            layout="inline"
+          >
+            <Switch
+              id="claude-auto-switch"
+              aria-describedby={settingsDescriptionId('claude-auto-switch')}
+              checked={snapshot.autoSwitch}
+              disabled={savingAutoSwitch}
+              onCheckedChange={(enabled) => void setAutoSwitch(enabled)}
+            />
+          </SettingsRow>
+        </SettingsCard>
+      )}
+
       {!loading && !failed && canManage && accounts.length === 1 && (
         <div className="mt-2 flex items-center gap-3 rounded-lg border border-border/60 bg-foreground/[0.02] p-3.5">
           <span
@@ -213,7 +272,7 @@ export function ProviderSettings(): React.JSX.Element {
             </span>
             <span className="text-2xs leading-relaxed text-muted-foreground">
               Add another Claude account and choose it per project. When one hits its limit, Termul
-              can offer to switch.
+              can continue on the other.
             </span>
           </div>
           <Button type="button" size="xs" variant="outline" onClick={() => setAddOpen(true)}>
@@ -233,7 +292,7 @@ export function ProviderSettings(): React.JSX.Element {
           ) : (
             <>
               <Monitor size={12} className="shrink-0" />
-              To add or sign in to an account, use the desktop app, or run
+              {READ_ONLY_SERVER_REASON} To add or sign in to an account, use the desktop app, or run
               <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-3xs text-secondary-foreground">
                 termul-server claude account
               </code>
@@ -253,6 +312,14 @@ export function ProviderSettings(): React.JSX.Element {
             usage={usage}
             onChanged={reload}
             onSignedIn={() => refreshUsage(true)}
+          />
+          <LinkSignInDialog
+            account={linkSignIn}
+            onClose={() => setLinkSignIn(null)}
+            onSignedIn={(account) => {
+              setLinkSignIn(null)
+              void signedIn(account)
+            }}
           />
           <AccountNameDialog
             open={renaming !== null}

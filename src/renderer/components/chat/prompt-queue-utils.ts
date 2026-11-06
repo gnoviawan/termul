@@ -1,4 +1,5 @@
 import type { ContentBlock } from '@/lib/acp-api'
+import { replaceSelectionContextsWithMarkers } from '@/lib/composer/selection-context'
 import { sanitizeDisplayText } from '@/lib/skill-tokens'
 import {
   blockData,
@@ -28,10 +29,12 @@ export function previewQueuedPrompt(blocks: ContentBlock[]): QueueItemPreview {
   // `/name`/`(name)`/`(display)` text instead of invisible private-use
   // sentinels.
   const text = sanitizeDisplayText(
-    blocks
-      .filter((b) => b.type === 'text')
-      .map((b) => b.text ?? '')
-      .join('')
+    replaceSelectionContextsWithMarkers(
+      blocks
+        .filter((b) => b.type === 'text')
+        .map((b) => b.text ?? '')
+        .join('')
+    )
   ).trim()
 
   const attachments: QueueAttachmentPreview[] = []

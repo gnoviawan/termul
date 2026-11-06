@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { applyColorTheme } from './apply-color-theme'
-import { oklchComponentsToHex } from './color-utils'
 import { readCssTokenHex } from './read-css-token'
 import { getTerminalSearchDecorations } from './terminal-search-decorations'
 
@@ -11,7 +10,7 @@ describe('readCssTokenHex', () => {
 
   it('reads an applied theme token as hex', () => {
     applyColorTheme('termul')
-    expect(readCssTokenHex('--primary-fill')).toBe(oklchComponentsToHex('0.551 0.188 259.9'))
+    expect(readCssTokenHex('--primary-fill')).toBe('#0d74ce')
   })
 
   it('throws when the token is missing', () => {

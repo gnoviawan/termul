@@ -50,55 +50,57 @@ beforeEach(() => {
   running.ids = new Set()
   resetShellLayoutStoreForTests()
   useShellLayoutStore.setState({ status: 'unavailable' })
+  // The Rail shows these icons only while the Side panel is off screen.
+  useShellLayoutStore.setState({ sidePanelVisible: false })
   useGitStatusStore.setState({ statuses: {} })
   useSSHStore.setState({ workspaceOpen: false })
   vi.spyOn(appSettingsHooks, 'useUpdatePanelVisibility').mockReturnValue(updatePanelVisibility)
 })
 
 describe('RailColumnIcons', () => {
-  it('renders Chats, Explorer and Changes in order with Chats selected by default', () => {
+  it('renders Chats, Explorer, Changes and GitHub in order, none pressed', () => {
     renderIcons()
-    expect(screen.getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+    const buttons = screen.getAllByRole('button')
+    expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual([
       'Chats',
       'Explorer',
-      'Changes'
+      'Changes',
+      'GitHub'
     ])
-    expect(button('Chats')).toHaveAttribute('aria-pressed', 'true')
-    expect(button('Explorer')).toHaveAttribute('aria-pressed', 'false')
-    expect(button('Changes')).toHaveAttribute('aria-pressed', 'false')
+    for (const b of buttons) expect(b).not.toHaveAttribute('aria-pressed')
   })
 
-  it('selects the tab through the shell-layout store and moves the pressed state', () => {
+  it('selects the tab through the shell-layout store', () => {
     renderIcons()
     fireEvent.click(button('Explorer'))
     expect(useShellLayoutStore.getState().lastColumnTabByProject.p1).toBe('explorer')
-    expect(button('Explorer')).toHaveAttribute('aria-pressed', 'true')
-    expect(button('Chats')).toHaveAttribute('aria-pressed', 'false')
-    expect(updatePanelVisibility).not.toHaveBeenCalled()
 
     fireEvent.click(button('Changes'))
     expect(useShellLayoutStore.getState().lastColumnTabByProject.p1).toBe('changes')
-  })
 
-  it('reflects the project last tab', () => {
-    useShellLayoutStore.getState().setLastColumnTab('p1', 'changes')
-    renderIcons()
-    expect(button('Changes')).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(button('GitHub'))
+    expect(useShellLayoutStore.getState().lastColumnTabByProject.p1).toBe('github')
   })
 
   it('shows a hidden Side panel through the persisted path, selecting the tab', () => {
-    useShellLayoutStore.setState({ sidePanelVisible: false })
     renderIcons()
-    // Nothing is selected while the panel is hidden.
-    expect(button('Chats')).toHaveAttribute('aria-pressed', 'false')
-
     fireEvent.click(button('Explorer'))
     expect(useShellLayoutStore.getState().lastColumnTabByProject.p1).toBe('explorer')
     expect(updatePanelVisibility).toHaveBeenCalledWith('fileExplorerVisible', true)
   })
 
+  it('moves focus to the Side panel tab once the panel mounts', async () => {
+    renderIcons()
+    const panelTab = document.createElement('button')
+    panelTab.id = 'side-panel-tab-changes'
+    button('Changes').focus()
+    fireEvent.click(button('Changes'))
+    document.body.append(panelTab)
+    await waitFor(() => expect(panelTab).toHaveFocus())
+    panelTab.remove()
+  })
+
   it('toasts when showing the panel fails', async () => {
-    useShellLayoutStore.setState({ sidePanelVisible: false })
     updatePanelVisibility.mockRejectedValueOnce(new Error('disk full'))
     renderIcons()
     fireEvent.click(button('Chats'))
@@ -107,17 +109,15 @@ describe('RailColumnIcons', () => {
 
   it('never writes the tab while the SSH workspace is open, but still shows the column', () => {
     useSSHStore.setState({ workspaceOpen: true })
-    useShellLayoutStore.setState({ sidePanelVisible: false })
     renderIcons()
     fireEvent.click(button('Changes'))
     expect(useShellLayoutStore.getState().lastColumnTabByProject.p1).toBeUndefined()
     expect(updatePanelVisibility).toHaveBeenCalledWith('fileExplorerVisible', true)
-    expect(button('Chats')).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('is disabled without a project', () => {
     renderIcons(null as unknown as undefined)
-    for (const name of ['Chats', 'Explorer', 'Changes']) {
+    for (const name of ['Chats', 'Explorer', 'Changes', 'GitHub']) {
       expect(button(name)).toBeDisabled()
     }
     fireEvent.click(button('Explorer'))

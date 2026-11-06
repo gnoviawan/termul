@@ -4,25 +4,23 @@ import {
   Download,
   FileEdit,
   FileText,
+  Globe,
   Keyboard,
   KeyRound,
   Monitor,
   Network,
   Palette,
   RotateCcw,
+  Server,
   Sparkles,
   Terminal,
   TerminalSquare
 } from '@/components/icons'
+import { BROWSER_ANCHORS } from '@/components/settings/browser-policy-copy'
+import { rowId } from '@/components/settings/row-id'
 import type { SettingsCategory } from '@/components/settings/SettingsLayout'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
 import { isTauriContext } from '@/lib/tauri-runtime'
-
-/**
- * Row ids for search jumps. A row's DOM id is `setting-<key>`; its control's
- * id is `<key>` (the row label's `htmlFor`).
- */
-export const rowId = (key: string): string => `setting-${key}`
 
 // The whole "Updates" page is desktop-only (issue #843): the web client
 // updates with the server, so the updater entry points are hidden there.
@@ -101,6 +99,14 @@ const ALL_APP_PREF_CATEGORIES: SettingsCategory[] = [
     icon: <Network size={16} />
   },
   {
+    id: 'browser',
+    group: 'Agents',
+    label: 'Browser',
+    description:
+      'Which sites agents may browse without asking, and whether they keep logins between chats.',
+    icon: <Globe size={16} />
+  },
+  {
     id: 'shortcuts',
     group: 'App',
     label: 'Keyboard shortcuts',
@@ -113,6 +119,16 @@ const ALL_APP_PREF_CATEGORIES: SettingsCategory[] = [
     label: 'Updates',
     description: 'Termul version, release channel and automatic checks.',
     icon: <Download size={16} />
+  },
+  // Web-only page (gh-1105): reconfigure the termul-server this client is
+  // connected to. The desktop app has no server to configure, so the page is
+  // filtered out there — the mirror of the web-only Updates filter (#843).
+  {
+    id: 'server',
+    group: 'App',
+    label: 'Server',
+    description: 'Where this Termul server can be reached, and how it updates.',
+    icon: <Server size={16} />
   },
   {
     id: 'diagnostics',
@@ -130,11 +146,13 @@ const ALL_APP_PREF_CATEGORIES: SettingsCategory[] = [
   }
 ]
 
-/** Pages for the current runtime: the web client has no Updates page. */
+/**
+ * Pages for the current runtime: the web client has no Updates page, and the
+ * desktop app has no Server page.
+ */
 export function appPrefCategories(): SettingsCategory[] {
-  return isTauriContext()
-    ? ALL_APP_PREF_CATEGORIES
-    : ALL_APP_PREF_CATEGORIES.filter((category) => category.id !== 'updates')
+  const hiddenId = isTauriContext() ? 'server' : 'updates'
+  return ALL_APP_PREF_CATEGORIES.filter((category) => category.id !== hiddenId)
 }
 
 // The updates search entries are desktop-only with the page itself; on web
@@ -253,6 +271,13 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   },
   {
     categoryId: 'ai-agents',
+    label: 'Suggest automations from repeated chats',
+    description: 'Offer to schedule something you ask on several days.',
+    keywords: ['automation', 'schedule', 'repeat', 'suggestion', 'recurring'],
+    anchorId: rowId('suggest-automations')
+  },
+  {
+    categoryId: 'ai-agents',
     label: 'If an answer goes quiet',
     description: 'Cancel an answer that stops sending updates.',
     keywords: ['timeout', 'idle', 'silent', 'turn'],
@@ -300,8 +325,47 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     categoryId: 'mcp-servers',
     label: 'MCP servers',
-    description: 'Manage global stdio, HTTP, and SSE servers for new agent sessions.',
-    keywords: ['mcp', 'model context protocol', 'stdio', 'http', 'sse']
+    description: 'Manage global stdio, HTTP, and SSE servers, or browse the MCP catalog.',
+    keywords: [
+      'mcp',
+      'model context protocol',
+      'stdio',
+      'http',
+      'sse',
+      'catalog',
+      'registry',
+      'browse',
+      'discover',
+      'marketplace'
+    ]
+  },
+  {
+    categoryId: 'browser',
+    label: 'Shared agent profile',
+    description: 'Keep agent logins between chats, in every project.',
+    keywords: ['browser', 'profile', 'cookies', 'login', 'sign in', 'incognito', 'logged out'],
+    anchorId: BROWSER_ANCHORS.appProfile
+  },
+  {
+    categoryId: 'browser',
+    label: 'Ask before an agent submits a password',
+    description: 'Have agents ask you before they sign in to a site.',
+    keywords: ['browser', 'password', 'sign in', 'login', 'prompt', 'ask', 'automation'],
+    anchorId: BROWSER_ANCHORS.appPasswordPrompt
+  },
+  {
+    categoryId: 'browser',
+    label: 'Clear agent profile',
+    description: 'Delete the shared agent profile logins and site data.',
+    keywords: ['browser', 'cookies', 'sign out', 'logins', 'wipe', 'reset'],
+    anchorId: BROWSER_ANCHORS.appClear
+  },
+  {
+    categoryId: 'browser',
+    label: 'Pre-approved actions in every project',
+    description: 'Actions agents may take on the shared agent profile without asking.',
+    keywords: ['browser', 'upload', 'download', 'approve', 'automation'],
+    anchorId: BROWSER_ANCHORS.appPreapprovals
   },
   {
     categoryId: 'shortcuts',
@@ -331,6 +395,13 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
     anchorId: rowId('release-channel')
   },
   {
+    categoryId: 'server',
+    label: 'Server',
+    description: 'Address, port and update channel for this Termul server.',
+    keywords: ['server', 'address', 'port', 'host', 'bind', 'remote', 'restart'],
+    anchorId: rowId('server-config')
+  },
+  {
     categoryId: 'diagnostics',
     label: 'Logs',
     description: 'Export or copy application logs to troubleshoot issues.',
@@ -347,16 +418,19 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
 
 /** Search entries for the current runtime. */
 export function appPrefSearchIndex(): SettingsSearchEntry[] {
-  return isTauriContext()
-    ? ALL_APP_PREF_SEARCH_INDEX
-    : [
-        ...ALL_APP_PREF_SEARCH_INDEX.filter((entry) => entry.categoryId !== 'updates'),
-        {
-          categoryId: 'diagnostics',
-          label: 'Server version',
-          description: 'The web client updates together with the termul-server.',
-          keywords: ['version', 'upgrade', 'server'],
-          anchorId: rowId('server-version')
-        }
-      ]
+  if (isTauriContext()) {
+    // The Server page doesn't exist on desktop — its entries can't be in
+    // the search index either.
+    return ALL_APP_PREF_SEARCH_INDEX.filter((entry) => entry.categoryId !== 'server')
+  }
+  return [
+    ...ALL_APP_PREF_SEARCH_INDEX.filter((entry) => entry.categoryId !== 'updates'),
+    {
+      categoryId: 'diagnostics',
+      label: 'Server version',
+      description: 'The web client updates together with the termul-server.',
+      keywords: ['version', 'upgrade', 'server'],
+      anchorId: rowId('server-version')
+    }
+  ]
 }

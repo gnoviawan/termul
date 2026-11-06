@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { acpApi } from '@/lib/acp-api'
-import { useAcpStore } from '@/stores/acp-store'
+import {
+  endedState,
+  type SubagentRecordOverrides,
+  subagentToolCall
+} from '@/lib/test-utils/subagent'
+import { switchBlockedReason, useAcpStore } from '@/stores/acp-store'
 import { FRESH } from '@/stores/acp-store/testkit'
 import { reloadAgentChat, reloadChatBlockedReason } from './reload-chat'
 
@@ -95,7 +100,11 @@ describe('reloadAgentChat', () => {
       mcpServers: [{ type: 'stdio', name: 'files', command: 'files-mcp', args: [], env: [] }],
       forceNewAgent: true
     })
-    expect(useAcpStore.getState().agentReloadMarks.s1).toEqual({ afterMessageId: 'm1' })
+    expect(useAcpStore.getState().agentReloadMarks.s1).toEqual({
+      afterMessageId: 'm1',
+      afterSeq: null,
+      reloadedAt: expect.any(Number)
+    })
     expect(useAcpStore.getState().reloadingChatIds.s1).toBeUndefined()
     expect(useAcpStore.getState().sessions.s2).toBeUndefined()
   })
@@ -124,6 +133,15 @@ describe('reloadAgentChat', () => {
     expect(useAcpStore.getState().sessions.s1.status).toBe('active')
   })
 
+  it('records the highest transcript seq for the divider', async () => {
+    useAcpStore.setState((s) => ({
+      messages: { s1: [{ ...s.messages.s1[0], seq: 4 }] },
+      toolCalls: { s1: [{ toolCallId: 't1', seq: 9 }] }
+    }))
+    await reloadAgentChat('s1')
+    expect(useAcpStore.getState().agentReloadMarks.s1?.afterSeq).toBe(9)
+  })
+
   it('refuses an agent that cannot reopen a session', async () => {
     useAcpStore.setState({
       agents: { 'agent-1': { id: 'agent-1', capabilities: { loadSession: false } } }
@@ -131,5 +149,48 @@ describe('reloadAgentChat', () => {
     await expect(reloadAgentChat('s1')).rejects.toThrow('cannot reload a chat')
     expect(useAcpStore.getState().killAgent).not.toHaveBeenCalled()
     expect(useAcpStore.getState().openHistorySession).not.toHaveBeenCalled()
+  })
+})
+
+describe('background agents and reload', () => {
+  const backgroundAgent = (id: string, record: SubagentRecordOverrides = {}) =>
+    subagentToolCall(
+      { background: true, ...record },
+      { toolCallId: id, status: 'completed', seq: 5 }
+    )
+  const blocked = () => reloadChatBlockedReason(useAcpStore.getState(), 's1')
+
+  beforeEach(() => {
+    useAcpStore.setState((s) => ({
+      messages: { s1: [{ ...s.messages.s1[0], seq: 1 }] }
+    }))
+  })
+
+  it('names the running background agents while the held turn blocks a reload', () => {
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, s1: session('s1', { busy: true }) },
+      toolCalls: { s1: [backgroundAgent('a'), backgroundAgent('b')] }
+    }))
+    expect(blocked()).toBe(
+      'Background agents are still running. Wait until they finish, or stop the reply.'
+    )
+  })
+
+  it('leaves the reload to its confirm, but blocks a switch, after the turn ends', () => {
+    useAcpStore.setState({ toolCalls: { s1: [backgroundAgent('a')] } })
+    expect(blocked()).toBeNull()
+    expect(switchBlockedReason(useAcpStore.getState(), 's1')).toBe(
+      'background subagents are still running — switching would stop them'
+    )
+  })
+
+  it('reloads a held-turn chat as a plain busy reply once its background agents ended', () => {
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, s1: session('s1', { busy: true }) },
+      toolCalls: {
+        s1: [backgroundAgent('a', { state: endedState('completed') })]
+      }
+    }))
+    expect(blocked()).toBe('Wait until this reply finishes.')
   })
 })

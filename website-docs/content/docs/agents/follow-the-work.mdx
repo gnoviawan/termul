@@ -28,17 +28,54 @@ Inside, the steps are grouped, for example "Read 1 file, ran 1 search". Click a 
 
 ## Review changed files
 
-The **Changed files** bar above the message box lists every file the agent edited, deleted, or moved in this chat. It shows how many files changed and how many lines were added and removed. Click the bar to open the list.
+When the agent edited, deleted, or moved files in this chat, a status pill shows at the top right of the chat. It shows how many files changed and how many subagents there are. In a wide chat it also shows how many lines were added and removed and how many subagents are running or have ended. On a phone or in a narrow pane it shows only the totals, so open the list for the details. Click the pill to open the list. In a Git repository, the list shows the files that this chat's edit, delete, and move steps touched and that are still uncommitted, under the caption "Edited this session, uncommitted". Files you commit or discard drop out of the list. A file that only you, a terminal, or another chat changed is not listed. For a file this chat did change, the row and its line counts include all its uncommitted changes, also ones made outside this chat. A file the agent changed only through a shell command, for example a formatter, is not listed either. The **Changes** tab in the side panel still shows it. When there are both changed files and subagents, the list has a **Changed files** tab and a **Subagents** tab. On a phone the list opens as a sheet, and you can swipe between the tabs.
+
+The picture below was taken when the list was a bar above the message box. The list itself is the same.
 
 ![The opened Changed files list shows cart.ts in the src folder, marked M, with 3 lines added and 2 removed.](/screenshots/agents-changed-files.png)
 
 Each file has a letter: **M** for modified, **D** for deleted, or **R** for renamed. Click a file to open it in the editor. A deleted file does not open. This list is for review only. To stage and commit the changes, use the **Changes** tab in the side panel. See [Git](/docs/git).
 
-## Open a subagent's details
+## Follow subagents
 
-Some agents hand part of a task to a helper agent, called a subagent. A subagent step has a robot icon. Open the turn's step list and click the step. A window shows its status (**Running**, **Completed**, or **Failed**), the **Task prompt** the agent gave it, and the **Result**. It does not list the subagent's own steps.
+Some agents hand part of a task to a helper agent, called a subagent. Subagents that the agent starts together show as one group in the turn. The group header shows up to three agent icons, the number of subagents, a summary such as "1 working · 1 done · 1 failed", and how long they have run. The group opens while a subagent runs and folds when all of them finish. You can fold it earlier by clicking the header. A single subagent shows as one card without the header. The group stays in the chat after the turn ends, and when you reopen the chat later.
 
-![The details of a subagent step named "Review the checkout flow". It shows Completed, the task prompt, and the result.](/screenshots/agents-subagent.png)
+Each row shows the subagent's title and type, its latest step while it runs or the first line of its result when it ends, its status (**Working**, **Needs input** when it waits for you, **Done**, **Failed** or **Stopped**) and its time.
+
+Click a row to open the subagent. On a wide window it opens beside the chat; on a narrow one it slides in from the right, and on a phone it opens as a full-height sheet. The panel shows:
+
+- **Task**, the prompt the agent gave the subagent. Click **Show full prompt** for the rest of a long prompt.
+- **Activity**, the steps the subagent ran. Click a step to expand it. A subagent that started its own subagents shows them here too; click one to open it, and click **Back** to return.
+- **Latest message** while the subagent runs, or **Result** when it ends.
+
+When the focus is on a control in the panel header, such as **Back**, use the up and down arrow keys to move between subagents. The keys don't switch subagents while the focus is in the panel body. From a group row, the keys stay within that group. When the agent did not report a section, the panel says why.
+
+### Stop one subagent
+
+To stop one subagent and leave the others running, click **Stop** in its panel. On a phone, tap the stop button on its row in the **Subagents** sheet and confirm. The work it did so far is kept. **Stop** shows only while the subagent runs and when the agent supports it. To stop the whole turn instead, use the Stop button of the chat.
+
+### Subagents that run in the background
+
+An agent can end its turn while subagents it started keep working in the background. The chat then keeps those subagents as running. The [status pill](#review-changed-files) shows "Waiting on N background subagents" in its hover tooltip, and the opened list shows it above the subagent rows. While they run, Termul does not switch the agent or the Claude account of the chat, because that would stop them.
+
+## See earlier steps of a long turn
+
+A long turn shows only its latest 40 steps. Click **Show N earlier steps** at the top of the turn to load 50 more.
+
+## See images, videos, and audio
+
+When the agent's reply includes an image, a video, or an audio clip, the chat shows it in the reply. This works in the desktop app and in a browser, for a file in your project, a file on the web, or one the agent sends inside its reply.
+
+- When the reply has two or more images in a row, they show as one row of square tiles. Scroll the row sideways to see them all.
+- Click an image or a tile to open it full screen. Images that a message sends together, and the tiles in one row, open in the same viewer.
+- In the viewer, swipe, use the left and right arrow buttons at the sides, or press the left and right arrow keys to move between images. The bottom of the viewer shows where you are, for example "2 of 5". A single image shows no count.
+- Click the download button at the top right of the viewer to save the image. In the desktop app, a save dialog opens. In a browser, the browser downloads the file. For an image from the web that Termul cannot save, Termul asks to open the image link in your browser instead. If the download fails, Termul shows "Failed to download image".
+- To close the viewer, click the **X** at the top left, click outside the image, or press `Esc`. On a phone, the back button also closes it.
+- A video from your project first shows its file name. Click it to load the video, and it starts playing. A video from the web shows a player right away.
+- An audio clip shows a player.
+- When the agent links to an image or video file in the middle of a sentence, the link stays in the sentence, and the preview shows below that paragraph.
+
+A video can be up to 100 MB. If a video is too large or cannot be read, Termul says why in its place, for example "clip.mp4 is too large to play inline (128.0 MB, limit 100.0 MB)". If an image cannot be shown, its name shows instead.
 
 ## Queue prompts
 
@@ -53,6 +90,10 @@ Termul sends the queued messages in order, one each time the agent finishes a tu
 
 You cannot edit a queued message. Remove it and type it again.
 
+### When the agent works after its turn
+
+An agent can keep working after its turn ends. For example, Claude Code starts a turn of its own when a background command or a subagent finishes. While that happens, the chat shows the same working cue and the same stop button as during a turn. A message you send goes into the queue and goes out when the work ends. Termul counts the work as ended when no step is still running and the agent sends nothing for 30 seconds.
+
 ## Stop a turn
 
 To stop the agent, do one of these:
@@ -61,6 +102,8 @@ To stop the agent, do one of these:
 - Click **Cancel turn**, the square button. It takes the place of the send button while the agent works and the message box is empty.
 
 Termul tells the agent to stop. Any approval request or question that was waiting is cancelled. If you have queued messages, Termul sends the next one.
+
+This also works while the agent works after its turn. Termul tells the agent to stop that work. If no messages are queued, the chat shows it as idle right away. If messages are queued, Termul sends the next one, and the chat shows as working again.
 
 ## Edit or retry a message
 
@@ -75,3 +118,5 @@ Hover a message to see its buttons. The last message in the chat always shows th
 If the chat stopped, **Retry** starts the agent again before it sends your message. When a turn ends with an error, the error notice has its own **Retry** or **Resume chat** button.
 
 Code blocks in a reply have their own **Copy** and **Download** buttons. Tables have copy, download, and **View fullscreen** buttons.
+
+When you click a link in a reply or in a **Thought**, Termul asks first. The **Open external link?** dialog shows the full address. Click **Open** to open it, or **Cancel** to stay in the chat. Pressing `Esc` also cancels. Clicking outside the dialog does not close it. A link to a heading or footnote in the same reply, one that starts with `#`, scrolls to it without asking.

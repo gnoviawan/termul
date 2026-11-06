@@ -1,4 +1,6 @@
+import type { ChatActivityRecord } from '@shared/types/web-protocol.types'
 import { describe, expect, it } from 'vitest'
+import { chatActivityRecord } from '@/lib/test-utils/chat-activity'
 import { RESUME_FAILED_PREFIX } from '@/stores/acp-store/helpers'
 import {
   type AcpAnnouncementState,
@@ -38,8 +40,33 @@ function acpState(overrides: Partial<AcpAnnouncementState> = {}): AcpAnnouncemen
     pendingPermissions: {},
     pendingQuestions: {},
     pendingElicitations: {},
+    activity: {},
     ...overrides
   }
+}
+
+/**
+ * `deriveAcpAnnouncements` with the host's record of every chat holding a
+ * pending prompt marked Needs you, as the host marks it. Explicit `activity`
+ * records win.
+ */
+function derive(
+  prev: Parameters<typeof deriveAcpAnnouncements>[0],
+  state: AcpAnnouncementState,
+  ctx: AnnouncementContext
+): ReturnType<typeof deriveAcpAnnouncements> {
+  const activity: Record<string, ChatActivityRecord> = {}
+  const pending = [state.pendingPermissions, state.pendingQuestions, state.pendingElicitations]
+  for (const items of pending) {
+    for (const { sessionId } of Object.values(items)) {
+      activity[sessionId] = chatActivityRecord({ needsYou: true })
+    }
+  }
+  return deriveAcpAnnouncements(
+    prev,
+    { ...state, activity: { ...activity, ...state.activity } },
+    ctx
+  )
 }
 
 function context(overrides: Partial<AnnouncementContext> = {}): AnnouncementContext {
@@ -68,8 +95,8 @@ function transition(
   after: AcpAnnouncementState,
   ctx: AnnouncementContext = context()
 ): string[] {
-  const baseline = deriveAcpAnnouncements(null, before, ctx)
-  return deriveAcpAnnouncements(baseline.memory, after, ctx).announcements
+  const baseline = derive(null, before, ctx)
+  return derive(baseline.memory, after, ctx).announcements
 }
 
 describe('announcement strings', () => {
@@ -105,7 +132,7 @@ describe('deriveAcpAnnouncements: baseline', () => {
       pendingPermissions: { r1: { sessionId: 'active' } },
       pendingQuestions: { q1: { sessionId: 'other' } }
     })
-    const result = deriveAcpAnnouncements(null, state, context())
+    const result = derive(null, state, context())
     expect(result.announcements).toEqual([])
     expect(result.memory.approvalKeys).toEqual(new Set(['permission:r1', 'question:q1']))
     expect(result.memory.needsYou).toEqual({ active: true, other: true })
@@ -208,18 +235,12 @@ describe('deriveAcpAnnouncements: other chat needs you', () => {
   it('announces a chat that became a candidate after the last evaluation', () => {
     // `other` has a session but no open tab or retained slot yet, so it is not
     // a candidate when the baseline is taken.
-    const baseline = deriveAcpAnnouncements(
-      null,
-      idle,
-      context({ candidateChatIds: new Set(['active']) })
-    )
+    const baseline = derive(null, idle, context({ candidateChatIds: new Set(['active']) }))
     expect(baseline.memory.needsYou).toEqual({ active: false, other: false })
 
     // Its tab opens (no ACP write), then a permission arrives for it.
     const next = { ...idle, pendingPermissions: { r1: { sessionId: 'other' } } }
-    expect(deriveAcpAnnouncements(baseline.memory, next, context()).announcements).toEqual([
-      'Chat other needs you'
-    ])
+    expect(derive(baseline.memory, next, context()).announcements).toEqual(['Chat other needs you'])
   })
 
   it('announces for a closed session that cannot resume and for a disconnected agent', () => {
@@ -256,12 +277,11 @@ describe('deriveAcpAnnouncements: other chat needs you', () => {
       sessions: twoChats(),
       pendingPermissions: { r1: { sessionId: 'active' } }
     })
-    const baseline = deriveAcpAnnouncements(null, waiting, context({ activeChatId: 'active' }))
+    const baseline = derive(null, waiting, context({ activeChatId: 'active' }))
     // The same state, now seen with another chat active: the waiting chat is
     // in another-chat territory, but it was already needing you.
     expect(
-      deriveAcpAnnouncements(baseline.memory, waiting, context({ activeChatId: 'other' }))
-        .announcements
+      derive(baseline.memory, waiting, context({ activeChatId: 'other' })).announcements
     ).toEqual([])
   })
 
@@ -280,21 +300,45 @@ describe('deriveAcpAnnouncements: other chat needs you', () => {
     const waiting = { ...before, pendingPermissions: { r1: { sessionId: 'far' } } }
     const farCandidates = new Set(['active', 'other', 'far'])
     const ctxP1 = context({ candidateChatIds: farCandidates })
-    const first = deriveAcpAnnouncements(null, before, ctxP1)
-    const second = deriveAcpAnnouncements(first.memory, waiting, ctxP1)
+    const first = derive(null, before, ctxP1)
+    const second = derive(first.memory, waiting, ctxP1)
     expect(second.announcements).toEqual([])
     const ctxP2 = context({
       activeProjectId: 'p2',
       activeChatId: null,
       candidateChatIds: farCandidates
     })
-    expect(deriveAcpAnnouncements(second.memory, waiting, ctxP2).announcements).toEqual([])
+    expect(derive(second.memory, waiting, ctxP2).announcements).toEqual([])
   })
 
-  it('ignores chats that are not open tabs or retained', () => {
-    const next = { ...idle, pendingQuestions: { q1: { sessionId: 'other' } } }
+  it('ignores a local reason on a chat that is not an open tab or retained', () => {
+    const next = {
+      ...idle,
+      sessions: twoChats({
+        other: { status: 'closed', lastError: `${RESUME_FAILED_PREFIX}agent exited` }
+      })
+    }
     const ctx = context({ candidateChatIds: new Set(['active']) })
     expect(transition(idle, next, ctx)).toEqual([])
+  })
+
+  it('announces a chat this surface never opened once the host says it needs you', () => {
+    const working = acpState({
+      sessions: { active: session() },
+      activity: {
+        elsewhere: chatActivityRecord({ busy: true, projectId: 'p1' }),
+        far: chatActivityRecord({ busy: true, projectId: 'p2' })
+      }
+    })
+    const waiting = acpState({
+      sessions: { active: session() },
+      activity: {
+        elsewhere: chatActivityRecord({ busy: true, needsYou: true, projectId: 'p1' }),
+        far: chatActivityRecord({ busy: true, needsYou: true, projectId: 'p2' })
+      }
+    })
+    const ctx = context({ candidateChatIds: new Set(['active']) })
+    expect(transition(working, waiting, ctx)).toEqual(['Chat elsewhere needs you'])
   })
 
   it('ignores a chat that first becomes a candidate while it already needs you', () => {
@@ -304,8 +348,8 @@ describe('deriveAcpAnnouncements: other chat needs you', () => {
     })
     const before = context({ candidateChatIds: new Set(['active']) })
     const after = context({ candidateChatIds: new Set(['active', 'other']) })
-    const baseline = deriveAcpAnnouncements(null, waiting, before)
-    expect(deriveAcpAnnouncements(baseline.memory, waiting, after).announcements).toEqual([])
+    const baseline = derive(null, waiting, before)
+    expect(derive(baseline.memory, waiting, after).announcements).toEqual([])
   })
 
   it('announces another chat that starts holding an elicitation', () => {
@@ -382,12 +426,8 @@ describe('deriveAcpAnnouncements: turn finished', () => {
     const state = acpState({
       sessions: twoChats({ active: { activeTurn: true }, other: { activeTurn: false } })
     })
-    const baseline = deriveAcpAnnouncements(null, state, context({ activeChatId: 'active' }))
-    const switched = deriveAcpAnnouncements(
-      baseline.memory,
-      { ...state },
-      context({ activeChatId: 'other' })
-    )
+    const baseline = derive(null, state, context({ activeChatId: 'active' }))
+    const switched = derive(baseline.memory, { ...state }, context({ activeChatId: 'other' }))
     expect(switched.announcements).toEqual([])
   })
 
@@ -395,15 +435,11 @@ describe('deriveAcpAnnouncements: turn finished', () => {
     const running = acpState({
       sessions: twoChats({ active: { activeTurn: true }, other: { activeTurn: true } })
     })
-    const baseline = deriveAcpAnnouncements(null, running, context({ activeChatId: 'active' }))
+    const baseline = derive(null, running, context({ activeChatId: 'active' }))
     const ended = acpState({
       sessions: twoChats({ active: { activeTurn: true }, other: { activeTurn: false } })
     })
-    const result = deriveAcpAnnouncements(
-      baseline.memory,
-      ended,
-      context({ activeChatId: 'other' })
-    )
+    const result = derive(baseline.memory, ended, context({ activeChatId: 'other' }))
     expect(result.announcements).toEqual([TURN_FINISHED])
   })
 
@@ -412,8 +448,8 @@ describe('deriveAcpAnnouncements: turn finished', () => {
     const after = acpState({ sessions: { b: session({ activeTurn: false }) } })
     const ctxA = context({ activeChatId: 'a', candidateChatIds: new Set(['a']) })
     const ctxB = context({ activeChatId: 'b', candidateChatIds: new Set(['b']) })
-    const baseline = deriveAcpAnnouncements(null, before, ctxA)
-    expect(deriveAcpAnnouncements(baseline.memory, after, ctxB).announcements).toEqual([])
+    const baseline = derive(null, before, ctxA)
+    expect(derive(baseline.memory, after, ctxB).announcements).toEqual([])
   })
 })
 

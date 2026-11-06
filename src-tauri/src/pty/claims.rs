@@ -112,6 +112,63 @@ const fn hex_digit(byte: u8) -> [u8; 2] {
     ]
 }
 
+/// Captured generation still admits a write.
+///
+/// A missing claim record (`current = None`, after kill) still holds so the
+/// ledgered write path can return `WRITE_FAILED`. A captured `None` is the
+/// test-only authorize path and holds against a live generation.
+pub fn generation_holds(captured: Option<u64>, current: Option<u64>) -> bool {
+    match current {
+        None => true,
+        Some(current) => captured.is_none_or(|captured| captured == current),
+    }
+}
+
+/// Lease that re-checks generation under the registry lock around a write.
+pub struct ClaimWriteLease<'a> {
+    registry: &'a TerminalClaimRegistry,
+    terminal_id: &'a str,
+    captured: Option<u64>,
+}
+
+impl<'a> ClaimWriteLease<'a> {
+    pub fn new(
+        registry: &'a TerminalClaimRegistry,
+        terminal_id: &'a str,
+        captured: Option<u64>,
+    ) -> Self {
+        Self {
+            registry,
+            terminal_id,
+            captured,
+        }
+    }
+
+    /// True while this captured generation still matches, under a brief lock.
+    pub fn is_current(&self) -> bool {
+        self.if_current(|| ()).is_some()
+    }
+
+    /// Run `op` only if this lease still matches. Holds the registry lock
+    /// across `op` so rotate/revoke cannot bump generation during the write.
+    pub fn if_current<T>(&self, op: impl FnOnce() -> T) -> Option<T> {
+        let result = self
+            .registry
+            .with_matching_generation(self.terminal_id, self.captured, op);
+        if result.is_none() {
+            log::warn!(
+                "[claims] write refused stale generation terminal_id={}",
+                self.terminal_id
+            );
+            tracing::warn!(
+                "[claims] write refused stale generation terminal_id={}",
+                self.terminal_id
+            );
+        }
+        result
+    }
+}
+
 fn hex_encode(bytes: &[u8; 32]) -> String {
     let mut out = Vec::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -444,6 +501,24 @@ impl TerminalClaimRegistry {
     /// terminate when it changes (rotate/revoke) or disappears (kill/reap).
     pub fn generation(&self, terminal_id: &str) -> Option<u64> {
         self.records.lock().get(terminal_id).map(|r| r.generation)
+    }
+
+    /// Run `op` while this registry lock is held, only if `captured` still
+    /// matches the live generation. Rotate/revoke take the same lock to bump
+    /// generation, so they cannot interleave with `op`.
+    pub fn with_matching_generation<T>(
+        &self,
+        terminal_id: &str,
+        captured: Option<u64>,
+        op: impl FnOnce() -> T,
+    ) -> Option<T> {
+        let records = self.records.lock();
+        let current = records.get(terminal_id).map(|r| r.generation);
+        if !generation_holds(captured, current) {
+            None
+        } else {
+            Some(op())
+        }
     }
 
     /// Number of live credential holders for a terminal (primary + shared

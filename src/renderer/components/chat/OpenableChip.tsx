@@ -37,7 +37,7 @@ export function OpenableChip({
       className={cn(
         className,
         'cursor-pointer appearance-none rounded-sm underline-offset-2 hover:underline',
-        'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring'
+        'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring'
       )}
     >
       {children}

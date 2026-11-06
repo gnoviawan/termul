@@ -141,17 +141,21 @@ vi.mock('@/lib/api', async (importActual) => {
 })
 
 import { invoke } from '@tauri-apps/api/core'
+import type { ContentBlock } from '@/lib/acp-api'
 import {
   _resetAcpTransportForTests,
   _setAcpTransportForTests,
   type AcpTransport,
   AcpTransportError
 } from '@/lib/acp-transport'
+import { COMMAND_RESEND_DELAYS_MS } from '@/lib/command-engine'
+import { buildReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { commandToken } from '@/lib/skill-tokens'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import {
   _flushCoalescedForTesting,
   _resetAcpAuthForTesting,
+  _resetBusyQueueRetriesForTesting,
   _resetCoalesceForTesting,
   _resetEphemeralSessionIdsForTesting,
   _resetHistorySeqWatermarksForTesting,
@@ -162,6 +166,10 @@ import {
   _resetSessionIndexLoadGenerationForTesting,
   useAcpStore
 } from '@/stores/acp-store'
+import {
+  _resetGithubChatLinksForTesting,
+  useGithubChatLinksStore
+} from '@/stores/github-chat-links-store'
 import { flushNextQueuedPrompt } from './slices/prompt'
 import { deferred, FRESH, flushTurnEnd, seedSession } from './testkit'
 
@@ -196,6 +204,7 @@ describe('acp-store', () => {
     _resetSessionIndexLoadGenerationForTesting()
     _resetHistorySeqWatermarksForTesting()
     _resetLiveSwitchSourcesForTesting()
+    _resetBusyQueueRetriesForTesting()
     useAcpStore.setState(FRESH)
   })
 
@@ -241,6 +250,23 @@ describe('acp-store', () => {
     expect(after).toHaveLength(1)
     expect(after[0].id).toBe(`turn:${turnId}`)
     expect(after[0].blocks[0]).toEqual({ type: 'text', text: 'hi there' })
+  })
+
+  it('marks a prompt sent on this device as sent here, and not the echo of another device', async () => {
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}))
+    void useAcpStore.getState().sendPrompt('s1', 'hi there')
+    await Promise.resolve()
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      turnId: 'turn-from-device-b',
+      content: [{ type: 'text', text: 'and from the phone' }]
+    })
+
+    const [sent, echoed] = useAcpStore.getState().messages['s1']
+    expect([sent.blocks, sent.sentHere]).toEqual([[{ type: 'text', text: 'hi there' }], true])
+    expect([echoed.id, echoed.sentHere]).toEqual(['turn:turn-from-device-b', undefined])
   })
 
   it('sendPromptBlocks stores displayBlocks in the optimistic message while dispatching the wire blocks', async () => {
@@ -619,6 +645,45 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().messages['s1']).toHaveLength(0)
     expect(useAcpStore.getState().sessions['s1'].lastError).toBeNull()
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+  })
+
+  it('issue #1594: a launch first turn the host rejects as busy is queued and resent, not stuck on its own optimistic turn', async () => {
+    // Another client reopening the new chat holds the host's turn gate, so the
+    // launcher's first send comes back ACP_TURN_IN_PROGRESS. No turn is running
+    // and none will end, so the chat must go idle and resend the prompt itself.
+    vi.useFakeTimers()
+    try {
+      seedSession('s1', 'agent-1', false)
+      const blocks: ContentBlock[] = [{ type: 'text', text: 'first prompt' }]
+      useAcpStore.getState().seedLaunchUserMessage('s1', blocks)
+      const sendPromptBlocks = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new AcpTransportError('rate_limited', 'ACP_TURN_IN_PROGRESS: session s1')
+        )
+        .mockReturnValue(new Promise(() => {}))
+      _setAcpTransportForTests({
+        sendPrompt: sendPromptBlocks,
+        sendPromptBlocks,
+        dispose: vi.fn()
+      } as unknown as AcpTransport)
+
+      await useAcpStore.getState().sendPromptBlocks('s1', blocks, { skipUserAppend: true })
+
+      expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+      expect(useAcpStore.getState().sessions['s1'].openTurnId).toBeNull()
+      expect(useAcpStore.getState().promptQueues['s1'].map((q) => q.blocks)).toEqual([blocks])
+
+      await vi.advanceTimersByTimeAsync(COMMAND_RESEND_DELAYS_MS[0])
+
+      expect(sendPromptBlocks).toHaveBeenCalledTimes(2)
+      expect(sendPromptBlocks.mock.calls[1][2]).toEqual(blocks)
+      expect(useAcpStore.getState().promptQueues['s1']).toEqual([])
+      expect(useAcpStore.getState().messages['s1'].map((m) => m.blocks)).toEqual([blocks])
+      expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('queues a prompt sent while a history reopen is in flight, then flushes onto the repointed agent', async () => {
@@ -1279,5 +1344,209 @@ describe('issue #838: live user_prompt echo marks the turn active', () => {
     expect(after.activeTurn).toBe(before.activeTurn)
     expect(after.openTurnId).toBe(before.openTurnId)
     expect(useAcpStore.getState().messages['s3']).toHaveLength(1)
+  })
+})
+
+describe('read-only GitHub chats (CAP-6)', () => {
+  const ITEM = { repo: { host: 'github.com', owner: 'acme', name: 'app' }, kind: 'pr', number: 15 }
+  const GUARD = buildReadOnlyGuard({ ...ITEM, kind: 'pr' })
+  const sent: ContentBlock[][] = []
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    sent.length = 0
+    mockPersistenceApi.write.mockResolvedValue({ success: true })
+    _resetAcpTransportForTests(null)
+    _resetGithubChatLinksForTesting()
+    useAcpStore.setState(FRESH)
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string, args: unknown) => {
+      if (cmd === 'acp_send_prompt') sent.push((args as { content: ContentBlock[] }).content)
+      return undefined
+    })
+  })
+
+  async function finishTurn(sessionId: string): Promise<void> {
+    const user = [...(useAcpStore.getState().messages[sessionId] ?? [])]
+      .reverse()
+      .find((m) => m.role === 'user')
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId,
+      stopReason: 'end_turn',
+      turnId: user?.id.slice('turn:'.length)
+    })
+    await flushTurnEnd()
+  }
+
+  it('prepends the guard to every turn of a linked Ask chat, not only the first', async () => {
+    seedSession('s1', 'agent-1', false)
+    useGithubChatLinksStore.getState().link('p1', {
+      sessionId: 's1',
+      action: 'ask',
+      itemId: 'github.com/acme/app#15',
+      item: { ...ITEM, kind: 'pr' },
+      createdAt: '2026-10-31T00:00:00Z'
+    })
+
+    await useAcpStore.getState().sendPrompt('s1', 'what does it change?')
+    await finishTurn('s1')
+    await useAcpStore.getState().sendPrompt('s1', 'now fix it')
+
+    expect(sent).toEqual([
+      [
+        { type: 'text', text: GUARD },
+        { type: 'text', text: 'what does it change?' }
+      ],
+      [
+        { type: 'text', text: GUARD },
+        { type: 'text', text: 'now fix it' }
+      ]
+    ])
+    expect(
+      useAcpStore
+        .getState()
+        .messages.s1.filter((m) => m.role === 'user')
+        .map((m) => m.blocks)
+    ).toEqual([
+      [{ type: 'text', text: 'what does it change?' }],
+      [{ type: 'text', text: 'now fix it' }]
+    ])
+  })
+
+  it('leads the display blocks with the guard too, so chips replay as typed', async () => {
+    seedSession('s4', 'agent-1', false)
+    useGithubChatLinksStore.getState().link('p1', {
+      sessionId: 's4',
+      action: 'review',
+      itemId: 'github.com/acme/app#15',
+      item: { ...ITEM, kind: 'pr' },
+      createdAt: '2026-10-31T00:00:00Z'
+    })
+    const displayed: (ContentBlock[] | undefined)[] = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string, args: unknown) => {
+      if (cmd === 'acp_send_prompt') {
+        displayed.push((args as { displayContent?: ContentBlock[] }).displayContent)
+      }
+      return undefined
+    })
+
+    await useAcpStore.getState().sendPromptBlocks('s4', [{ type: 'text', text: 'see @src/a.ts' }], {
+      displayBlocks: [{ type: 'text', text: 'see a.ts' }]
+    })
+
+    expect(displayed).toEqual([
+      [
+        { type: 'text', text: GUARD },
+        { type: 'text', text: 'see a.ts' }
+      ]
+    ])
+  })
+
+  it('keeps guarding a chat whose guarded turns arrive from another device', async () => {
+    seedSession('s2', 'agent-1', false)
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's2',
+      turnId: 'remote-turn',
+      content: [
+        { type: 'text', text: GUARD },
+        { type: 'text', text: 'asked on the phone' }
+      ]
+    })
+    expect(useAcpStore.getState().messages.s2[0].blocks).toEqual([
+      { type: 'text', text: 'asked on the phone' }
+    ])
+    await finishTurn('s2')
+
+    await useAcpStore.getState().sendPrompt('s2', 'follow-up on desktop')
+
+    expect(sent).toEqual([
+      [
+        { type: 'text', text: GUARD },
+        { type: 'text', text: 'follow-up on desktop' }
+      ]
+    ])
+  })
+
+  it('keeps guarding a chat this device started after its link is gone', async () => {
+    seedSession('s5', 'agent-1', false)
+    useGithubChatLinksStore.getState().link('p1', {
+      sessionId: 's5',
+      action: 'ask',
+      itemId: 'github.com/acme/app#15',
+      item: { ...ITEM, kind: 'pr' },
+      createdAt: '2026-10-31T00:00:00Z'
+    })
+    await useAcpStore.getState().sendPrompt('s5', 'what does it change?')
+    const [firstUser] = useAcpStore.getState().messages.s5
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's5',
+      turnId: firstUser.id.slice('turn:'.length),
+      content: [
+        { type: 'text', text: GUARD },
+        { type: 'text', text: 'what does it change?' }
+      ]
+    })
+    await finishTurn('s5')
+    // Evicted by the per-project cap, or never hydrated on this run.
+    _resetGithubChatLinksForTesting()
+
+    await useAcpStore.getState().sendPrompt('s5', 'and the tests?')
+
+    expect(sent[1]).toEqual([
+      { type: 'text', text: GUARD },
+      { type: 'text', text: 'and the tests?' }
+    ])
+  })
+
+  it('sends an unlinked chat unchanged', async () => {
+    seedSession('s3', 'agent-1', false)
+    await useAcpStore.getState().sendPromptBlocks('s3', [{ type: 'text', text: 'hello' }])
+    expect(sent).toEqual([[{ type: 'text', text: 'hello' }]])
+  })
+
+  // The agent works on its own after its prompt turn ended (Claude Code wakes
+  // when a background task finishes); the host reports it with `agent_working`.
+  it('queues a send while the agent works outside a turn and sends it when the work ends', async () => {
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) =>
+      cmd === 'acp_send_prompt' ? 'end_turn' : undefined
+    )
+    useAcpStore.getState()._onAgentWorking({ agentId: 'agent-1', sessionId: 's1', working: true })
+
+    await useAcpStore.getState().sendPrompt('s1', 'after you')
+    expect(invoke).not.toHaveBeenCalledWith('acp_send_prompt', expect.anything())
+    expect(useAcpStore.getState().promptQueues['s1']?.map((q) => q.blocks)).toEqual([
+      [{ type: 'text', text: 'after you' }]
+    ])
+
+    useAcpStore.getState()._onAgentWorking({ agentId: 'agent-1', sessionId: 's1', working: false })
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        'acp_send_prompt',
+        expect.objectContaining({ agentId: 'agent-1', sessionId: 's1' })
+      )
+    )
+    expect(useAcpStore.getState().promptQueues['s1'] ?? []).toHaveLength(0)
+  })
+
+  it('ignores a working report from a process the chat no longer runs on', () => {
+    seedSession('s1', 'agent-new', false)
+    useAcpStore.getState()._onAgentWorking({ agentId: 'agent-old', sessionId: 's1', working: true })
+    expect(useAcpStore.getState().sessions['s1']?.agentWorking).toBeFalsy()
+  })
+
+  it('Stop cancels agent work while no prompt turn is open', async () => {
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+    useAcpStore.getState()._onAgentWorking({ agentId: 'agent-1', sessionId: 's1', working: true })
+
+    await useAcpStore.getState().cancelPrompt('s1')
+
+    expect(invoke).toHaveBeenCalledWith('acp_cancel_prompt', {
+      agentId: 'agent-1',
+      sessionId: 's1'
+    })
   })
 })

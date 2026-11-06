@@ -15,6 +15,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// parent directory. Windows replacement/open-sharing failures are returned to
 /// the caller; no portable parent-directory fsync claim is made there.
 pub fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    replace_with_mode(path, bytes, None)
+}
+
+/// [`replace`] for files holding credentials: on Unix the temp file is
+/// created owner-only, so the target is never readable by others, even
+/// briefly.
+pub fn replace_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    replace_with_mode(path, bytes, Some(0o600))
+}
+
+fn replace_with_mode(path: &Path, bytes: &[u8], mode: Option<u32>) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         io::Error::other(format!("atomic target '{}' has no parent", path.display()))
     })?;
@@ -22,10 +33,15 @@ pub fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
     let tmp = temp_path(path);
     let write_result = (|| -> io::Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if let Some(mode) = mode {
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+        let mut file = options.open(&tmp)?;
         file.write_all(bytes)?;
         file.flush()?;
         file.sync_all()?;

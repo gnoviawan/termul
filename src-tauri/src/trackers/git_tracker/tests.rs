@@ -302,6 +302,15 @@ fn test_git_get_status_detail_uses_rename_destination_path() {
     assert!(!details[1].staged);
 }
 
+#[test]
+fn test_git_get_status_detail_unquotes_c_quoted_paths() {
+    let details = git_get_status_detail_from_output(
+        " M \"caf\\303\\251.txt\"\nR  \"old\\tname.txt\" -> \"new\\tname.txt\"\n D \"say \\\"hi\\\".txt\"\n",
+    );
+    let paths: Vec<&str> = details.iter().map(|d| d.path.as_str()).collect();
+    assert_eq!(paths, vec!["café.txt", "new\tname.txt", "say \"hi\".txt"]);
+}
+
 // ========== parse_git_log unit tests ==========
 
 /// Build one NUL-delimited, record-terminated log record matching the
@@ -1435,4 +1444,180 @@ async fn a_cwd_snapshot_requested_while_one_runs_gets_that_result() {
 
     drop(running);
     assert_eq!(GitTracker::poll_git_snapshot(cwd).await, (None, None));
+}
+
+// #1492: wholly-untracked directories must expand to their files in the
+// Changes panel, and a directory path must never reach the diff loader.
+#[test]
+fn it_status_detail_expands_untracked_directories_into_files() {
+    if git_missing() {
+        return;
+    }
+    let repo = init_repo("untracked-dir");
+    std::fs::create_dir_all(repo.join("newdir/nested")).unwrap();
+    std::fs::write(repo.join("newdir/a.txt"), "one\n").unwrap();
+    std::fs::write(repo.join("newdir/nested/b.txt"), "two\n").unwrap();
+    std::fs::write(repo.join("tracked.txt"), "keep\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    // Stage nothing new: newdir/ is wholly untracked -> porcelain shows
+    // `?? newdir/`.
+    std::fs::create_dir_all(repo.join("fresh/inner")).unwrap();
+    std::fs::write(repo.join("fresh/one.txt"), "1\n").unwrap();
+    std::fs::write(repo.join("fresh/inner/two.txt"), "2\n").unwrap();
+
+    let details = git_get_status_detail(repo.to_str().unwrap()).unwrap();
+    let untracked: Vec<&str> = details
+        .iter()
+        .filter(|d| d.status == "untracked")
+        .map(|d| d.path.as_str())
+        .collect();
+    assert!(untracked.contains(&"fresh/one.txt"), "files must be listed, got {untracked:?}");
+    assert!(
+        untracked.contains(&"fresh/inner/two.txt"),
+        "nested files must be listed, got {untracked:?}"
+    );
+    assert!(
+        !untracked.iter().any(|p| p.ends_with('/')),
+        "no directory entry may remain, got {untracked:?}"
+    );
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+#[test]
+fn it_get_diff_on_a_directory_returns_empty_instead_of_os_error() {
+    if git_missing() {
+        return;
+    }
+    let repo = init_repo("untracked-dir-diff");
+    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    std::fs::create_dir_all(repo.join("dir")).unwrap();
+    std::fs::write(repo.join("dir/x.txt"), "x\n").unwrap();
+
+    let cwd = repo.to_str().unwrap();
+    let diff = git_get_diff(cwd, "dir", false).unwrap();
+    assert!(diff.is_empty(), "directory diff must be empty, got: {diff}");
+    // And the expanded file path diffs cleanly as an all-additions patch.
+    let file_diff = git_get_diff(cwd, "dir/x.txt", false).unwrap();
+    assert!(file_diff.contains("+x"), "untracked file diff should show additions:\n{file_diff}");
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+// #1492 review: quoted directory names and nested-cwd (root-relative porcelain).
+#[test]
+fn it_status_detail_expands_quoted_untracked_directory_names() {
+    if git_missing() {
+        return;
+    }
+    // `"` is not valid in Windows path names; the quoted-name scenario is
+    // POSIX-only by construction.
+    if cfg!(windows) {
+        return;
+    }
+    let repo = init_repo("untracked-quoted");
+    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    // A directory name that forces porcelain C-quoting (space + dquote).
+    let dir = "we ird\"q";
+    std::fs::create_dir_all(repo.join(dir)).unwrap();
+    std::fs::write(repo.join(dir).join("f.txt"), "x\n").unwrap();
+
+    let details = git_get_status_detail(repo.to_str().unwrap()).unwrap();
+    let untracked: Vec<&str> = details
+        .iter()
+        .filter(|d| d.status == "untracked")
+        .map(|d| d.path.as_str())
+        .collect();
+    assert!(
+        untracked.contains(&"we ird\"q/f.txt"),
+        "quoted dir must expand to its file, got {untracked:?}"
+    );
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+// An expanded path is decoded once: a name that starts and ends with `"`
+// keeps its quotes.
+#[test]
+fn it_status_detail_decodes_expanded_untracked_paths_once() {
+    if git_missing() || cfg!(windows) {
+        return;
+    }
+    let repo = init_repo("untracked-decode-once");
+    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    std::fs::create_dir_all(repo.join("\"d\"")).unwrap();
+    std::fs::write(repo.join("\"d\"").join("\"q\""), "x\n").unwrap();
+
+    let details = git_get_status_detail(repo.to_str().unwrap()).unwrap();
+    let untracked: Vec<&str> = details
+        .iter()
+        .filter(|d| d.status == "untracked")
+        .map(|d| d.path.as_str())
+        .collect();
+    assert_eq!(untracked, vec!["\"d\"/\"q\""]);
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+#[test]
+fn it_status_detail_expands_directory_named_like_a_pathspec_magic() {
+    if git_missing() {
+        return;
+    }
+    let repo = init_repo("untracked-magic");
+    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    // A directory literally named like pathspec exclusion magic must be
+    // expanded as a path, not swallowed as a directive.
+    std::fs::create_dir_all(repo.join(":(exclude)fresh")).unwrap();
+    std::fs::write(repo.join(":(exclude)fresh/one.txt"), "1\n").unwrap();
+    std::fs::write(repo.join("outside.txt"), "keep\n").unwrap();
+
+    let details = git_get_status_detail(repo.to_str().unwrap()).unwrap();
+    let untracked: Vec<&str> = details
+        .iter()
+        .filter(|d| d.status == "untracked")
+        .map(|d| d.path.as_str())
+        .collect();
+    assert!(
+        untracked.contains(&":(exclude)fresh/one.txt"),
+        "magic-named dir must expand to its file, got {untracked:?}"
+    );
+    assert!(
+        untracked.contains(&"outside.txt"),
+        "sibling untracked file must remain, got {untracked:?}"
+    );
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+#[test]
+fn it_status_detail_expansion_is_root_relative_from_nested_cwd() {
+    if git_missing() {
+        return;
+    }
+    let repo = init_repo("untracked-nested");
+    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    std::fs::create_dir_all(repo.join("sub/newdir")).unwrap();
+    std::fs::write(repo.join("sub/newdir/b.txt"), "b\n").unwrap();
+
+    // From a nested cwd, porcelain rows are repo-root-relative; the expanded
+    // files must be too (they replace the root-relative `?? sub/` row).
+    let nested = repo.join("sub");
+    let details = git_get_status_detail(nested.to_str().unwrap()).unwrap();
+    let untracked: Vec<&str> = details
+        .iter()
+        .filter(|d| d.status == "untracked")
+        .map(|d| d.path.as_str())
+        .collect();
+    assert!(
+        untracked.contains(&"sub/newdir/b.txt"),
+        "expansion must be root-relative like the status row, got {untracked:?}"
+    );
+    std::fs::remove_dir_all(&repo).ok();
 }

@@ -588,7 +588,15 @@ export async function resolveSupportedAcpAgents(
           ? null
           : !managedInstall && derived.kind === 'runnable'
             ? toStoredConfig(registryAgent, derived.config)
-            : null),
+            : // A bare command the host found on PATH is ready with no install
+              // record, so it needs a launchable config here too (Oh My Pi, #1501).
+              agent.status === 'ready' && derived.kind === 'needs-install'
+              ? installedBinaryConfig(
+                  registryAgent,
+                  { command: derived.cmd, args: derived.args },
+                  { env: derived.env }
+                )
+              : null),
       status: agent.status,
       installedVersion: agent.installed?.version ?? undefined,
       install:

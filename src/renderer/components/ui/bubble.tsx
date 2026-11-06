@@ -101,7 +101,7 @@ function BubbleContent({
       data-slot="bubble-content"
       className={cn(
         bubbleContentVariants({ variant }),
-        '[&:is(button,a)]:cursor-pointer [&:is(button,a)]:outline-none [&:is(button,a)]:focus-visible:ring-2 [&:is(button,a)]:focus-visible:ring-ring',
+        '[&:is(button,a)]:cursor-pointer [&:is(button,a)]:outline-none [&:is(button,a)]:focus-visible:ring-2 [&:is(button,a)]:focus-visible:ring-focus-ring',
         className
       )}
       {...props}

@@ -6,6 +6,8 @@ import StarterKit from '@tiptap/starter-kit'
 import { useEffect, useRef } from 'react'
 import {
   CMD_PILL_NODE,
+  CONTEXT_PILL_NODE,
+  CONVERSATION_PILL_NODE,
   docOffsetToDisplayOffset,
   docToDisplayText,
   FILE_PILL_NODE,
@@ -15,7 +17,9 @@ import { draftFromTokens } from '@/lib/composer/draft-from-tokens'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { CommandPill } from './CommandPillNode'
+import { ConversationPill } from './ConversationPillNode'
 import { FilePill } from './FilePillNode'
+import { SelectionContextPill } from './SelectionContextPillNode'
 import { SkillPill } from './SkillPillNode'
 
 export interface ChatComposerEditorProps {
@@ -77,6 +81,15 @@ export interface ChatComposerEditorProps {
 
 const KEYMAP_KEY = new PluginKey('chatComposerKeymap')
 
+/** Atom pills that one Backspace removes whole (with the splicer's trailing space). */
+const ATOM_PILL_NODES = new Set([
+  SKILL_PILL_NODE,
+  CMD_PILL_NODE,
+  FILE_PILL_NODE,
+  CONTEXT_PILL_NODE,
+  CONVERSATION_PILL_NODE
+])
+
 /**
  * Factory: build a per-instance keymap extension that closes over a stable ref
  * to the host's `onBeforeEditorKeyDown` callback. The ref is created per
@@ -136,22 +149,12 @@ function createComposerKeymap(
                   if (before?.isText && before.text === ' ') {
                     const $prev = state.doc.resolve(Math.max(0, probePos - 1))
                     const prevNode = $prev.nodeBefore
-                    if (
-                      prevNode &&
-                      (prevNode.type.name === SKILL_PILL_NODE ||
-                        prevNode.type.name === CMD_PILL_NODE ||
-                        prevNode.type.name === FILE_PILL_NODE)
-                    ) {
+                    if (prevNode && ATOM_PILL_NODES.has(prevNode.type.name)) {
                       before = prevNode
                       probePos = probePos - 1
                     }
                   }
-                  if (
-                    before &&
-                    (before.type.name === SKILL_PILL_NODE ||
-                      before.type.name === CMD_PILL_NODE ||
-                      before.type.name === FILE_PILL_NODE)
-                  ) {
+                  if (before && ATOM_PILL_NODES.has(before.type.name)) {
                     event.preventDefault()
                     // Delete the pill + any trailing space the splicer appended
                     // (the caret sat after the space) — matches the pre-refactor
@@ -180,6 +183,31 @@ function createComposerKeymap(
       ]
     }
   })
+}
+
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(Math.max(value, min), max)
+
+/**
+ * `onMouseDown` for the host row that pads the editor. Chrome places no caret
+ * for a press outside a scrolled contenteditable, and on the phone the
+ * focusable card takes focus instead. A press on the row's own padding puts
+ * the caret at the visible text nearest the press, or at the end.
+ */
+export function focusComposerFromRowPress(
+  event: React.MouseEvent<HTMLElement>,
+  editor: Editor | null
+): void {
+  if (event.target !== event.currentTarget || !editor?.isEditable) return
+  event.preventDefault()
+  const visible = editor.view.dom.closest('[data-composer-scroll]')?.getBoundingClientRect()
+  const hit =
+    visible &&
+    editor.view.posAtCoords({
+      left: clamp(event.clientX, visible.left + 1, visible.right - 1),
+      top: clamp(event.clientY, visible.top + 1, visible.bottom - 1)
+    })
+  editor.commands.focus(hit ? hit.pos : 'end', { scrollIntoView: false })
 }
 
 /**
@@ -257,6 +285,8 @@ export function ChatComposerEditor({
         SkillPill,
         CommandPill,
         FilePill,
+        SelectionContextPill,
+        ConversationPill,
         createComposerKeymap(beforeKeyDownRef),
         Placeholder.configure({
           placeholder: () => placeholderRef.current,
@@ -306,15 +336,7 @@ export function ChatComposerEditor({
           onPasteAttachmentsRef.current?.(event as ClipboardEvent)
           if (event.defaultPrevented) return true
           const text = event.clipboardData?.getData('text/plain') ?? ''
-          // 2) ONLY parse pill nodes from the sentinel chars in `text/plain`.
-          // Never parse pills from HTML (SkillPill/CommandPill.parseHTML return
-          // []), so a malicious clipboard carrying `<span data-skill-pill>` or
-          // `<span data-command-pill>` cannot inject pill nodes. Plain-text
-          // paste (no sentinel) falls through to ProseMirror's default (text
-          // nodes). The skill sentinel `\uE000` and the command sentinel
-          // `\uE004` both trigger the pill-paste path.
-          if (!text.includes('\uE000') && !text.includes('\uE004') && !text.includes('\uE006'))
-            return false
+          if (!/[\uE000\uE004\uE006\uE008\uE00A]/.test(text)) return false
           event.preventDefault()
           try {
             const parsed = view.state.schema.nodeFromJSON(
@@ -477,6 +499,7 @@ export function ChatComposerEditor({
   return (
     <div className={cn('relative w-full overflow-hidden', disabled && 'opacity-60', className)}>
       <div
+        data-composer-scroll
         className="w-full overflow-y-auto overscroll-contain"
         style={
           {

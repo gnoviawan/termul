@@ -1,0 +1,103 @@
+/**
+ * GitHub issues & PRs facade (spec-github-integration).
+ *
+ * Desktop invokes the `github_*` Tauri commands; web/remote and
+ * `termul-server` POST the matching `/github/*` routes. Both return the
+ * shared `IpcResult<T>` and never throw. The host runs `gh`, so the
+ * phone client drives the same login as the desktop.
+ */
+
+import type {
+  GithubCheckLog,
+  GithubCheckLogRequest,
+  GithubCheckoutPrRequest,
+  GithubCheckoutPrResult,
+  GithubChecksRequest,
+  GithubChecksResult,
+  GithubCommentRequest,
+  GithubCommentResult,
+  GithubContext,
+  GithubCreateLabelRequest,
+  GithubCreateLabelResult,
+  GithubEditItemRequest,
+  GithubEditItemResult,
+  GithubItemDetail,
+  GithubItemRequest,
+  GithubListRequest,
+  GithubListResult,
+  GithubMergeRequest,
+  GithubMergeResult,
+  GithubRepoMeta,
+  GithubRepoMetaRequest,
+  GithubSetItemStateRequest,
+  GithubSetItemStateResult
+} from '@shared/types/github.types'
+import type { IpcResult } from '@shared/types/ipc.types'
+import { postJson } from './ipc/http'
+import { invokeIpc } from './ipc/tauri'
+import { logFrontendError } from './log-api'
+import { isTauriContext } from './tauri-runtime'
+
+async function call<T>(command: string, route: string, request: object): Promise<IpcResult<T>> {
+  const result = isTauriContext()
+    ? await invokeIpc<T>(command, { request })
+    : await postJson<T>(route, request)
+  if (!result.success) {
+    void logFrontendError({
+      level: 'warn',
+      source: `github-api.${command}`,
+      message: `${command} failed (code=${result.code})`
+    })
+  }
+  return result
+}
+
+export const githubApi = {
+  getContext(cwd: string): Promise<IpcResult<GithubContext>> {
+    return call('github_get_context', '/github/context', { cwd })
+  },
+
+  listItems(request: GithubListRequest): Promise<IpcResult<GithubListResult>> {
+    return call('github_list_items', '/github/items', request)
+  },
+
+  getItem(request: GithubItemRequest): Promise<IpcResult<GithubItemDetail>> {
+    return call('github_get_item', '/github/item', request)
+  },
+
+  getChecks(request: GithubChecksRequest): Promise<IpcResult<GithubChecksResult>> {
+    return call('github_get_checks', '/github/checks', request)
+  },
+
+  getCheckLog(request: GithubCheckLogRequest): Promise<IpcResult<GithubCheckLog>> {
+    return call('github_get_check_log', '/github/check-log', request)
+  },
+
+  merge(request: GithubMergeRequest): Promise<IpcResult<GithubMergeResult>> {
+    return call('github_merge', '/github/merge', request)
+  },
+
+  comment(request: GithubCommentRequest): Promise<IpcResult<GithubCommentResult>> {
+    return call('github_comment', '/github/comment', request)
+  },
+
+  checkoutPr(request: GithubCheckoutPrRequest): Promise<IpcResult<GithubCheckoutPrResult>> {
+    return call('github_checkout_pr', '/github/checkout-pr', request)
+  },
+
+  getRepoMeta(request: GithubRepoMetaRequest): Promise<IpcResult<GithubRepoMeta>> {
+    return call('github_repo_meta', '/github/repo-meta', request)
+  },
+
+  createLabel(request: GithubCreateLabelRequest): Promise<IpcResult<GithubCreateLabelResult>> {
+    return call('github_create_label', '/github/create-label', request)
+  },
+
+  editItem(request: GithubEditItemRequest): Promise<IpcResult<GithubEditItemResult>> {
+    return call('github_edit_item', '/github/edit-item', request)
+  },
+
+  setItemState(request: GithubSetItemStateRequest): Promise<IpcResult<GithubSetItemStateResult>> {
+    return call('github_set_item_state', '/github/item-state', request)
+  }
+}

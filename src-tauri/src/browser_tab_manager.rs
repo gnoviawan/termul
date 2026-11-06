@@ -1,6 +1,14 @@
+//! Native webviews for browser tabs: building them with the engine's
+//! hooks, confirming the engine really created them, placing, showing and
+//! closing them. Tab state (owner, epoch, URL, title) lives in the
+//! automation core's tab registry; this module only drives webviews.
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
+
+use crate::browser_automation::engine::profile::{self, AgentProfiles, DataStore};
+use crate::browser_automation::engine::{events::TabEvents, hooks};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,19 +34,28 @@ pub struct BrowserBounds {
 
 pub struct BrowserTabManager {
     app_handle: AppHandle,
-    tabs: Arc<Mutex<HashMap<String, BrowserTabInfo>>>,
+    /// Event channel of every webview this manager built, by label.
+    tabs: Arc<Mutex<HashMap<String, TabEvents>>>,
+    /// The agent profiles under app data; agent tabs are refused without.
+    profiles: Result<Arc<AgentProfiles>, String>,
     agentation_endpoint: Arc<Mutex<Option<String>>>,
     agentation_enabled: Arc<Mutex<bool>>,
+    #[cfg(windows)]
+    saved_grants: crate::browser_tab_saved_grants::ClearOnce,
 }
 
 impl BrowserTabManager {
     pub fn new(app_handle: AppHandle) -> Self {
+        let profiles = open_profiles(&app_handle);
         Self {
             app_handle,
             tabs: Arc::new(Mutex::new(HashMap::new())),
+            profiles,
 
             agentation_endpoint: Arc::new(Mutex::new(None)),
             agentation_enabled: Arc::new(Mutex::new(true)),
+            #[cfg(windows)]
+            saved_grants: crate::browser_tab_saved_grants::ClearOnce::default(),
         }
     }
 
@@ -59,206 +76,61 @@ impl BrowserTabManager {
         self.get_webview(tab_id)
     }
 
-    /// Current metadata for a tab (clone).
-    pub(crate) fn info(&self, tab_id: &str) -> Result<BrowserTabInfo, String> {
-        self.tabs
-            .lock()
-            .map_err(|_| "Lock poisoned".to_string())?
-            .get(tab_id)
-            .cloned()
-            .ok_or_else(|| format!("Browser tab '{}' not found", tab_id))
-    }
-
-    /// Mark/unmark a tab as agent-controlled (returned to the renderer in
-    /// `browser_tab_list` so the badge stays correct).
-    pub(crate) fn set_agent_controlled(&self, tab_id: &str, controlled: bool) {
-        if let Ok(mut tabs) = self.tabs.lock() {
-            if let Some(info) = tabs.get_mut(tab_id) {
-                info.agent_controlled = controlled;
-            }
-        }
-    }
-
-    fn start_url_poller(&self, tab_id: String) {
-        let app_handle = self.app_handle.clone();
-        std::thread::spawn(move || {
-            // Wait for webview to fully initialize before injecting scripts
-            std::thread::sleep(std::time::Duration::from_millis(1500));
-
-            // Script that polls URL, title and readyState continuously.
-            // This is more reliable than window.load for SPAs (React, Vue, Angular).
-            let poller_script = format!(
-                r#"
-                (function() {{
-                    if (window.__termul_poller) return;
-                    window.__termul_poller = true;
-
-                    var tabId = '{}';
-                    var lastUrl = location.href;
-                    var lastTitle = '';
-                    var lastReady = '';
-                    var loadedReported = false;
-
-                    var invoke = function(cmd, args) {{
-                        try {{
-                            if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
-                                window.__TAURI_INTERNALS__.invoke(cmd, args);
-                                return true;
-                            }}
-                        }} catch(e) {{}}
-                        try {{
-                            if (window.__TAURI__ && window.__TAURI__.invoke) {{
-                                window.__TAURI__.invoke(cmd, args);
-                                return true;
-                            }}
-                        }} catch(e) {{}}
-                        try {{
-                            if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {{
-                                window.__TAURI__.core.invoke(cmd, args);
-                                return true;
-                            }}
-                        }} catch(e) {{}}
-                        return false;
-                    }};
-
-                    var reportUrl = function(url) {{
-                        invoke('browser_tab_report_url', {{ tabId: tabId, url: url }});
-                    }};
-
-                    var reportTitle = function(title) {{
-                        invoke('browser_tab_report_title', {{ tabId: tabId, title: title }});
-                    }};
-
-                    var reportLoaded = function() {{
-                        if (loadedReported) return;
-                        loadedReported = true;
-                        invoke('browser_tab_report_loaded', {{ tabId: tabId }});
-                    }};
-
-                    var check = function() {{
-                        var url = location.href;
-                        var ready = document.readyState;
-                        var title = document.title || '';
-
-                        // Report URL change
-                        if (url !== lastUrl) {{
-                            lastUrl = url;
-                            reportUrl(url);
-                            // Reset loaded flag on navigation — new page needs to load
-                            loadedReported = false;
-                            lastReady = '';
-                        }}
-
-                        // Report title change
-                        if (title !== lastTitle) {{
-                            lastTitle = title;
-                            reportTitle(title);
-                        }}
-
-                        // Report loaded when readyState stabilizes at 'complete'
-                        if (ready === 'complete' && lastReady !== 'complete') {{
-                            reportLoaded();
-                        }}
-                        lastReady = ready;
-                    }};
-
-                    // Poll every 400ms
-                    setInterval(check, 400);
-
-                    // Hook history.pushState for SPA navigation
-                    var origPush = history.pushState;
-                    var origReplace = history.replaceState;
-                    history.pushState = function() {{
-                        origPush.apply(this, arguments);
-                        setTimeout(check, 50);
-                        setTimeout(check, 300);
-                    }};
-                    history.replaceState = function() {{
-                        origReplace.apply(this, arguments);
-                        setTimeout(check, 50);
-                        setTimeout(check, 300);
-                    }};
-                    window.addEventListener('popstate', function() {{
-                        setTimeout(check, 50);
-                        setTimeout(check, 300);
-                    }});
-
-                    // Initial check
-                    check();
-                }})();
-                "#,
-                tab_id
-            );
-
-            // Try to inject the poller script. Retry a few times if webview not ready.
-            for attempt in 0..5 {
-                match app_handle.get_webview(&tab_id) {
-                    Some(webview) => {
-                        let _ = webview.eval(&poller_script);
-                        log::info!(
-                            "[BrowserTab] Injected URL poller for tab={} (attempt={})",
-                            tab_id,
-                            attempt
-                        );
-                        break;
-                    }
-                    None => {
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                    }
-                }
-            }
-
-            // Inject agentation toolbar via eval after a delay for DOM readiness.
-            // The agentation library accesses document.head at module top-level,
-            // so it needs a ready DOM. 3s delay matches the poller's init time.
-            let app_handle_clone = app_handle.clone();
-            let tab_id_clone = tab_id.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(3000));
-                log::info!(
-                    "[BrowserTab] Agentation delayed injection check for tab={}",
-                    tab_id_clone
-                );
-                if let Some(bt) = app_handle_clone.try_state::<Arc<BrowserTabManager>>() {
-                    let enabled = bt.is_agentation_enabled();
-                    log::info!(
-                        "[BrowserTab] Agentation enabled={} for tab={}",
-                        enabled,
-                        tab_id_clone
-                    );
-                    if enabled {
-                        match bt.inject_agentation_toolbar(&tab_id_clone) {
-                            Ok(()) => {}
-                            Err(e) => log::warn!(
-                                "[BrowserTab] Agentation toolbar eval failed for tab={}: {}",
-                                tab_id_clone,
-                                e
-                            ),
-                        }
-                    }
-                } else {
-                    log::warn!(
-                        "[BrowserTab] Could not get BrowserTabManager from state for tab={}",
-                        tab_id_clone
-                    );
-                }
-            });
-        });
-    }
-
+    /// Build the tab's webview on `store` with the builder hooks installed,
+    /// then confirm the engine created it and attach the adapter's own
+    /// hooks. Those come after the first navigation started, which is why
+    /// the core builds agent tabs at `about:blank`. A webview the engine
+    /// failed to build is closed and the tab refused.
     pub async fn create(
         &self,
         tab_id: String,
         url: String,
         bounds: BrowserBounds,
-    ) -> Result<BrowserTabInfo, String> {
+        events: TabEvents,
+        store: DataStore,
+    ) -> Result<(), String> {
         let window = self.get_window()?;
         let parsed_url: tauri::Url = url.parse().map_err(|e| format!("Invalid URL: {}", e))?;
+        crate::host_perimeter::check_tab_target(&self.app_handle, &tab_id, &parsed_url)?;
+
+        // User tabs share the app's profile, so clearing through the main
+        // webview resets saved site grants before the first user tab loads a
+        // page. The app UI's own origin keeps its grants.
+        #[cfg(windows)]
+        if let (DataStore::App, Some(main)) = (&store, self.app_handle.get_webview("main")) {
+            use crate::browser_tab_saved_grants::{clear_saved_grants, ClearError};
+            let app_origin = main
+                .url()
+                .map(|url| url.origin().ascii_serialization())
+                .unwrap_or_default();
+            match self
+                .saved_grants
+                .run(|| clear_saved_grants(&main, app_origin))
+                .await
+            {
+                Some(Ok(report)) if report.reset > 0 => log::warn!(
+                    "[BrowserTab] reset {} saved web permission grants before opening tab={}",
+                    report.reset,
+                    tab_id
+                ),
+                Some(Err(ClearError::Unsupported)) => log::warn!(
+                    "[BrowserTab] webview runtime cannot clear saved web permissions; tab={}",
+                    tab_id
+                ),
+                Some(Err(ClearError::Failed)) => log::warn!(
+                    "[BrowserTab] could not clear saved web permissions, the next tab retries; tab={}",
+                    tab_id
+                ),
+                Some(Ok(_)) | None => {}
+            }
+        }
 
         let mut builder = tauri::webview::WebviewBuilder::new(
             tab_id.clone(),
             tauri::WebviewUrl::External(parsed_url),
-        );
+        )
+        .on_permission_request(crate::browser_tab_permissions::on_permission_request);
+        builder = hooks::install(builder, &events);
 
         // Inject agentation globals via initialization_script (runs before page JS).
         // The toolbar bundle itself is injected via eval AFTER page load,
@@ -276,7 +148,7 @@ impl BrowserTabManager {
                 .map_err(|_| "Lock poisoned")?;
             (ep, en)
         };
-        if enabled {
+        if enabled && crate::host_perimeter::agentation_allowed(&tab_id) {
             if let Some(endpoint_url) = &endpoint {
                 let init_script = format!(
                     r#"
@@ -285,14 +157,53 @@ impl BrowserTabManager {
                     "#
                 );
                 builder = builder.initialization_script(&init_script);
-                log::info!(
-                    "[BrowserTab] Agentation init script set for tab={} endpoint={}",
-                    tab_id,
-                    endpoint_url
-                );
+                log::info!("[BrowserTab] Agentation init script set for tab={tab_id}");
             }
         }
 
+        if store != DataStore::App {
+            let profiles = self.profiles.as_ref().map_err(Clone::clone)?;
+            builder = profiles.configure(builder, &tab_id, &store)?;
+        }
+        match self.mount(&window, builder, &tab_id, bounds, events.clone()).await {
+            Ok(webview) => {
+                if let Ok(profiles) = &self.profiles {
+                    profiles.built(&webview, &tab_id, &store).await;
+                }
+            }
+            Err(error) => {
+                self.release_profile(&tab_id);
+                return Err(error);
+            }
+        }
+        self.tabs
+            .lock()
+            .map_err(|_| "Lock poisoned")?
+            .insert(tab_id, events);
+        Ok(())
+    }
+
+    fn release_profile(&self, tab_id: &str) {
+        if let Ok(profiles) = &self.profiles {
+            profiles.dropped(&self.app_handle, tab_id);
+        }
+    }
+
+    /// Clear the global agent profile. No webview may use it any more.
+    pub async fn wipe_global_profile(&self) -> Result<(), String> {
+        let profiles = self.profiles.as_ref().map_err(Clone::clone)?;
+        profiles.wipe_global(&self.app_handle).await
+    }
+
+    /// Add the built webview to the window and confirm the engine created it.
+    async fn mount(
+        &self,
+        window: &tauri::Window,
+        builder: tauri::webview::WebviewBuilder<tauri::Wry>,
+        tab_id: &str,
+        bounds: BrowserBounds,
+        events: TabEvents,
+    ) -> Result<tauri::Webview, String> {
         let _webview = window
             .add_child(
                 builder,
@@ -389,29 +300,21 @@ impl BrowserTabManager {
             }
         }
 
-        // Start background poller only after native placement succeeds.
-        self.start_url_poller(tab_id.clone());
-
-        let info = BrowserTabInfo {
-            id: tab_id.clone(),
-            url,
-            title: String::new(),
-            agent_controlled: false,
-        };
-
-        let mut tabs = self.tabs.lock().map_err(|_| "Lock poisoned")?;
-        tabs.insert(tab_id.clone(), info.clone());
-        drop(tabs);
-
-        Ok(info)
+        if let Err(error) = hooks::attach(&_webview, events).await {
+            let _ = _webview.close();
+            log::warn!("[BrowserTab] tab {tab_id} refused: engine did not confirm the webview ({error})");
+            return Err(format!("the browser engine did not create the tab: {error}"));
+        }
+        Ok(_webview)
     }
+
     pub fn navigate(&self, tab_id: &str, url: String) -> Result<(), String> {
         let webview = self.get_webview(tab_id)?;
         let parsed_url: tauri::Url = url.parse().map_err(|e| format!("Invalid URL: {}", e))?;
+        crate::host_perimeter::check_tab_target(&self.app_handle, tab_id, &parsed_url)?;
         webview
             .navigate(parsed_url)
             .map_err(|e| format!("Navigation failed: {}", e))?;
-        self.schedule_agentation_reinject(tab_id);
         Ok(())
     }
 
@@ -512,9 +415,12 @@ impl BrowserTabManager {
     }
 
     /// Inject the agentation toolbar bundle into a browser tab via eval.
-    /// Called after page load (browser_tab_report_loaded) because the
-    /// agentation library accesses document.head at module top-level.
+    /// Runs after a page load because the agentation library accesses
+    /// document.head at module top-level.
     pub fn inject_agentation_toolbar(&self, tab_id: &str) -> Result<(), String> {
+        if !crate::host_perimeter::agentation_allowed(tab_id) {
+            return Err("Agentation is not available in agent tabs".to_string());
+        }
         let webview = self.get_webview(tab_id)?;
 
         // Inject the agentation toolbar bundle (bundled IIFE).
@@ -531,33 +437,31 @@ impl BrowserTabManager {
         Ok(())
     }
 
-    /// Re-inject the URL poller after navigation. The poller detects
-    /// `readyState === 'complete'` and calls `browser_tab_report_loaded`,
-    /// which in turn injects the agentation toolbar. This chains the
-    /// document-load signal instead of using a blind fixed delay.
-    fn schedule_agentation_reinject(&self, tab_id: &str) {
-        let app_handle = self.app_handle.clone();
-        let tab_id = tab_id.to_string();
-        std::thread::spawn(move || {
-            // Wait for the new document to start loading before re-injecting
-            // the poller. The poller self-deduplicates via __termul_poller.
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            if let Some(bt) = app_handle.try_state::<Arc<BrowserTabManager>>() {
-                if bt.is_agentation_enabled() {
-                    bt.start_url_poller(tab_id.clone());
-                    log::info!(
-                        "[BrowserTab] Re-injected URL poller after navigation for tab={}",
-                        tab_id
-                    );
-                }
-            }
-        });
+    /// The toolbar's post-load injection on user tabs, when enabled.
+    pub(crate) fn inject_agentation_after_load(&self, tab_id: &str) {
+        if !self.is_agentation_enabled() {
+            return;
+        }
+        if let Err(e) = self.inject_agentation_toolbar(tab_id) {
+            log::warn!("[BrowserTab] Agentation toolbar injection failed for tab={tab_id}: {e}");
+        }
     }
 
-    pub fn destroy(&self, tab_id: &str) -> Result<(), String> {
-        #[cfg(target_os = "linux")]
-        {
-            if let Ok(webview) = self.get_webview(tab_id) {
+    /// Close the tab's webview and wait until the engine has destroyed it,
+    /// then publish the close on the tab's event stream. A no-op for
+    /// labels this manager never built.
+    pub async fn destroy(&self, tab_id: &str) {
+        let events = self
+            .tabs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(tab_id);
+        let Some(events) = events else {
+            return;
+        };
+        if let Ok(webview) = self.get_webview(tab_id) {
+            #[cfg(target_os = "linux")]
+            {
                 let _ = webview.with_webview(move |child_platform| {
                     use gtk::prelude::*;
                     let child_widget = child_platform.inner();
@@ -568,41 +472,28 @@ impl BrowserTabManager {
                     }
                 });
             }
+            hooks::close(&webview).await;
         }
-
-        if let Ok(webview) = self.get_webview(tab_id) {
-            let _ = webview.close();
-        }
-        let mut tabs = self.tabs.lock().map_err(|_| "Lock poisoned")?;
-        tabs.remove(tab_id);
-        drop(tabs);
-        Ok(())
+        self.release_profile(tab_id);
+        events.publish(crate::browser_automation::engine::events::TabEvent::Closed);
     }
 
     pub fn go_back(&self, tab_id: &str) -> Result<(), String> {
         let webview = self.get_webview(tab_id)?;
-        webview
-            .eval("window.history.back()")
-            .map_err(|e| format!("Go back failed: {}", e))?;
-        self.schedule_agentation_reinject(tab_id);
-        Ok(())
+        step_history(&webview, HistoryDirection::Back).map_err(|e| format!("Go back failed: {}", e))
     }
 
     pub fn go_forward(&self, tab_id: &str) -> Result<(), String> {
         let webview = self.get_webview(tab_id)?;
-        webview
-            .eval("window.history.forward()")
-            .map_err(|e| format!("Go forward failed: {}", e))?;
-        self.schedule_agentation_reinject(tab_id);
-        Ok(())
+        step_history(&webview, HistoryDirection::Forward)
+            .map_err(|e| format!("Go forward failed: {}", e))
     }
 
     pub fn reload(&self, tab_id: &str) -> Result<(), String> {
         let webview = self.get_webview(tab_id)?;
         webview
-            .eval("window.location.reload()")
+            .reload()
             .map_err(|e| format!("Reload failed: {}", e))?;
-        self.schedule_agentation_reinject(tab_id);
         Ok(())
     }
 
@@ -647,13 +538,90 @@ impl BrowserTabManager {
             if let Ok(webview) = self.get_webview(&id) {
                 let _ = webview.close();
             }
+            self.release_profile(&id);
         }
         tabs.clear();
     }
 }
 
+/// Open the agent profiles under app data and delete what an earlier run
+/// left of retired global generations.
+fn open_profiles(app: &AppHandle) -> Result<Arc<AgentProfiles>, String> {
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?
+        .join(profile::GLOBAL_ROOT);
+    let profiles = AgentProfiles::open(root).map(Arc::new).map_err(|e| {
+        log::error!("[BrowserTab] agent profile unavailable; agent tabs are refused: {e}");
+        format!("the agent browser profile is unavailable: {e}")
+    })?;
+    let sweeping = profiles.clone();
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let removed = sweeping.sweep(&handle).await;
+        if removed > 0 {
+            log::info!("[BrowserTab] removed {removed} retired agent profile generation(s)");
+        }
+    });
+    Ok(profiles)
+}
+
 impl Drop for BrowserTabManager {
     fn drop(&mut self) {
         self.destroy_all();
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum HistoryDirection {
+    Back,
+    Forward,
+}
+
+/// Move the tab along the engine's own back-forward list. Page script
+/// cannot intercept it the way it can `window.history`.
+fn step_history(webview: &tauri::Webview, direction: HistoryDirection) -> tauri::Result<()> {
+    webview.with_webview(move |platform| native_history(&platform, direction))
+}
+
+#[cfg(target_os = "windows")]
+fn native_history(platform: &tauri::webview::PlatformWebview, direction: HistoryDirection) {
+    // SAFETY: this closure runs on the UI thread that owns the WebView2
+    // COM objects.
+    let stepped = unsafe {
+        platform.controller().CoreWebView2().and_then(|core| match direction {
+            HistoryDirection::Back => core.GoBack(),
+            HistoryDirection::Forward => core.GoForward(),
+        })
+    };
+    if stepped.is_err() {
+        log::warn!("[BrowserTab] WebView2 history step ({direction:?}) failed");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn native_history(platform: &tauri::webview::PlatformWebview, direction: HistoryDirection) {
+    use objc2_web_kit::WKWebView;
+    // SAFETY: tauri hands out the tab's live WKWebView, and this closure
+    // runs on the main thread that owns it.
+    let webview = unsafe { &*platform.inner().cast::<WKWebView>() };
+    // SAFETY: main thread, as above. A missing history item returns nil,
+    // so there is nothing to report.
+    let _ = unsafe {
+        match direction {
+            HistoryDirection::Back => webview.goBack(),
+            HistoryDirection::Forward => webview.goForward(),
+        }
+    };
+}
+
+#[cfg(target_os = "linux")]
+fn native_history(platform: &tauri::webview::PlatformWebview, direction: HistoryDirection) {
+    use webkit2gtk::WebViewExt;
+    let webview = platform.inner();
+    match direction {
+        HistoryDirection::Back => webview.go_back(),
+        HistoryDirection::Forward => webview.go_forward(),
     }
 }

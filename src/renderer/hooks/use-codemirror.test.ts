@@ -1,5 +1,6 @@
+import { searchPanelOpen } from '@codemirror/search'
 import { runScopeHandlers } from '@codemirror/view'
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const { requestSaveEditorFile } = vi.hoisted(() => ({ requestSaveEditorFile: vi.fn() }))
@@ -62,5 +63,47 @@ describe('useCodeMirror Mod-s', () => {
 
     expect(pressModS(result.current.view!)).toBe(true)
     expect(requestSaveEditorFile).toHaveBeenCalledWith('/remote/a.txt')
+  })
+})
+
+describe('useCodeMirror find', () => {
+  /** Ctrl+key with the editor focused, inside act because the find panels render React. */
+  function pressCtrl(view: NonNullable<ReturnType<typeof useCodeMirror>['view']>, key: string) {
+    const event = new KeyboardEvent('keydown', { key, ctrlKey: true })
+    let handled = false
+    act(() => {
+      handled = runScopeHandlers(view, event, 'editor')
+    })
+    return handled
+  }
+
+  it('opens the find widget on Ctrl+F', async () => {
+    const { result } = renderEditor()
+    await waitFor(() => expect(result.current.view).not.toBeNull(), { timeout: 5000 })
+    const view = result.current.view!
+
+    expect(pressCtrl(view, 'f')).toBe(true)
+    expect(searchPanelOpen(view.state)).toBe(true)
+    expect(document.activeElement).toBe(view.dom.querySelector('[data-find-field="search"]'))
+  })
+
+  it('opens the find widget with the replace field focused on Ctrl+H', async () => {
+    const { result } = renderEditor()
+    await waitFor(() => expect(result.current.view).not.toBeNull(), { timeout: 5000 })
+    const view = result.current.view!
+
+    expect(pressCtrl(view, 'h')).toBe(true)
+    expect(searchPanelOpen(view.state)).toBe(true)
+    expect(document.activeElement).toBe(view.dom.querySelector('[data-find-field="replace"]'))
+  })
+
+  it('opens go to line on Ctrl+G', async () => {
+    const { result } = renderEditor()
+    await waitFor(() => expect(result.current.view).not.toBeNull(), { timeout: 5000 })
+    const view = result.current.view!
+
+    expect(pressCtrl(view, 'g')).toBe(true)
+    expect(document.activeElement).toBe(view.dom.querySelector('[data-go-to-line]'))
+    expect(searchPanelOpen(view.state)).toBe(false)
   })
 })

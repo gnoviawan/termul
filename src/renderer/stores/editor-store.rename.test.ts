@@ -37,6 +37,7 @@ function seed(operationStatus: EditorFileState['operationStatus']): void {
         {
           filePath: from,
           content: 'edited',
+          kind: 'text',
           originalContent: 'on disk',
           isDirty: true,
           language: 'typescript',

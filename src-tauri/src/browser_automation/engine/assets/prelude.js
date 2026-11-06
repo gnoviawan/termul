@@ -1,0 +1,481 @@
+// A form or a document that holds an element named like one of its own
+// properties (<input name=nodeType>, <img name=body>) shadows that property
+// in every script world. Node reads go through the prototypes' own
+// accessors, captured before any page value is touched.
+function getter(proto, name) {
+  var d = Object.getOwnPropertyDescriptor(proto, name);
+  return function (obj) { return d.get.call(obj); };
+}
+function setter(proto, name) {
+  var d = Object.getOwnPropertyDescriptor(proto, name);
+  return function (obj, value) { d.set.call(obj, value); };
+}
+function method(proto, name) {
+  var f = proto[name];
+  return function (obj, a, b, c) { return f.call(obj, a, b, c); };
+}
+var nodeTypeOf = getter(Node.prototype, 'nodeType');
+var parentOf = getter(Node.prototype, 'parentNode');
+var firstNodeOf = getter(Node.prototype, 'firstChild');
+var nextNodeOf = getter(Node.prototype, 'nextSibling');
+var prevNodeOf = getter(Node.prototype, 'previousSibling');
+var nodeValueOf = getter(Node.prototype, 'nodeValue');
+var containsOf = method(Node.prototype, 'contains');
+var dispatchOf = method(EventTarget.prototype, 'dispatchEvent');
+var ownerDocOf = getter(Node.prototype, 'ownerDocument');
+var connectedOf = getter(Node.prototype, 'isConnected');
+var baseOf = getter(Node.prototype, 'baseURI');
+var rootOf = method(Node.prototype, 'getRootNode');
+var tagOf = getter(Element.prototype, 'tagName');
+var shadowOf = getter(Element.prototype, 'shadowRoot');
+var nextOf = getter(Element.prototype, 'nextElementSibling');
+var prevOf = getter(Element.prototype, 'previousElementSibling');
+var clientLeftOf = getter(Element.prototype, 'clientLeft');
+var clientTopOf = getter(Element.prototype, 'clientTop');
+var attr = method(Element.prototype, 'getAttribute');
+var hasAttr = method(Element.prototype, 'hasAttribute');
+var matchesOf = method(Element.prototype, 'matches');
+var closestOf = method(Element.prototype, 'closest');
+var rectOf = method(Element.prototype, 'getBoundingClientRect');
+var scrollIntoViewOf = method(Element.prototype, 'scrollIntoView');
+var docElOf = getter(Document.prototype, 'documentElement');
+var bodyOf = getter(Document.prototype, 'body');
+var titleOf = getter(Document.prototype, 'title');
+var createRangeOf = method(Document.prototype, 'createRange');
+var viewOf = getter(Document.prototype, 'defaultView');
+var urlOf = getter(Document.prototype, 'URL');
+var pointOf = method(Document.prototype, 'elementFromPoint');
+var hostOf = getter(ShadowRoot.prototype, 'host');
+var formElements = getter(HTMLFormElement.prototype, 'elements');
+var hrefOf = getter(HTMLAnchorElement.prototype, 'href');
+var checkedOf = getter(HTMLInputElement.prototype, 'checked');
+var optionsOf = getter(HTMLSelectElement.prototype, 'options');
+var clickOf = method(HTMLElement.prototype, 'click');
+var assignedOf = HTMLSlotElement.prototype.assignedElements ? method(HTMLSlotElement.prototype, 'assignedElements') : null;
+var FIRST = {
+  1: getter(Element.prototype, 'firstElementChild'),
+  9: getter(Document.prototype, 'firstElementChild'),
+  11: getter(DocumentFragment.prototype, 'firstElementChild')
+};
+var QSA = {
+  1: method(Element.prototype, 'querySelectorAll'),
+  9: method(Document.prototype, 'querySelectorAll'),
+  11: method(DocumentFragment.prototype, 'querySelectorAll')
+};
+var BY_ID = { 9: method(Document.prototype, 'getElementById'), 11: method(DocumentFragment.prototype, 'getElementById') };
+var FRAME_DOC = {
+  IFRAME: getter(HTMLIFrameElement.prototype, 'contentDocument'),
+  FRAME: getter(HTMLFrameElement.prototype, 'contentDocument'),
+  OBJECT: getter(HTMLObjectElement.prototype, 'contentDocument')
+};
+var EDITABLE = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'isContentEditable');
+var INNER_TEXT = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'innerText');
+var textContentOf = getter(Node.prototype, 'textContent');
+var setTextContentOf = setter(Node.prototype, 'textContent');
+var inputValueOf = getter(HTMLInputElement.prototype, 'value');
+var VALUE = {
+  INPUT: inputValueOf,
+  TEXTAREA: getter(HTMLTextAreaElement.prototype, 'value'),
+  SELECT: getter(HTMLSelectElement.prototype, 'value')
+};
+var LABELS = {
+  INPUT: getter(HTMLInputElement.prototype, 'labels'),
+  SELECT: getter(HTMLSelectElement.prototype, 'labels'),
+  TEXTAREA: getter(HTMLTextAreaElement.prototype, 'labels'),
+  BUTTON: getter(HTMLButtonElement.prototype, 'labels'),
+  METER: getter(HTMLMeterElement.prototype, 'labels'),
+  OUTPUT: getter(HTMLOutputElement.prototype, 'labels'),
+  PROGRESS: getter(HTMLProgressElement.prototype, 'labels')
+};
+function firstChildOf(node) {
+  return FIRST[nodeTypeOf(node)](node);
+}
+// The element children of an element, document or shadow root.
+function elementsIn(parent) {
+  var out = [];
+  for (var c = firstChildOf(parent); c; c = nextOf(c)) out.push(c);
+  return out;
+}
+function fieldValueOf(el) {
+  var read = VALUE[tagOf(el)];
+  return read ? read(el) : '';
+}
+function all(root, selector) {
+  return Array.prototype.slice.call(QSA[nodeTypeOf(root)](root, selector));
+}
+// Elements whose focus can sit in a document of their own.
+var FRAME_TAGS = ['IFRAME', 'FRAME', 'OBJECT', 'EMBED'];
+// The document of a same-origin frame element; null for anything else.
+function frameDocOf(el) {
+  var read = FRAME_DOC[tagOf(el)];
+  return read ? read(el) : null;
+}
+// The node above n, crossing out of a shadow root to its host.
+function upOf(n) {
+  return parentOf(n) || (nodeTypeOf(n) === 11 ? hostOf(n) : null);
+}
+// HTML-only properties; an SVG or MathML element has none.
+function editableOf(el) {
+  try { return EDITABLE.get.call(el); } catch (e) { return false; }
+}
+function textOf(el) {
+  try { return INNER_TEXT.get.call(el) || ''; } catch (e) { return ''; }
+}
+var INTERACTIVE =
+  'a[href],button,input,select,textarea,summary,' +
+  '[role=button],[role=link],[role=textbox],[role=checkbox],[role=switch],[role=combobox],' +
+  '[role=listbox],[role=menuitem],[role=tab],[role=slider],[role=searchbox],' +
+  '[contenteditable=true],[contenteditable=""],[onclick],[tabindex]';
+var BUTTON_TYPES = ['button', 'submit', 'reset', 'image'];
+var FIELD_ROLES = ['textbox', 'searchbox', 'combobox', 'listbox', 'slider', 'spinbutton'];
+var TAG_ROLE = {
+  A: 'link', BUTTON: 'button', INPUT: 'textbox', SELECT: 'combobox',
+  TEXTAREA: 'textbox', SUMMARY: 'button', H1: 'heading', H2: 'heading',
+  H3: 'heading', H4: 'heading', H5: 'heading', H6: 'heading',
+  NAV: 'navigation', MAIN: 'main', ASIDE: 'complementary',
+  HEADER: 'banner', FOOTER: 'contentinfo', FORM: 'form', IMG: 'img',
+  UL: 'list', OL: 'list', LI: 'listitem', TABLE: 'table'
+};
+// Set once any page text in this helper's result was cut to its limit.
+var textCut = false;
+// The first `max` UTF-16 units of `text`, never ending inside a surrogate
+// pair, which would make the result invalid JSON.
+function clip(text, max) {
+  if (text.length <= max) return text;
+  textCut = true;
+  var end = max;
+  var last = text.charCodeAt(end - 1);
+  if (last >= 0xD800 && last <= 0xDBFF) end -= 1;
+  return text.slice(0, end);
+}
+function oneLine(value, max) {
+  return clip(String(value).replace(/\s+/g, ' ').trim(), max);
+}
+function inputType(el) {
+  return oneLine(attr(el, 'type') || 'text', 32).toLowerCase();
+}
+function roleOf(el) {
+  var r = oneLine(attr(el, 'role') || '', 64);
+  if (r) return r;
+  var tag = tagOf(el);
+  if (tag === 'INPUT') {
+    var t = inputType(el);
+    if (t === 'checkbox') return 'checkbox';
+    if (t === 'radio') return 'radio';
+    if (BUTTON_TYPES.indexOf(t) >= 0) return 'button';
+    if (t === 'search') return 'searchbox';
+    return 'textbox';
+  }
+  return TAG_ROLE[tag] || '';
+}
+function checkState(el) {
+  var t = tagOf(el) === 'INPUT' ? inputType(el) : '';
+  if (t === 'checkbox' || t === 'radio') return { checked: !!checkedOf(el), radio: t === 'radio' };
+  var role = attr(el, 'role');
+  if (role === 'checkbox' || role === 'switch' || role === 'radio' || role === 'menuitemcheckbox') {
+    return { checked: attr(el, 'aria-checked') === 'true', radio: role === 'radio' };
+  }
+  return null;
+}
+function labelledText(el) {
+  var ids = (attr(el, 'aria-labelledby') || '').split(/\s+/);
+  var root = rootOf(el);
+  var byId = BY_ID[nodeTypeOf(root)];
+  var out = '';
+  for (var i = 0; i < ids.length; i++) {
+    var t = byId ? byId(root, ids[i]) : null;
+    if (t) out += textOf(t) + ' ';
+  }
+  return out.trim();
+}
+var NOT_STATIC = ['INPUT', 'SELECT', 'TEXTAREA', 'SCRIPT', 'STYLE'];
+// The text under node without the controls and editable elements in it,
+// whose text the agent's own input changes. Read in place: a copy would
+// construct the page's custom elements, running page code.
+function staticText(node) {
+  var out = '';
+  for (var c = firstNodeOf(node); c; c = nextNodeOf(c)) {
+    var type = nodeTypeOf(c);
+    if (type === 3) out += nodeValueOf(c);
+    else if (type === 1 && NOT_STATIC.indexOf(tagOf(c)) < 0 && !editableOf(c)) out += staticText(c);
+  }
+  return out;
+}
+function labelsText(el) {
+  var read = LABELS[tagOf(el)];
+  var labels = read ? read(el) : null;
+  var out = '';
+  for (var i = 0; labels && i < labels.length; i++) out += staticText(labels[i]) + ' ';
+  return out;
+}
+// A field never takes its name from what it holds: the value changes as
+// the agent fills it, and the name is how a ref recognises its element.
+// That also keeps a password out of every snapshot.
+function contentText(el) {
+  var tag = tagOf(el);
+  if (tag === 'INPUT') {
+    var t = inputType(el);
+    if (t === 'submit') return inputValueOf(el) || 'Submit';
+    if (t === 'reset') return inputValueOf(el) || 'Reset';
+    return t === 'button' ? inputValueOf(el) : '';
+  }
+  if (tag === 'TEXTAREA' || tag === 'SELECT' || editableOf(el)) return '';
+  return FIELD_ROLES.indexOf(roleOf(el)) >= 0 ? '' : textOf(el);
+}
+function named(raw) {
+  return oneLine(raw || '', 100);
+}
+function nameOf(el) {
+  return named(attr(el, 'aria-labelledby') ? labelledText(el) : '') ||
+    named(attr(el, 'aria-label')) || named(labelsText(el)) || named(contentText(el)) ||
+    named(attr(el, 'title')) || named(attr(el, 'placeholder')) || named(attr(el, 'alt'));
+}
+function visible(el) {
+  if (!connectedOf(el)) return false;
+  var r = rectOf(el);
+  if (r.width === 0 && r.height === 0) return false;
+  var s = styleOf(el);
+  return s.visibility !== 'hidden' && s.display !== 'none';
+}
+function styleOf(el) {
+  var view = viewOf(ownerDocOf(el)) || window;
+  return view.getComputedStyle(el);
+}
+// A path names an element by tag:nth-of-type steps from its root. Roots
+// chain with '|': '|shadow|' enters an element's open shadow root and
+// '|frame:<doc>|' a same-origin frame's document, where <doc> pins the
+// document the snapshot saw. A leading 'frame:<doc>|' pins this frame's
+// own document.
+function docId(doc) {
+  var view = doc && viewOf(doc);
+  return view ? String(view.performance.timeOrigin) : '';
+}
+function localPath(el) {
+  var segs = [];
+  while (el && nodeTypeOf(el) === 1) {
+    var parent = parentOf(el);
+    if (!parent) return '';
+    var tag = tagOf(el);
+    if (nodeTypeOf(parent) === 9) {
+      segs.unshift(tag.toLowerCase());
+      break;
+    }
+    var n = 1;
+    for (var c = firstChildOf(parent); c && c !== el; c = nextOf(c)) {
+      if (tagOf(c) === tag) n++;
+    }
+    segs.unshift(tag.toLowerCase() + ':nth-of-type(' + n + ')');
+    el = nodeTypeOf(parent) === 1 ? parent : null;
+  }
+  return segs.join('>');
+}
+function pathOf(el) {
+  var root = rootOf(el);
+  var local = localPath(el);
+  var type = nodeTypeOf(root);
+  if (type === 11 && hostOf(root)) return pathOf(hostOf(root)) + '|shadow|' + local;
+  var view = type === 9 ? viewOf(root) : null;
+  if (view && view !== window && view.frameElement) {
+    return pathOf(view.frameElement) + '|frame:' + docId(root) + '|' + local;
+  }
+  return local;
+}
+function stepInto(root, local) {
+  var node = root;
+  var segs = local.split('>');
+  for (var i = 0; i < segs.length && node; i++) {
+    var m = /^([a-z0-9._-]+)(?::nth-of-type\((\d+)\))?$/.exec(segs[i]);
+    if (!m) return null;
+    var want = m[1], n = m[2] ? Number(m[2]) : 1, next = null;
+    var isDoc = nodeTypeOf(node) === 9;
+    for (var c = isDoc ? docElOf(node) : firstChildOf(node); c; c = isDoc ? null : nextOf(c)) {
+      if (tagOf(c).toLowerCase() === want && --n === 0) { next = c; break; }
+    }
+    node = next;
+  }
+  return node && nodeTypeOf(node) === 1 ? node : null;
+}
+// A snapshot path ends in '~<fingerprint>' of its element: its tag, the
+// attributes that tell like elements apart, and the text of the item
+// holding it. A path that leads to another element once the page has
+// moved its siblings (the next card's "Delete") then finds nothing
+// instead of that element. Text under controls and editables is left
+// out, so the agent's own input never changes a fingerprint.
+var ROW = 'tr, li, [role=row], [role=listitem], [role=option]';
+var ITEM_LEVELS = 6;
+var NEAR_SIBLINGS = 3;
+function flatText(node) {
+  return staticText(node).replace(/\s+/g, ' ').trim();
+}
+function shapeOf(el) {
+  var shape = tagOf(el) + '.' + (attr(el, 'class') || '');
+  for (var c = firstChildOf(el); c; c = nextOf(c)) shape += ' ' + tagOf(c);
+  return shape;
+}
+// Whether a near sibling has el's tag, class and child tags, as the items
+// of a list or the cards of a grid do.
+function repeats(el) {
+  var shape = shapeOf(el);
+  var before = prevOf(el), after = nextOf(el);
+  for (var i = 0; i < NEAR_SIBLINGS; i++) {
+    if (before && shapeOf(before) === shape) return true;
+    if (after && shapeOf(after) === shape) return true;
+    before = before && prevOf(before);
+    after = after && nextOf(after);
+  }
+  return false;
+}
+// The text of the item holding el: the nearest row, or the nearest
+// repeated ancestor whose text says more than el's own, so a button
+// beside an "Edit" takes its card's text rather than its own.
+function itemText(el) {
+  var own = flatText(el);
+  var body = bodyOf(ownerDocOf(el));
+  var a = parentOf(el);
+  for (var i = 0; i < ITEM_LEVELS && a && nodeTypeOf(a) === 1 && a !== body; i++, a = parentOf(a)) {
+    if (matchesOf(a, ROW)) return flatText(a);
+    if (repeats(a)) {
+      var text = flatText(a);
+      if (text !== own) return text;
+    }
+  }
+  var row = closestOf(el, ROW);
+  return row && row !== el ? flatText(row) : '';
+}
+// For an element with no name at all, the nearest text before it: the
+// label-like text that is all that tells unnamed fields apart.
+function besideText(el) {
+  if (attr(el, 'id') || attr(el, 'name') || nameOf(el)) return '';
+  for (var n = prevNodeOf(el), i = 0; n && i < 8; n = prevNodeOf(n), i++) {
+    var type = nodeTypeOf(n);
+    var text = type === 3 ? nodeValueOf(n)
+      : type === 1 && NOT_STATIC.indexOf(tagOf(n)) < 0 && !editableOf(n) ? staticText(n) : '';
+    text = text.replace(/\s+/g, ' ').trim();
+    if (text) return text;
+  }
+  return '';
+}
+function fingerprint(el) {
+  var text = [tagOf(el), attr(el, 'id'), attr(el, 'name'), attr(el, 'type'), attr(el, 'href'),
+    itemText(el), besideText(el)].join('\u0001');
+  var h = 0x811c9dc5;
+  for (var i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(36);
+}
+function locate(path) {
+  var text = String(path);
+  var pinned = /~([0-9a-z]+)$/.exec(text);
+  if (pinned) text = text.slice(0, pinned.index);
+  var parts = text.split('|');
+  var i = 0;
+  if (parts[0].indexOf('frame:') === 0) {
+    if (parts[0].slice(6) !== docId(document)) return null;
+    i = 1;
+  }
+  var el = stepInto(document, parts[i] || '');
+  for (i += 1; el && i + 1 < parts.length; i += 2) {
+    var root = null;
+    if (parts[i] === 'shadow') {
+      root = shadowOf(el);
+    } else if (parts[i].indexOf('frame:') === 0) {
+      root = frameDocOf(el);
+      if (root && docId(root) !== parts[i].slice(6)) root = null;
+    }
+    el = root ? stepInto(root, parts[i + 1]) : null;
+  }
+  return el && (!pinned || fingerprint(el) === pinned[1]) ? el : null;
+}
+function isInteractive(el) {
+  try { return matchesOf(el, INTERACTIVE); } catch (e) { return false; }
+}
+function nodeRole(el) {
+  return roleOf(el) || tagOf(el).toLowerCase();
+}
+function byPath(path) {
+  var el = locate(path);
+  return el && visible(el) ? el : null;
+}
+// The offset of el's frame viewport in this frame's viewport, through
+// every same-origin frame in between.
+function frameOffset(el) {
+  var x = 0, y = 0;
+  for (var view = viewOf(ownerDocOf(el)); view && view !== window; view = view.parent) {
+    var owner = view.frameElement;
+    if (!owner) break;
+    var r = rectOf(owner), s = styleOf(owner);
+    x += r.left + clientLeftOf(owner) + parseFloat(s.paddingLeft || '0');
+    y += r.top + clientTopOf(owner) + parseFloat(s.paddingTop || '0');
+  }
+  return { x: x, y: y };
+}
+// A background tab may never paint, so a frame also ends on a timer.
+function frame() {
+  return new Promise(function (done) {
+    var fired = false;
+    function go() { if (!fired) { fired = true; done(); } }
+    requestAnimationFrame(go);
+    setTimeout(go, 50);
+  });
+}
+function center(el) {
+  var rc = rectOf(el);
+  var off = frameOffset(el);
+  return { cx: off.x + rc.left + rc.width / 2, cy: off.y + rc.top + rc.height / 2, w: rc.width, h: rc.height };
+}
+var ACTIVE = getter(Document.prototype, 'activeElement');
+var SHADOW_ACTIVE = getter(ShadowRoot.prototype, 'activeElement');
+function deepActive() {
+  var a = ACTIVE(document);
+  for (;;) {
+    var inner = null;
+    var shadow = a && shadowOf(a);
+    if (shadow && SHADOW_ACTIVE(shadow)) inner = SHADOW_ACTIVE(shadow);
+    else if (a && FRAME_DOC[tagOf(a)]) {
+      var doc = frameDocOf(a);
+      inner = doc && ACTIVE(doc);
+      if (inner && inner === bodyOf(ownerDocOf(inner))) inner = null;
+    }
+    if (!inner || inner === a) return a;
+    a = inner;
+  }
+}
+function setValue(el, value) {
+  if (editableOf(el)) {
+    setTextContentOf(el, value);
+    return;
+  }
+  var tag = tagOf(el);
+  var proto = tag === 'TEXTAREA' ? HTMLTextAreaElement.prototype
+    : tag === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+  var desc = Object.getOwnPropertyDescriptor(proto, 'value');
+  if (desc && desc.set) desc.set.call(el, value); else el.value = value;
+}
+function changed(el) {
+  dispatchOf(el, new Event('input', { bubbles: true }));
+  dispatchOf(el, new Event('change', { bubbles: true }));
+}
+function tokens(el) {
+  return (attr(el, 'autocomplete') || '').toLowerCase().split(/\s+/);
+}
+var CARD_NAME = /card.?num|cc.?num|cvc|cvv|csc|security.?code|expir/i;
+function isPayment(el) {
+  if (tokens(el).some(function (t) { return t.indexOf('cc-') === 0; })) return true;
+  return CARD_NAME.test((attr(el, 'name') || '') + ' ' + (attr(el, 'id') || ''));
+}
+var FIELDS = 'input,select,textarea,[autocomplete]';
+// Elements matching selector under root, open shadow roots and same-origin
+// frames included.
+function deepAll(root, selector, out) {
+  Array.prototype.push.apply(out, all(root, selector));
+  all(root, '*').forEach(function (el) {
+    var shadow = shadowOf(el);
+    if (shadow) deepAll(shadow, selector, out);
+    var inner = frameDocOf(el);
+    if (inner) deepAll(inner, selector, out);
+  });
+  return out;
+}
+function deepFields(root, out) {
+  return deepAll(root, FIELDS, out);
+}
+var STALE = { error: 'stale_ref' };

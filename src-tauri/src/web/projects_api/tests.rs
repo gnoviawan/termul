@@ -34,6 +34,7 @@ fn state_for(host: &TestHost) -> AppState {
         allow_remote_writes: false,
         shared_live_writes_denied: false,
         connections: Default::default(),
+        server_admin: None,
     }
 }
 

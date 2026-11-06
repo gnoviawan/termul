@@ -305,6 +305,11 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --bin termul-server --features standalone-server -- -D warnings
 
+      # The headless server must not link GTK/WebKit (#1349); it has to start on
+      # hosts without them. Runs against the dev build above (rust-lld).
+      - name: Assert termul-server links no GUI libraries
+        run: scripts/check-server-no-gui-libs.sh src-tauri/target/debug/termul-server
+
   rust-windows-check:
     name: Rust Windows Smoke Check
     if: github.event.action != 'edited' || github.event.changes.base != null

@@ -1,8 +1,10 @@
 //! PTY lifetime rule: a live PTY ends only by an explicit kill, a process exit
 //! or host shutdown. Detaching never ends it; an exited PTY expires by TTL.
 
+#[cfg(unix)]
 use super::*;
 
+#[cfg(unix)]
 fn project_options(project: &str) -> SpawnOptions {
     SpawnOptions {
         project_id: Some(project.to_string()),
@@ -12,6 +14,7 @@ fn project_options(project: &str) -> SpawnOptions {
     }
 }
 
+#[cfg(unix)]
 fn echo_then_exit(project: &str) -> SpawnOptions {
     SpawnOptions {
         project_id: Some(project.to_string()),
@@ -21,6 +24,7 @@ fn echo_then_exit(project: &str) -> SpawnOptions {
     }
 }
 
+#[cfg(unix)]
 async fn wait_for_exit(instance: &TerminalInstance) {
     for _ in 0..100 {
         if instance.has_exited() {
@@ -34,6 +38,7 @@ async fn wait_for_exit(instance: &TerminalInstance) {
 /// `has_exited` flips when the reader hits EOF, before the flusher publishes
 /// the last buffered output. The flusher ends only after that final publish,
 /// so joining it is the point where the output is replayable.
+#[cfg(unix)]
 async fn wait_for_output_published(instance: &TerminalInstance) {
     let flusher = instance
         .flusher_handle

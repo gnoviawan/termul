@@ -203,6 +203,25 @@ fn chunk_message_id(chunk: &agent_client_protocol::schema::v1::ContentChunk) -> 
     chunk.message_id.as_ref().map(|id| id.0.to_string())
 }
 
+/// Longest subagent parent id that a chunk can carry; a longer value is not a tool-call id.
+const MAX_PARENT_TOOL_CALL_ID_LEN: usize = 512;
+
+/// The subagent dispatch that wrote `chunk`: Claude stamps
+/// `_meta.claudeCode.parentToolUseId` on subagent text, and the native
+/// subagent router stamps the same key on re-routed child chunks.
+pub(crate) fn chunk_parent_tool_call_id(
+    chunk: &agent_client_protocol::schema::v1::ContentChunk,
+) -> Option<String> {
+    chunk
+        .meta
+        .as_ref()?
+        .get("claudeCode")?
+        .get("parentToolUseId")?
+        .as_str()
+        .filter(|id| !id.is_empty() && id.len() <= MAX_PARENT_TOOL_CALL_ID_LEN)
+        .map(str::to_owned)
+}
+
 /// Translate an inbound `session/update` notification into the matching
 /// `acp:*` event and fan it out through the dispatcher's sinks.
 ///
@@ -223,12 +242,14 @@ pub fn emit_session_update(
     match notification.update {
         SessionUpdate::UserMessageChunk(chunk) => {
             let message_id = chunk_message_id(&chunk);
+            let parent_tool_call_id = chunk_parent_tool_call_id(&chunk);
             let event = MessageChunkEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 role: ChunkRole::User,
                 content: chunk.content,
                 message_id,
+                parent_tool_call_id,
             };
             events::fan_out(
                 sinks,
@@ -255,12 +276,14 @@ pub fn emit_session_update(
                 crate::logging::redact_session_id(&session_id.0)
             );
             let message_id = chunk_message_id(&chunk);
+            let parent_tool_call_id = chunk_parent_tool_call_id(&chunk);
             let event = MessageChunkEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 role: ChunkRole::Agent,
                 content: chunk.content,
                 message_id,
+                parent_tool_call_id,
             };
             events::fan_out(
                 sinks,
@@ -271,12 +294,14 @@ pub fn emit_session_update(
         }
         SessionUpdate::AgentThoughtChunk(chunk) => {
             let message_id = chunk_message_id(&chunk);
+            let parent_tool_call_id = chunk_parent_tool_call_id(&chunk);
             let event = MessageChunkEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 role: ChunkRole::Thought,
                 content: chunk.content,
                 message_id,
+                parent_tool_call_id,
             };
             events::fan_out(
                 sinks,

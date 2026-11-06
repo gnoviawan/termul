@@ -110,6 +110,8 @@ fn server_config_bind_addr() {
         web_auth_token: None,
         allowed_origins: OriginPolicy::default(),
         state_dir: None,
+        explicit_config: false,
+        host_explicit: false,
     };
     assert_eq!(
         cfg.bind_addr(),
@@ -137,6 +139,8 @@ fn server_config_bind_addr() {
         web_auth_token: None,
         allowed_origins: OriginPolicy::default(),
         state_dir: None,
+        explicit_config: false,
+        host_explicit: false,
     };
     assert_eq!(bad.bind_addr(), None);
 }
@@ -152,9 +156,33 @@ fn removed_flag_warnings(cfg: &ServerConfig) -> Vec<&String> {
         .collect()
 }
 
+/// `ServerConfig::from_args` under [`lock_env`] with a private `--state-dir`
+/// prepended, for tests that do not hold `ENV_LOCK` themselves (calling it
+/// while holding the lock deadlocks). The lock keeps the `ENV_LOCK` tests
+/// from changing the env mid-parse — e.g. `TERMUL_PROJECT_ROOT` pointing at
+/// a dir that is about to be removed (#1710) — and `lock_env` clears the
+/// termul env vars a developer or CI may have exported. The state dir keeps
+/// the sessions dir, the projects file and the `server-config.json` lookup
+/// off `$HOME` / `$XDG_STATE_HOME` (#1626). The dir is never created:
+/// `from_args` only derives paths from it. It goes first so a trailing flag
+/// in `args` stays trailing.
+fn from_args_isolated<'a>(
+    args: impl IntoIterator<Item = &'a str>,
+) -> Result<ServerConfig, ParseCliError> {
+    let _env = lock_env();
+    let state_dir =
+        std::env::temp_dir().join(format!("termul-config-isolated-{}", std::process::id()));
+    let mut argv = vec![
+        "--state-dir".to_owned(),
+        state_dir.to_string_lossy().into_owned(),
+    ];
+    argv.extend(args.into_iter().map(str::to_owned));
+    ServerConfig::from_args(argv)
+}
+
 #[test]
 fn from_args_defaults() {
-    let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("defaults");
+    let cfg = from_args_isolated(Vec::<&str>::new()).expect("defaults");
     assert_eq!(cfg.host, "127.0.0.1");
     assert_eq!(cfg.port, 8080);
     assert_eq!(
@@ -173,7 +201,7 @@ fn from_args_defaults() {
 /// no default host project root any more.
 #[test]
 fn from_args_project_root_is_a_removed_flag_that_only_seeds() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_PROJECT_ROOT"]);
     std::env::remove_var("TERMUL_PROJECT_ROOT");
     let none = ServerConfig::from_args(Vec::<&str>::new()).expect("defaults");
@@ -212,7 +240,7 @@ fn from_args_bad_project_root_fails_fast() {
 
 #[test]
 fn from_args_host_and_port() {
-    let cfg = ServerConfig::from_args(["--host", "0.0.0.0", "--port", "9090"]).expect("parse");
+    let cfg = from_args_isolated(["--host", "0.0.0.0", "--port", "9090"]).expect("parse");
     assert_eq!(cfg.host, "0.0.0.0");
     assert_eq!(cfg.port, 9090);
 }
@@ -243,7 +271,7 @@ fn from_args_rejects_port_zero() {
 
 #[test]
 fn from_args_accepts_event_log_capacity() {
-    let cfg = ServerConfig::from_args(["--event-log-capacity", "1024"]).expect("parse");
+    let cfg = from_args_isolated(["--event-log-capacity", "1024"]).expect("parse");
     assert_eq!(cfg.event_log_capacity, 1024);
     // The other defaults stay intact.
     assert_eq!(cfg.host, "127.0.0.1");
@@ -274,9 +302,15 @@ fn from_args_missing_event_log_capacity_value() {
     ));
 }
 
+// Explicit sessions dir: these tests also check that the removed flags never
+// swallow the value of the flag that follows them.
+const SESSIONS_DIR_ARG: &str = "/tmp/termul-removed-flag-sessions";
+
 #[test]
 fn from_args_removed_permission_flags_parse_and_warn_once_each() {
-    let cfg = ServerConfig::from_args([
+    let cfg = from_args_isolated([
+        "--sessions-dir",
+        SESSIONS_DIR_ARG,
         "--permission-timeout",
         "30",
         "--permission-reconnect-grace",
@@ -292,6 +326,7 @@ fn from_args_removed_permission_flags_parse_and_warn_once_each() {
     // Everything else is unaffected.
     assert_eq!(cfg.host, "127.0.0.1");
     assert_eq!(cfg.port, 8080);
+    assert_eq!(cfg.sessions_dir.as_deref(), Some(Path::new(SESSIONS_DIR_ARG)));
 }
 
 #[test]
@@ -302,38 +337,46 @@ fn from_args_removed_permission_flags_tolerate_invalid_values() {
         ("--permission-reconnect-grace", "0"),
         ("--permission-reconnect-grace", "-3"),
     ] {
-        let cfg = ServerConfig::from_args([flag, value])
+        let cfg = from_args_isolated(["--sessions-dir", SESSIONS_DIR_ARG, flag, value])
             .unwrap_or_else(|e| panic!("{flag} {value} must not abort: {e}"));
         let warnings = removed_flag_warnings(&cfg);
         assert_eq!(warnings.len(), 1, "{flag} {value}");
         assert!(warnings[0].contains(flag));
+        assert_eq!(cfg.sessions_dir.as_deref(), Some(Path::new(SESSIONS_DIR_ARG)));
     }
 }
 
 #[test]
 fn from_args_removed_permission_flags_tolerate_missing_value() {
     // Trailing: no value at all.
-    let cfg = ServerConfig::from_args(["--permission-timeout"]).expect("must not abort");
+    let cfg = from_args_isolated(["--sessions-dir", SESSIONS_DIR_ARG, "--permission-timeout"])
+        .expect("must not abort");
     let warnings = removed_flag_warnings(&cfg);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("no value"));
     // Followed by another flag: that flag is NOT swallowed as the value.
-    let cfg = ServerConfig::from_args(["--permission-reconnect-grace", "--port", "9091"])
-        .expect("must not abort");
+    let cfg = from_args_isolated([
+        "--sessions-dir",
+        SESSIONS_DIR_ARG,
+        "--permission-reconnect-grace",
+        "--port",
+        "9091",
+    ])
+    .expect("must not abort");
     assert_eq!(cfg.port, 9091, "the next flag keeps its own value");
     let warnings = removed_flag_warnings(&cfg);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("no value"));
     // `-h` is help, never the removed flag's value.
     assert!(matches!(
-        ServerConfig::from_args(["--permission-timeout", "-h"]),
+        from_args_isolated(["--sessions-dir", SESSIONS_DIR_ARG, "--permission-timeout", "-h"]),
         Err(ParseCliError::Help)
     ));
 }
 
 #[test]
 fn from_args_tunable_defaults() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&[
         AGENT_IDLE_WINDOW_ENV,
         PARTITION_GC_AGE_ENV,
@@ -358,7 +401,7 @@ fn from_args_tunable_defaults() {
 
 #[test]
 fn from_args_accepts_tunable_flags() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let cfg = ServerConfig::from_args([
         "--agent-idle-window-secs",
         "120",
@@ -406,7 +449,7 @@ fn from_args_rejects_zero_non_numeric_and_missing_tunable_values() {
 
 #[test]
 fn from_args_tunable_env_fallback_flag_wins_and_invalid_env_warns() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&[
         AGENT_IDLE_WINDOW_ENV,
         PARTITION_GC_AGE_ENV,
@@ -462,7 +505,7 @@ fn from_args_unknown_option() {
 // parsed and ignored like the removed permission flags.
 #[test]
 fn from_args_removed_workspace_manifests_dir_parses_and_warns_once() {
-    let cfg = ServerConfig::from_args(["--workspace-manifests-dir", "/var/lib/termul/manifests"])
+    let cfg = from_args_isolated(["--workspace-manifests-dir", "/var/lib/termul/manifests"])
         .expect("the removed flag still parses");
     let warnings: Vec<_> = cfg
         .deprecation_warnings
@@ -477,16 +520,15 @@ fn from_args_removed_workspace_manifests_dir_parses_and_warns_once() {
         vec!["--workspace-manifests-dir", ""],
         vec!["--workspace-manifests-dir", "--port", "9091"],
     ] {
-        ServerConfig::from_args(args).expect("a removed flag must not abort startup");
+        from_args_isolated(args).expect("a removed flag must not abort startup");
     }
-    let cfg = ServerConfig::from_args(["--workspace-manifests-dir", "--port", "9091"]).unwrap();
+    let cfg = from_args_isolated(["--workspace-manifests-dir", "--port", "9091"]).unwrap();
     assert_eq!(cfg.port, 9091);
 }
 
 #[test]
 fn from_args_accepts_store_file() {
-    let cfg =
-        ServerConfig::from_args(["--store-file", "/var/lib/termul/store.json"]).expect("parse");
+    let cfg = from_args_isolated(["--store-file", "/var/lib/termul/store.json"]).expect("parse");
     assert_eq!(
         cfg.store_file,
         Some(PathBuf::from("/var/lib/termul/store.json"))
@@ -514,6 +556,7 @@ fn from_args_rejects_empty_store_file() {
 
 #[test]
 fn from_args_accepts_state_dir_and_prefers_it() {
+    let _g = lock_env();
     let cfg = ServerConfig::from_args(["--state-dir", "/var/lib/termul-state"]).expect("parse");
     assert_eq!(
         cfg.state_dir.as_deref(),
@@ -540,8 +583,8 @@ fn from_args_missing_state_dir_value() {
 
 #[test]
 fn from_args_accepts_projects_file() {
-    let cfg = ServerConfig::from_args(["--projects-file", "/var/lib/termul/projects.json"])
-        .expect("parse");
+    let cfg =
+        from_args_isolated(["--projects-file", "/var/lib/termul/projects.json"]).expect("parse");
     assert_eq!(
         cfg.projects_file,
         Some(PathBuf::from("/var/lib/termul/projects.json"))
@@ -601,29 +644,106 @@ fn service_account_state_dir_falls_through_empty_env_var() {
         web_auth_token: None,
         allowed_origins: OriginPolicy::default(),
         state_dir: None,
+        explicit_config: false,
+        host_explicit: false,
     };
-    // We cannot safely mutate the real process env vars in a parallel
-    // test runner, so we assert the contract indirectly: the resolved
-    // path is EITHER under $HOME / $XDG_STATE_HOME (when set + non-empty)
-    // OR falls back to the OS temp dir. In both cases it must NOT be a
-    // relative `./termul` path (which would be CWD-dependent).
+    // Under `lock_env` the state-dir env vars are ours to pin (#1710):
+    // unlocked, a sibling test's `XDG_STATE_HOME=relative/state` leaked in.
+    // Every one empty: no branch applies, so the OS temp dir wins — never a
+    // CWD-relative `./termul`.
+    let _g = lock_env();
+    for key in STATE_HOME_ENV_KEYS {
+        std::env::set_var(key, "");
+    }
     let resolved = cfg.service_account_state_dir();
-    assert!(
-        resolved.is_absolute(),
-        "service_account_state_dir must resolve to an absolute path, got: {}",
-        resolved.display()
-    );
+    assert_eq!(resolved, std::env::temp_dir().join("termul"));
+    // `TMPDIR` is not pinned here: tests in other modules read it without
+    // `ENV_LOCK`. Unix `temp_dir()` returns an inherited relative `TMPDIR`
+    // as is, so only an absolute temp dir must yield an absolute path.
+    if std::env::temp_dir().is_absolute() {
+        assert!(resolved.is_absolute(), "got: {}", resolved.display());
+    }
+    // An empty higher-priority var falls through to the next branch.
+    let base = std::env::temp_dir().join("termul-state-env-base");
+    #[cfg(unix)]
+    {
+        std::env::set_var("HOME", &base);
+        assert_eq!(
+            cfg.service_account_state_dir(),
+            base.join(".local").join("state").join("termul"),
+            "an empty XDG_STATE_HOME must fall through to $HOME"
+        );
+    }
+    #[cfg(windows)]
+    {
+        std::env::set_var("LOCALAPPDATA", &base);
+        assert_eq!(cfg.service_account_state_dir(), base.join("Termul"));
+    }
 }
 
-// --- allow_remote_writes opt-in (CWE-306 guard relaxation) ---
+// --- env isolation (#1626, #1710) ---
 
-// `from_args` reads `TERMUL_SERVER_ALLOW_REMOTE_WRITES` from the real
-// process env. These env-mutating tests are NOT parallel-safe, so
-// serialize them with a shared lock (mirrors `acp::host_mcp::child`'s
-// `ENV_LOCK` pattern). The lock also protects `from_args_defaults_to_guarded`,
-// which reads the same env var without mutating it — without the lock a
-// sibling test's `set_var` can flip its assertion spuriously.
+// `from_args`, `default_sessions_dir`, `default_projects_file`,
+// `service_account_state_dir` and the `desktop_*` helpers read the real
+// process env, and tests run in parallel. So every test that reaches one of
+// those reads holds `ENV_LOCK` through `lock_env` (directly or via
+// `from_args_isolated`) — a reader without the lock sees a sibling test's
+// half-done `set_var` (mirrors `acp::host_mcp::child`'s `ENV_LOCK` pattern).
+// Tests that only check argv errors return before any env read and stay
+// unlocked.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The termul env vars the code under test reads. [`lock_env`] clears them
+/// so a value the developer or CI exported (`TERMUL_PROJECT_ROOT=/missing`)
+/// cannot leak into a test.
+const TERMUL_ENV_KEYS: &[&str] = &[
+    PROJECT_ROOT_ENV,
+    "TERMUL_SESSIONS_DIR",
+    "TERMUL_PROJECTS_FILE",
+    "TERMUL_STORE_FILE",
+    "TERMUL_SERVER_ALLOW_REMOTE_WRITES",
+    "TERMUL_WEB_AUTH_TOKEN",
+    "TERMUL_ALLOWED_ORIGINS",
+    AGENT_IDLE_WINDOW_ENV,
+    MAX_TERMINALS_PER_PROJECT_ENV,
+    PARTITION_GC_AGE_ENV,
+    PARTITION_BYTE_BUDGET_ENV,
+];
+
+/// The platform state-dir vars. [`lock_env`] keeps their values (the
+/// no-`--state-dir` defaults need a usable `$HOME`) but restores them, so a
+/// test may change them freely.
+const STATE_HOME_ENV_KEYS: &[&str] = &["HOME", "XDG_STATE_HOME", "LOCALAPPDATA"];
+
+/// Holds `ENV_LOCK` and restores every var in [`TERMUL_ENV_KEYS`] and
+/// [`STATE_HOME_ENV_KEYS`] on drop, also when the test panics.
+struct EnvGuard {
+    saved: Vec<(String, Option<std::ffi::OsString>)>,
+    // Declared last: it is released only after `drop` restored the env.
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        restore_env(std::mem::take(&mut self.saved));
+    }
+}
+
+/// Take `ENV_LOCK` and clear [`TERMUL_ENV_KEYS`] for the rest of the test.
+fn lock_env() -> EnvGuard {
+    // The guard restores the env while a failing test unwinds, so a
+    // poisoned lock does not mean a dirty env: keep going instead of
+    // failing every later test with "ENV_LOCK poisoned".
+    let lock = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut saved = save_env(TERMUL_ENV_KEYS);
+    saved.extend(save_env(STATE_HOME_ENV_KEYS));
+    for key in TERMUL_ENV_KEYS {
+        std::env::remove_var(key);
+    }
+    EnvGuard { saved, _lock: lock }
+}
 
 fn clear_remote_writes_env() {
     std::env::remove_var("TERMUL_SERVER_ALLOW_REMOTE_WRITES");
@@ -631,7 +751,7 @@ fn clear_remote_writes_env() {
 
 #[test]
 fn desktop_agent_idle_window_reads_env_then_default() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&[AGENT_IDLE_WINDOW_ENV]);
     std::env::remove_var(AGENT_IDLE_WINDOW_ENV);
     let open = desktop_agent_idle_window_secs();
@@ -652,7 +772,7 @@ fn desktop_agent_idle_window_reads_env_then_default() {
 
 #[test]
 fn from_args_defaults_to_guarded() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     clear_remote_writes_env();
     let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("defaults");
     assert!(
@@ -663,7 +783,7 @@ fn from_args_defaults_to_guarded() {
 
 #[test]
 fn from_args_flag_enables() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     clear_remote_writes_env();
     let cfg = ServerConfig::from_args(["--allow-remote-writes"]).expect("parse");
     assert!(
@@ -674,7 +794,7 @@ fn from_args_flag_enables() {
 
 #[test]
 fn from_args_env_enables_true() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     clear_remote_writes_env();
     std::env::set_var("TERMUL_SERVER_ALLOW_REMOTE_WRITES", "true");
     let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
@@ -687,7 +807,7 @@ fn from_args_env_enables_true() {
 
 #[test]
 fn from_args_invalid_env_stays_guarded() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     clear_remote_writes_env();
     std::env::set_var("TERMUL_SERVER_ALLOW_REMOTE_WRITES", "yes");
     let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
@@ -700,7 +820,7 @@ fn from_args_invalid_env_stays_guarded() {
 
 #[test]
 fn from_args_cli_wins_over_env_false() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     clear_remote_writes_env();
     std::env::set_var("TERMUL_SERVER_ALLOW_REMOTE_WRITES", "false");
     let cfg = ServerConfig::from_args(["--allow-remote-writes"]).expect("parse");
@@ -718,7 +838,7 @@ fn clear_web_auth_env() {
 
 #[test]
 fn from_args_accepts_web_auth_token() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     clear_web_auth_env();
     let cfg = ServerConfig::from_args(["--web-auth-token", "s3cret"]).expect("parse");
     // Debug must redact (the token never lands in logs).
@@ -729,7 +849,7 @@ fn from_args_accepts_web_auth_token() {
 
 #[test]
 fn from_args_rejects_empty_web_auth_token() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     clear_web_auth_env();
     assert!(matches!(
         ServerConfig::from_args(["--web-auth-token", ""]),
@@ -743,7 +863,7 @@ fn from_args_rejects_empty_web_auth_token() {
 
 #[test]
 fn from_args_missing_web_auth_token_value() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     clear_web_auth_env();
     assert!(matches!(
         ServerConfig::from_args(["--web-auth-token"]),
@@ -753,7 +873,7 @@ fn from_args_missing_web_auth_token_value() {
 
 #[test]
 fn from_args_web_auth_token_env_fallback() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     clear_web_auth_env();
     std::env::set_var("TERMUL_WEB_AUTH_TOKEN", "env-token");
     let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
@@ -766,7 +886,7 @@ fn from_args_web_auth_token_env_fallback() {
 
 #[test]
 fn from_args_web_auth_token_empty_env_ignored() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     clear_web_auth_env();
     std::env::set_var("TERMUL_WEB_AUTH_TOKEN", "");
     let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
@@ -803,7 +923,7 @@ fn restore_env(saved: Vec<(String, Option<std::ffi::OsString>)>) {
 
 #[test]
 fn from_args_projects_file_flag_wins_over_env() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_PROJECTS_FILE"]);
     std::env::set_var("TERMUL_PROJECTS_FILE", "/tmp/termul-env/projects.json");
     let cfg = ServerConfig::from_args(["--projects-file", "/tmp/termul-flag/projects.json"])
@@ -819,7 +939,7 @@ fn from_args_projects_file_flag_wins_over_env() {
 #[cfg(unix)]
 #[test]
 fn from_args_projects_file_env_wins_over_state_dir() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME"]);
     let state = tempdir_like("projects-env-wins");
     std::env::set_var("XDG_STATE_HOME", &state);
@@ -837,7 +957,7 @@ fn from_args_projects_file_env_wins_over_state_dir() {
 #[cfg(unix)]
 #[test]
 fn from_args_projects_file_defaults_to_state_dir() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME"]);
     let state = tempdir_like("projects-default");
     std::env::remove_var("TERMUL_PROJECTS_FILE");
@@ -856,7 +976,7 @@ fn from_args_projects_file_defaults_to_state_dir() {
 #[cfg(unix)]
 #[test]
 fn from_args_projects_file_empty_env_ignored() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME"]);
     let state = tempdir_like("projects-empty-env");
     std::env::set_var("TERMUL_PROJECTS_FILE", "   ");
@@ -874,7 +994,7 @@ fn from_args_projects_file_empty_env_ignored() {
 
 #[test]
 fn from_args_web_auth_token_cli_wins_over_env() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     clear_web_auth_env();
     std::env::set_var("TERMUL_WEB_AUTH_TOKEN", "env-token");
     let cfg = ServerConfig::from_args(["--web-auth-token", "flag-token"]).expect("parse");
@@ -887,7 +1007,7 @@ fn from_args_web_auth_token_cli_wins_over_env() {
 
 #[test]
 fn default_projects_file_trims_padded_env() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_PROJECTS_FILE"]);
     std::env::set_var(
         "TERMUL_PROJECTS_FILE",
@@ -905,7 +1025,7 @@ fn default_projects_file_trims_padded_env() {
 #[cfg(unix)]
 #[test]
 fn default_projects_file_relative_xdg_falls_back_to_home() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME", "HOME"]);
     let home = tempdir_like("projects-relative-xdg");
     std::env::remove_var("TERMUL_PROJECTS_FILE");
@@ -928,7 +1048,7 @@ fn default_projects_file_relative_xdg_falls_back_to_home() {
 #[cfg(unix)]
 #[test]
 fn default_projects_file_empty_xdg_falls_back_to_home() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME", "HOME"]);
     let home = tempdir_like("projects-empty-xdg");
     std::env::remove_var("TERMUL_PROJECTS_FILE");
@@ -951,7 +1071,7 @@ fn default_projects_file_empty_xdg_falls_back_to_home() {
 #[cfg(unix)]
 #[test]
 fn default_projects_file_none_when_no_state_dir() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME", "HOME"]);
     std::env::remove_var("TERMUL_PROJECTS_FILE");
     std::env::remove_var("XDG_STATE_HOME");
@@ -966,7 +1086,7 @@ fn default_projects_file_none_when_no_state_dir() {
 
 #[test]
 fn from_args_accepts_allowed_origins_flag() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     std::env::remove_var("TERMUL_ALLOWED_ORIGINS");
     let cfg = ServerConfig::from_args([
         "--allowed-origins",
@@ -980,7 +1100,7 @@ fn from_args_accepts_allowed_origins_flag() {
 
 #[test]
 fn from_args_rejects_wildcard_allowed_origins() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     std::env::remove_var("TERMUL_ALLOWED_ORIGINS");
     assert!(matches!(
         ServerConfig::from_args(["--allowed-origins", "*"]),
@@ -994,7 +1114,7 @@ fn from_args_rejects_wildcard_allowed_origins() {
 
 #[test]
 fn from_args_allowed_origins_env_fallback() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     std::env::set_var("TERMUL_ALLOWED_ORIGINS", "https://tunnel.example");
     let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
     std::env::remove_var("TERMUL_ALLOWED_ORIGINS");
@@ -1003,7 +1123,7 @@ fn from_args_allowed_origins_env_fallback() {
 
 #[test]
 fn from_args_repeats_allowed_origins_flag() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     std::env::remove_var("TERMUL_ALLOWED_ORIGINS");
     let cfg = ServerConfig::from_args([
         "--allowed-origins",
@@ -1018,7 +1138,7 @@ fn from_args_repeats_allowed_origins_flag() {
 
 #[test]
 fn from_args_allowed_origins_cli_replaces_env() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     std::env::set_var("TERMUL_ALLOWED_ORIGINS", "https://from-env.example");
     let cfg =
         ServerConfig::from_args(["--allowed-origins", "https://from-flag.example"]).expect("parse");
@@ -1030,7 +1150,7 @@ fn from_args_allowed_origins_cli_replaces_env() {
 #[cfg(unix)]
 #[test]
 fn from_args_projects_file_none_when_no_state_dir() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME", "HOME"]);
     std::env::remove_var("TERMUL_PROJECTS_FILE");
     std::env::remove_var("XDG_STATE_HOME");
@@ -1056,7 +1176,7 @@ fn from_args_projects_file_none_when_no_state_dir() {
 #[cfg(unix)]
 #[test]
 fn from_args_state_dir_derives_sessions_and_projects_defaults() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&[
         "TERMUL_SESSIONS_DIR",
         "TERMUL_PROJECTS_FILE",
@@ -1105,7 +1225,7 @@ fn from_args_state_dir_derives_sessions_and_projects_defaults() {
 #[cfg(unix)]
 #[test]
 fn from_args_state_dir_does_not_override_explicit_flags() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&[
         "TERMUL_SESSIONS_DIR",
         "TERMUL_PROJECTS_FILE",
@@ -1145,7 +1265,7 @@ fn from_args_state_dir_does_not_override_explicit_flags() {
 #[cfg(unix)]
 #[test]
 fn from_args_without_state_dir_keeps_home_defaults() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&[
         "TERMUL_SESSIONS_DIR",
         "TERMUL_PROJECTS_FILE",
@@ -1180,7 +1300,7 @@ fn from_args_without_state_dir_keeps_home_defaults() {
 #[cfg(unix)]
 #[test]
 fn from_args_without_state_dir_keeps_xdg_defaults() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&[
         "TERMUL_SESSIONS_DIR",
         "TERMUL_PROJECTS_FILE",
@@ -1216,7 +1336,7 @@ fn from_args_without_state_dir_keeps_xdg_defaults() {
 #[cfg(unix)]
 #[test]
 fn from_args_specific_env_still_wins_without_state_dir() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&[
         "TERMUL_SESSIONS_DIR",
         "TERMUL_PROJECTS_FILE",
@@ -1246,7 +1366,7 @@ fn from_args_specific_env_still_wins_without_state_dir() {
 #[cfg(unix)]
 #[test]
 fn from_args_specific_env_wins_over_state_dir_derivation() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&[
         "TERMUL_SESSIONS_DIR",
         "TERMUL_PROJECTS_FILE",
@@ -1284,7 +1404,7 @@ fn from_args_specific_env_wins_over_state_dir_derivation() {
 #[cfg(unix)]
 #[test]
 fn default_sessions_dir_empty_xdg_falls_back_to_home() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_SESSIONS_DIR", "XDG_STATE_HOME", "HOME"]);
     let home = tempdir_like("sessions-empty-xdg");
     std::env::remove_var("TERMUL_SESSIONS_DIR");
@@ -1304,7 +1424,7 @@ fn default_sessions_dir_empty_xdg_falls_back_to_home() {
 #[cfg(unix)]
 #[test]
 fn default_sessions_dir_relative_xdg_falls_back_to_home() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_SESSIONS_DIR", "XDG_STATE_HOME", "HOME"]);
     let home = tempdir_like("sessions-relative-xdg");
     std::env::remove_var("TERMUL_SESSIONS_DIR");
@@ -1324,7 +1444,7 @@ fn default_sessions_dir_relative_xdg_falls_back_to_home() {
 #[cfg(unix)]
 #[test]
 fn default_sessions_dir_relative_home_is_rejected() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_SESSIONS_DIR", "XDG_STATE_HOME", "HOME"]);
     // CodeRabbit: a relative HOME would produce a CWD-relative sessions
     // path — the documented safeguard must reject it (resolution then
@@ -1343,7 +1463,7 @@ fn default_sessions_dir_relative_home_is_rejected() {
 #[cfg(unix)]
 #[test]
 fn default_sessions_dir_empty_home_yields_none_not_cwd_relative() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_SESSIONS_DIR", "XDG_STATE_HOME", "HOME"]);
     std::env::remove_var("TERMUL_SESSIONS_DIR");
     std::env::set_var("XDG_STATE_HOME", "");
@@ -1362,7 +1482,7 @@ fn from_args_state_dir_sessions_dir_must_be_dir_if_exists() {
     // not-a-directory check as an explicit --sessions-dir. HOME stays set
     // so a regression that prefers the platform default would resolve a
     // different path and miss this failure.
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&["TERMUL_SESSIONS_DIR", "XDG_STATE_HOME", "HOME"]);
     std::env::remove_var("TERMUL_SESSIONS_DIR");
     std::env::remove_var("XDG_STATE_HOME");
@@ -1388,7 +1508,7 @@ fn from_args_state_dir_sessions_dir_must_be_dir_if_exists() {
 
 #[test]
 fn a_receipt_retention_above_the_maximum_is_clamped_with_a_warning() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let cfg = ServerConfig::from_args(["--receipt-retention-secs", "18446744073709551615"])
         .expect("parse");
 
@@ -1401,7 +1521,7 @@ fn a_receipt_retention_above_the_maximum_is_clamped_with_a_warning() {
 
 #[test]
 fn a_later_receipt_retention_within_the_maximum_drops_the_clamp_warning() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let cfg = ServerConfig::from_args([
         "--receipt-retention-secs",
         "18446744073709551615",
@@ -1419,7 +1539,7 @@ fn a_later_receipt_retention_within_the_maximum_drops_the_clamp_warning() {
 
 #[test]
 fn max_terminals_per_project_defaults_to_ten_and_takes_the_flag() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&[MAX_TERMINALS_PER_PROJECT_ENV]);
     std::env::remove_var(MAX_TERMINALS_PER_PROJECT_ENV);
     let default = ServerConfig::from_args(Vec::<&str>::new()).expect("defaults");
@@ -1452,7 +1572,7 @@ fn max_terminals_per_project_rejects_zero_non_numeric_and_missing_values() {
 
 #[test]
 fn max_terminals_per_project_env_fallback_flag_wins_and_invalid_env_warns() {
-    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let _g = lock_env();
     let saved = save_env(&[MAX_TERMINALS_PER_PROJECT_ENV]);
     std::env::set_var(MAX_TERMINALS_PER_PROJECT_ENV, "6");
     let from_env = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
@@ -1473,4 +1593,417 @@ fn max_terminals_per_project_env_fallback_flag_wins_and_invalid_env_warns() {
     assert_eq!(invalid.deprecation_warnings.len(), 1);
     assert!(invalid.deprecation_warnings[0].contains(MAX_TERMINALS_PER_PROJECT_ENV));
     assert_eq!(desktop_invalid, DEFAULT_MAX_TERMINALS_PER_PROJECT);
+}
+
+// --- gh-1105: explicit-config provenance + server-config.json merge ---
+//
+// These tests serialize on `ENV_LOCK` (same process-global env as the
+// allow-remote-writes/tunable tests) and pass `--state-dir <tempdir>` so
+// the `server-config.json` lookup is hermetic — an ambient config file
+// under the real HOME/XDG state dir can never leak in.
+
+/// The env vars that feed `explicit_config` / the resolution chains and
+/// must be neutral in every test below.
+const ONBOARD_ENV_KEYS: &[&str] = &[
+    "TERMUL_SESSIONS_DIR",
+    "TERMUL_PROJECTS_FILE",
+    "TERMUL_SERVER_ALLOW_REMOTE_WRITES",
+];
+
+fn clear_onboard_env() {
+    for key in ONBOARD_ENV_KEYS {
+        std::env::remove_var(key);
+    }
+}
+
+/// Write `<state>/server-config.json` through the shared save contract.
+fn write_config_file(state: &Path, file: &server_config_file::ServerConfigFile) {
+    server_config_file::save(state, file).expect("save server-config.json");
+}
+
+fn config_file_fixture() -> server_config_file::ServerConfigFile {
+    server_config_file::ServerConfigFile {
+        host: "0.0.0.0".into(),
+        port: 9090,
+        sessions_dir: PathBuf::from("/tmp/termul-file-sessions"),
+        projects_file: PathBuf::from("/tmp/termul-file-projects.json"),
+        allow_remote_writes: true,
+        update_channel: None,
+        update_interval_secs: 21600,
+    }
+}
+
+#[test]
+fn explicit_config_flags_detect_argv() {
+    let _g = lock_env();
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("explicit-flags");
+    let state_str = state.to_str().unwrap().to_string();
+
+    let bare = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    let host = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--host",
+        "0.0.0.0",
+    ])
+    .expect("parse");
+    let port = ServerConfig::from_args(["--state-dir", state_str.as_str(), "--port", "9001"])
+        .expect("parse");
+    let sessions =
+        ServerConfig::from_args(["--state-dir", state_str.as_str(), "--sessions-dir", "/tmp/x-s"])
+            .expect("parse");
+    let projects = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--projects-file",
+        "/tmp/x-p.json",
+    ])
+    .expect("parse");
+    let writes =
+        ServerConfig::from_args(["--state-dir", state_str.as_str(), "--allow-remote-writes"])
+            .expect("parse");
+    let unrelated = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--event-log-capacity",
+        "1024",
+    ])
+    .expect("parse");
+    restore_env(saved);
+    cleanup(&state);
+
+    assert!(
+        !bare.explicit_config && !bare.host_explicit,
+        "--state-dir alone is NOT explicit (it only names where the file lives)"
+    );
+    assert!(
+        host.explicit_config && host.host_explicit,
+        "--host sets both provenance flags"
+    );
+    assert!(
+        port.explicit_config && !port.host_explicit,
+        "--port is explicit config but not host_explicit"
+    );
+    assert!(sessions.explicit_config, "--sessions-dir is explicit config");
+    assert!(projects.explicit_config, "--projects-file is explicit config");
+    assert!(
+        writes.explicit_config,
+        "--allow-remote-writes is explicit config"
+    );
+    assert!(
+        !unrelated.explicit_config && !unrelated.host_explicit,
+        "unrelated flags (--event-log-capacity) must not count as explicit config"
+    );
+}
+
+#[test]
+fn explicit_config_flags_detect_env() {
+    let _g = lock_env();
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("explicit-env");
+    let state_str = state.to_str().unwrap().to_string();
+
+    std::env::set_var("TERMUL_SESSIONS_DIR", "/tmp/termul-env-explicit-s");
+    let sessions = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    std::env::remove_var("TERMUL_SESSIONS_DIR");
+    std::env::set_var("TERMUL_PROJECTS_FILE", "/tmp/termul-env-explicit.json");
+    let projects = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    std::env::remove_var("TERMUL_PROJECTS_FILE");
+    std::env::set_var("TERMUL_SERVER_ALLOW_REMOTE_WRITES", "true");
+    let writes = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    restore_env(saved);
+    cleanup(&state);
+
+    assert!(sessions.explicit_config, "$TERMUL_SESSIONS_DIR is explicit");
+    assert!(projects.explicit_config, "$TERMUL_PROJECTS_FILE is explicit");
+    assert!(
+        writes.explicit_config,
+        "$TERMUL_SERVER_ALLOW_REMOTE_WRITES is explicit"
+    );
+    assert!(
+        !sessions.host_explicit && !projects.host_explicit && !writes.host_explicit,
+        "no env var feeds host_explicit (there is none)"
+    );
+}
+
+#[test]
+fn config_file_wins_over_argv_and_env() {
+    let _g = lock_env();
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("file-wins");
+    write_config_file(&state, &config_file_fixture());
+    let state_str = state.to_str().unwrap().to_string();
+    // Even the env vars lose to the file — stale systemd `EnvironmentFile`
+    // entries must not beat the record the web wizard wrote.
+    std::env::set_var("TERMUL_SESSIONS_DIR", "/tmp/termul-env-sessions");
+    std::env::set_var("TERMUL_PROJECTS_FILE", "/tmp/termul-env-projects.json");
+
+    let cfg = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8080",
+        "--sessions-dir",
+        "/tmp/termul-argv-sessions",
+        "--projects-file",
+        "/tmp/termul-argv-projects.json",
+        "--event-log-capacity",
+        "1234",
+    ])
+    .expect("parse");
+    restore_env(saved);
+    cleanup(&state);
+
+    assert_eq!(cfg.host, "0.0.0.0", "file host beats --host");
+    assert_eq!(cfg.port, 9090, "file port beats --port");
+    assert_eq!(
+        cfg.sessions_dir.as_deref(),
+        Some(Path::new("/tmp/termul-file-sessions")),
+        "file sessions_dir beats --sessions-dir and $TERMUL_SESSIONS_DIR"
+    );
+    assert_eq!(
+        cfg.projects_file.as_deref(),
+        Some(Path::new("/tmp/termul-file-projects.json")),
+        "file projects_file beats --projects-file and $TERMUL_PROJECTS_FILE"
+    );
+    assert!(
+        cfg.allow_remote_writes,
+        "file allow_remote_writes applies (no flag/env set it)"
+    );
+    // A field the file does not model still comes from argv.
+    assert_eq!(
+        cfg.event_log_capacity, 1234,
+        "fields the file does not carry still resolve from argv"
+    );
+    // Provenance is argv/env — the file merge never flips it.
+    assert!(cfg.explicit_config, "argv presence stays explicit");
+    assert!(cfg.host_explicit, "--host still counts as carried by argv");
+    assert!(
+        !cfg.setup_required(),
+        "an onboarded install never enters setup mode"
+    );
+    // The file-vs-argv divergence is surfaced once as a startup warning.
+    let warnings: Vec<_> = cfg
+        .deprecation_warnings
+        .iter()
+        .filter(|w| w.contains("server-config.json"))
+        .collect();
+    assert_eq!(
+        warnings.len(),
+        1,
+        "an override note must be queued when the file changes argv values: {:?}",
+        cfg.deprecation_warnings
+    );
+}
+
+#[test]
+fn config_file_false_remote_writes_beats_flag() {
+    let _g = lock_env();
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("file-writes-off");
+    let mut file = config_file_fixture();
+    file.allow_remote_writes = false;
+    write_config_file(&state, &file);
+    let state_str = state.to_str().unwrap().to_string();
+
+    let cfg = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--allow-remote-writes",
+    ])
+    .expect("parse");
+    restore_env(saved);
+    cleanup(&state);
+
+    assert!(
+        !cfg.allow_remote_writes,
+        "the file's allowRemoteWrites=false must win over --allow-remote-writes"
+    );
+}
+
+#[test]
+fn config_file_merge_is_silent_when_values_agree() {
+    // The common onboarded case — the generated unit's argv repeats the
+    // file's values — must not emit the override warning every boot.
+    let _g = lock_env();
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("file-agrees");
+    let file = config_file_fixture();
+    write_config_file(&state, &file);
+    let state_str = state.to_str().unwrap().to_string();
+
+    let cfg = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "9090",
+        "--sessions-dir",
+        "/tmp/termul-file-sessions",
+        "--projects-file",
+        "/tmp/termul-file-projects.json",
+        "--allow-remote-writes",
+    ])
+    .expect("parse");
+    restore_env(saved);
+    cleanup(&state);
+
+    assert!(
+        !cfg
+            .deprecation_warnings
+            .iter()
+            .any(|w| w.contains("server-config.json")),
+        "file agreeing with argv must not warn: {:?}",
+        cfg.deprecation_warnings
+    );
+}
+
+#[test]
+fn corrupt_config_file_is_ignored_by_from_args() {
+    let _g = lock_env();
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("corrupt-config");
+    std::fs::write(
+        state.join(server_config_file::SERVER_CONFIG_FILE_NAME),
+        "{not json",
+    )
+    .expect("write corrupt file");
+    let state_str = state.to_str().unwrap().to_string();
+
+    let cfg = ServerConfig::from_args(["--state-dir", state_str.as_str(), "--port", "8088"])
+        .expect("argv still parses");
+    restore_env(saved);
+    cleanup(&state);
+
+    assert_eq!(cfg.port, 8088, "argv stands when the file is corrupt");
+    assert!(cfg.explicit_config);
+}
+
+#[test]
+fn setup_required_matrix() {
+    let _g = lock_env();
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("setup-required");
+    let state_str = state.to_str().unwrap().to_string();
+
+    let bare = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    assert!(
+        bare.setup_required(),
+        "no config file + no explicit argv/env → setup mode"
+    );
+
+    let flagged = ServerConfig::from_args(["--state-dir", state_str.as_str(), "--port", "9001"])
+        .expect("parse");
+    assert!(
+        !flagged.setup_required(),
+        "explicit argv → normal mode even without a file"
+    );
+
+    write_config_file(&state, &config_file_fixture());
+    let onboarded = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    assert!(
+        !onboarded.setup_required(),
+        "a completed config file → normal mode"
+    );
+    restore_env(saved);
+    cleanup(&state);
+}
+
+#[test]
+fn corrupt_config_file_recovers_into_setup_mode() {
+    let _g = lock_env();
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("corrupt-setup");
+    std::fs::write(
+        state.join(server_config_file::SERVER_CONFIG_FILE_NAME),
+        "not json at all",
+    )
+    .expect("write corrupt file");
+    let state_str = state.to_str().unwrap().to_string();
+
+    let bare = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    let flagged = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--host",
+        "127.0.0.1",
+    ])
+    .expect("parse");
+    restore_env(saved);
+    cleanup(&state);
+
+    assert!(
+        bare.setup_required(),
+        "corrupt file + no explicit config → setup mode (operator recovery)"
+    );
+    assert!(
+        !flagged.setup_required(),
+        "explicit argv wins: normal mode runs even on a corrupt file"
+    );
+}
+
+/// A file that PARSES but carries semantically invalid values (a hand-edit
+/// or a partial write) must be treated as corrupt too — it would otherwise
+/// win the argv/env merge and wedge the boot (port `0`, unparseable host)
+/// or silently misbind.
+#[test]
+fn semantically_invalid_config_file_is_ignored_and_recovers() {
+    let _g = lock_env();
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("invalid-config");
+    std::fs::write(
+        state.join(server_config_file::SERVER_CONFIG_FILE_NAME),
+        serde_json::json!({
+            "host": "not-a-bind-mode",
+            "port": 0,
+            "sessionsDir": "/srv/termul/sessions",
+            "projectsFile": "/srv/termul/projects.json",
+            "allowRemoteWrites": false,
+            "updateChannel": null,
+            "updateIntervalSecs": 21600,
+        })
+        .to_string(),
+    )
+    .expect("write invalid file");
+    let state_str = state.to_str().unwrap().to_string();
+
+    let flagged = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8088",
+    ])
+    .expect("argv still parses");
+    let bare = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    // `load` reports the semantic failure the same way as a parse failure.
+    assert!(
+        server_config_file::load(&state).is_err(),
+        "a parseable-but-invalid file must be treated as corrupt"
+    );
+    // And it does not count as onboarded → setup recovery (no explicit argv).
+    assert!(
+        bare.setup_required(),
+        "parseable-but-invalid file + no explicit config → setup mode"
+    );
+    restore_env(saved);
+    cleanup(&state);
+
+    // The invalid file must NOT win the merge — argv values stand.
+    assert_eq!(flagged.host, "127.0.0.1", "invalid file host must not win");
+    assert_eq!(flagged.port, 8088, "invalid file port must not win");
 }

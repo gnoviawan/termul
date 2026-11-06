@@ -20,15 +20,21 @@
  * menu) still win via `defaultPrevented`, and custom menus
  * (FileExplorer/ProjectSidebar) still render. Mounted on BOTH surfaces
  * (TauriApp + App) for parity.
+ *
+ * Touch-primary devices keep the native menu: on Android the long-press
+ * `contextmenu` is what shows the selection toolbar (Copy / Paste), and
+ * `<GlobalContextMenu>` stands down there too.
  */
 
 import { useEffect } from 'react'
+import { isTouchPrimaryPointer } from '@/hooks/use-touch-primary-pointer'
 
 export function usePreventNativeContextMenu(): void {
   useEffect(() => {
     if (typeof document === 'undefined') return
 
     const handler = (e: MouseEvent): void => {
+      if (isTouchPrimaryPointer()) return
       e.preventDefault()
     }
 

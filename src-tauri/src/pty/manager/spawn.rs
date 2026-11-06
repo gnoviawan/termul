@@ -1,4 +1,6 @@
 use super::*;
+use crate::pty::session_protocol::deliver::process_reader_chunk;
+use crate::pty::session_protocol::gate::SessionGate;
 
 impl PtyManager {
     /// Spawn a new terminal (with binary channel IPC).
@@ -144,13 +146,15 @@ impl PtyManager {
             };
 
             // Create terminal instance
+            let writer = Arc::new(AsyncMutex::new(Some(writer)));
             let instance = Arc::new(TerminalInstance {
                 id: id.clone(),
                 project_id: options.project_id.clone(),
                 command_id: options.command_id.clone(),
                 child: Arc::new(AsyncMutex::new(Some(Box::new(child)))),
                 master: Arc::new(AsyncMutex::new(None)), // No master for ConPTY
-                writer: Arc::new(AsyncMutex::new(Some(writer))),
+                writer: writer.clone(),
+                session_gate: Arc::new(SessionGate::new(writer)),
                 reader_handle: Arc::new(AsyncMutex::new(None)),
                 flusher_handle: Arc::new(AsyncMutex::new(None)),
                 shell: shell_path.clone(),
@@ -303,13 +307,16 @@ impl PtyManager {
                 .take_writer()
                 .map_err(|e| format!("Failed to get PTY writer: {}", e))?;
 
+            let writer = Arc::new(AsyncMutex::new(Some(writer)));
+            let session_gate = Arc::new(SessionGate::new(writer.clone()));
             let instance = Arc::new(TerminalInstance {
                 id: id.clone(),
                 project_id: options.project_id.clone(),
                 command_id: options.command_id.clone(),
                 child: Arc::new(AsyncMutex::new(Some(child))),
                 master: Arc::new(AsyncMutex::new(Some(pty_pair.master))),
-                writer: Arc::new(AsyncMutex::new(Some(writer))),
+                writer: writer.clone(),
+                session_gate,
                 reader_handle: Arc::new(AsyncMutex::new(None)),
                 flusher_handle: Arc::new(AsyncMutex::new(None)),
                 shell: shell_path.clone(),
@@ -418,8 +425,12 @@ impl PtyManager {
     ) {
         let mut buffer = [0u8; READ_BUF];
         let id = terminal_id.clone();
+        instance
+            .session_gate
+            .bind_exit_code_tracker(exit_code_tracker.clone());
         // ADR-002.5: DA filter — intercepts DA queries and responds to PTY writer
         let mut da_filter = crate::pty::DaFilter::new();
+        let mut session_filter = crate::pty::session_protocol::filter::SessionFilter::new();
         // Clone writer Arc for the DA filter respond closure
         let da_writer = instance.writer.clone();
 
@@ -450,23 +461,15 @@ impl PtyManager {
                             let _ = writer.flush();
                         }
                     });
-
-                    // Push filtered (DA-processed) bytes to pending buffer
-                    let mut guard = match pending_buf.lock() {
-                        Ok(g) => g,
-                        Err(e) => {
-                            log::error!("[PTY {}] Pending buffer mutex poisoned: {}", id, e);
-                            break;
-                        }
-                    };
-
-                    if guard.len() + filtered.len() > MAX_PENDING {
-                        // Overflow: clear buffer and insert notice
-                        guard.clear();
-                        guard.extend_from_slice(OVERFLOW_NOTICE);
-                        log::warn!("[PTY {}] Output buffer overflow — dropped data", id);
-                    } else {
-                        guard.extend_from_slice(&filtered);
+                    if !process_reader_chunk(
+                        &mut session_filter,
+                        &filtered,
+                        &pending_buf,
+                        &instance.session_gate,
+                        &id,
+                        &terminal_events,
+                    ) {
+                        break;
                     }
                 }
                 Err(e) => {
@@ -499,10 +502,14 @@ impl PtyManager {
             Err(_) => None,
         };
 
-        terminal_events.emit(TerminalEvent::Exit {
-            terminal_id: id.clone(),
-            exit_code,
-            signal: None,
+        instance.session_gate.publish_exit(&terminal_events, || {
+            instance.session_gate.process_exited();
+            TerminalEvent::Exit {
+                terminal_id: id.clone(),
+                exit_code,
+                signal: None,
+                lifecycle_sequence: None,
+            }
         });
 
         log::info!("[PTY {}] Reader thread ended", id);

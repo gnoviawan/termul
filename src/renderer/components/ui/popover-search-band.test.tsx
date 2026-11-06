@@ -27,7 +27,7 @@ describe('PopoverSearchBand', () => {
       'h-10',
       'border-b',
       'border-border',
-      'focus-within:border-ring'
+      'focus-within:border-focus-ring'
     )
   })
 

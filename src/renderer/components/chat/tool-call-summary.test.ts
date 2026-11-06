@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import type { ToolCall } from '@/lib/acp-api'
 import {
+  endedState,
+  type SubagentRecordOverrides,
+  subagentToolCall
+} from '@/lib/test-utils/subagent'
+import {
   baseName,
   describeToolCall,
   isSubagentCall,
   isSubagentRunning,
   readableOutput,
   summarizeToolActivity,
+  toolCallChangedPaths,
   toolCallPath
 } from './tool-call-summary'
 
@@ -142,23 +148,30 @@ describe('describeToolCall', () => {
     expect(s.primary).toBe('git status')
   })
 
-  it('renders a subagent/Task call as the task name with no verb', () => {
-    const s = describeToolCall(
-      call({
-        kind: 'think',
-        title: 'Task',
-        rawInput: {
-          subagent_type: 'explore',
-          description: 'Find chat response cursor rendering',
-          prompt: 'long prompt...'
-        }
-      })
-    )
+  it('renders a subagent call as the record title with no verb', () => {
+    const s = describeToolCall(subagentToolCall({ title: 'Find chat response cursor rendering' }))
     expect(s).toEqual({
       verb: '',
       primary: 'Find chat response cursor rendering',
       detail: null
     })
+  })
+
+  it('renders a subagent control call as its title, else "Agent command"', () => {
+    const control = { subagentControl: { subagentIds: [] } }
+    expect(describeToolCall(call({ title: 'wait', ...control }))).toEqual({
+      verb: '',
+      primary: 'wait',
+      detail: null
+    })
+    expect(describeToolCall(call({ kind: 'other', ...control })).primary).toBe('Agent command')
+  })
+
+  it('no longer guesses a subagent from rawInput', () => {
+    const s = describeToolCall(
+      call({ kind: 'think', title: 'Task', rawInput: { description: 'd', prompt: 'p' } })
+    )
+    expect(s.verb).toBe('Thinking')
   })
 
   it('still renders a genuine think call as "Thinking"', () => {
@@ -168,29 +181,11 @@ describe('describeToolCall', () => {
 })
 
 describe('isSubagentCall', () => {
-  it('detects a subagent_type input', () => {
-    expect(isSubagentCall(call({ rawInput: { subagent_type: 'explore' } }))).toBe(true)
-  })
-
-  it('detects a description + prompt input', () => {
-    expect(isSubagentCall(call({ rawInput: { description: 'do x', prompt: 'p' } }))).toBe(true)
-  })
-
-  it('is false for a plain think call', () => {
-    expect(isSubagentCall(call({ kind: 'think', rawInput: { thought: 'pondering' } }))).toBe(false)
-  })
-
-  it('detects a Codex subagent rawInput', () => {
-    expect(isSubagentCall(call({ rawInput: { prompt: 'review', senderThreadId: 'parent' } }))).toBe(
-      true
+  it('is true only when the host attached a record', () => {
+    expect(isSubagentCall(subagentToolCall())).toBe(true)
+    expect(isSubagentCall(call({ rawInput: { subagent_type: 'explore', prompt: 'p' } }))).toBe(
+      false
     )
-    expect(
-      isSubagentCall(call({ rawInput: { agentThreadId: 'child', activityKind: 'start' } }))
-    ).toBe(true)
-  })
-
-  it('is false when rawInput is absent', () => {
-    expect(isSubagentCall(call({ kind: 'read', title: 'Task' }))).toBe(false)
   })
 })
 
@@ -221,11 +216,7 @@ describe('readableOutput', () => {
 })
 
 describe('summarizeToolActivity', () => {
-  const subagent = (extra?: Record<string, unknown>): ToolCall =>
-    call({
-      kind: 'think',
-      rawInput: { subagent_type: 'explore', description: 'Audit branch', prompt: 'p', ...extra }
-    })
+  const subagent = (record?: SubagentRecordOverrides): ToolCall => subagentToolCall(record)
 
   it('returns null for a turn with no tool calls', () => {
     expect(summarizeToolActivity([])).toBeNull()
@@ -253,20 +244,18 @@ describe('summarizeToolActivity', () => {
     expect(summarizeToolActivity([subagent(), subagent()])?.label).toBe('Ran 2 agents')
   })
 
-  it.each([
-    'run_in_background',
-    'is_background',
-    'background'
-  ])('counts a subagent with %s: true as a background agent', (key) => {
-    expect(summarizeToolActivity([subagent({ [key]: true })])?.label).toBe('Ran 1 background agent')
+  it('counts a background subagent as a background agent', () => {
+    expect(summarizeToolActivity([subagent({ background: true })])?.label).toBe(
+      'Ran 1 background agent'
+    )
     expect(
-      summarizeToolActivity([subagent({ [key]: true }), subagent({ [key]: true })])?.label
+      summarizeToolActivity([subagent({ background: true }), subagent({ background: true })])?.label
     ).toBe('Ran 2 background agents')
   })
 
-  it('keeps a non-true background flag as a plain agent', () => {
-    expect(summarizeToolActivity([subagent({ background: false })])?.label).toBe('Ran 1 agent')
-    expect(summarizeToolActivity([subagent({ background: 'yes' })])?.label).toBe('Ran 1 agent')
+  it('counts a subagent control call as an agent command', () => {
+    const control = call({ title: 'wait', subagentControl: { subagentIds: [] } })
+    expect(summarizeToolActivity([control])?.label).toBe('Sent 1 agent command')
   })
 
   it('counts an edit whose diffs all create files as created', () => {
@@ -455,22 +444,92 @@ describe('toolCallPath', () => {
   })
 })
 
+describe('toolCallChangedPaths', () => {
+  it('claims every diff path of a multi-file edit without locations', () => {
+    const paths = toolCallChangedPaths(
+      call({
+        kind: 'edit',
+        content: [
+          { type: 'diff', path: 'src/a.ts', newText: 'a' },
+          { type: 'content', content: { type: 'text', text: 'note' } },
+          { type: 'diff', path: ' src/b.ts ', newText: 'b' },
+          { type: 'diff', path: '  ', newText: 'x' },
+          { type: 'diff', path: 'src/a.ts', newText: 'aa' }
+        ]
+      })
+    )
+    expect(paths).toEqual(['src/a.ts', 'src/b.ts'])
+  })
+
+  it('puts the toolCallPath first, then every location, then the diff paths', () => {
+    const paths = toolCallChangedPaths(
+      call({
+        kind: 'move',
+        rawInput: { path: 'src/input.ts' },
+        locations: [{ path: 'src/old.ts' }, { path: 'src/new.ts' }],
+        content: [{ type: 'diff', path: 'src/diff.ts', newText: 'x' }]
+      })
+    )
+    expect(paths).toEqual(['src/old.ts', 'src/new.ts', 'src/diff.ts'])
+    expect(
+      toolCallChangedPaths(call({ kind: 'edit', rawInput: { path: 'src/input.ts' } }))
+    ).toEqual(['src/input.ts'])
+    expect(toolCallChangedPaths(call({ kind: 'edit' }))).toEqual([])
+  })
+})
+
 describe('isSubagentRunning', () => {
-  it('is running for pending and in_progress only while the parent turn is active', () => {
-    expect(isSubagentRunning(call({ status: 'pending' }), true)).toBe(true)
-    expect(isSubagentRunning(call({ status: 'in_progress' }), true)).toBe(true)
+  const dispatch = (partial: Partial<ToolCall> = {}, record: SubagentRecordOverrides = {}) =>
+    subagentToolCall(record, partial)
+  const background = (partial: Partial<ToolCall> = {}, record: SubagentRecordOverrides = {}) =>
+    dispatch({ status: 'completed', ...partial }, { background: true, ...record })
+
+  it('is false without a record', () => {
+    expect(isSubagentRunning(call({ status: 'in_progress' }), 'active')).toBe(false)
+  })
+
+  it('runs a foreground dispatch only while its turn is active', () => {
+    expect(isSubagentRunning(dispatch({ status: 'pending' }), 'active')).toBe(true)
+    expect(isSubagentRunning(dispatch({ status: undefined }), 'active')).toBe(true)
     // A cancelled or crashed turn can leave the dispatch in flight forever.
-    expect(isSubagentRunning(call({ status: 'pending' }), false)).toBe(false)
-    expect(isSubagentRunning(call({ status: 'in_progress' }), false)).toBe(false)
+    expect(isSubagentRunning(dispatch({ status: 'in_progress' }), 'ended')).toBe(false)
+    expect(isSubagentRunning(dispatch({ status: 'in_progress' }), 'superseded')).toBe(false)
   })
 
-  it('treats a missing status as running only while the parent turn is active', () => {
-    expect(isSubagentRunning(call({}), true)).toBe(true)
-    expect(isSubagentRunning(call({ status: undefined }), false)).toBe(false)
+  it('is not running once idle or unknown, even in an active turn', () => {
+    for (const reason of ['completed', 'failed', 'cancelled', 'unexplained'] as const) {
+      expect(isSubagentRunning(dispatch({}, { state: endedState(reason) }), 'active')).toBe(false)
+    }
+    expect(isSubagentRunning(dispatch({}, { state: { activity: 'unknown' } }), 'active')).toBe(
+      false
+    )
   })
 
-  it('is not running once completed or failed, even in an active turn', () => {
-    expect(isSubagentRunning(call({ status: 'completed' }), true)).toBe(false)
-    expect(isSubagentRunning(call({ status: 'failed' }), true)).toBe(false)
+  it('counts waiting for input as running', () => {
+    const waiting = dispatch({}, { state: { activity: 'requires_action' } })
+    expect(isSubagentRunning(waiting, 'active')).toBe(true)
+  })
+
+  it('keeps a background launch running after its turn ends, until a newer turn starts', () => {
+    expect(isSubagentRunning(background(), 'active')).toBe(true)
+    expect(isSubagentRunning(background(), 'ended')).toBe(true)
+    expect(isSubagentRunning(background(), 'superseded')).toBe(false)
+  })
+
+  it('treats a background launch without a launch receipt as foreground', () => {
+    // Stop before the receipt leaves the launch pending with nothing to outlive the turn.
+    for (const status of ['pending', 'in_progress', undefined] as const) {
+      expect(isSubagentRunning(background({ status }), 'active')).toBe(true)
+      expect(isSubagentRunning(background({ status }), 'ended')).toBe(false)
+      expect(isSubagentRunning(background({ status }), 'superseded')).toBe(false)
+    }
+  })
+
+  it('stays running in any turn while a live source reports running', () => {
+    const live = dispatch({ status: 'in_progress' }, { caps: { liveProgress: true } })
+    expect(isSubagentRunning(live, 'ended')).toBe(true)
+    expect(isSubagentRunning(live, 'superseded')).toBe(true)
+    const ended = dispatch({}, { caps: { liveProgress: true }, state: endedState('completed') })
+    expect(isSubagentRunning(ended, 'active')).toBe(false)
   })
 })

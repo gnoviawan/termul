@@ -32,8 +32,8 @@ import {
 import { WEB_TERMINAL_ERROR_CODES } from './web-terminal-protocol.types'
 
 describe('web-protocol.types — event/request type registries (AC2)', () => {
-  it('exports exactly 22 event types including durable user prompts, host records, switch markers + delivery frames', () => {
-    expect(WS_EVENT_TYPES).toHaveLength(22)
+  it('exports exactly 23 event types including durable user prompts, host records, switch markers, the live agent_working state + delivery frames', () => {
+    expect(WS_EVENT_TYPES).toHaveLength(23)
     // The 16 from events.rs (prefix-dropped) + auth_required.
     const expected16FromEvents = [
       'agent_spawned',
@@ -73,6 +73,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     }
     // CAP-2 (spec-in-chat-agent-switch): durable agent-switch marker.
     expect(WS_EVENT_TYPES).toContain('agent_switch')
+    // Live-only work outside a prompt turn (never persisted).
+    expect(WS_EVENT_TYPES).toContain('agent_working')
+    expect(WS_EVENT_TIERS.agent_working).toBe('reliable')
     // Host-authored durable title record (occupies a session-log seq).
     expect(WS_EVENT_TYPES).toContain('local_title_generated')
     // Delivery frames (no seq): gap after a LOSSY drop, host heartbeat.
@@ -88,16 +91,19 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 55 request types including warm-pool promotion and host-owned session delete', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(55)
+  it('exports exactly 72 request types including warm-pool promotion, host-owned session delete, browser stop and subagent stop', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(72)
     const expected = [
       'send_prompt',
       'cancel_prompt',
+      'stop_subagent',
       'set_config_option',
       'set_mode',
       'set_model',
       'respond_permission',
       'answer_question',
+      // Stop agent browsing for a session (desktop parity with browser_stop).
+      'browser_stop',
       'create_session',
       'load_session',
       'resume_session',
@@ -129,6 +135,14 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'list_acp_catalog',
       'set_catalog_opt_in',
       'fetch_acp_registry_snapshot',
+      'search_mcp_catalog',
+      'get_mcp_catalog_status',
+      'set_mcp_catalog_sync',
+      'describe_mcp_install',
+      'plan_mcp_install',
+      'commit_mcp_install',
+      'cancel_mcp_install',
+      'get_mcp_catalog_icon',
       // CAP-6 / Story 9: host-owned verified-atomic ACP install.
       'install_acp_agent',
       // Issue #613: server-side generic key-value store.
@@ -152,11 +166,18 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'unwatch',
       // Explicit host-default project change.
       'set_default_project',
-      // Claude Accounts: view and choose.
+      // Claude Accounts: view, choose, add, rename, remove and link sign-in.
       'list_claude_accounts',
       'list_claude_usage',
       'set_default_claude_account',
       'set_project_claude_account',
+      'set_claude_auto_switch',
+      'add_claude_account',
+      'rename_claude_account',
+      'remove_claude_account',
+      'start_claude_link_login',
+      'finish_claude_link_login',
+      'cancel_claude_login',
       // The canvas gateway's renderer leg.
       'canvas_mount',
       'canvas_unmount',
@@ -180,9 +201,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
 })
 
 describe('web-protocol.types — error codes (AC2)', () => {
-  it('exports exactly 27 stable error codes', () => {
+  it('exports exactly 29 stable error codes', () => {
     const codes = new Set(Object.values(WS_ERROR_CODES))
-    expect(codes.size).toBe(27)
+    expect(codes.size).toBe(29)
     const expected = [
       'not_found',
       'unauthorized',
@@ -216,7 +237,11 @@ describe('web-protocol.types — error codes (AC2)', () => {
       'command_conflict',
       'invalid_command_id',
       // A Claude Account that is not signed in.
-      'claude_account_signed_out'
+      'claude_account_signed_out',
+      // A pasted Claude sign-in code the CLI calls incomplete.
+      'claude_login_code_incomplete',
+      // A pasted Claude sign-in code while the CLI still checks the last one.
+      'claude_login_busy'
     ]
     for (const code of expected) {
       expect(codes).toContain(code)
@@ -471,6 +496,10 @@ describe('web-protocol.types — command classes (AD-5)', () => {
     }
     expect(WS_COMMAND_CLASSES.send_prompt).toEqual(['command', 'entity'])
     expect(WS_COMMAND_CLASSES.create_session).toEqual(['create', 'entity'])
+  })
+
+  it('keeps the secret-bearing MCP install commit out of the ledger', () => {
+    expect(WS_COMMAND_CLASSES.commit_mcp_install).toEqual(['command', 'never'])
   })
 
   it('accepts 1-128 chars of [A-Za-z0-9_-] as a commandId and nothing else', () => {

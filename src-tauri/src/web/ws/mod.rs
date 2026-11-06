@@ -68,11 +68,13 @@ mod claude_accounts;
 mod commands;
 mod dispatch;
 mod lifecycle;
+mod mcp_catalog;
 mod projects;
 mod prompts;
 mod relay;
 mod sessions;
 mod store;
+mod subagents;
 mod subscribe;
 mod watch;
 
@@ -91,6 +93,7 @@ use projects::*;
 use prompts::*;
 use relay::*;
 use sessions::*;
+use subagents::*;
 use store::*;
 use subscribe::*;
 use watch::*;
@@ -471,6 +474,12 @@ pub enum WsErrorCode {
     /// a Project or as the default, or starting a managed Claude agent on it.
     /// The message names the Account and where to sign in.
     ClaudeAccountSignedOut,
+    /// `finish_claude_link_login` got a code the Claude CLI calls incomplete.
+    /// The sign-in still waits for the whole code.
+    ClaudeLoginCodeIncomplete,
+    /// `finish_claude_link_login` got a code while the Claude CLI still checks
+    /// an earlier one. The sign-in goes on; its first code gets the verdict.
+    ClaudeLoginBusy,
 }
 
 impl WsErrorCode {
@@ -505,6 +514,8 @@ impl WsErrorCode {
             Self::CommandConflict => "command_conflict",
             Self::InvalidCommandId => "invalid_command_id",
             Self::ClaudeAccountSignedOut => "claude_account_signed_out",
+            Self::ClaudeLoginCodeIncomplete => "claude_login_code_incomplete",
+            Self::ClaudeLoginBusy => "claude_login_busy",
         }
     }
 }
@@ -635,6 +646,13 @@ pub struct AppState {
     /// `None` keeps the legacy ungated behavior (accept-any-token
     /// `authenticate`, no `/terminal/ws` connection gate).
     pub web_auth: Option<Arc<WebAuth>>,
+    /// Standalone `termul-server` host-administration context (gh-1105): the
+    /// resolved state dir + the effective setup answers the `/server/config`
+    /// reconfigure routes read, persist, and restart onto. `Some` only on the
+    /// standalone server; `None` on the desktop shared-live host (and the
+    /// desktop's in-process channel state) so `/server/config` stays
+    /// unreachable there and `/health` reports `setupRequired: false`.
+    pub server_admin: Option<crate::web::server_config_file::ServerAdminContext>,
     /// Host shutdown coordination + per-connection overflow tolerance, shared
     /// by every upgraded `/ws` and `/terminal/ws` socket (AD-19).
     pub connections: ConnectionRuntime,
@@ -796,11 +814,17 @@ pub(super) fn ok_with_payload<T: serde::Serialize>(id: String, value: &T) -> WsR
 }
 
 #[cfg(test)]
+mod authenticate_agent_tests;
+#[cfg(test)]
 mod canvas_tests;
 #[cfg(test)]
 mod capability_tests;
 #[cfg(test)]
 mod project_binding_tests;
+#[cfg(test)]
+mod host_ticket_route_tests;
+#[cfg(test)]
+mod pending_permission_tests;
 #[cfg(test)]
 mod project_command_tests;
 #[cfg(test)]

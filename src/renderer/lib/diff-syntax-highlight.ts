@@ -1,11 +1,11 @@
 import type { Highlighter, Tag } from '@lezer/highlight'
 import { highlightTree, tags } from '@lezer/highlight'
+import { detectLanguage } from '@/lib/editor-file-kind'
 import { logFrontendError } from '@/lib/log-api'
 import { getLastAppliedColorThemeId } from '@/lib/themes/apply-color-theme'
 import { getColorThemeDefinition } from '@/lib/themes/bundled-themes'
 import { resolveSyntaxColors } from '@/lib/themes/resolve-syntax'
 import type { ResolvedSyntaxColors } from '@/lib/themes/types'
-import { detectLanguage } from '@/stores/editor-store'
 
 export interface TokenSpan {
   start: number

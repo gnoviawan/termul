@@ -534,6 +534,9 @@ describe('acp-store', () => {
       agentId: 'agent-r',
       sessionId: 's-resume',
       cwd: '/w',
+      // #1420: a reopen onto a fresh agent attaches the (here empty) MCP list
+      // so the host still gets the `termul` plan server.
+      mcpServers: [],
       commandId: expect.any(String)
     })
     expect(useAcpStore.getState().toolCalls['s-resume']).toEqual([
@@ -730,6 +733,7 @@ describe('acp-store', () => {
       agentId: 'agent-1',
       sessionId: 's-closed',
       cwd: '/w',
+      mcpServers: [],
       commandId: expect.any(String)
     })
     // The local transcript stays visible while (and after) the load: an agent
@@ -1082,6 +1086,7 @@ describe('acp-store', () => {
       agentId: 'agent-1',
       sessionId: 's-closed',
       cwd: '/w',
+      mcpServers: [],
       commandId: expect.any(String)
     })
     expect(useAcpStore.getState().messages['s-closed']).toHaveLength(1)
@@ -1089,6 +1094,52 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s-closed'].modes?.currentModeId).toBe('live')
     expect(useAcpStore.getState().sessions['s-closed'].models?.currentModelId).toBe('model-resume')
     expect(useAcpStore.getState().sessions['s-closed'].configOptions).toEqual([])
+  })
+
+  it('a reopen onto a fresh agent attaches the configured MCP servers (idle-stop auto-resume, #1420)', async () => {
+    // Idle-stop auto-resume (use-idle-stop-auto-resume.ts) calls
+    // `openHistorySession(id)` with NO options. Without the store default the
+    // host received `None` and the agent lost the `termul` server + every
+    // configured MCP server. The default must send a non-undefined list.
+    useAcpStore.setState((s) => ({
+      agents: {
+        ...s.agents,
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { resume: {} } }
+        }
+      },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      mcpServers: [
+        { id: 'srv-ctx7', type: 'stdio', name: 'context7', command: 'ctx7', args: [], env: [] }
+      ]
+    }))
+    setCachedSessionPayload('s-mcp', {
+      metadata: {
+        id: 's-mcp',
+        agentId: 'agent-1',
+        title: 'Reaped chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 0,
+        status: 'closed'
+      },
+      messages: []
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce({})
+    // No options — exactly what idle-stop auto-resume passes.
+    await useAcpStore.getState().openHistorySession('s-mcp')
+    const resumeCall = (invoke as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([cmd]) => cmd === 'acp_resume_session'
+    )
+    expect(resumeCall).toBeDefined()
+    const payload = resumeCall?.[1] as { mcpServers?: unknown }
+    expect(payload.mcpServers).toBeDefined()
+    expect(payload.mcpServers).toEqual([
+      { type: 'stdio', name: 'context7', command: 'ctx7', args: [], env: [] }
+    ])
   })
 
   it('openHistorySession sets replaying=streaming for resume strategy to accept gap-replay chunks', async () => {
@@ -1354,6 +1405,7 @@ describe('acp-store', () => {
       agentId: 'fresh-agent',
       sessionId: 's-reopen',
       cwd: '/w',
+      mcpServers: [],
       commandId: expect.any(String)
     })
     expect(useAcpStore.getState().sessions['s-reopen'].agentId).toBe('fresh-agent')
@@ -1411,6 +1463,7 @@ describe('acp-store', () => {
       agentId: 'fresh-agent',
       sessionId: 's-cold-start',
       cwd: '/w',
+      mcpServers: [],
       commandId: expect.any(String)
     })
     expect(useAcpStore.getState().sessions['s-cold-start'].status).toBe('active')

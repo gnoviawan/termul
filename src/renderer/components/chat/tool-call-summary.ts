@@ -6,6 +6,7 @@
  * Tool input shapes vary per agent, so extraction is best-effort across a set of
  * common key names, with graceful fallbacks to the agent-provided title.
  */
+import type { Subagent, SubagentControl } from '@shared/types/subagent'
 import type { ToolCall, ToolCallContent, ToolKind } from '@/lib/acp-api'
 import { diffLineCounts } from './tool-call-format'
 
@@ -26,16 +27,6 @@ export interface ToolCallSummary {
 
 export function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
-}
-
-function firstThreadId(obj: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = obj[key]
-    if (!Array.isArray(value)) continue
-    const hit = value.find((item) => typeof item === 'string' && item.trim().length > 0)
-    if (typeof hit === 'string') return hit.trim()
-  }
-  return undefined
 }
 
 export function firstString(
@@ -74,7 +65,6 @@ export const PATH_KEYS = [
 const COMMAND_KEYS = ['command', 'cmd', 'script', 'commandLine']
 const QUERY_KEYS = ['query', 'pattern', 'q', 'search', 'searchTerm', 'regex']
 const URL_KEYS = ['url', 'uri', 'href', 'link']
-const TASK_NAME_KEYS = ['description', 'task', 'name', 'title']
 
 /**
  * Keys that commonly carry readable text in a tool-call content item or raw
@@ -83,26 +73,19 @@ const TASK_NAME_KEYS = ['description', 'task', 'name', 'title']
  */
 export const READABLE_TEXT_KEYS = ['output', 'stdout', 'result', 'text', 'content', 'message']
 
+/** A subagent dispatch: the host attached its canonical record. */
+export function isSubagentCall(toolCall: ToolCall): toolCall is ToolCall & { subagent: Subagent } {
+  return toolCall.subagent !== undefined
+}
+
 /**
- * Detect a subagent/Task dispatch. ACP gives no dedicated kind for these and
- * discards the raw tool name, so such calls arrive looking like a `think` chunk.
- * We discriminate on `rawInput`: a subagent dispatch carries a `subagent_type`,
- * or both a `description` and a `prompt`. Genuine reasoning has neither.
+ * A call that steers existing subagents instead of starting one (Codex
+ * `wait`, `sendInput`, `closeAgent`, activity cards), as the host marks it.
  */
-export function isSubagentCall(toolCall: ToolCall): boolean {
-  const input = asRecord(toolCall.rawInput)
-  if (!input) return false
-  if (firstString(input, ['subagent_type', 'subagentType'])) return true
-  if (
-    firstString(input, ['senderThreadId', 'receiverThreadIds', 'agentThreadId', 'agentPath']) ||
-    firstThreadId(input, ['receiverThreadIds'])
-  ) {
-    return true
-  }
-  return (
-    firstString(input, ['description']) !== undefined &&
-    firstString(input, ['prompt']) !== undefined
-  )
+export function isSubagentControlCall(
+  toolCall: ToolCall
+): toolCall is ToolCall & { subagentControl: SubagentControl } {
+  return toolCall.subagentControl !== undefined
 }
 
 /** Final path segment (handles both `/` and `\\`). */
@@ -128,7 +111,7 @@ function firstDiffPath(content: ToolCallContent[]): string | undefined {
  * `describeToolCall` (it diffs full file contents). Cached on the content
  * array's identity: tool-call updates replace the array wholesale, so a
  * repeat look at an unchanged call is free and a changed call recomputes.
- * `ChatChangedFilesPanel` re-extracts files on every store commit — this
+ * `useChatChangedFiles` re-extracts files on every store commit — this
  * keeps that O(calls × file size) scan from repeating the diff itself.
  */
 const diffInfoCache = new WeakMap<
@@ -189,6 +172,30 @@ export function toolCallPath(toolCall: ToolCall): string | undefined {
   return firstDiffPath(content)
 }
 
+/**
+ * Every path a file-changing call claims, trimmed and deduped in order: its
+ * `toolCallPath`, each `locations` entry (both ends of a move), then each diff
+ * item's path (a multi-file edit that lists its files only as diffs). The
+ * session-paths filter and the trimmed-call summary share it; the host's
+ * `file_change_paths` (session_persistence/normalize.rs) mirrors it for the
+ * durable summary.
+ */
+export function toolCallChangedPaths(toolCall: ToolCall): string[] {
+  const diffPaths = (toolCall.content ?? []).map((item) =>
+    item.type === 'diff' ? (item as { path?: string }).path : undefined
+  )
+  const paths = new Set<string>()
+  for (const raw of [
+    toolCallPath(toolCall),
+    ...(toolCall.locations ?? []).map((loc) => loc.path),
+    ...diffPaths
+  ]) {
+    const path = raw?.trim()
+    if (path) paths.add(path)
+  }
+  return Array.from(paths)
+}
+
 /** "L<start>-<end>" from common range keys, or null when not derivable. */
 function lineRange(input: Record<string, unknown> | null): string | null {
   const start = firstNumber(input, ['startLine', 'start_line', 'start', 'line', 'lineStart'])
@@ -228,13 +235,27 @@ export function isToolCallRunning(toolCall: ToolCall): boolean {
 }
 
 /**
- * A subagent dispatch runs only while its parent turn is active: it is
- * pending/in_progress, or has no status yet (the adapter sends the dispatch
- * before any status update). A cancelled or crashed turn can leave a dispatch
- * pending forever, so an ended turn never counts it as running.
+ * Where a subagent's parent turn stands: still running, ended with no user
+ * message after it, or followed by a newer user turn.
  */
-export function isSubagentRunning(toolCall: ToolCall, parentTurnActive: boolean): boolean {
-  return parentTurnActive && (isToolCallRunning(toolCall) || toolCall.status == null)
+export type ParentTurn = 'active' | 'ended' | 'superseded'
+
+/**
+ * Whether a subagent is still running. Only a running or waiting record can
+ * be. A source that reports progress live holds `running` across turns until
+ * it reports the end. Otherwise the record mirrors the dispatch call, whose
+ * completion a cancelled or crashed turn can lose, so a foreground dispatch
+ * runs only while its turn is active. A background launch completes its call
+ * at once and outlives its turn, but nothing reports its end, so it counts as
+ * running until a newer user turn starts.
+ */
+export function isSubagentRunning(toolCall: ToolCall, parentTurn: ParentTurn): boolean {
+  const record = toolCall.subagent
+  if (!record) return false
+  if (record.activity === 'idle' || record.activity === 'unknown') return false
+  if (record.caps.liveProgress) return true
+  if (record.background && toolCall.status === 'completed') return parentTurn !== 'superseded'
+  return parentTurn === 'active'
 }
 
 function runningVerbForKind(kind: ToolKind | undefined): string {
@@ -314,11 +335,13 @@ export function describeToolCall(toolCall: ToolCall): ToolCallSummary {
     ? runningVerbForKind(toolCall.kind)
     : verbForKind(toolCall.kind)
 
-  // Subagent/Task dispatch: render as the task name with no verb (the robot
-  // icon carries the meaning), rather than the misleading "Thinking" of `think`.
+  // Subagent dispatch: render as the task name with no verb (the robot icon
+  // carries the meaning), rather than the misleading "Thinking" of `think`.
   if (isSubagentCall(toolCall)) {
-    const name = firstString(input, TASK_NAME_KEYS) ?? title ?? 'Subagent task'
-    return { verb: '', primary: name, detail: null }
+    return { verb: '', primary: toolCall.subagent.title, detail: null }
+  }
+  if (isSubagentControlCall(toolCall)) {
+    return { verb: '', primary: title ?? 'Agent command', detail: null }
   }
 
   switch (toolCall.kind) {
@@ -384,16 +407,9 @@ type ActivityCategory =
   | 'fetch'
   | 'agent'
   | 'background-agent'
+  | 'agent-control'
   | 'mode'
   | 'other'
-
-const BACKGROUND_INPUT_KEYS = ['run_in_background', 'is_background', 'background']
-
-function isBackgroundAgent(call: ToolCall): boolean {
-  const input = asRecord(call.rawInput)
-  if (!input) return false
-  return BACKGROUND_INPUT_KEYS.some((key) => input[key] === true)
-}
 
 /**
  * Create-only edit: at least one diff item, and every diff created its file
@@ -415,10 +431,8 @@ const ACTIVITY_CATEGORY_RULES: ReadonlyArray<{
   category: ActivityCategory
   match: (call: ToolCall) => boolean
 }> = [
-  {
-    category: 'background-agent',
-    match: (call) => isSubagentCall(call) && isBackgroundAgent(call)
-  },
+  { category: 'agent-control', match: (call) => isSubagentControlCall(call) },
+  { category: 'background-agent', match: (call) => call.subagent?.background === true },
   { category: 'agent', match: (call) => isSubagentCall(call) },
   { category: 'command', match: (call) => call.kind === 'execute' },
   { category: 'file-read', match: (call) => call.kind === 'read' },
@@ -444,6 +458,10 @@ const ACTIVITY_PHRASES: Record<ActivityCategory, { one: string; many: (n: number
   'background-agent': {
     one: 'ran 1 background agent',
     many: (n) => `ran ${n} background agents`
+  },
+  'agent-control': {
+    one: 'sent 1 agent command',
+    many: (n) => `sent ${n} agent commands`
   },
   mode: { one: 'switched mode', many: (n) => `switched mode ${n} times` },
   other: { one: 'used 1 tool', many: (n) => `used ${n} tools` }

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Unnamed fields fixture</title>
+</head>
+<body>
+<main>
+<h1>Unnamed fields fixture</h1>
+<div id="people">
+<div class="person"><span>Ada</span> <input type="text"></div>
+<div class="person"><span>Bob</span> <input type="text"></div>
+<div class="person"><span>Carol</span> <input type="text"></div>
+</div>
+<section id="flat"><span>Dan</span> <input type="text"> <span>Eve</span> <input type="text"> <span>Fay</span> <input type="text"></section>
+<button type="button" id="shift">Remove first</button>
+<p id="left">Left: Ada Bob Carol Dan Eve Fay</p>
+<p id="values">Values:</p>
+</main>
+<script>
+function names() {
+  return Array.prototype.map.call(document.querySelectorAll('#people span, #flat span'), function (s) {
+    return s.textContent;
+  }).join(' ');
+}
+document.getElementById('shift').addEventListener('click', function () {
+  document.querySelector('#people .person').remove();
+  var flat = document.getElementById('flat');
+  flat.removeChild(flat.querySelector('span'));
+  flat.removeChild(flat.querySelector('input'));
+  document.getElementById('left').textContent = 'Left: ' + names();
+});
+document.addEventListener('input', function () {
+  var values = Array.prototype.map.call(document.querySelectorAll('input'), function (i) {
+    return i.previousElementSibling.textContent + '=' + i.value;
+  });
+  document.getElementById('values').textContent = 'Values: ' + values.join(' ');
+});
+</script>
+</body>
+</html>

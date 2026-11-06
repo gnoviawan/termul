@@ -281,6 +281,31 @@ mod served_from_dev_dir {
                 ("app.js", b"export default 1"),
             ])
         }
+
+        /// Like [`Self::standard`], but the bundle lives one directory below a
+        /// temp dir this test owns, so a `..` traversal target can be written
+        /// into that owned parent (removed on drop) instead of the shared
+        /// system temp dir. [`Self::dir`] is the owned parent.
+        fn nested() -> Self {
+            let guard = ENV_LOCK.lock();
+            let dir = tempfile::tempdir().unwrap();
+            let bundle = dir.path().join("bundle");
+            let files: [(&str, &[u8]); 3] = [
+                ("index.html", INDEX.as_bytes()),
+                ("app_bg.wasm", b"\0asm"),
+                ("app.js", b"export default 1"),
+            ];
+            for (name, bytes) in files {
+                let path = bundle.join(name);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, bytes).unwrap();
+            }
+            std::env::set_var(crate::web::assets::CANVAS_BUNDLE_DIR_ENV, &bundle);
+            Self {
+                _guard: guard,
+                dir: Some(dir),
+            }
+        }
     }
 
     impl Drop for Bundle {
@@ -368,18 +393,13 @@ mod served_from_dev_dir {
 
     #[tokio::test]
     async fn paths_cannot_leave_the_bundle_directory() {
-        let bundle = Bundle::standard();
+        let bundle = Bundle::nested();
         let id = "cv_traversal";
         let token = bundle_tokens().issue(id).unwrap();
+        // The owned temp dir is the bundle's parent, so `..` targets it — and
+        // it is removed when `bundle` drops, never leaking into shared /tmp.
         std::fs::write(
-            bundle
-                .dir
-                .as_ref()
-                .unwrap()
-                .path()
-                .parent()
-                .unwrap()
-                .join("secret.txt"),
+            bundle.dir.as_ref().unwrap().path().join("secret.txt"),
             "top secret",
         )
         .unwrap();
@@ -565,6 +585,18 @@ mod served_from_dev_dir {
             .unwrap();
         assert_eq!(script.status(), 200, "a sub-resource needs no cookie");
 
+        let first_addr = server.addr().unwrap();
+        assert!(crate::host_perimeter::is_owned_port(first_addr.port()));
+        let page_path = format!("/canvas/{id}/{token}/");
+        assert_eq!(
+            raw_status(first_addr, &page_path, "attacker.example").await,
+            "HTTP/1.1 403 Forbidden"
+        );
+        assert_eq!(
+            raw_status(first_addr, &page_path, &first_addr.to_string()).await,
+            "HTTP/1.1 200 OK"
+        );
+
         server.drop_listener();
         let second = loop {
             if server.bind_count() == 2 {
@@ -580,6 +612,8 @@ mod served_from_dev_dir {
             .await
             .unwrap();
         assert_eq!(page.status(), 200, "rebuilt base URL serves the bundle");
+        let second_port = server.addr().unwrap().port();
+        assert!(crate::host_perimeter::is_owned_port(second_port));
 
         server.shutdown();
         tokio::time::timeout(Duration::from_secs(5), supervisor)
@@ -587,6 +621,23 @@ mod served_from_dev_dir {
             .unwrap()
             .unwrap();
         assert_eq!(server.base(), None);
+        assert!(
+            !crate::host_perimeter::is_owned_port(second_port),
+            "port released after shutdown"
+        );
+    }
+
+    /// Raw HTTP/1.1 GET so the `Host` header is exactly the one a rebinding
+    /// page would send.
+    async fn raw_status(addr: std::net::SocketAddr, path: &str, host: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        response.lines().next().unwrap_or_default().to_string()
     }
 }
 

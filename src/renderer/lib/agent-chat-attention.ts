@@ -1,19 +1,8 @@
+import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
+import type { ChatActivityRecord } from '@shared/types/web-protocol.types'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
 import type { SessionStatus } from '@/stores/acp-store'
 import { isResumeFailureError } from '@/stores/acp-store/helpers'
-
-export interface AgentChatAttentionInput {
-  projectId: string
-  sessionStatus: SessionStatus
-  agentStatus: string | undefined
-  pendingPermission: boolean
-  pendingQuestion: boolean
-  pendingElicitation: boolean
-  /** The Session's `lastError`. Decides whether a `closed` Session can resume by itself. */
-  lastError: string | null
-  /** An entrance warm-up is not an Agent chat. */
-  ephemeral: boolean
-}
 
 /**
  * A `closed` Session that cannot resume by itself: its resume failed, or Codex
@@ -24,19 +13,44 @@ function closedSessionCannotResume(lastError: string | null): boolean {
   return isResumeFailureError(lastError) || lastError === CODEX_CLI_SIGNED_OUT_MESSAGE
 }
 
+/** The parts of this renderer's Session record a chat's status reads. */
+export interface LocalChatSession {
+  projectId: string
+  status: SessionStatus
+  lastError?: string | null
+}
+
 /**
- * A permission, a question, an elicitation, a disconnected Agent, or a closed
- * Session that cannot resume by itself. A cleanly stopped chat is not
- * Attention, and neither is a finished turn, including a turn that ended in an
- * error while the process is still the chat's process. An unanswered
- * elicitation blocks the agent exactly as a question does.
+ * One chat's Needs you: the host holds a permission, question or elicitation
+ * of it, or, for a chat this renderer opened (`session`), its Agent
+ * disconnected or it is closed and cannot resume by itself. A cleanly stopped
+ * chat is not Needs you, and neither is a finished turn, including one that
+ * ended in an error. Every chat list row, project count and announcement
+ * reads this, so a chat never reads differently in two places.
  */
-export function agentChatNeedsAttention(input: AgentChatAttentionInput): boolean {
-  if (input.ephemeral || input.projectId.length === 0) return false
-  if (input.pendingPermission || input.pendingQuestion || input.pendingElicitation) return true
-  if (input.sessionStatus === 'closed' && closedSessionCannotResume(input.lastError)) return true
-  if (input.agentStatus === 'disconnected') return true
-  return false
+export function chatNeedsYou(
+  activity: ChatActivityRecord | undefined,
+  session: LocalChatSession | undefined,
+  agentStatus: string | undefined
+): boolean {
+  if (activity?.needsYou) return true
+  if (!session || session.projectId.length === 0) return false
+  if (session.status === 'closed' && closedSessionCannotResume(session.lastError ?? null)) {
+    return true
+  }
+  return agentStatus === 'disconnected'
+}
+
+/**
+ * The chat's project: the host's record names it, this renderer's Session is
+ * the fallback. The host's unassigned sentinel names no project.
+ */
+export function chatProjectId(
+  activity: ChatActivityRecord | undefined,
+  session: LocalChatSession | undefined
+): string | undefined {
+  const projectId = activity?.projectId || session?.projectId
+  return projectId && projectId !== UNASSIGNED_PROJECT_ID ? projectId : undefined
 }
 
 /** A connected Agent chat with no turn in progress. The activity spinner covers a live turn. */
@@ -55,12 +69,4 @@ export function agentChatIsRunning(input: {
 
 export function needsYouLabel(count: number): string {
   return count === 1 ? '1 needs you' : `${count} need you`
-}
-
-export function attentionCountForProject(
-  projectId: string,
-  chats: readonly AgentChatAttentionInput[]
-): number {
-  return chats.filter((chat) => chat.projectId === projectId && agentChatNeedsAttention(chat))
-    .length
 }

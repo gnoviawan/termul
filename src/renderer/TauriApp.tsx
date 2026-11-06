@@ -5,11 +5,14 @@ import { BrowserAuthDialogHost } from '@/components/agents/BrowserAuthDialog'
 import { BrowserConsentCardHost } from '@/components/agents/BrowserConsentCardHost'
 import { CodexCliAuthSync } from '@/components/agents/CodexCliAuthSync'
 import { ChatRoute } from '@/components/ChatRoute'
+import { useClaudeAutoSwitch } from '@/components/chat/claude-account/auto-switch'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAcpUpdateChecks } from '@/hooks/use-acp-update-checks'
+import { useAutomationProposals } from '@/hooks/use-automation-proposals'
 import { usePreventDevToolsShortcuts } from '@/hooks/use-prevent-devtools-shortcuts'
 import { usePreventNativeContextMenu } from '@/hooks/use-prevent-native-context-menu'
 import { useWindowState } from '@/hooks/use-window-state'
@@ -112,6 +115,11 @@ function AppEffects(): null {
   // waiting), gated on the user not already watching the chat. Mounted on
   // both renderer roots for parity.
   useChatNotifications()
+  // A Claude chat at its account's limit continues on another account, even
+  // off screen. Mounted on both renderer roots for parity.
+  useClaudeAutoSwitch()
+  // A chat agent's proposed automation opens for review. Both roots.
+  useAutomationProposals()
   useAcpMcp()
   usePreventFileDropNavigation()
   // Suppress the native webview context menu app-wide (BUBBLE phase) so
@@ -198,6 +206,7 @@ export default function TauriApp(): React.JSX.Element {
           <ErrorBoundary context="App Root">
             <AppEffects />
             <Toaster />
+            <ExternalLinkConfirmHost />
             {/* Headless ACP auth: global host for the browser-open paste-back
                 dialog (spec-acp-terminal-auth) — auth can be triggered from a
                 chat panel or warm pool, not just the launcher. */}

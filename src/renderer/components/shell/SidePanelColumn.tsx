@@ -10,7 +10,6 @@ import {
   useLastColumnTab,
   useShellLayoutStore
 } from '@/stores/shell-layout-store'
-import { useSidebarVisible } from '@/stores/sidebar-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 import { ChangesPanel } from './ChangesPanel'
@@ -27,22 +26,20 @@ const FileExplorer = lazy(() =>
   import('@/components/file-explorer/FileExplorer').then((m) => ({ default: m.FileExplorer }))
 )
 
+const GithubPanel = lazy(() =>
+  import('@/components/github/GithubPanel').then((m) => ({ default: m.GithubPanel }))
+)
+
 interface SidePanelColumnProps {
   activeProject: Project
 }
 
-const TAB_LABELS: Record<ShellLastColumnTab, string> = {
-  chats: 'Chats',
-  explorer: 'Explorer',
-  changes: 'Changes'
-}
-
 /**
  * Shell Side panel: a header with the New chat and Hide panel buttons,
- * the Chats / Explorer / Changes Column tabs and the selected tab's body. The
- * last tab is remembered per project. The tabs render only while the Rail is
- * expanded; collapsed, the Rail's own icons select the tab. Mounted through
- * `ExplorerColumn`'s `sidePanel` slot, never in SSH mode.
+ * the Chats / Explorer / Changes / GitHub Column tabs and the selected tab's body. The
+ * last tab is remembered per project. The tabs show in both Rail states; the
+ * collapsed Rail shows its own tab icons only while this panel is hidden.
+ * Mounted through `ExplorerColumn`'s `sidePanel` slot, never in SSH mode.
  *
  * The header is the Side panel's part of the window top row (both Rail
  * states): a drag region on desktop. With the Rail collapsed on macOS the
@@ -52,7 +49,6 @@ const TAB_LABELS: Record<ShellLastColumnTab, string> = {
 export function SidePanelColumn({ activeProject }: SidePanelColumnProps): React.JSX.Element {
   const projectId = activeProject.id
   const { cwd } = useColumnWorkingCopy(activeProject)
-  const railExpanded = useSidebarVisible()
   const dragAttr = useTopRowPlatform().dragRegions ? true : undefined
   const trafficLightInset = useTrafficLightInset()
 
@@ -114,16 +110,12 @@ export function SidePanelColumn({ activeProject }: SidePanelColumnProps): React.
           </div>
         </div>
 
-        {railExpanded && (
-          <ColumnTabs selected={selected} onSelect={handleSelectTab} changedCount={changedCount} />
-        )}
+        <ColumnTabs selected={selected} onSelect={handleSelectTab} changedCount={changedCount} />
 
         <div
           role="tabpanel"
           id={columnPanelId(selected)}
-          {...(railExpanded
-            ? { 'aria-labelledby': columnTabId(selected) }
-            : { 'aria-label': TAB_LABELS[selected] })}
+          aria-labelledby={columnTabId(selected)}
           className="flex min-h-0 flex-1 flex-col"
         >
           {selected === 'chats' && <ChatsList project={activeProject} />}
@@ -133,6 +125,11 @@ export function SidePanelColumn({ activeProject }: SidePanelColumnProps): React.
             </Suspense>
           )}
           {selected === 'changes' && <ChangesPanel cwd={cwd} isVisible />}
+          {selected === 'github' && (
+            <Suspense fallback={<ShellSkeleton />}>
+              <GithubPanel projectId={projectId} cwd={cwd} />
+            </Suspense>
+          )}
         </div>
       </div>
       <button

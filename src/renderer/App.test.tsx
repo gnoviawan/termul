@@ -26,6 +26,29 @@ vi.mock('./hooks/use-smooth-wheel-scroll', () => ({
   useSmoothWheelScroll: mockUseSmoothWheelScroll
 }))
 
+// gh-1105: the setup gate is a parallel slice (`components/setup/`). This
+// mock is faithful to the settled contract — children normally, the wizard
+// full-screen while the gate reports 'setup' — and the gate store is a
+// switchable ref, same pattern as WorkspaceLayout.test.tsx's webAuthGateRef.
+const { setupGateRef, mockCheckWebSetupGate } = vi.hoisted(() => ({
+  setupGateRef: { current: 'ok' as 'checking' | 'setup' | 'ok' },
+  mockCheckWebSetupGate: vi.fn()
+}))
+
+vi.mock('@/lib/web-setup-gate', () => ({
+  useWebSetupGate: () => setupGateRef.current,
+  checkWebSetupGate: mockCheckWebSetupGate
+}))
+
+vi.mock('@/components/setup/ServerSetupGate', () => ({
+  ServerSetupGate: ({ children }: { children: React.ReactNode }) =>
+    setupGateRef.current === 'setup' ? (
+      <div data-testid="server-setup-wizard-swap" />
+    ) : (
+      <>{children}</>
+    )
+}))
+
 vi.mock('./hooks/use-terminal-detached-output', () => ({
   useTerminalDetachedOutput: () => undefined
 }))
@@ -183,6 +206,7 @@ const mockApi = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  setupGateRef.current = 'ok'
   vi.stubGlobal('api', mockApi)
   useUpdaterStore.setState({
     updateAvailable: false,
@@ -390,5 +414,37 @@ describe('App CAP-3 resilience wiring (web entry)', () => {
       await Promise.resolve()
     })
     expect(mockInitNotificationPermissions).not.toHaveBeenCalled()
+  })
+})
+
+describe('App server setup gate (gh-1105)', () => {
+  it('primes the /health setup probe at boot', () => {
+    render(<App />)
+    expect(mockCheckWebSetupGate).toHaveBeenCalled()
+  })
+
+  it('swaps the whole app tree for the wizard — AppEffects never mounts — while the gate reports setup', () => {
+    setupGateRef.current = 'setup'
+    render(<App />)
+
+    expect(document.body.querySelector('[data-testid="server-setup-wizard-swap"]')).not.toBeNull()
+    // Every hook below assumes a configured server; none may run in setup mode.
+    expect(mockUseAcpUpdateChecks).not.toHaveBeenCalled()
+    expect(mockUseCrashRecovery).not.toHaveBeenCalled()
+    expect(mockUsePersistenceErrorToasts).not.toHaveBeenCalled()
+    expect(mockUseVisibilityState).not.toHaveBeenCalled()
+    expect(mockUseRemoteProjects).not.toHaveBeenCalled()
+    expect(mockContextBarSettingsRead).not.toHaveBeenCalled()
+    // The probe itself lives in the App body (outside the swapped subtree)
+    // and still primed.
+    expect(mockCheckWebSetupGate).toHaveBeenCalled()
+  })
+
+  it('mounts the normal app tree when the gate resolves ok', () => {
+    setupGateRef.current = 'ok'
+    render(<App />)
+
+    expect(document.body.querySelector('[data-testid="server-setup-wizard-swap"]')).toBeNull()
+    expect(mockUseAcpUpdateChecks).toHaveBeenCalledTimes(1)
   })
 })

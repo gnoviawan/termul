@@ -75,6 +75,34 @@ impl<'de> Deserialize<'de> for Expected {
     }
 }
 
+// Hand-written to match the `Deserialize` above: a derive would describe
+// serde's externally tagged `"Absent"` / `{"Sha256": ...}` instead.
+impl schemars::JsonSchema for Expected {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Expected".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "What a checked write requires of the file as it is now.",
+            "oneOf": [
+                { "const": "absent", "description": "The file does not exist." },
+                {
+                    "type": "object",
+                    "required": ["sha256"],
+                    "properties": {
+                        "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-fA-F]{64}$",
+                            "description": "The sha256 hex of the file's current bytes.",
+                        },
+                    },
+                },
+            ],
+        })
+    }
+}
+
 /// How a checked write ended.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CheckedWrite {

@@ -32,7 +32,10 @@ pub(super) async fn run_command_loop(
     let init_request = InitializeRequest::new(ProtocolVersion::V1)
         .client_capabilities(client::client_capabilities(allow_terminal))
         .client_info(Implementation::new("termul", env!("CARGO_PKG_VERSION")).title("Termul"));
-    let init_message = match initialize_message(&init_request) {
+    if profile.native_subagents {
+        log::info!("[acp] agent {agent_id}: advertising native subagent sessions");
+    }
+    let init_message = match initialize_message(&init_request, profile.native_subagents) {
         Ok(message) => message,
         Err(error) => {
             let _ = init_tx.send(Err(error.clone()));
@@ -41,7 +44,7 @@ pub(super) async fn run_command_loop(
     };
     let init_outcome =
         tokio::time::timeout(INIT_TIMEOUT, cx.send_request(init_message).block_task()).await;
-    let supports_session_close = match init_outcome {
+    let (supports_session_close, api_key_shapes) = match init_outcome {
         Ok(Ok(value)) => {
             let response: InitializeResponse = match serde_json::from_value(value) {
                 Ok(response) => response,
@@ -65,6 +68,10 @@ pub(super) async fn run_command_loop(
             // action and call `authenticate(methodId)` before `session/new`.
             // Every advertised method is forwarded; no agent-type filtering.
             let auth_methods = to_auth_method_infos(&response.auth_methods);
+            let api_key_shapes: HashMap<String, ApiKeyShape> = auth_methods
+                .iter()
+                .filter_map(|m| Some((m.id.clone(), m.api_key?)))
+                .collect();
             let auth_method_ids: Vec<&str> = auth_methods.iter().map(|m| m.id.as_str()).collect();
             let session_caps = &response.agent_capabilities.session_capabilities;
             let supports_session_close = session_caps.close.is_some();
@@ -79,12 +86,21 @@ pub(super) async fn run_command_loop(
                 supports_session_close,
             );
 
+            let agent_name = response.agent_info.as_ref().map(|info| info.name.as_str());
+            let family = crate::acp::subagents::AgentFamily::from_agent_name(agent_name);
+            if family != crate::acp::subagents::AgentFamily::Other {
+                log::info!(
+                    "[acp] agent {agent_id} is {family:?}: its subagent tool calls are mapped"
+                );
+            }
+            driver_state.lock().subagent_records().set_agent(family);
+
             spawned.store(true, Ordering::Release);
             let _ = init_tx.send(Ok(InitOutcome {
                 capabilities: response.agent_capabilities,
                 auth_methods,
             }));
-            supports_session_close
+            (supports_session_close, api_key_shapes)
         }
         Ok(Err(e)) => {
             let _ = init_tx.send(Err(e.to_string()));
@@ -134,6 +150,7 @@ pub(super) async fn run_command_loop(
                 worktree_branch,
                 additional_directories,
                 command_id,
+                tool_allowlist,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -148,8 +165,12 @@ pub(super) async fn run_command_loop(
                     let mut request = NewSessionRequest::new(cwd.clone())
                         .mcp_servers(mcp_servers)
                         .additional_directories(additional_directories);
-                    if profile.summarize_thinking {
-                        request = request.meta(summarized_thinking_meta());
+                    let mut meta = profile.summarize_thinking.then(summarized_thinking_meta);
+                    if let Some(allowlist) = &tool_allowlist {
+                        meta = Some(with_headless_options(meta.unwrap_or_default(), allowlist));
+                    }
+                    if let Some(meta) = meta {
+                        request = request.meta(meta);
                     }
                     let timeout = session_new_timeout();
                     log::debug!(
@@ -229,6 +250,9 @@ pub(super) async fn run_command_loop(
                                 state.set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
                                 if ephemeral {
                                     state.mark_ephemeral(session_id.0.clone());
+                                    if let Some(allowlist) = tool_allowlist {
+                                        state.set_tool_allowlist(session_id.0.clone(), allowlist);
+                                    }
                                     state.note_promotable_registration(
                                         session_id.0.clone(),
                                         registration,
@@ -351,6 +375,10 @@ pub(super) async fn run_command_loop(
                             );
                         }
                     }
+                    if answer_reopen_of_held_session(&req_state, &session_id.0, "load", &task_slot)
+                    {
+                        return;
+                    }
                     // Open the replay window IMMEDIATELY BEFORE the request is
                     // sent — not at admission time — so suppression covers
                     // exactly the agent's history replay and live updates
@@ -448,6 +476,14 @@ pub(super) async fn run_command_loop(
                                 crate::logging::redact_session_id(&session_id.0)
                             );
                         }
+                    }
+                    if answer_reopen_of_held_session(
+                        &req_state,
+                        &session_id.0,
+                        "resume",
+                        &task_slot,
+                    ) {
+                        return;
                     }
                     // Same deferred replay window as LoadSession above: opened
                     // immediately before the request so suppression covers
@@ -649,6 +685,11 @@ pub(super) async fn run_command_loop(
                 driver_state
                     .lock()
                     .set_active_turn_id(&session_id.0, turn_id.clone());
+                // The prompt turn takes over from any work the agent did on
+                // its own in this session.
+                if driver_state.lock().unprompted().end(&session_id.0) {
+                    crate::acp::events::emit_agent_working(&sinks, &agent_id, &session_id.0, false);
+                }
                 // Sequence + fan out the carrier's `user_prompt` NOW — the
                 // driver has accepted the prompt and nothing of its turn has
                 // been emitted yet, so the record can never trail one of its
@@ -674,6 +715,8 @@ pub(super) async fn run_command_loop(
                 // routed to this accepted prompt's session, even when the agent
                 // reuses an MCP child created for an older session.
                 host_plan_server.begin_turn(&agent_id.0, &session_id.0);
+                // The user's prompt turn ends a browser Stop for the session.
+                crate::browser_automation::user_turn(&session_id.0);
                 // Story 1.8 T3.2: capture the client turn-id to echo on prompt_complete.
                 let turn_turn_id = turn_id.clone();
                 let spawn_result = cx.spawn(async move {
@@ -855,6 +898,10 @@ pub(super) async fn run_command_loop(
 
             AcpCommand::SessionIds { reply } => {
                 let _ = reply.send(Ok(driver_state.lock().active_session_ids()));
+            }
+
+            AcpCommand::WorkingSessionIds { reply } => {
+                let _ = reply.send(Ok(driver_state.lock().unprompted().session_ids()));
             }
 
             AcpCommand::SessionRoots { reply } => {
@@ -1094,7 +1141,52 @@ pub(super) async fn run_command_loop(
                     cancel_elicitation(elicitation);
                 }
                 let result = cx.send_notification(CancelNotification::new(&session_id));
+                // Stop with no prompt turn open ends the agent's own work at
+                // once instead of after the quiet period. An agent that keeps
+                // going reports working again with its next update. Clients
+                // hear the end even when no work is recorded here: each
+                // `agent_working` is emitted after the state lock is released,
+                // so a `true` can land after the `false` that ended its work,
+                // and Stop is how the user clears that.
+                let stopped_working = {
+                    let mut state = driver_state.lock();
+                    let no_turn = !state.is_turn_active(&session_id.0);
+                    if no_turn {
+                        state.unprompted().end(&session_id.0);
+                    }
+                    no_turn
+                };
+                if stopped_working {
+                    crate::acp::events::emit_agent_working(&sinks, &agent_id, &session_id.0, false);
+                }
                 let _ = reply.send(result.map_err(|e| e.to_string()));
+            }
+
+            AcpCommand::StopSubagent {
+                root_session_id,
+                subagent_id,
+                reply,
+            } => {
+                use crate::acp::subagents::{
+                    stop_plan, StopPlan, StopSubagentError, StopSubagentOutcome,
+                };
+                let child = {
+                    let mut state = driver_state.lock();
+                    let records = state.subagent_records();
+                    stop_plan(records.find(&root_session_id, &subagent_id)).map(|plan| match plan {
+                        StopPlan::CancelSession(child) => Some(child.to_string()),
+                        StopPlan::AlreadyEnded => None,
+                    })
+                };
+                let result = match child {
+                    Ok(Some(child)) => cx
+                        .send_notification(CancelNotification::new(&SessionId::new(child.as_str())))
+                        .map(|()| StopSubagentOutcome::Sent)
+                        .map_err(|error| StopSubagentError::Failed(error.to_string())),
+                    Ok(None) => Ok(StopSubagentOutcome::AlreadyEnded),
+                    Err(refusal) => Err(refusal),
+                };
+                let _ = reply.send(result);
             }
 
             AcpCommand::SetMode {
@@ -1105,10 +1197,31 @@ pub(super) async fn run_command_loop(
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
+                let req_sinks = sinks.clone();
+                let req_agent_id = agent_id.clone();
                 spawn_request(&cx, slot, async move {
-                    let request = SetSessionModeRequest::new(&session_id, mode_id);
-                    let result = req_cx.send_request(request).block_task().await;
-                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
+                    let mode_id = agent_client_protocol::schema::v1::SessionModeId::new(mode_id);
+                    let request = SetSessionModeRequest::new(&session_id, mode_id.clone());
+                    match req_cx.send_request(request).block_task().await {
+                        Ok(_) => {
+                            // The durable log learns the switch here: the
+                            // agent need not echo a `current_mode_update`.
+                            let event = events::ModeUpdateEvent {
+                                agent_id: req_agent_id,
+                                session_id,
+                                current_mode_id: mode_id,
+                                available_modes: Vec::new(),
+                            };
+                            events::fan_out(
+                                &req_sinks,
+                                Some(event.session_id.0.as_str()),
+                                events::EVENT_MODE_UPDATE,
+                                &event,
+                            );
+                            send_reply(&task_slot, Ok(()));
+                        }
+                        Err(e) => send_reply(&task_slot, Err(e.to_string())),
+                    }
                 });
             }
 
@@ -1319,25 +1432,67 @@ pub(super) async fn run_command_loop(
 
             AcpCommand::Authenticate {
                 method_id,
-                gateway,
+                credential,
                 reply,
             } => {
                 let slot = reply_slot(reply);
+                let meta = match &credential {
+                    None => None,
+                    Some(AuthCredential::Gateway(gateway)) => Some(gateway_auth_meta(gateway)),
+                    Some(AuthCredential::ApiKey(key)) => match api_key_shapes.get(&method_id) {
+                        Some(shape) => Some(api_key_auth_meta(*shape, key)),
+                        None => {
+                            log::warn!(
+                                "[acp] agent {agent_id}: refused an API key for '{method_id}', \
+                                 which does not take one"
+                            );
+                            send_reply(
+                                &slot,
+                                Err(format!(
+                                    "sign-in method '{method_id}' does not take an API key"
+                                )),
+                            );
+                            continue;
+                        }
+                    },
+                };
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
                 let log_agent_id = agent_id.clone();
+                let req_state = driver_state.clone();
+                let req_sinks = sinks.clone();
+                driver_state.lock().sign_in().begin_authenticate();
                 spawn_request(&cx, slot, async move {
-                    log::info!("[acp] agent {log_agent_id} authenticating via '{method_id}'");
+                    let carrying = match &credential {
+                        None => "",
+                        Some(AuthCredential::Gateway(_)) => " with a gateway",
+                        Some(AuthCredential::ApiKey(_)) => " with a typed API key",
+                    };
+                    log::info!(
+                        "[acp] agent {log_agent_id} authenticating via '{method_id}'{carrying}"
+                    );
                     let mut request = AuthenticateRequest::new(method_id);
-                    if let Some(gateway) = gateway {
-                        request = request.meta(gateway_auth_meta(&gateway));
+                    if let Some(meta) = meta {
+                        request = request.meta(meta);
                     }
                     let result = req_cx
                         .send_request(request)
                         .block_task()
                         .await
                         .map(|_| ())
-                        .map_err(|e| e.to_string());
+                        .map_err(|e| match &credential {
+                            Some(credential) => credential.redact(e.to_string()),
+                            None => e.to_string(),
+                        });
+                    let raised = req_state.lock().sign_in().end_authenticate();
+                    if let Some(prompt) = raised {
+                        super::sign_in::settle_sign_in(
+                            &req_sinks,
+                            &log_agent_id,
+                            prompt,
+                            "authenticate ended",
+                        );
+                    }
                     send_reply(&task_slot, result);
                 });
             }
@@ -1365,17 +1520,30 @@ pub(super) async fn run_command_loop(
                 let req_cx = cx.clone();
                 let req_state = driver_state.clone();
                 let req_plan_server = host_plan_server.clone();
+                let req_sinks = sinks.clone();
+                let req_agent_id = agent_id.clone();
                 spawn_request(&cx, slot, async move {
                     let result = req_cx
                         .send_request(DeleteSessionRequest::new(&session_id))
                         .block_task()
                         .await;
                     if result.is_ok() {
-                        let pending = {
+                        let (pending, stopped_working) = {
                             let mut state = req_state.lock();
+                            // No `session_closed` follows a delete, so clients
+                            // hear the end of the agent's own work here.
+                            let stopped_working = state.unprompted().end(&session_id.0);
                             let (_ephemeral, pending) = state.begin_close_session(&session_id.0);
-                            pending
+                            (pending, stopped_working)
                         };
+                        if stopped_working {
+                            crate::acp::events::emit_agent_working(
+                                &req_sinks,
+                                &req_agent_id,
+                                &session_id.0,
+                                false,
+                            );
+                        }
                         for permission in pending {
                             let _ = permission.responder.respond(RequestPermissionResponse::new(
                                 RequestPermissionOutcome::Cancelled,
@@ -1406,17 +1574,31 @@ pub(super) async fn run_command_loop(
                 reply,
             } => {
                 let pending = driver_state.lock().take_elicitation(&request_id);
-                match pending {
-                    Some(elicitation) => {
-                        let response = elicitation_response(&action, content);
-                        let result = elicitation.responder.respond(response);
-                        let _ = reply.send(result.map_err(|e| e.to_string()));
-                    }
-                    None => {
-                        let _ =
-                            reply.send(Err(format!("unknown elicitation request: {request_id}")));
-                    }
+                if let Some(elicitation) = pending {
+                    let response = elicitation_response(&action, content);
+                    let result = elicitation.responder.respond(response);
+                    let _ = reply.send(result.map_err(|e| e.to_string()));
+                    continue;
                 }
+                let answered = driver_state
+                    .lock()
+                    .sign_in()
+                    .answer(&request_id, action == "accept");
+                let Some(answered) = answered else {
+                    let _ = reply.send(Err(format!("unknown elicitation request: {request_id}")));
+                    continue;
+                };
+                log::info!("[acp] agent {agent_id} sign-in prompt {request_id} answered: {action}");
+                let result = match answered.responder {
+                    Some(responder) => responder
+                        .respond(elicitation_response(&action, None))
+                        .map_err(|e| e.to_string()),
+                    None => Ok(()),
+                };
+                if answered.settled {
+                    super::sign_in::announce_sign_in_resolved(&sinks, &agent_id, request_id);
+                }
+                let _ = reply.send(result);
             }
         }
     }
@@ -1478,10 +1660,16 @@ pub(super) fn send_reply<T>(slot: &ReplySlot<T>, value: Result<T, String>) {
     }
 }
 
-/// Typed initialize plus the Codex gateway auth capability, which SDK 1.3
-/// cannot set on `AuthCapabilities`.
-fn initialize_message(request: &InitializeRequest) -> Result<UntypedMessage, String> {
+/// Typed initialize plus the capabilities SDK 1.3 cannot set: Codex gateway
+/// auth, and (verified Claude and Codex adapters) native subagent sessions.
+pub(super) fn initialize_message(
+    request: &InitializeRequest,
+    native_subagents: bool,
+) -> Result<UntypedMessage, String> {
     let mut value = serde_json::to_value(request).map_err(|error| error.to_string())?;
+    if native_subagents {
+        super::native_subagents::advertise_subagents(&mut value);
+    }
     if let Some(auth) = value
         .get_mut("clientCapabilities")
         .and_then(|caps| caps.get_mut("auth"))
@@ -1490,6 +1678,14 @@ fn initialize_message(request: &InitializeRequest) -> Result<UntypedMessage, Str
         auth.insert("gateway".to_string(), serde_json::json!({}));
     }
     UntypedMessage::new("initialize", &value).map_err(|error| error.to_string())
+}
+
+fn api_key_auth_meta(shape: ApiKeyShape, key: &ApiKey) -> Meta {
+    let value = match shape {
+        ApiKeyShape::Object => serde_json::json!({ "apiKey": key.secret() }),
+        ApiKeyShape::Text => serde_json::Value::String(key.secret().to_string()),
+    };
+    Meta::from_iter([("api-key".to_string(), value)])
 }
 
 fn gateway_auth_meta(gateway: &GatewayAuthInput) -> Meta {

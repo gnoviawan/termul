@@ -1,5 +1,5 @@
-//! `subscribe` wiring + permission/question rendezvous WS handlers
-//! (`respond_permission`, `answer_question`).
+//! `subscribe` wiring (with the session's pending prompts) + permission/question
+//! rendezvous WS handlers (`respond_permission`, `answer_question`).
 
 use super::*;
 
@@ -34,6 +34,43 @@ pub(super) fn spawn_event_forwarder(mut stream: EventStream, out_tx: OutboundSen
             }
         }
     });
+}
+
+/// Add the session's still-pending prompts to a subscribe or snapshot reply:
+/// `pendingPermissions` (queue order), `pendingQuestions` and
+/// `pendingElicitations` (registration order), each the request payloads as
+/// published. Read AFTER the subscription registered: a request published
+/// later is delivered live, and its ticket is registered before the publish,
+/// so none falls in between. A replay cannot restore these: a permission
+/// request is not in the durable log (issue #1595), and a question or
+/// elicitation the client's history already covers is dropped, since no event
+/// says it was answered. A list is present only when the host keeps its
+/// tickets; without one the client keeps what it has.
+pub(super) fn attach_pending_prompts(reply: &mut Value, relay: &WsRelaySink, session_id: &str) {
+    let permissions = relay
+        .rendezvous()
+        .map(|rdz| rdz.pending_requests(session_id));
+    let questions = relay
+        .question_rendezvous()
+        .map(|rdz| rdz.pending_requests(session_id));
+    let elicitations = relay.elicitations().pending_requests(session_id);
+    let count = |list: &Option<Vec<Value>>| list.as_ref().map_or(0, Vec::len);
+    if count(&permissions) + count(&questions) + elicitations.len() > 0 {
+        log::info!(
+            "[ws] subscription restores pending prompts permissions={} questions={} elicitations={} session_id={}",
+            count(&permissions),
+            count(&questions),
+            elicitations.len(),
+            crate::logging::redact_session_id(session_id)
+        );
+    }
+    if let Some(permissions) = permissions {
+        reply["pendingPermissions"] = Value::Array(permissions);
+    }
+    if let Some(questions) = questions {
+        reply["pendingQuestions"] = Value::Array(questions);
+    }
+    reply["pendingElicitations"] = Value::Array(elicitations);
 }
 
 /// Wire `subscribe` → [`WsRelaySink::subscribe`] + forward replay/live to this connection.
@@ -121,6 +158,7 @@ pub(super) async fn handle_subscribe(
                 reply["logEpoch"] = json!(head.log_epoch);
                 reply["headSeq"] = json!(head.head_seq);
             }
+            attach_pending_prompts(&mut reply, relay, &parsed.session_id);
             WsReply::ok(id, Some(reply))
         }
     }
@@ -235,6 +273,94 @@ pub(super) async fn handle_respond_permission(
             };
             WsReply::err(id, code, msg)
         }
+    }
+}
+
+/// A `/ws` connection as an approver of host tickets: it qualifies only
+/// when it passed the host's web-token gate and is subscribed to the
+/// session (the desktop's own channel carrier is token-less; the desktop
+/// answers through its `main`-webview command instead).
+fn remote_approver(env: &HandlerEnv, session_id: Option<&str>) -> crate::acp::host_ticket::Approver {
+    crate::acp::host_ticket::Approver::Remote {
+        token_authenticated: env.carrier == Carrier::Ws && env.web_auth.is_some(),
+        subscribed: session_id.is_some_and(|sid| !env.subscriptions.clients_for(sid).is_empty()),
+    }
+}
+
+/// `respond_permission` for a host ticket (`host:` request id): answered
+/// against the host ticket resolver, never forwarded to an agent.
+pub(super) fn handle_respond_host_ticket(id: String, payload: &Value, env: &HandlerEnv) -> WsReply {
+    use crate::acp::host_ticket::AnswerError;
+    let Some(rdz) = env.relay.rendezvous() else {
+        return WsReply::err(id, WsErrorCode::NotImplemented, "permission rendezvous is not attached");
+    };
+    let parsed: RespondPermissionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed respond_permission payload (want requestId, optionId?): {e}"),
+            );
+        }
+    };
+    let session = rdz.host_ticket_session(&parsed.request_id);
+    let approver = remote_approver(env, session.as_deref());
+    match rdz.answer_host(approver, &parsed.request_id, parsed.option_id.as_deref()) {
+        Ok(_) => WsReply::ok(id, Some(json!({}))),
+        Err(err) => {
+            let (code, msg) = match err {
+                AnswerError::NotFound => (WsErrorCode::Stale, "no outstanding permission for this requestId"),
+                AnswerError::AlreadyResolved => (
+                    WsErrorCode::AlreadyResolved,
+                    "this permission was already resolved (first-response-wins)",
+                ),
+                AnswerError::Unqualified => (
+                    WsErrorCode::PermissionDenied,
+                    "only an authenticated client of this session can answer it",
+                ),
+                AnswerError::TooEarly => (
+                    WsErrorCode::RateLimited,
+                    "answered too soon after the prompt appeared; try again",
+                ),
+                AnswerError::InvalidOption => (
+                    WsErrorCode::PermissionDenied,
+                    "optionId is not among the original permission options",
+                ),
+            };
+            WsReply::err(id, code, msg)
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BrowserStopPayload {
+    session_id: String,
+}
+
+/// `browser_stop`: the remote twin of the desktop `browser_stop` command,
+/// under the same approver rule as host tickets.
+pub(super) fn handle_browser_stop(id: String, payload: &Value, env: &HandlerEnv) -> WsReply {
+    let parsed: BrowserStopPayload = match serde_json::from_value::<BrowserStopPayload>(payload.clone()) {
+        Ok(p) if !p.session_id.is_empty() => p,
+        _ => return WsReply::err(id, WsErrorCode::Unsupported, "browser_stop needs sessionId"),
+    };
+    let approver = remote_approver(env, Some(&parsed.session_id));
+    if !approver.qualifies() {
+        return WsReply::err(
+            id,
+            WsErrorCode::PermissionDenied,
+            "only an authenticated client of this session can stop it",
+        );
+    }
+    match crate::browser_automation::stop_session(&parsed.session_id) {
+        Some(_) => WsReply::ok(id, Some(json!({}))),
+        None => WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "browser automation runs only on the desktop app",
+        ),
     }
 }
 

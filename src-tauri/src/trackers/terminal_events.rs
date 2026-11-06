@@ -12,7 +12,22 @@ const EVENT_CAPACITY: usize = 256;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TerminalEvent {
+    SessionLifecycle {
+        #[serde(skip)]
+        lifecycle_sequence: Option<u64>,
+        terminal_id: String,
+        session_id: String,
+        kind: String,
+        nonce: Option<String>,
+        prompt_suppressed: bool,
+        line_empty: bool,
+        exit_code: Option<i32>,
+        prompt_generation: Option<u64>,
+        cwd: Option<String>,
+    },
     Exit {
+        #[serde(skip)]
+        lifecycle_sequence: Option<u64>,
         terminal_id: String,
         exit_code: Option<i32>,
         signal: Option<i32>,
@@ -36,9 +51,34 @@ pub enum TerminalEvent {
 }
 
 impl TerminalEvent {
+    pub fn lifecycle_sequence(&self) -> Option<u64> {
+        match self {
+            Self::SessionLifecycle {
+                lifecycle_sequence, ..
+            }
+            | Self::Exit {
+                lifecycle_sequence, ..
+            } => *lifecycle_sequence,
+            _ => None,
+        }
+    }
+
+    pub(crate) fn set_lifecycle_sequence(&mut self, sequence: u64) {
+        match self {
+            Self::SessionLifecycle {
+                lifecycle_sequence, ..
+            }
+            | Self::Exit {
+                lifecycle_sequence, ..
+            } => *lifecycle_sequence = Some(sequence),
+            _ => unreachable!("only lifecycle events have a sequence"),
+        }
+    }
+
     pub fn terminal_id(&self) -> &str {
         match self {
-            Self::Exit { terminal_id, .. }
+            Self::SessionLifecycle { terminal_id, .. }
+            | Self::Exit { terminal_id, .. }
             | Self::CwdChanged { terminal_id, .. }
             | Self::GitBranchChanged { terminal_id, .. }
             | Self::GitStatusChanged { terminal_id, .. }
@@ -57,10 +97,15 @@ pub struct TerminalStateSnapshot {
     pub exited: bool,
 }
 
+type DesktopEmit = Arc<dyn Fn(&str, serde_json::Value) -> Result<(), tauri::Error> + Send + Sync>;
+
 #[derive(Clone)]
 pub struct TerminalEventHub {
     tx: Arc<broadcast::Sender<TerminalEvent>>,
-    tauri: Option<AppHandle>,
+    /// Desktop renderer bridge. Type-erased so this struct (and its drop glue)
+    /// never names `AppHandle<Wry>`: the standalone server must not link the
+    /// Wry runtime.
+    tauri: Option<DesktopEmit>,
     snapshots: Arc<RwLock<HashMap<String, TerminalStateSnapshot>>>,
 }
 
@@ -68,7 +113,9 @@ impl TerminalEventHub {
     pub fn tauri(app_handle: AppHandle) -> Self {
         Self {
             tx: Arc::new(broadcast::channel(EVENT_CAPACITY).0),
-            tauri: Some(app_handle),
+            tauri: Some(Arc::new(move |event, payload| {
+                app_handle.emit(event, payload)
+            })),
             snapshots: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -114,10 +161,11 @@ impl TerminalEventHub {
     }
 
     pub fn emit(&self, event: TerminalEvent) {
-        {
+        if !matches!(&event, TerminalEvent::SessionLifecycle { .. }) {
             let mut snapshots = self.snapshots.write();
             let terminal_id = match &event {
-                TerminalEvent::Exit { terminal_id, .. }
+                TerminalEvent::SessionLifecycle { terminal_id, .. }
+                | TerminalEvent::Exit { terminal_id, .. }
                 | TerminalEvent::CwdChanged { terminal_id, .. }
                 | TerminalEvent::GitBranchChanged { terminal_id, .. }
                 | TerminalEvent::GitStatusChanged { terminal_id, .. }
@@ -125,6 +173,7 @@ impl TerminalEventHub {
             };
             let snapshot = snapshots.entry(terminal_id).or_default();
             match &event {
+                TerminalEvent::SessionLifecycle { .. } => {}
                 TerminalEvent::Exit { exit_code, .. } => {
                     snapshot.exited = true;
                     snapshot.exit_code = *exit_code;
@@ -146,36 +195,40 @@ impl TerminalEventHub {
             return;
         };
         let result = match event {
+            TerminalEvent::SessionLifecycle { .. } => {
+                app("terminal-session-lifecycle", serde_json::json!(&event))
+            }
             TerminalEvent::Exit {
                 terminal_id,
                 exit_code,
                 signal,
-            } => app.emit(
+                ..
+            } => app(
                 "terminal-exit",
                 serde_json::json!({ "id": terminal_id, "exitCode": exit_code, "signal": signal }),
             ),
-            TerminalEvent::CwdChanged { terminal_id, cwd } => app.emit(
+            TerminalEvent::CwdChanged { terminal_id, cwd } => app(
                 "terminal-cwd-changed",
                 serde_json::json!({ "terminalId": terminal_id, "cwd": cwd }),
             ),
             TerminalEvent::GitBranchChanged {
                 terminal_id,
                 branch,
-            } => app.emit(
+            } => app(
                 "terminal-git-branch-changed",
                 serde_json::json!({ "terminalId": terminal_id, "branch": branch }),
             ),
             TerminalEvent::GitStatusChanged {
                 terminal_id,
                 status,
-            } => app.emit(
+            } => app(
                 "terminal-git-status-changed",
                 serde_json::json!({ "terminalId": terminal_id, "status": status }),
             ),
             TerminalEvent::ExitCodeChanged {
                 terminal_id,
                 exit_code,
-            } => app.emit(
+            } => app(
                 "terminal-exit-code-changed",
                 serde_json::json!({ "terminalId": terminal_id, "exitCode": exit_code }),
             ),

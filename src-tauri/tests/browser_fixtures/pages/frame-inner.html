@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Inner frame</title>
+</head>
+<body>
+<label for="inner">Inner field</label>
+<input id="inner" type="text" aria-label="Inner field">
+<button id="go" type="button">Inner button</button>
+<p id="out">Inner result: none</p>
+<script>
+document.getElementById('go').addEventListener('click', function () {
+  document.getElementById('out').textContent =
+    'Inner result: clicked [' + document.getElementById('inner').value + ']';
+});
+</script>
+</body>
+</html>

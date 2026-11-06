@@ -24,17 +24,30 @@ subprocess stays on Bun (it uses `Bun.stdin`/`Bun.file`), spawned by the app
 exactly as registered.
 
 
-The app exe must exist — **the worktree dev-identifier build**
-(`src-tauri/target/release/termul-manager.exe`, identifier
+The app exe must exist — **the worktree dev-identifier perf build**
+(`src-tauri/target-perf/release/termul-manager.exe`, identifier
 `com.termul-manager.app.dev`). It must be built with the dev config so it
 escapes the user's installed-instance single-instance mutex AND carries
-`withGlobalTauri`:
-`bun x @tauri-apps/cli build --config src-tauri/tauri.conf.dev.json`
-(run `bun run build:frontend:tauri` first). Fallbacks: the worktree
-`x86_64-pc-windows-msvc/release` output, then the main checkout's
-`target/x86_64-pc-windows-msvc/release/termul-manager.exe`. Override with
-`--exe <path>`; a same-identifier exe exits via the single-instance plugin
-when a user instance is running.
+`withGlobalTauri`, and with debug assertions on: the host scrubs the
+WebView2 debug port at startup and only a debug-assertions build honors
+`TERMUL_DEV_ALLOW_ENGINE_DEBUG=1`, so a plain release exe never answers CDP.
+Optimizations stay on, so the numbers remain release-grade:
+
+```bash
+CARGO_TARGET_DIR=src-tauri/target-perf CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true \
+  bun x @tauri-apps/cli build --config src-tauri/tauri.conf.dev.json --no-bundle
+```
+
+On Windows run it from a Visual Studio developer environment (`vcvars64.bat`)
+so `cl.exe` is on PATH; on a 16 GB machine add `CARGO_BUILD_JOBS=2` or LLVM
+can run out of memory on the main crate. Override with `--exe <path>`; a
+same-identifier exe exits via the single-instance plugin when a user
+instance is running.
+
+The harness seeds the fake agent and the scenario's projects into
+`termul-data.json` **before** launch: the host imports that file once at
+startup and then retires it, so state written after launch never reaches
+the renderer.
 
 ## Scenarios
 
@@ -63,6 +76,48 @@ Open `tools/perf/results/<run-id>/report.html` (works offline, no external asset
 - **Top components by commit count** — which components re-rendered (CAP-4).
 - **Heap slope** — linear regression over the JS-heap series: distinguishes allocation churn (flat) from retained growth (monotonic climb — the 2026-09-28 incident signature).
 - **Gaps** — anything a collector failed to capture is listed explicitly, never silently missing.
+
+`result.json` also carries an `end` snapshot taken after the scenario and
+before teardown: JS heap after two forced GCs, DOM counters, private bytes
+split by process role (renderer, gpu, other WebView2, host, fake agents, and
+any other child such as an agent the app spawned on its own), the count of
+`[ERROR]` / `Handler errored` lines in the app log, and how many updates the
+fake agents emitted. Its `summary` keys start with `end` (plus
+`appLogErrorLines` and `agentUpdatesEmitted`). Check the error and work
+counts before trusting a run: errors mean the app rejected part of the
+workload, and a low update count means the scenario did not stream.
+
+## Interleaved A/B runner
+
+```bash
+node tools/perf/ab.ts --a <exeA> --b <exeB> --runs 5 -- stream-storm --seed 42
+```
+
+Alternates A, B, A, B so drift favors neither side, then prints median and
+range per end metric with the error and work counts. Keep a copy of each exe
+(and its `rg.exe`) outside `target-perf` so a rebuild does not replace a side.
+
+A frontend change needs a rebuilt exe: the frontend is embedded, and
+Playwright request interception does not see WebView2's `tauri.localhost`
+requests reliably, so serving another `dist-tauri` to an old exe silently
+runs the embedded build. The end snapshot's `pageState` lists the
+`tauri-index-*` / `AgentChatPanel-*` chunks that loaded; check them when a
+result looks too good or too flat.
+
+## Finding what keeps memory alive
+
+`--heap-snapshot` writes `end.heapsnapshot` (about 150 MB) into the run
+directory after the end snapshot. Then:
+
+```bash
+node --max-old-space-size=8192 tools/perf/heap-retainers.ts <run>/end.heapsnapshot
+```
+
+prints detached DOM by class and, for each chain from the GC roots into the
+detached set, how many detached nodes it keeps alive with one sample path.
+The end snapshot's `rendererAllocators` (a Chromium memory-infra dump) says
+whether renderer bytes sit in `blink_gc` (DOM), `v8`, `partition_alloc` or
+`malloc` before you reach for a heap snapshot.
 
 ## A/B compare (CAP-5)
 

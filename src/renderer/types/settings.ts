@@ -66,6 +66,9 @@ export interface AppSettings {
   terminalBufferSize: number // Scrollback buffer size in lines
   terminalRenderer: 'auto' | 'webgl' | 'dom'
   terminalScreenReaderMode: boolean // xterm screenReaderMode for new terminals (off by default)
+  automaticCompletionRefresh: boolean // Refresh command suggestions for new terminals (on by default)
+  /** Offer to schedule an ask repeated across chats (on by default). */
+  suggestAutomations: boolean
   defaultShell: string
   defaultProjectColor: string // Default color for new projects (from PROJECT_COLORS)
   confirmTerminalClose: boolean // Show a confirmation dialog before closing a terminal
@@ -280,6 +283,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   terminalBufferSize: 10000,
   terminalRenderer: 'auto',
   terminalScreenReaderMode: false,
+  automaticCompletionRefresh: true,
+  suggestAutomations: true,
   defaultShell: '',
   defaultProjectColor: 'blue',
   confirmTerminalClose: true,

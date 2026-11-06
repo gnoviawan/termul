@@ -6,8 +6,15 @@
 
 import type { BugReportSubmitRequest } from '@shared/types/bug-report.types'
 import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
-import { flattenConfigOptionValues } from '@/components/chat/chat-input-bar-config'
+import {
+  flattenConfigOptionValues,
+  MODEL_CATEGORY,
+  sessionModelSnapshot,
+  wireConfigValue
+} from '@/components/chat/chat-input-bar-config'
 import { stripHandoffPreamble } from '@/components/chat/handoff-summary'
+import { runningBackgroundSubagents } from '@/components/chat/subagent-strip'
+import { describeToolCall, toolCallChangedPaths } from '@/components/chat/tool-call-summary'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import {
   type AgentId,
@@ -42,7 +49,11 @@ import {
   isAgentAuthRequiredError,
   isClaudeAccountSignedOutError
 } from '@/lib/agents/acp-spawn-errors'
+import { serializeSelectionContexts } from '@/lib/composer/selection-context'
+import { restoreConversationLabels, stripConversationEnvelopes } from '@/lib/conversation-envelope'
+import { splitReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { logFrontendError } from '@/lib/log-api'
+import { isAfter, type LogPoint } from '@/lib/log-point'
 import {
   isFolderTokenPath,
   parseFileSegments,
@@ -52,7 +63,6 @@ import {
 } from '@/lib/skill-tokens'
 import { wireBlocksToDisplay, wireTextToDisplay } from '@/lib/skills-wire-reverse'
 import { randomUUID } from '@/lib/uuid'
-import { isAfter, type LogPoint } from '@/stores/agent-chat-unread-store'
 import {
   configIdFromReuseKey,
   detachedReuseKey,
@@ -65,9 +75,19 @@ import {
   type QueuedPrompt,
   sessionTurnBusy
 } from '../prompt-queue-orchestration'
+import {
+  latestModelPick,
+  type OptionValues,
+  readComposerOptions,
+  reopenRestores,
+  savedAgentWideValues,
+  savedModelValues,
+  warnOnce
+} from './composer-options'
 import { ephemeralSessionIds, stoppingAgentIds } from './ephemeral-ids'
 import { isIndexedRealSession } from './live-turn'
 import { modelCatalogFromOptions, persistModelCatalog } from './model-catalog'
+import { forgetRegistryMcpServers, mcpServersFingerprint } from './registry-mcp-fingerprints'
 
 // Re-export so the transcript/session slices can consult turn-busy state via
 // the shared helpers surface they already import (issue #838/#846 wiring).
@@ -212,8 +232,12 @@ export function dropHiddenToolCalls(
  * Non-user roles pass through untouched — the agent may legitimately echo
  * the framing in prose.
  */
-export function normalizeUserMessageBlocks(message: ChatMessage): ChatMessage {
-  if (message.role !== 'user') return message
+export function normalizeUserMessageBlocks(input: ChatMessage): ChatMessage {
+  if (input.role !== 'user') return input
+  const guarded = splitReadOnlyGuard(input.blocks)
+  const message: ChatMessage = guarded.guard
+    ? { ...input, blocks: guarded.blocks, readOnlyGuard: guarded.guard }
+    : input
   // spec-agent-switch-separator-redesign: a user bubble re-streamed from
   // message_chunks (recovery fold) still carries the handoff wire framing —
   // the `user_prompt` fold strips it, this pass covers the chunk path.
@@ -296,7 +320,14 @@ export const SKILL_PAD_BLOCK_RE = new RegExp(
 export function canonicalTwinText(message: ChatMessage): string {
   const text = transcriptText(message)
   const display = message.role === 'user' ? wireTextToDisplay(text) : text
-  return replaceFileTokensInline(display.replace(SKILL_PAD_BLOCK_RE, '')).trim()
+  // Selection contexts compare in prompt form: the restore cannot recover the
+  // spacing after a leading command pill, and typed text in the exact prompt
+  // shape restores as chips.
+  return replaceFileTokensInline(
+    serializeSelectionContexts(
+      restoreConversationLabels(stripConversationEnvelopes(display)).replace(SKILL_PAD_BLOCK_RE, '')
+    )
+  ).trim()
 }
 
 /**
@@ -899,37 +930,82 @@ export const MAX_LIVE_WINDOW_MESSAGES = 300
 /**
  * Maximum number of tool calls retained per session in the live React window
  * (CAP-2). Mirrors the host's persisted budget (`PERSISTED_TOOL_CALLS_LIMIT` =
- * 500 in acp-history-persistence) so the live list plateaus at the same size
+ * 500 in acp-history-persistence) so the live calls plateau at the same size
  * the durable history keeps — older finished cards drop, in-flight calls are
  * always retained, and late updates for trimmed ids are already no-ops
- * (`_onToolCallUpdate`'s `idx === -1` path).
+ * (`_onToolCallUpdate`'s `idx === -1` path). File-change summaries do not
+ * count toward the cap, so the list grows past it by one small summary per
+ * dropped file-changing call.
  */
 export const MAX_LIVE_TOOL_CALLS = 500
+
+/**
+ * The restored-style summary of a file-changing call: its paths (both ends
+ * of a move, every file of a multi-file edit), kind, status and line counts,
+ * which the changed files list reads, without the diff text. Null for a call
+ * that changes no file.
+ */
+function fileChangeSummary(call: ToolCall): ToolCall | null {
+  if (call.kind !== 'edit' && call.kind !== 'delete' && call.kind !== 'move') return null
+  const paths = toolCallChangedPaths(call)
+  if (paths.length === 0) return null
+  const summary: ToolCall = {
+    toolCallId: call.toolCallId,
+    kind: call.kind,
+    locations: paths.map((path) => ({ path })),
+    restoredSummary: true
+  }
+  if (call.status !== undefined) summary.status = call.status
+  if (call.seq !== undefined) summary.seq = call.seq
+  if (call.timestamp !== undefined) summary.timestamp = call.timestamp
+  const diffStat = describeToolCall(call).diffStat
+  if (diffStat) summary.diffStat = diffStat
+  return summary
+}
 
 /**
  * Cap a session's live tool calls at {@link MAX_LIVE_TOOL_CALLS}: drop the
  * OLDEST FINISHED calls (status `completed`/`failed`), always retaining
  * in-flight ones (`pending`/`in_progress`/absent status — never drop what we
- * can't prove finished). The result preserves relative order of survivors.
+ * can't prove finished). Subagent dispatches are never dropped either: each
+ * is a row of the transcript, while the calls a subagent makes are its detail.
+ * A dropped file-changing call leaves its {@link fileChangeSummary}, and
+ * summaries never count toward the cap, so the changed files list keeps every
+ * file the session touched. The result preserves relative order of survivors.
  */
 export function trimLiveToolCalls(calls: ToolCall[]): ToolCall[] {
   if (calls.length <= MAX_LIVE_TOOL_CALLS) return calls
-  let dropCount = calls.length - MAX_LIVE_TOOL_CALLS
+  const liveCount = calls.reduce((count, call) => (call.restoredSummary ? count : count + 1), 0)
+  if (liveCount <= MAX_LIVE_TOOL_CALLS) return calls
+  let dropCount = liveCount - MAX_LIVE_TOOL_CALLS
   const survivors: ToolCall[] = []
+  let liveSurvivors = 0
   // Walk oldest→newest; finished calls (completed/failed — provably done) drop
   // from the head until the cap holds. Absent status is treated as in-flight:
   // never drop what we can't prove finished.
-  for (let i = 0; i < calls.length; i++) {
-    const status = calls[i].status
-    if (dropCount > 0 && (status === 'completed' || status === 'failed')) {
-      dropCount--
+  for (const call of calls) {
+    if (call.restoredSummary) {
+      survivors.push(call)
       continue
     }
-    survivors.push(calls[i])
+    if (
+      dropCount > 0 &&
+      call.subagent === undefined &&
+      (call.status === 'completed' || call.status === 'failed')
+    ) {
+      dropCount--
+      const summary = fileChangeSummary(call)
+      if (summary) survivors.push(summary)
+      continue
+    }
+    survivors.push(call)
+    liveSurvivors++
   }
   // Degenerate guard: more in-flight calls than the cap — keep the newest
   // (never trim in-flight, and the array must not grow without bound).
-  return survivors.length > MAX_LIVE_TOOL_CALLS ? survivors.slice(-MAX_LIVE_TOOL_CALLS) : survivors
+  let excess = liveSurvivors - MAX_LIVE_TOOL_CALLS
+  if (excess <= 0) return survivors
+  return survivors.filter((call) => call.restoredSummary || excess-- <= 0)
 }
 
 /** True when live (or mid-replay) session updates may mutate transcript maps. */
@@ -967,6 +1043,17 @@ export function recoverPromptToQueue(
       sessions: patch.sessions as AcpState['sessions']
     }
   })
+}
+
+/**
+ * A chat's creation time is first-write-wins: keep `recorded` once it holds a
+ * real timestamp, so reopening or resuming a chat (which stamps a fresh
+ * `Date.now()` on the live session) never moves it.
+ */
+export function keepCreatedAt(recorded: number | undefined, candidate: number): number {
+  return typeof recorded === 'number' && Number.isFinite(recorded) && recorded > 0
+    ? recorded
+    : candidate
 }
 
 /** Keep a known live turn when the other side never sent the flag. */
@@ -1016,7 +1103,13 @@ export function mergeSessionIndexEntries(
             ...entry,
             messageCount: Math.max(entry.messageCount ?? 0, hostEntry.messageCount ?? 0),
             lastSeq: Math.max(entry.lastSeq ?? 0, hostEntry.lastSeq ?? 0),
-            turnActive: mergeTurnActive(entry.turnActive, hostEntry.turnActive, true)
+            // A projection made after the agent left the live map has no
+            // config; the host's durable attribution must survive the spread.
+            agentConfigId: entry.agentConfigId ?? hostEntry.agentConfigId,
+            turnActive: mergeTurnActive(entry.turnActive, hostEntry.turnActive, true),
+            // The host stamps `created_at` once at registration; a local
+            // projection re-stamped by a reopen must not override it.
+            createdAt: keepCreatedAt(hostEntry.createdAt, entry.createdAt)
           }
         }
       } else {
@@ -1160,10 +1253,7 @@ export function prepareChatKey(
   cwd: string,
   mcpServers: McpServer[] | undefined
 ): string {
-  const mcpKey = (mcpServers ?? [])
-    .map((s) => JSON.stringify(s))
-    .sort()
-    .join('|')
+  const mcpKey = mcpServersFingerprint(mcpServers ?? [])
   // Normalize cwd here so every producer (`prepareChat` trims; armed-switch
   // lookups pass the raw session cwd) agrees on the same key.
   return `${configId}\0${cwd.trim()}\0${mcpKey}`
@@ -1436,6 +1526,233 @@ export function cacheOptionsFromSession(set: AcpSet, get: AcpGet, sessionId: Ses
     modes: session.modes ?? null,
     configOptions: session.configOptions ?? []
   })
+  // #1486/#1479: advertised options landing on a live session (fresh
+  // session/new after a branch-checkout re-prepare, or the first
+  // config_option_update after an idle reopen) is exactly the moment a
+  // silently-reset pick can be healed from the persisted composer options.
+  // Idempotent: values equal to the session's current ones are no-ops, and
+  // picks no longer advertised are dropped.
+  void reapplyPersistedComposerOptions(get, sessionId, configId)
+}
+
+/** Sessions with a reapply currently in flight (dedupes event storms). */
+const reapplyInFlight = new Set<SessionId>()
+/** Sessions whose reapply was triggered while one ran: one more pass follows it. */
+const reapplyRerun = new Set<SessionId>()
+
+/** The model a session runs now, as the composer shows it. */
+export function currentSessionModel(session: AcpSession | undefined): string | null {
+  return sessionModelSnapshot(session)?.modelId ?? null
+}
+
+/** Every option's value now: a later mismatch means something else moved it. */
+export function optionValueBaseline(
+  session: AcpSession | undefined
+): ReadonlyMap<string, string | boolean> {
+  return new Map((session?.configOptions ?? []).map((o) => [o.id, o.currentValue]))
+}
+
+/** How long a native model switch may take to re-advertise the options. */
+const READVERTISE_WAIT_MS = 1000
+const READVERTISE_POLL_MS = 25
+
+/** The non-model options as data: `setModel` itself only moves the model's value. */
+function nonModelOptionsKey(options: readonly SessionConfigOption[] | undefined): string {
+  return JSON.stringify((options ?? []).filter((o) => o.category !== MODEL_CATEGORY))
+}
+
+/**
+ * After a native `setModel`, wait (bounded) for the agent to re-advertise the
+ * options: the new model's effort choices arrive as a separate event, and
+ * values applied before it would be checked against the old model's.
+ * `before` is the option list from before the `setModel` call, so an update
+ * that landed ahead of the reply ends the wait at once.
+ */
+export async function waitForReadvertisedOptions(
+  get: AcpGet,
+  sessionId: SessionId,
+  before: readonly SessionConfigOption[]
+): Promise<void> {
+  const beforeKey = nonModelOptionsKey(before)
+  const deadline = Date.now() + READVERTISE_WAIT_MS
+  while (Date.now() < deadline) {
+    const session = get().sessions[sessionId]
+    if (session?.status !== 'active') return
+    if (nonModelOptionsKey(session.configOptions) !== beforeKey) return
+    await new Promise((resolve) => setTimeout(resolve, READVERTISE_POLL_MS))
+  }
+}
+
+/**
+ * Set saved option values on a live session, after its model is in place.
+ * Skips the model option, an option or value the session does not advertise
+ * (warn log), a value already current, and an option that moved off
+ * `baseline`: a change made while the restore ran wins. Stops once the
+ * session leaves `modelId`, the model the values belong to.
+ */
+export async function applyOptionValues(
+  get: AcpGet,
+  sessionId: SessionId,
+  values: OptionValues,
+  opts: {
+    source: string
+    modelId?: string | null
+    baseline?: ReadonlyMap<string, string | boolean>
+    persist?: boolean
+  }
+): Promise<void> {
+  const { source } = opts
+  const setOpts = opts.persist === false ? { persist: false } : undefined
+  let baseline = opts.baseline ?? optionValueBaseline(get().sessions[sessionId])
+  for (const [optionId, valueId] of Object.entries(values)) {
+    const session = get().sessions[sessionId]
+    if (session?.status !== 'active') return
+    if (opts.modelId && currentSessionModel(session) !== opts.modelId) return
+    const option = session.configOptions.find((o) => o.id === optionId)
+    if (option?.category === MODEL_CATEGORY) continue
+    if (option && baseline.has(optionId) && baseline.get(optionId) !== option.currentValue) continue
+    const wire = option ? wireConfigValue(option, valueId) : null
+    // Grouped selects nest their values; flatten like mergeAgentConfigOptions.
+    const advertised =
+      option != null &&
+      wire != null &&
+      (option.type === 'boolean' || flattenConfigOptionValues(option).some((v) => v.value === wire))
+    if (!advertised) {
+      warnOnce(
+        sessionId,
+        `${optionId}\0${valueId}`,
+        source,
+        `skipped saved value for '${optionId}' on session ${sessionId}: the session does not advertise it`
+      )
+      continue
+    }
+    if (option.currentValue === wire) continue
+    try {
+      await get().setConfigOption(sessionId, optionId, wire, setOpts)
+      void logFrontendError({
+        level: 'info',
+        source,
+        message: `restored saved value for '${optionId}' on session ${sessionId}`
+      })
+    } catch {
+      void logFrontendError({
+        level: 'warn',
+        source,
+        message: `the agent rejected the saved value for '${optionId}' on session ${sessionId}; kept its value (details withheld)`
+      })
+    }
+    // The set may re-advertise other options; compare later changes to that.
+    baseline = optionValueBaseline(get().sessions[sessionId])
+  }
+}
+
+/**
+ * Heal a live chat from the agent's saved composer record (#1486/#1479):
+ * the saved model first (the agent re-advertises effort choices on a model
+ * switch), then that model's values and the agent-wide ones. A reopened chat
+ * (`reopenRestores`) keeps its own model and values and gets only the
+ * agent-wide ones; so does a chat whose saved model is no longer offered.
+ * Skipped while a model pick runs on the chat. A restore, so it never writes
+ * the record.
+ */
+export async function reapplyPersistedComposerOptions(
+  get: AcpGet,
+  sessionId: SessionId,
+  configId: string
+): Promise<void> {
+  if (latestModelPick.has(sessionId)) return
+  if (reapplyInFlight.has(sessionId)) {
+    // The pass in flight read the record before this trigger: run once more after it.
+    reapplyRerun.add(sessionId)
+    return
+  }
+  const session = get().sessions[sessionId]
+  // Only heal live chats: a session still initializing or sitting in an
+  // error/launch-fail state has no stable advertised surface to validate
+  // picks against, and firing set-config calls there can race the launch
+  // failure path.
+  if (
+    !session ||
+    session.status !== 'active' ||
+    (session.configOptions.length === 0 && (session.models?.availableModels.length ?? 0) === 0)
+  )
+    return
+  reapplyInFlight.add(sessionId)
+  // Snapshot the live values when the read starts. The read is async; if the
+  // user (or any event) changes a value while it is in flight, the change is
+  // newer than the persisted record and must win — the saved value for that
+  // option is then skipped instead of undoing it (review: race on #1488).
+  let baseline = optionValueBaseline(session)
+  const modelAtReadStart = currentSessionModel(session)
+  try {
+    const saved = await readComposerOptions(configId)
+    if (!saved || latestModelPick.has(sessionId)) return
+    const live = get().sessions[sessionId]
+    const current = currentSessionModel(live)
+    if (current !== modelAtReadStart) return // model changed during read
+    const agentWide = savedAgentWideValues(saved, live?.configOptions ?? [])
+    const applyValues = (values: OptionValues, modelId: string | null) =>
+      applyOptionValues(get, sessionId, values, {
+        source: 'acp.reapplyComposerOptions',
+        modelId,
+        baseline,
+        persist: false
+      })
+    // A reopened chat keeps its own model and values.
+    if (reopenRestores.has(sessionId)) return await applyValues(agentWide, current)
+    const target = saved.modelId
+    if (target && target !== current) {
+      // Advertised via a model-category config option (flattened for groups)
+      // or through the native session.models state when no option exists.
+      const modelOption = live?.configOptions.find((o) => o.category === MODEL_CATEGORY)
+      const advertised = modelOption
+        ? flattenConfigOptionValues(modelOption).some((v) => v.value === target)
+        : (live?.models?.availableModels.some((m) => m.modelId === target) ?? false)
+      if (!advertised) {
+        warnOnce(
+          sessionId,
+          `model\0${target}`,
+          'acp.reapplyComposerOptions',
+          `saved model is not advertised on session ${sessionId}; kept the session's model and its values`
+        )
+        return await applyValues(agentWide, current)
+      }
+      try {
+        // Same route as the launcher apply: the native model state when the
+        // session has one, else the model option.
+        if (live?.models || !modelOption) {
+          const before = live?.configOptions ?? []
+          await get().setModel(sessionId, target, { persist: false })
+          if (Object.keys(savedModelValues(saved, target)).length > 0) {
+            await waitForReadvertisedOptions(get, sessionId, before)
+          }
+        } else {
+          await get().setConfigOption(sessionId, modelOption.id, target, { persist: false })
+        }
+        void logFrontendError({
+          level: 'info',
+          source: 'acp.reapplyComposerOptions',
+          message: `re-applied persisted model on session ${sessionId} (#1486/#1479)`
+        })
+      } catch {
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.reapplyComposerOptions',
+          message: 'failed to re-apply persisted model (details withheld)'
+        })
+        return
+      }
+      // The switch re-advertised the options; compare later changes to that.
+      baseline = optionValueBaseline(get().sessions[sessionId])
+    }
+    const model = currentSessionModel(get().sessions[sessionId])
+    await applyValues({ ...agentWide, ...savedModelValues(saved, model) }, model)
+  } finally {
+    reapplyInFlight.delete(sessionId)
+    if (reapplyRerun.delete(sessionId)) {
+      void reapplyPersistedComposerOptions(get, sessionId, configId)
+    }
+  }
 }
 
 /** Best-effort tear-down for a session created by a cancelled/stale prepare. */
@@ -1473,6 +1790,7 @@ export function reapOrphanPreparedSession(
     .then(() => get().deleteHistorySession(sessionId))
     .finally(() => {
       ephemeralSessionIds.delete(sessionId)
+      forgetRegistryMcpServers(sessionId)
       set((s) => (s.sessions[sessionId] ? dropEphemeralSessionState(s, sessionId) : s))
     })
 }
@@ -1600,21 +1918,29 @@ export function dropEphemeralSessionState(
   }
 }
 
+/** Checked last, so a caller can tell that nothing else blocks. */
+export const BACKGROUND_SUBAGENTS_BLOCK_REASON =
+  'background subagents are still running — switching would stop them'
+
 /**
  * Story 3 (spec-in-chat-agent-switch): the busy gate for a switch. True when
  * the old session has an active turn, an open turn, queued prompts, or a
  * pending permission/question — the "never kill a live turn" rule (CAP-4/CAP-6).
- * A pending browser-auth dialog also counts (the agent is waiting on the user).
+ * A pending browser-auth dialog also counts (the agent is waiting on the user),
+ * and so do background subagents that outlive the turn: a new agent process
+ * would kill them.
  */
 export function switchBlockedReason(
   state: Pick<
     AcpState,
     | 'sessions'
+    | 'toolCalls'
+    | 'messages'
     | 'promptQueues'
     | 'pendingPermissions'
     | 'pendingQuestions'
     | 'pendingElicitations'
-    | 'pendingBrowserOpen'
+    | 'pendingSignIn'
     | 'launchingSessionIds'
   >,
   sessionId: SessionId
@@ -1643,8 +1969,13 @@ export function switchBlockedReason(
     (item) => item.sessionId === sessionId
   )
   if (elicitation) return 'the agent is waiting for your input before switching'
-  if (session.agentId && state.pendingBrowserOpen[session.agentId]) {
+  if (session.agentId && state.pendingSignIn[session.agentId]) {
     return 'the agent is waiting for you to sign in before switching'
+  }
+  if (
+    runningBackgroundSubagents(state.toolCalls[sessionId], state.messages[sessionId]).length > 0
+  ) {
+    return BACKGROUND_SUBAGENTS_BLOCK_REASON
   }
   return null
 }
@@ -1981,19 +2312,6 @@ export function selectAgentIdentity(state: AcpState, agentId: AgentId | null): A
     templateId: config?.templateId ?? null,
     icon: config?.icon ?? null
   }
-}
-
-/** Project IDs with at least one open agent-chat session in an active turn. */
-export function collectProjectsWithActiveAgentChat(
-  sessions: Record<SessionId, AcpSession>
-): string[] {
-  const ids = new Set<string>()
-  for (const session of Object.values(sessions)) {
-    if (session.status !== 'closed' && session.activeTurn && session.projectId) {
-      ids.add(session.projectId)
-    }
-  }
-  return Array.from(ids).sort()
 }
 
 /**

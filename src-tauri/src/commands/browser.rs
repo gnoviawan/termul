@@ -1,50 +1,27 @@
 use super::IpcResult;
 use crate::browser_tab_manager::{BrowserBounds, BrowserTabInfo, BrowserTabManager};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State, Webview};
-
-/// Validate that the caller webview matches the expected tab_id.
-/// This prevents cross-tab command injection where a malicious webview
-/// could emit events for other tabs.
-fn validate_browser_tab_caller(webview: &Webview, expected_tab_id: &str) -> Result<(), String> {
-    let caller_label = webview.label();
-    if caller_label != expected_tab_id {
-        log::warn!(
-            "[Security] Browser tab command rejected: caller '{}' does not match expected '{}'",
-            caller_label,
-            expected_tab_id
-        );
-        return Err(format!(
-            "Browser tab command rejected: caller '{}' does not match expected '{}'",
-            caller_label, expected_tab_id
-        ));
-    }
-    Ok(())
-}
+use tauri::{State, Webview};
 
 // ==================== Browser Tab Commands ====================
 
-/// Create a new browser tab webview
+/// Create a browser tab: the tab registry validates the label (a
+/// `tab-<uuid>` the renderer names, or an agent tab the host asked for),
+/// builds the webview and admits it once the engine confirmed it.
 #[tauri::command]
 pub async fn browser_tab_create(
     tab_id: String,
     url: String,
     bounds: BrowserBounds,
-    browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<IpcResult<BrowserTabInfo>, String> {
-    match browser_manager.create(tab_id, url, bounds).await {
-        Ok(mut info) => {
-            // If the tab was opened on behalf of an agent (pending agent
-            // request), flag it so the renderer shows the Agent badge and
-            // the automation host tracks its lifetime.
-            if crate::browser_automation::tab_created(&info.id) {
-                browser_manager.set_agent_controlled(&info.id, true);
-                info.agent_controlled = true;
-                log::info!("[BrowserTab] tab {} marked agent-controlled", info.id);
-            }
-            Ok(IpcResult::success(info))
-        }
-        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_CREATE_FAILED")),
+    match crate::browser_automation::create_tab(&tab_id, &url, bounds).await {
+        Ok(view) => Ok(IpcResult::success(BrowserTabInfo {
+            id: view.tab_id,
+            url: view.url,
+            title: view.title,
+            agent_controlled: view.agent_controlled,
+        })),
+        Err(e) => Ok(IpcResult::error(e.message, e.code)),
     }
 }
 
@@ -98,19 +75,12 @@ pub async fn browser_tab_hide(
     }
 }
 
-/// Destroy a browser tab webview
+/// Close a browser tab through the registry; resolves once the engine
+/// destroyed the webview. Closing an agent tab ends the agent's control.
 #[tauri::command]
-pub async fn browser_tab_destroy(
-    tab_id: String,
-    browser_manager: State<'_, Arc<BrowserTabManager>>,
-) -> Result<IpcResult<()>, String> {
-    match browser_manager.destroy(&tab_id) {
-        Ok(()) => {
-            crate::browser_automation::tab_closed(&tab_id);
-            Ok(IpcResult::success(()))
-        }
-        Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_DESTROY_FAILED")),
-    }
+pub async fn browser_tab_destroy(tab_id: String) -> Result<IpcResult<()>, String> {
+    crate::browser_automation::destroy_tab(&tab_id).await;
+    Ok(IpcResult::success(()))
 }
 
 /// Go back in browser tab history
@@ -206,119 +176,51 @@ pub async fn browser_tab_inject_agentation(
     }
 }
 
-/// Report URL from browser tab webview (called by injected JS poller)
-#[tauri::command]
-pub async fn browser_tab_report_url(
-    tab_id: String,
-    url: String,
-    app_handle: AppHandle,
-    webview: Webview,
-    _browser_manager: State<'_, Arc<BrowserTabManager>>,
-) -> Result<(), String> {
-    validate_browser_tab_caller(&webview, &tab_id)?;
-    log::debug!("[BrowserTab] URL report: tab={} navigated", tab_id);
-    // Invalidate stored @eN refs held by agent automation for this tab.
-    crate::browser_automation::tab_navigated(&tab_id);
-    app_handle
-        .emit(
-            "browser-tab-navigated",
-            serde_json::json!({ "browserTabId": tab_id, "url": url }),
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-/// Report page loaded from browser tab webview (called by injected JS poller)
-#[tauri::command]
-pub async fn browser_tab_report_loaded(
-    tab_id: String,
-    app_handle: AppHandle,
-    webview: Webview,
-    browser_manager: State<'_, Arc<BrowserTabManager>>,
-) -> Result<(), String> {
-    validate_browser_tab_caller(&webview, &tab_id)?;
-    log::info!(
-        "[BrowserTab] Loaded report: tab={} agentation_enabled={}",
-        tab_id,
-        browser_manager.is_agentation_enabled()
-    );
-    // Inject agentation toolbar after page load (the library accesses
-    // document.head at module top-level, so it must run after DOM ready).
-    if browser_manager.is_agentation_enabled() {
-        log::info!(
-            "[BrowserTab] Injecting agentation toolbar for tab={}",
-            tab_id
-        );
-        if let Err(e) = browser_manager.inject_agentation_toolbar(&tab_id) {
-            log::warn!(
-                "[BrowserTab] Agentation toolbar injection failed for tab={}: {}",
-                tab_id,
-                e
-            );
-        }
+/// Only the `main` webview answers host consent and presses Stop: browser
+/// tabs share the app-wide event channel and could otherwise observe a
+/// ticket id and approve themselves.
+fn require_main_webview(webview: &Webview, command: &str) -> Result<(), String> {
+    if webview.label() == "main" {
+        return Ok(());
     }
-    app_handle
-        .emit(
-            "browser-tab-loaded",
-            serde_json::json!({ "browserTabId": tab_id }),
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
+    log::warn!("[Security] {command} rejected from a non-main webview");
+    Err(format!("{command} must come from the main window"))
 }
 
-/// Return channel for the agent eval bridge: injected scripts post their
-/// result back here. Caller-validated to the originating tab so a page in
-/// one tab can't resolve another tab's pending eval.
+/// Desktop answer to a host-originated browser consent ticket (`host:`
+/// request id). `option_id: None` denies.
 #[tauri::command]
-pub async fn browser_agent_eval_result(
-    tab_id: String,
-    nonce: String,
-    ok: bool,
-    value: Option<String>,
-    webview: Webview,
-) -> Result<(), String> {
-    validate_browser_tab_caller(&webview, &tab_id)?;
-    crate::browser_automation::eval_resolved(&nonce, ok, value);
-    Ok(())
-}
-
-/// Renderer response to an `acp:browser_consent_request` prompt. Restricted
-/// to the main webview — browser tabs share the app-wide event channel and
-/// could otherwise observe the request id and self-grant consent.
-#[tauri::command]
-pub async fn browser_consent_respond(
+pub async fn browser_ticket_respond(
     request_id: String,
-    allowed: bool,
+    option_id: Option<String>,
     webview: Webview,
-) -> Result<(), String> {
-    if webview.label() != "main" {
-        log::warn!(
-            "[Security] browser_consent_respond rejected from '{}'",
-            webview.label()
-        );
-        return Err("consent must come from the main window".to_string());
-    }
-    if !crate::browser_automation::consent_responded(&request_id, allowed) {
-        return Err("unknown or expired consent request".to_string());
-    }
-    Ok(())
+    tickets: State<'_, Arc<crate::acp::host_ticket::HostTickets>>,
+) -> Result<IpcResult<()>, String> {
+    use crate::acp::host_ticket::{AnswerError, Approver};
+    require_main_webview(&webview, "browser_ticket_respond")?;
+    Ok(
+        match tickets.answer(Approver::Desktop, &request_id, option_id.as_deref()) {
+            Ok(_) => IpcResult::success(()),
+            Err(err) => {
+                let code = match err {
+                    AnswerError::NotFound => "TICKET_NOT_FOUND",
+                    AnswerError::AlreadyResolved => "TICKET_ALREADY_RESOLVED",
+                    AnswerError::Unqualified => "TICKET_UNQUALIFIED",
+                    AnswerError::TooEarly => "TICKET_TOO_EARLY",
+                    AnswerError::InvalidOption => "TICKET_INVALID_OPTION",
+                };
+                IpcResult::error(err.as_str(), code)
+            }
+        },
+    )
 }
 
-/// Report title change from browser tab webview (called by injected JS poller)
+/// Stop agent browsing for a session until the user's next prompt turn.
 #[tauri::command]
-pub async fn browser_tab_report_title(
-    tab_id: String,
-    title: String,
-    app_handle: AppHandle,
-    webview: Webview,
-) -> Result<(), String> {
-    validate_browser_tab_caller(&webview, &tab_id)?;
-    log::debug!("[BrowserTab] Title report: tab={}", tab_id);
-    app_handle
-        .emit(
-            "browser-tab-title-changed",
-            serde_json::json!({ "browserTabId": tab_id, "title": title }),
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
+pub async fn browser_stop(session_id: String, webview: Webview) -> Result<IpcResult<()>, String> {
+    require_main_webview(&webview, "browser_stop")?;
+    Ok(match crate::browser_automation::stop_session(&session_id) {
+        Some(_) => IpcResult::success(()),
+        None => IpcResult::error("browser automation is not running", "BROWSER_STOP_UNAVAILABLE"),
+    })
 }

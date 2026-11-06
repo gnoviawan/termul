@@ -7,7 +7,7 @@ import { windowApi } from '@/lib/api'
 const titlebarNoDragStyle = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 
 const windowControlClass =
-  'h-full px-3 hover:bg-secondary/80 inline-flex items-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset cursor-pointer'
+  'h-full px-3 hover:bg-secondary/80 inline-flex items-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-inset cursor-pointer'
 
 /**
  * Windows/Linux window controls (minimize, maximize or restore, close): the
@@ -72,7 +72,7 @@ export function WindowControls({
           e.stopPropagation()
           void windowApi.close()
         }}
-        className="h-full px-3 hover:bg-destructive-fill hover:text-destructive-foreground inline-flex items-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset cursor-pointer"
+        className="h-full px-3 hover:bg-destructive-fill hover:text-destructive-foreground inline-flex items-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-inset cursor-pointer"
         title="Close"
         aria-label="Close window"
       >

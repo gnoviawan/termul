@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
 import { acpApi, type McpServerConfig, type ProbeResult } from '@/lib/acp-api'
 import {
+  catalogInstallEntry,
   loadMcpServers as loadMcpServersFromDisk,
   type StoredMcpServer,
   saveMcpServers as saveMcpServersToDisk,
@@ -13,6 +14,7 @@ import {
 } from '@/lib/acp-mcp-persistence'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { randomUUID } from '@/lib/uuid'
 import { useProjectStore } from '@/stores/project-store'
 import type { AcpState } from '../types'
 
@@ -30,11 +32,11 @@ function activeProjectId(): string {
   return useProjectStore.getState().activeProjectId
 }
 
-async function runSerializedMcpRegistryMutation(mutation: () => Promise<void>): Promise<void> {
+function runSerializedMcpRegistryMutation<T>(mutation: () => Promise<T>): Promise<T> {
   const run = mcpRegistryQueue.then(mutation)
   // Swallow for the chain only — the returned promise still rejects to callers.
   mcpRegistryQueue = run.catch(() => undefined)
-  await run
+  return run
 }
 
 type McpSliceState = Pick<
@@ -51,6 +53,7 @@ type McpSliceState = Pick<
   | 'loadMcpServers'
   | 'saveMcpServer'
   | 'importMcpServers'
+  | 'saveCatalogInstall'
   | 'setMcpServerEnabled'
   | 'deleteMcpServer'
   | 'syncMcpRegistryToProjectFile'
@@ -67,7 +70,7 @@ type McpSliceState = Pick<
 let projectFileMirrorPending: string | null = null
 
 function probeConfigOf(server: StoredMcpServer): McpServerConfig {
-  const { id: _id, enabled: _enabled, ...config } = server
+  const { id: _id, enabled: _enabled, catalog: _catalog, ...config } = server
   return config as McpServerConfig
 }
 
@@ -105,6 +108,14 @@ const deletionCounts = new Map<string, number>()
 
 export function mcpServerDeletionCount(id: string): number {
   return deletionCounts.get(id) ?? 0
+}
+
+// Probes that have started and not yet settled. `mcpProbing` cannot answer
+// this: deleting a server clears its flag while the probe is still running.
+let probesInFlight = 0
+
+export function mcpProbesInFlight(): number {
+  return probesInFlight
 }
 
 function deletionGuard(id: string): () => boolean {
@@ -236,6 +247,39 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
     })
   },
 
+  saveCatalogInstall: (result, projectId) =>
+    runSerializedMcpRegistryMutation(async () => {
+      if (!get().mcpServersLoaded) throw new Error('The MCP server list has not loaded yet')
+      if (!isTauriContext() && activeProjectId() !== projectId) {
+        throw new Error('The open project changed during the install')
+      }
+      const list = get().mcpServers
+      const entry = catalogInstallEntry(
+        result,
+        new Set(list.map((server) => server.name)),
+        randomUUID()
+      )
+      const label = `'${result.provenance?.name}' ${result.provenance?.version}`
+      const next = [...list, entry]
+      set({ mcpServers: next })
+      try {
+        await saveMcpServersToDisk(next, activeProjectId())
+      } catch (err) {
+        set({ mcpServers: list })
+        void logFrontendError({
+          source: 'acp-store.saveCatalogInstall',
+          message: `Failed to persist the catalog install of ${label} (${String(err)})`
+        })
+        throw err
+      }
+      void logFrontendError({
+        level: 'info',
+        source: 'acp-store.saveCatalogInstall',
+        message: `Saved the catalog install of ${label} as '${entry.name}' digest=${result.launchDigest.slice(0, 12)}`
+      })
+      return entry
+    }),
+
   setMcpServerEnabled: (id, enabled) =>
     runSerializedMcpRegistryMutation(async () => {
       const list = get().mcpServers
@@ -299,6 +343,7 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
     if (!server) return
     const deleted = deletionGuard(id)
     set((s) => ({ mcpProbing: { ...s.mcpProbing, [id]: true } }))
+    probesInFlight += 1
     try {
       const result: ProbeResult = await acpApi.probeMcpServer(probeConfigOf(server))
       const stale = settleStaleProbe(set, get, server, deleted)
@@ -338,6 +383,8 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
         mcpProbing: { ...s.mcpProbing, [id]: false },
         mcpProbeError: { ...s.mcpProbeError, [id]: undefined }
       }))
+    } finally {
+      probesInFlight -= 1
     }
   },
 

@@ -552,7 +552,11 @@ impl PtyManager {
         #[cfg(not(target_os = "windows"))]
         {
             let path_for_which = crate::pty::env_refresh::path_for_resolution();
-            if let Ok(output) = std::process::Command::new("which")
+            // Scrub AppImage-only vars before our explicit `PATH`, so the host
+            // `which` resolves against host libraries (#1435).
+            let mut which_command = std::process::Command::new("which");
+            crate::process_util::clean_appimage_env(&mut which_command);
+            if let Ok(output) = which_command
                 .env("PATH", &path_for_which)
                 .arg(trimmed)
                 .output()

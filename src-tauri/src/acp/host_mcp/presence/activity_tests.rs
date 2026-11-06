@@ -55,13 +55,24 @@ struct Row {
     expect: Option<Activity>,
 }
 
+/// The tools whose `engine.execute` frame asks for layout issues
+/// (`issues: true`); the editor then replies `{result, issues}`.
+const CHECKED: &[&str] = &["run_command", "batch", "create_node", "set_properties"];
+
+/// A frame of `tool`. For a [`CHECKED`] tool's `engine.execute`, `params`
+/// and `result` are the command's, and the row holds the frame as it is sent
+/// and answered.
 fn row(
     tool: &'static str,
     method: &'static str,
-    params: Value,
-    result: Value,
+    mut params: Value,
+    mut result: Value,
     expect: Option<Activity>,
 ) -> Row {
+    if method == EXECUTE && CHECKED.contains(&tool) {
+        params["issues"] = json!(true);
+        result = json!({ "result": result, "issues": [] });
+    }
     Row {
         tool,
         method,
@@ -88,6 +99,13 @@ fn table() -> Vec<Row> {
             "engine.commands",
             json!({}),
             json!([]),
+            None,
+        ),
+        row(
+            "list_issues",
+            EXECUTE,
+            exec("doc.issues", json!({ "ids": [2] })),
+            json!({ "issues": [] }),
             None,
         ),
         row(
@@ -140,6 +158,27 @@ fn table() -> Vec<Row> {
             None,
         ),
         row(
+            "run_command",
+            EXECUTE,
+            exec("proto.linkNotice", json!({ "show": false })),
+            json!({ "shown": false }),
+            None,
+        ),
+        row(
+            "run_command",
+            EXECUTE,
+            exec("text.loadFont", json!({ "data": "AAAA" })),
+            json!({ "families": ["Brand Sans"], "refitted": [5, 6] }),
+            write(ids(&[5, 6])),
+        ),
+        row(
+            "run_command",
+            EXECUTE,
+            exec("text.rescanFonts", json!({})),
+            json!({ "added": [], "refitted": [] }),
+            None,
+        ),
+        row(
             "batch",
             EXECUTE,
             exec(
@@ -152,6 +191,19 @@ fn table() -> Vec<Row> {
             ),
             json!([{ "id": 7 }, { "ok": true }, { "ok": true }]),
             write(ids(&[4, 7])),
+        ),
+        row(
+            "batch",
+            EXECUTE,
+            exec(
+                "command.batch",
+                json!({ "label": "Card", "commands": [
+                    { "command": "node.create", "as": "card", "params": { "type": "frame" } },
+                    { "command": "node.create", "params": { "type": "text", "parent": { "$ref": "card" } } },
+                ] }),
+            ),
+            json!([{ "id": 7 }, { "id": 8 }]),
+            write(ids(&[7, 8])),
         ),
         row(
             "batch",
@@ -415,4 +467,38 @@ fn touched_ids_are_deduplicated_and_capped_to_the_last_ones() {
     assert_eq!(ids.last(), Some(&100));
     assert_eq!(ids.iter().filter(|id| **id == 50).count(), 1);
     assert!(!ids.contains(&1), "the oldest ids are dropped");
+}
+
+fn checked(command: &str, params: Value) -> Value {
+    json!({ "command": command, "params": params, "issues": true })
+}
+
+#[test]
+fn a_named_batch_with_layout_issues_still_names_its_layers() {
+    let batch = checked(
+        "command.batch",
+        json!({ "label": "Hero", "commands": [
+            { "command": "node.create", "as": "hero", "params": { "type": "frame" } },
+            { "command": "node.create", "params": { "type": "text", "parent": { "$ref": "hero" } } },
+        ] }),
+    );
+    let built = json!({
+        "result": [{ "id": 7 }, { "id": 8 }],
+        "issues": [{ "id": 8, "name": "Title", "kind": "low_contrast", "message": "Raise the contrast." }],
+    });
+    assert_eq!(
+        derive_activity("batch", EXECUTE, &batch, &built.to_string()),
+        write(ids(&[7, 8]))
+    );
+}
+
+/// figcraft-mcp takes a bare result to a frame that asked for issues as an
+/// editor that lists none, and so does presence.
+#[test]
+fn a_bare_reply_to_a_frame_that_asked_for_issues_is_the_result() {
+    let create = checked("node.create", json!({ "type": "rectangle" }));
+    assert_eq!(
+        derive_activity("create_node", EXECUTE, &create, r#"{"id":7}"#),
+        write(ids(&[7]))
+    );
 }

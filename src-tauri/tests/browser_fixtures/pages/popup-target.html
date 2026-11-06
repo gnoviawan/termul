@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Popup target</title>
+</head>
+<body>
+<main>
+<h1>Popup target</h1>
+<p id="opener">Opener: unknown</p>
+</main>
+<script>
+document.getElementById('opener').textContent =
+  'Opener: ' + (window.opener === null ? 'none' : 'present');
+</script>
+</body>
+</html>

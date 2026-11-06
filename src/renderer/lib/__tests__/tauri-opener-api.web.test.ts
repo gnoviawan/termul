@@ -17,14 +17,21 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { mockOpenPath, mockOpenUrl, mockRevealItemInDir, mockIsTauriContext, mockWindowOpen } =
-  vi.hoisted(() => ({
-    mockOpenPath: vi.fn(),
-    mockOpenUrl: vi.fn(),
-    mockRevealItemInDir: vi.fn(),
-    mockIsTauriContext: vi.fn(),
-    mockWindowOpen: vi.fn()
-  }))
+const {
+  mockOpenPath,
+  mockOpenUrl,
+  mockRevealItemInDir,
+  mockIsTauriContext,
+  mockWindowOpen,
+  mockPlatform
+} = vi.hoisted(() => ({
+  mockOpenPath: vi.fn(),
+  mockOpenUrl: vi.fn(),
+  mockRevealItemInDir: vi.fn(),
+  mockIsTauriContext: vi.fn(),
+  mockWindowOpen: vi.fn(),
+  mockPlatform: vi.fn(() => 'windows')
+}))
 
 vi.mock('@tauri-apps/plugin-opener', () => ({
   openPath: mockOpenPath,
@@ -34,6 +41,10 @@ vi.mock('@tauri-apps/plugin-opener', () => ({
 
 vi.mock('../tauri-runtime', () => ({
   isTauriContext: mockIsTauriContext
+}))
+
+vi.mock('../tauri-os', () => ({
+  platform: mockPlatform
 }))
 
 import { openerApi } from '../tauri-opener-api'
@@ -180,6 +191,7 @@ describe('revealInFileManager (web branch: WEB_UNSUPPORTED)', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    mockPlatform.mockReturnValue('windows')
   })
 
   it('web: returns WEB_UNSUPPORTED without calling the Tauri plugin', async () => {
@@ -203,5 +215,77 @@ describe('revealInFileManager (web branch: WEB_UNSUPPORTED)', () => {
 
     expect(result).toEqual({ success: true, data: undefined })
     expect(mockRevealItemInDir).toHaveBeenCalledWith(PATH)
+  })
+
+  it('desktop: drops the verbatim prefix the Windows explorer paths carry', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockRevealItemInDir.mockResolvedValue(undefined)
+
+    await openerApi.revealInFileManager('//?/E:/pawbytes/agents/pawbytes-skill-suites/skills')
+    await openerApi.revealInFileManager(String.raw`\\?\UNC\srv\share\docs`)
+
+    expect(mockRevealItemInDir.mock.calls).toEqual([
+      ['E:/pawbytes/agents/pawbytes-skill-suites/skills'],
+      [String.raw`\\srv\share\docs`]
+    ])
+  })
+
+  it('desktop: keeps a Windows verbatim path that has no plain spelling', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockRevealItemInDir.mockResolvedValue(undefined)
+    const volume = String.raw`\\?\Volume{0b1c2d3e-0000-0000-0000-100000000000}\proj`
+
+    await openerApi.revealInFileManager(volume)
+
+    expect(mockRevealItemInDir).toHaveBeenCalledWith(volume)
+  })
+
+  it('desktop: leaves a //?/ path alone outside Windows', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockPlatform.mockReturnValue('linux')
+    mockRevealItemInDir.mockResolvedValue(undefined)
+    mockOpenPath.mockResolvedValue(undefined)
+
+    await openerApi.revealInFileManager('//?/C:/project/readme.md')
+    await openerApi.openWithExternalApp('//?/notes.txt')
+
+    expect(mockRevealItemInDir).toHaveBeenCalledWith('//?/C:/project/readme.md')
+    expect(mockOpenPath).toHaveBeenCalledWith('//?/notes.txt')
+  })
+
+  it('desktop: keeps the prefix on a name only the verbatim form can reach', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockRevealItemInDir.mockResolvedValue(undefined)
+    mockOpenPath.mockResolvedValue(undefined)
+    const names = [
+      '//?/E:/pawbytes/notes.',
+      String.raw`\\?\E:\pawbytes\draft \a.md`,
+      String.raw`\\?\C:\project\AUX.txt`,
+      '//?/C:/project/com1/x.md'
+    ]
+
+    for (const name of names) await openerApi.openWithExternalApp(name)
+    await openerApi.revealInFileManager(names[2])
+
+    expect(mockOpenPath.mock.calls).toEqual(names.map((name) => [name]))
+    expect(mockRevealItemInDir).toHaveBeenCalledWith(names[2])
+  })
+
+  it('desktop: strips the prefix when the names only look reserved', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockOpenPath.mockResolvedValue(undefined)
+
+    await openerApi.openWithExternalApp('//?/C:/project/auxiliary/console.txt')
+
+    expect(mockOpenPath).toHaveBeenCalledWith('C:/project/auxiliary/console.txt')
+  })
+
+  it('desktop: opens a verbatim Windows path without its prefix', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockOpenPath.mockResolvedValue(undefined)
+
+    await openerApi.openWithExternalApp('//?/E:/pawbytes/notes.pdf')
+
+    expect(mockOpenPath).toHaveBeenCalledWith('E:/pawbytes/notes.pdf')
   })
 })

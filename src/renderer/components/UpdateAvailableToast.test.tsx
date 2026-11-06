@@ -26,6 +26,7 @@ const installAndRestart = vi.fn(async () => {})
 let storeError: string | null = null
 let storeDownloaded = true
 let storeChannel: UpdateChannel = 'stable'
+let storeManual = false
 
 vi.mock('@/stores/updater-store', () => ({
   updaterStore: {
@@ -41,7 +42,8 @@ vi.mock('@/stores/updater-store', () => ({
       // still staged) from a package that is gone. The toast only exists while
       // an update is downloaded, so default to true.
       downloaded: storeDownloaded,
-      updateChannel: storeChannel
+      updateChannel: storeChannel,
+      isManualUpdateMode: storeManual
     })
   },
   // Hooks are unused by the functions under test but imported by the module.
@@ -184,6 +186,7 @@ describe('UpdateAvailableToast channel-aware labeling', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     storeChannel = 'stable'
+    storeManual = false
     storeError = null
   })
 
@@ -203,6 +206,7 @@ describe('UpdateAvailableToast channel-aware labeling', () => {
 
   it('names the insider channel in the title and uses the manual-download action label for insider', () => {
     storeChannel = 'insider'
+    storeManual = true
     showUpdateToast('0.5.0-rc.1')
     const calls = vi.mocked(toast.success).mock.calls
     const [title, opts] = calls[calls.length - 1] as [
@@ -216,19 +220,52 @@ describe('UpdateAvailableToast channel-aware labeling', () => {
     expect(renderToStaticMarkup(opts.action.label)).toContain('Open download page')
   })
 
-  it('names the nightly channel in the title, with the version in the description', () => {
+  it('offers the in-app download for a signed nightly update', () => {
     storeChannel = 'nightly'
-    showUpdateToast('0.0.0-nightly.20260808.abc')
+    storeManual = false
+    showUpdateToast('0.5.0-nightly.20261028.101.bbbbbbb')
     const calls = vi.mocked(toast.success).mock.calls
     const [title, opts] = calls[calls.length - 1] as [
       string,
-      { description: string; classNames: { toast: string } }
+      { description: string; classNames: { toast: string }; action: { label: ReactElement } }
     ]
     expect(title).toBe('Nightly update available')
     // The text keeps the full width: buttons wrap to their own row.
     expect(opts.classNames.toast).toContain('flex-wrap')
     expect(opts.description).toBe(
-      'Version 0.0.0-nightly.20260808.abc. Open the download page to install it manually.'
+      'Version 0.5.0-nightly.20261028.101.bbbbbbb is ready to download.'
     )
+    expect(opts.description).not.toContain('manually')
+    expect(renderToStaticMarkup(opts.action.label)).toContain('Download')
+    expect(renderToStaticMarkup(opts.action.label)).not.toContain('Open download page')
+  })
+
+  it('uses the manual copy when the nightly check fell back to the release page', () => {
+    storeChannel = 'nightly'
+    storeManual = true
+    showUpdateToast('0.5.0-nightly.20261028.101.bbbbbbb')
+    const calls = vi.mocked(toast.success).mock.calls
+    const [title, opts] = calls[calls.length - 1] as [
+      string,
+      { description: string; action: { label: ReactElement } }
+    ]
+    expect(title).toBe('Nightly update available')
+    expect(opts.description).toBe(
+      'Version 0.5.0-nightly.20261028.101.bbbbbbb. Open the download page to install it manually.'
+    )
+    expect(renderToStaticMarkup(opts.action.label)).toContain('Open download page')
+  })
+
+  it('uses the manual copy when stable falls back to the GitHub release page', () => {
+    storeChannel = 'stable'
+    storeManual = true
+    showUpdateToast('0.4.9')
+    const calls = vi.mocked(toast.success).mock.calls
+    const [, opts] = calls[calls.length - 1] as [
+      string,
+      { description: string; action: { label: ReactElement } }
+    ]
+    expect(opts.description).toBe('Version 0.4.9. Open the download page to install it manually.')
+    expect(renderToStaticMarkup(opts.action.label)).toContain('Open download page')
   })
 })

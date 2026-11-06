@@ -57,6 +57,72 @@ fn verify_rejects_bad_key() {
     );
 }
 
+// --- signature format: release manifests base64-wrap the minisign text ---
+
+/// The manifest form: `tauri signer sign` output (minisign `.sig` text wrapped
+/// in base64), as copied into `latest-<channel>.json`.
+fn manifest_signature() -> String {
+    BASE64_STANDARD.encode(SIGNATURE_TEXT)
+}
+
+#[test]
+fn verify_accepts_base64_wrapped_manifest_signature() {
+    let pk = test_public_key();
+    verify_signature(MESSAGE, &manifest_signature(), &pk)
+        .expect("base64-wrapped manifest signature verifies");
+}
+
+#[test]
+fn verify_accepts_manifest_signature_with_surrounding_whitespace() {
+    let pk = test_public_key();
+    let sig = format!("  {}\n", manifest_signature());
+    verify_signature(MESSAGE, &sig, &pk).expect("trimmed manifest signature verifies");
+}
+
+#[test]
+fn verify_rejects_tampered_binary_with_manifest_signature() {
+    let pk = test_public_key();
+    let err = verify_signature(b"tampered", &manifest_signature(), &pk)
+        .expect_err("tampered binary must not verify");
+    assert!(
+        err.to_string().contains("signature verification failed"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn verify_rejects_bad_key_with_manifest_signature() {
+    let pk = mismatched_public_key();
+    let err = verify_signature(MESSAGE, &manifest_signature(), &pk)
+        .expect_err("a different public key must not verify");
+    assert!(
+        err.to_string().contains("signature verification failed"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn verify_rejects_garbage_signature() {
+    let pk = test_public_key();
+    let err =
+        verify_signature(MESSAGE, "not a signature!", &pk).expect_err("garbage must not decode");
+    assert!(
+        err.to_string()
+            .contains("failed to decode minisign signature"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn apply_verified_update_swaps_on_manifest_signature() {
+    let dir = tempdir().expect("tempdir");
+    let bin = write_current_binary(dir.path(), b"OLD BINARY");
+    let pk = test_public_key();
+    apply_verified_update(&bin, MESSAGE, &manifest_signature(), &pk)
+        .expect("manifest-format signature applies");
+    assert_eq!(fs::read(&bin).expect("read swapped binary"), MESSAGE);
+}
+
 // --- version compare: SemVer prerelease precedence ---
 
 #[test]

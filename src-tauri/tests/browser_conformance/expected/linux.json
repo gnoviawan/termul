@@ -1,0 +1,11 @@
+{
+  "knownFailing": [
+    { "capability": "iframe_cross_origin", "code": "capability_unavailable" },
+    { "capability": "frame_password_submit", "code": "capability_unavailable" },
+    { "capability": "frame_focused_password_submit", "code": "capability_unavailable" },
+    { "capability": "frame_focused_key", "code": "capability_unavailable" },
+    { "capability": "frame_upload", "code": "capability_unavailable" },
+    { "capability": "frame_file_chooser", "code": "capability_unavailable" },
+    { "capability": "payment_frame_fields", "code": "capability_unavailable" }
+  ]
+}

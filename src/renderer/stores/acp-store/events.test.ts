@@ -73,6 +73,7 @@ const { addAgentChatTabSpy, setTabFocusedSessionIdSpy, workspaceStateRef } = vi.
   workspaceStateRef: {
     current: {
       root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
+      openChatSessionIds: new Set<string>(),
       removeTab: vi.fn(),
       remapAgentChatSession: vi.fn()
     }
@@ -100,7 +101,7 @@ vi.mock('@/stores/workspace-store', () => {
     getAllTreeRoots: (state: { root: PaneNodeLike }) => [state.root],
     findPaneContainingTab,
     agentChatTabId: (sessionId: string) => `chat-${sessionId}`,
-    getAgentChatSessionIdsInAllTrees: () => new Set<string>(),
+    getAgentChatSessionIdsInAllTrees: () => workspaceStateRef.current.openChatSessionIds,
     useWorkspaceStore: {
       subscribe: () => () => {},
       getState: () => ({
@@ -150,6 +151,7 @@ import {
   _setAcpTransportForTests,
   type AcpTransport
 } from '@/lib/acp-transport'
+import { subagentMeta, subagentRecord, subagentToolCall } from '@/lib/test-utils/subagent'
 import {
   _flushCoalescedForTesting,
   _resetAcpAuthForTesting,
@@ -163,8 +165,11 @@ import {
   initAcpEventListeners,
   useAcpStore
 } from '@/stores/acp-store'
-import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
+import { agentReuseKey } from '../acp-reuse-keys'
+import { selectAgentIdentity } from './helpers'
 import { FRESH, flushTurnEnd, seedSession } from './testkit'
+
+const UNEXPLAINED_END = { activity: 'idle', end: { reason: 'unexplained' } }
 
 describe('acp-store', () => {
   beforeEach(() => {
@@ -186,6 +191,7 @@ describe('acp-store', () => {
     _resetSessionIndexLoadGenerationForTesting()
     _resetHistorySeqWatermarksForTesting()
     _resetLiveSwitchSourcesForTesting()
+    workspaceStateRef.current.openChatSessionIds.clear()
     useAcpStore.setState(FRESH)
   })
 
@@ -441,6 +447,95 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
   })
 
+  it('agent_disconnected cancels subagents the host still marked running', () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState({
+      messages: {
+        s1: [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hi' }],
+            timestamp: 1
+          }
+        ]
+      },
+      toolCalls: {
+        s1: [
+          subagentToolCall(
+            { source: 'acp-rfd', caps: { liveProgress: true } },
+            { toolCallId: 'termul-subagent:child-1', status: 'in_progress' }
+          )
+        ]
+      }
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
+    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagent).toMatchObject(UNEXPLAINED_END)
+  })
+
+  it('agent_disconnected cancels a background launch that never reported its end', () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState({
+      messages: {
+        s1: [{ id: 'm1', role: 'user', blocks: [{ type: 'text', text: 'hi' }], timestamp: 1 }]
+      },
+      toolCalls: {
+        s1: [
+          subagentToolCall(
+            { background: true },
+            { toolCallId: 'toolu_bg', status: 'completed', timestamp: 2 }
+          )
+        ]
+      }
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
+    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagent).toMatchObject(UNEXPLAINED_END)
+  })
+
+  it('session close applies a buffered tool update before cancelling running subagents', () => {
+    seedSession('s1', 'agent-1', false)
+    workspaceStateRef.current.openChatSessionIds.add('s1')
+    useAcpStore.setState({
+      messages: {
+        s1: [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hi' }],
+            timestamp: 1
+          }
+        ]
+      },
+      toolCalls: {
+        s1: [
+          {
+            toolCallId: 'termul-subagent:child-1',
+            status: 'in_progress',
+            rawInput: { description: 'Review', prompt: 'p' }
+          }
+        ]
+      }
+    })
+    useAcpStore.getState()._onToolCallUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      update: {
+        toolCallId: 'termul-subagent:child-1',
+        _meta: subagentMeta(
+          subagentRecord({
+            dispatchToolCallId: 'termul-subagent:child-1',
+            source: 'acp-rfd',
+            caps: { liveProgress: true }
+          })
+        )
+      }
+    })
+    useAcpStore
+      .getState()
+      ._onSessionClosed({ agentId: 'agent-1', sessionId: 's1', reason: 'closed' })
+    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagent).toMatchObject(UNEXPLAINED_END)
+  })
+
   it.each([
     'killed',
     'reaped',
@@ -463,6 +558,35 @@ describe('acp-store', () => {
     useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason })
     expect(useAcpStore.getState().agentStatus['agent-1']).toBeUndefined()
     expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
+  })
+
+  it('an idle-reaped chat keeps its agent config so the list keeps the agent icon', () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState({
+      agents: { 'agent-1': {} as never },
+      agentStatus: { 'agent-1': 'connected' },
+      agentConfigs: [{ id: 'cfg-claude', name: 'Claude', templateId: 'claude-acp' } as never],
+      configToLiveAgent: { [agentReuseKey('cfg-claude', '/work', 'p1')]: 'agent-1' },
+      sessionIndex: [
+        {
+          id: 's1',
+          agentId: 'agent-1',
+          agentConfigId: 'cfg-claude',
+          title: 'Chat',
+          cwd: '/work',
+          projectId: 'p1',
+          createdAt: 1,
+          lastActivityAt: 1,
+          messageCount: 0,
+          status: 'active'
+        }
+      ]
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'reaped' })
+    const state = useAcpStore.getState()
+    expect(state.configToLiveAgent).toEqual({})
+    expect(state.sessionIndex[0]).toMatchObject({ status: 'closed', agentConfigId: 'cfg-claude' })
+    expect(selectAgentIdentity(state, 'agent-1').templateId).toBe('claude-acp')
   })
 
   it.each([
@@ -714,38 +838,6 @@ describe('acp-store', () => {
         questionId: 'q-1'
       })
       expect(Object.keys(useAcpStore.getState().pendingQuestions)).toEqual(['q-2'])
-    } finally {
-      teardown()
-    }
-  })
-
-  it('notes a live turn end at the log epoch of the session cursor (cross-surface unread)', async () => {
-    const listeners = new Map<string, (payload: unknown, eventSeq?: number) => void>()
-    _setAcpTransportForTests({
-      onEvent: vi.fn((name: string, cb: (payload: unknown, eventSeq?: number) => void) => {
-        listeners.set(name, cb)
-        return () => {}
-      }),
-      getSessionCursor: (sessionId: string) =>
-        sessionId === 's1' ? { lastSeq: 7, logEpoch: 'epoch-live' } : null,
-      setReconnectListener: vi.fn(),
-      setRecoveryHandler: vi.fn(),
-      setReconnectPriorityProvider: vi.fn(),
-      dispose: vi.fn()
-    } as unknown as AcpTransport)
-    useAgentChatUnreadStore.setState({ seenTurnEnd: {} })
-    seedSession('s1', 'agent-1')
-    const teardown = initAcpEventListeners()
-    try {
-      listeners.get('acp:prompt_complete')?.(
-        { agentId: 'agent-1', sessionId: 's1', stopReason: 'end_turn' },
-        7
-      )
-      await flushTurnEnd()
-
-      expect(useAgentChatUnreadStore.getState().seenTurnEnd).toEqual({
-        s1: { logEpoch: 'epoch-live', seq: 7 }
-      })
     } finally {
       teardown()
     }
@@ -1263,6 +1355,103 @@ describe('acp-store', () => {
     const rejected = { ...rateLimit, status: 'rejected', percent: 100 }
     useAcpStore.getState()._onUsageUpdate({ ...update, used: 61_000, rateLimit: rejected })
     expect(useAcpStore.getState().sessionUsage.s1?.rateLimit).toEqual(rejected)
+  })
+
+  it('_onUsageUpdate records a rate limit that arrives without token counts', () => {
+    seedSession('s1', 'agent-1')
+    const rejected = {
+      status: 'rejected',
+      resetsAt: 1_760_360_399,
+      kind: 'five_hour',
+      percent: 100,
+      overageInUse: false
+    }
+    useAcpStore.getState()._onUsageUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      used: 0,
+      size: 0,
+      rateLimit: rejected
+    })
+    expect(useAcpStore.getState().sessionUsage.s1?.rateLimit).toEqual(rejected)
+    useAcpStore.getState()._onUsageUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      used: 40_000,
+      size: 200_000
+    })
+    useAcpStore.getState()._onUsageUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      used: 0,
+      size: 0,
+      rateLimit: { ...rejected, resetsAt: 1_760_370_000 }
+    })
+    const usage = useAcpStore.getState().sessionUsage.s1
+    expect([usage?.used, usage?.size, usage?.baselineUsed]).toEqual([40_000, 200_000, 40_000])
+    expect(usage?.rateLimit?.resetsAt).toBe(1_760_370_000)
+  })
+
+  it('agent_error at the usage limit records a rejected rate limit for the chat', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: "Internal error: You've hit your 5-hour limit · resets 4am (Europe/Berlin)",
+      code: -32603,
+      data: { errorKind: 'rate_limit' },
+      providerCode: 'provider_quota_exceeded'
+    })
+    expect(useAcpStore.getState().sessionUsage.s1?.rateLimit).toEqual({
+      status: 'rejected',
+      resetsAt: null,
+      kind: 'five_hour',
+      percent: null,
+      overageInUse: false
+    })
+  })
+
+  it('agent_error leaves the rate limit alone for another failure or an agent the chat left', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'Internal error: overloaded',
+      providerCode: 'provider_request_rejected'
+    })
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-old',
+      sessionId: 's1',
+      message: "You've hit your weekly limit",
+      providerCode: 'provider_quota_exceeded'
+    })
+    expect(useAcpStore.getState().sessionUsage.s1).toBeUndefined()
+  })
+
+  it('a turn that ends normally clears a rejected rate limit, a failed turn keeps it', async () => {
+    seedSession('s1', 'agent-1')
+    const limitHit = (): void =>
+      useAcpStore.getState()._onAgentError({
+        agentId: 'agent-1',
+        sessionId: 's1',
+        message: "You've hit your 5-hour limit",
+        providerCode: 'provider_quota_exceeded'
+      })
+    limitHit()
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'error'
+    })
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessionUsage.s1?.rateLimit?.status).toBe('rejected')
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessionUsage.s1?.rateLimit).toBeUndefined()
   })
 
   it('_onUsageUpdate ignores zero cost placeholders', () => {

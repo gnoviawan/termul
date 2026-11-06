@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom'
 import React from 'react'
-import { vi } from 'vitest'
+import { beforeEach, vi } from 'vitest'
 
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
@@ -145,4 +145,10 @@ vi.mock('react-virtuoso', () => {
   VirtuosoComponent.displayName = 'Virtuoso'
 
   return { Virtuoso: VirtuosoComponent }
+})
+
+// The v2 model picker is the app default. Older picker tests were written for
+// v1, so tests start on v1; a v2 test sets 'termul.modelPickerV2' to '1'.
+beforeEach(() => {
+  if (typeof localStorage !== 'undefined') localStorage.setItem('termul.modelPickerV2', '0')
 })

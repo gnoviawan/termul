@@ -2,7 +2,7 @@ import { findFilePathMatches } from '@/lib/file-path-links'
 
 /**
  * Escape `& < > "` so interpolated path/alt/url values cannot break out of
- * the raw HTML we emit for `termul-file-path` / `termul-image` elements.
+ * the raw HTML we emit for `termul-file-path` / `termul-media` elements.
  */
 export function escapeHtmlAttribute(value: string): string {
   return value
@@ -77,7 +77,7 @@ function fileUrlPath(decodableRest: string): string | null {
  * protocol-relative `//host`, remote `file://host/…`, malformed escapes).
  * A `#L<n>` fragment becomes a `:<n>` line suffix; other fragments are dropped.
  */
-function localLinkPath(url: string): string | null {
+export function localLinkPath(url: string): string | null {
   const trimmed = url.trim()
   if (!trimmed || trimmed.startsWith('#')) return null
 
@@ -106,8 +106,13 @@ function localLinkPath(url: string): string | null {
   return line && !LINE_SUFFIX_RE.test(path) ? `${path}:${line[1]}` : path
 }
 
+/** `remarkTermulMedia` has already turned images into `<termul-media>` html when it runs first. */
 function containsImage(node: MarkdownNode): boolean {
-  return node.type === 'image' || (node.children ?? []).some(containsImage)
+  return (
+    node.type === 'image' ||
+    (node.type === 'html' && (node.value ?? '').startsWith('<termul-media')) ||
+    (node.children ?? []).some(containsImage)
+  )
 }
 
 function nodeText(node: MarkdownNode): string {

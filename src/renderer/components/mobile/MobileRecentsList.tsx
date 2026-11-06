@@ -11,9 +11,9 @@ import {
 } from '@/components/workspace/tabs/agent-chat-status'
 import { useMobileTabActions } from '@/hooks/use-mobile-tab-actions'
 import { logFrontendError } from '@/lib/log-api'
+import { formatChatCreatedTime } from '@/lib/relative-time'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
-import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { MobileRecentsActionsSheet } from './MobileRecentsActionsSheet'
 
 /** How long a touch must hold still before it opens the row actions (iOS fires no `contextmenu`). */
@@ -21,17 +21,16 @@ const LONG_PRESS_MS = 500
 /** A touch that moves further than this (px) is a scroll, not a long-press. */
 const LONG_PRESS_SLOP_PX = 10
 
-/**
- * Open chats not in the session index yet sort to the top of Today: the
- * largest timestamp `groupSessionsByRecency` still buckets as today.
- */
-const OPEN_ONLY_ACTIVITY_AT = Number.MAX_SAFE_INTEGER
+/** The row's accessible name: title, then status, then the created time, when known. */
+function rowAriaLabel(title: string, statusText: string | null | undefined, time: string): string {
+  return [title, statusText, time ? `created ${time}` : ''].filter(Boolean).join(', ')
+}
 
 /** Claude-style row: borderless 16px label, the active row a full-width pill. */
 function rowClass(isActive: boolean): string {
   return cn(
     'flex min-h-11 w-full min-w-0 items-center gap-3 rounded-full px-4 py-2 text-left text-base outline-none transition-colors duration-150 ease-out',
-    'select-none [-webkit-touch-callout:none] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+    'select-none [-webkit-touch-callout:none] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring',
     isActive ? 'bg-secondary text-foreground' : 'text-foreground hover:bg-foreground/[0.04]'
   )
 }
@@ -127,6 +126,8 @@ interface RowShellProps {
   disabled?: boolean
   icon: React.ReactNode
   status?: React.ReactNode
+  /** The created time, shown after the status glyphs; empty shows nothing. */
+  time: string
   onSelect: () => void
   onOpenActions: () => void
 }
@@ -140,6 +141,7 @@ function RecentsRowShell({
   disabled,
   icon,
   status,
+  time,
   onSelect,
   onOpenActions
 }: RowShellProps): React.JSX.Element {
@@ -162,6 +164,9 @@ function RecentsRowShell({
         <span className="inline-flex shrink-0 items-center">{icon}</span>
         <span className="min-w-0 flex-1 truncate">{title}</span>
         {status ? <span className="flex shrink-0 items-center gap-1">{status}</span> : null}
+        {time ? (
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{time}</span>
+        ) : null}
       </button>
       {/* Keyboard and screen-reader route to the row actions. Invisible and
           untouchable until it holds focus (a screen reader's double-tap
@@ -172,7 +177,7 @@ function RecentsRowShell({
         aria-label={`More actions for ${title}`}
         aria-haspopup="dialog"
         onClick={onOpenActions}
-        className="pointer-events-none absolute right-1 top-1/2 inline-flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-secondary text-foreground opacity-0 outline-none focus:pointer-events-auto focus:opacity-100 focus-visible:ring-2 focus-visible:ring-ring"
+        className="pointer-events-none absolute right-1 top-1/2 inline-flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-secondary text-foreground opacity-0 outline-none focus:pointer-events-auto focus:opacity-100 focus-visible:ring-2 focus-visible:ring-focus-ring"
       >
         <MoreHorizontal size={16} aria-hidden="true" />
       </button>
@@ -183,27 +188,27 @@ function RecentsRowShell({
 interface OpenRecentsRowProps {
   entry: ChatHistorySidebarEntry
   sessionId: string
+  time: string
   isActive: boolean
   onSelect: () => void
   onOpenActions: (title: string) => void
 }
 
 /**
- * An open chat in Recents: live title and status glyphs (the signals the
- * desktop `agent-chat-tab` uses; "New activity" from the same unread store the
- * tab reads). Status
- * is glyphs with sr-only text, never a text chip beside the title.
+ * An open chat in Recents: live title and status glyphs (the host-owned
+ * signals the desktop `agent-chat-tab` uses). Status is glyphs with sr-only
+ * text, never a text chip beside the title.
  */
 function OpenRecentsRow({
   entry,
   sessionId,
+  time,
   isActive,
   onSelect,
   onOpenActions
 }: OpenRecentsRowProps): React.JSX.Element {
   const signals = useAgentChatStatusSignals(sessionId)
-  const unread = useAgentChatUnreadStore((state) => Boolean(state.unread[sessionId]))
-  const { showWorking, showUnread, statusText } = agentChatStatusSlots({ ...signals, unread })
+  const { showWorking, showUnread, statusText } = agentChatStatusSlots(signals)
   const { title, indexAgentId, agentConfigId, agents } = useAcpStore(
     useShallow((s) => {
       const indexEntry = (s.sessionIndex ?? []).find((e) => e.id === sessionId)
@@ -221,7 +226,7 @@ function OpenRecentsRow({
       entryId={entry.id}
       title={title}
       isActive={isActive}
-      ariaLabel={statusText ? `${title}, ${statusText}` : title}
+      ariaLabel={rowAriaLabel(title, statusText, time)}
       icon={
         <ChatEntryIcon
           agentId={signals.session?.agentId ?? indexAgentId ?? entry.agentId}
@@ -238,8 +243,70 @@ function OpenRecentsRow({
           />
         ) : null
       }
+      time={time}
       onSelect={onSelect}
       onOpenActions={() => onOpenActions(title)}
+    />
+  )
+}
+
+interface HistoryRecentsRowProps {
+  entry: ChatHistorySidebarEntry
+  time: string
+  onSelect: () => void
+  onOpenActions: () => void
+}
+
+/**
+ * A chat in Recents with no open tab here. The host's chat activity still
+ * reaches it, so a chat another surface is driving shows Working, Needs you
+ * or New activity before this surface opens it; a failed chat shows Failed.
+ */
+function HistoryRecentsRow({
+  entry,
+  time,
+  onSelect,
+  onOpenActions
+}: HistoryRecentsRowProps): React.JSX.Element {
+  const signals = useAgentChatStatusSignals(entry.id)
+  const { showWorking, showUnread, statuses } = agentChatStatusSlots(signals)
+  const failed = entry.status === 'error'
+  const statusText = [...(failed ? ['Failed'] : []), ...statuses].join(', ')
+  const hasStatus = signals.needsAttention || showWorking || showUnread
+  return (
+    <RecentsRowShell
+      entryId={entry.id}
+      title={entry.title}
+      isActive={false}
+      ariaLabel={rowAriaLabel(entry.title, statusText, time)}
+      disabled={entry.discovered && !entry.canOpen}
+      icon={
+        <ChatEntryIcon
+          agentId={entry.agentId}
+          agentConfigId={entry.agentConfigId}
+          agents={entry.agents}
+        />
+      }
+      status={
+        failed || hasStatus ? (
+          <>
+            {failed ? (
+              <span className="inline-flex size-3.5 items-center justify-center" title="Failed">
+                <span className="size-2 rounded-full bg-destructive" aria-hidden />
+                <span className="sr-only">Failed</span>
+              </span>
+            ) : null}
+            <AgentChatStatusGlyphs
+              needsAttention={signals.needsAttention}
+              showWorking={showWorking}
+              showUnread={showUnread}
+            />
+          </>
+        ) : null
+      }
+      time={time}
+      onSelect={onSelect}
+      onOpenActions={onOpenActions}
     />
   )
 }
@@ -270,9 +337,10 @@ interface ActionsTarget {
 
 /**
  * The drawer's one chat list: open chats merged into the scoped history, so
- * each chat appears once (an open one with its live status, highlighted when
- * it is on screen), grouped Today / Yesterday / Earlier. An open chat the
- * session index does not list yet sits at the top of Today.
+ * each chat appears once. Open chats (with their live status, highlighted when
+ * on screen) sit under Active; the rest are grouped Today / Yesterday /
+ * Earlier. Both the sections and the order follow when a chat was created,
+ * which reopening never changes, and every row shows that time.
  */
 export function MobileRecentsList({
   query,
@@ -305,19 +373,36 @@ export function MobileRecentsList({
       )
     )
   )
+  // Creation times of the open chats outside the scoped history: the index's
+  // (never re-stamped) when it lists the chat, else the live session's.
+  const openCreatedAts = useAcpStore(
+    useShallow((s) =>
+      openSessionIds.map(
+        (id) =>
+          (s.sessionIndex ?? []).find((e) => e.id === id)?.createdAt ||
+          s.sessions?.[id]?.createdAt ||
+          0
+      )
+    )
+  )
   const extraEntries = useMemo<ChatHistorySidebarEntry[]>(
     () =>
-      openSessionIds.map((id, index) => ({
-        id,
-        title: openTitles[index] ?? 'Agent Chat',
-        messageCount: 0,
-        status: 'active',
-        discovered: false,
-        lastActivityAt: OPEN_ONLY_ACTIVITY_AT,
-        canOpen: true
-      })),
-    [openSessionIds, openTitles]
+      openSessionIds.map((id, index) => {
+        const createdAt = openCreatedAts[index] ?? 0
+        return {
+          id,
+          title: openTitles[index] ?? 'Agent Chat',
+          messageCount: 0,
+          status: 'active',
+          discovered: false,
+          lastActivityAt: createdAt,
+          createdAt,
+          canOpen: true
+        }
+      }),
+    [openSessionIds, openTitles, openCreatedAts]
   )
+  const activeIds = useMemo(() => new Set(openSessionIds), [openSessionIds])
 
   const {
     mergedEntries,
@@ -333,6 +418,8 @@ export function MobileRecentsList({
     query,
     scrollRootRef,
     extraEntries,
+    activeIds,
+    timeKey: 'createdAt',
     onSessionOpened: onNavigate,
     logSource: 'MobileRecentsList.delete'
   })
@@ -418,14 +505,16 @@ export function MobileRecentsList({
     deleteEntry(id)
   }
 
+  const now = Date.now()
+
   return (
-    <div ref={rootRef} tabIndex={-1} className="flex flex-col px-2 pb-2 outline-none">
+    <div ref={rootRef} tabIndex={-1} className="flex flex-1 flex-col px-2 pb-2 outline-none">
       {mergedEntries.length === 0 ? (
-        <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+        <p className="my-auto px-4 py-6 text-center text-sm text-muted-foreground">
           No chats yet. Start one with the New chat button.
         </p>
       ) : filtered.length === 0 ? (
-        <p className="px-4 py-4 text-center text-sm text-muted-foreground">
+        <p className="my-auto px-4 py-6 text-center text-sm text-muted-foreground">
           No chats match this search.
         </p>
       ) : (
@@ -438,6 +527,7 @@ export function MobileRecentsList({
               </h3>
               <div role="group" aria-labelledby={labelId} className="flex flex-col gap-0.5">
                 {entries.map((entry) => {
+                  const time = formatChatCreatedTime(entry.createdAt, now)
                   const open = openBySession.get(entry.id)
                   if (open) {
                     return (
@@ -445,6 +535,7 @@ export function MobileRecentsList({
                         key={entry.id}
                         entry={entry}
                         sessionId={open.tab.sessionId}
+                        time={time}
                         isActive={open.tab.id === activeTabId}
                         onSelect={() => {
                           selectTab(open.paneId, open.tab.id)
@@ -462,31 +553,10 @@ export function MobileRecentsList({
                     )
                   }
                   return (
-                    <RecentsRowShell
+                    <HistoryRecentsRow
                       key={entry.id}
-                      entryId={entry.id}
-                      title={entry.title}
-                      isActive={false}
-                      ariaLabel={entry.status === 'error' ? `${entry.title}, Failed` : entry.title}
-                      disabled={entry.discovered && !entry.canOpen}
-                      icon={
-                        <ChatEntryIcon
-                          agentId={entry.agentId}
-                          agentConfigId={entry.agentConfigId}
-                          agents={entry.agents}
-                        />
-                      }
-                      status={
-                        entry.status === 'error' ? (
-                          <span
-                            className="inline-flex size-3.5 items-center justify-center"
-                            title="Failed"
-                          >
-                            <span className="size-2 rounded-full bg-destructive" aria-hidden />
-                            <span className="sr-only">Failed</span>
-                          </span>
-                        ) : null
-                      }
+                      entry={entry}
+                      time={time}
                       onSelect={() => void openEntry(entry)}
                       onOpenActions={() =>
                         openActions({

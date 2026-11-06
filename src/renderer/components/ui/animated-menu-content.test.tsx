@@ -5,7 +5,7 @@ import {
   resetNativeWebviewOcclusionForTests,
   useNativeWebviewOccluded
 } from '@/hooks/use-native-webview-occlusion'
-import { AnimatedMenuContent, menuMotion } from './animated-menu-content'
+import { AnimatedMenuContent, flyoutMotion, menuMotion } from './animated-menu-content'
 
 vi.mock('@/lib/tauri-runtime', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/tauri-runtime')>()),
@@ -63,6 +63,29 @@ describe('menuMotion (transitions.dev menu dropdown, on the motion tokens)', () 
     expect(m.openTransition.duration).toBe(0.3)
     expect(m.closeTransition.duration).toBe(0.1)
     expect(m.initial).toEqual({ opacity: 0, scale: 0.95 })
+  })
+})
+
+describe('flyoutMotion (side submenu)', () => {
+  it('slides 4px out of its row over --duration-quick on the smooth-out curve', () => {
+    const m = flyoutMotion(false, 'right')
+    expect(m.initial).toEqual({ opacity: 0, x: -4 })
+    expect(m.open).toEqual({ opacity: 1, x: 0 })
+    expect(m.closed).toEqual({ opacity: 0, x: 0 })
+    expect(m.openTransition).toEqual({ duration: 0.15, ease: [0.22, 1, 0.36, 1] })
+    expect(m.closeTransition.duration).toBeCloseTo(0.1)
+  })
+
+  it('comes from the trigger side', () => {
+    expect(flyoutMotion(false, 'left').initial).toEqual({ opacity: 0, x: 4 })
+  })
+
+  it('does not move under reduced motion', () => {
+    const m = flyoutMotion(true, 'right')
+    expect(m.initial).toEqual(m.open)
+    expect(m.openTransition.duration).toBe(0)
+    expect(m.closeTransition.duration).toBe(0)
+    for (const state of [m.initial, m.open, m.closed]) expect(state).not.toHaveProperty('x')
   })
 })
 

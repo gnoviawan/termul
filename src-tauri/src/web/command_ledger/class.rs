@@ -11,7 +11,9 @@
 //!
 //! `Create` and `Command` carry a [`Replay`] policy: `Payload` replays the
 //! stored (sanitized) reply, `Entity` rebuilds it from the entity the command
-//! stamped, `ReceiptOnly` never stores a payload (credential-bearing kinds).
+//! stamped, `ReceiptOnly` never stores a payload (credential-bearing kinds),
+//! `Never` keeps the command out of the ledger (one-shot kinds whose reply
+//! carries secrets).
 //! `send_prompt` is `Command` + `Entity`: its `turnId` is its `commandId` and
 //! `TurnWatermark` is its entity-lookup layer, so it never enters the ledger.
 
@@ -36,6 +38,9 @@ pub enum Replay {
     Entity,
     /// Success only; the payload (it may carry secrets) is never stored.
     ReceiptOnly,
+    /// Not ledgered and never replayed. The request refuses a repeat itself,
+    /// and its reply carries secrets, so not even a receipt is kept.
+    Never,
 }
 
 /// One row of the class table.
@@ -78,7 +83,7 @@ impl CommandClass {
     pub const fn ledgered(self) -> bool {
         match self.kind {
             ClassKind::Create => true,
-            ClassKind::Command => !matches!(self.replay, Some(Replay::Entity)),
+            ClassKind::Command => !matches!(self.replay, Some(Replay::Entity | Replay::Never)),
             ClassKind::Idempotent | ClassKind::Read => false,
         }
     }
@@ -93,7 +98,7 @@ impl CommandClass {
     /// Whether the reply payload may be stored for replay.
     #[must_use]
     pub const fn stores_payload(self) -> bool {
-        !matches!(self.replay, Some(Replay::ReceiptOnly))
+        !matches!(self.replay, Some(Replay::ReceiptOnly | Replay::Never))
     }
 }
 
@@ -101,6 +106,7 @@ impl CommandClass {
 pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     ("send_prompt", CommandClass::command(Replay::Entity)),
     ("cancel_prompt", CommandClass::idempotent()),
+    ("stop_subagent", CommandClass::idempotent()),
     ("set_config_option", CommandClass::idempotent()),
     ("set_mode", CommandClass::idempotent()),
     ("set_model", CommandClass::idempotent()),
@@ -108,6 +114,7 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     // reply + resend of the same commandId must replay the original outcome.
     ("respond_permission", CommandClass::command(Replay::Payload)),
     ("answer_question", CommandClass::command(Replay::Payload)),
+    ("browser_stop", CommandClass::idempotent()),
     ("create_session", CommandClass::create()),
     ("load_session", CommandClass::command(Replay::Payload)),
     ("resume_session", CommandClass::command(Replay::Payload)),
@@ -127,6 +134,23 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     ("list_claude_usage", CommandClass::read()),
     ("set_default_claude_account", CommandClass::idempotent()),
     ("set_project_claude_account", CommandClass::idempotent()),
+    ("set_claude_auto_switch", CommandClass::idempotent()),
+    // A resend of a lost reply answers with the Account the first run added,
+    // instead of adding a second one.
+    ("add_claude_account", CommandClass::command(Replay::Payload)),
+    // Renaming sets a value; removing deletes by id and answers an Account
+    // that is already gone with no moved Projects.
+    ("rename_claude_account", CommandClass::idempotent()),
+    ("remove_claude_account", CommandClass::idempotent()),
+    // A new start replaces the running sign-in, and only the last link works.
+    ("start_claude_link_login", CommandClass::idempotent()),
+    // The code is one-shot (a second write finds the session gone), so a
+    // resend replays the verdict. The request carries a credential.
+    (
+        "finish_claude_link_login",
+        CommandClass::command(Replay::ReceiptOnly),
+    ),
+    ("cancel_claude_login", CommandClass::idempotent()),
     ("kill_agent", CommandClass::idempotent()),
     ("list_agents", CommandClass::read()),
     ("authenticate", CommandClass::read()),
@@ -152,6 +176,16 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     ("list_acp_catalog", CommandClass::read()),
     ("set_catalog_opt_in", CommandClass::idempotent()),
     ("fetch_acp_registry_snapshot", CommandClass::read()),
+    ("search_mcp_catalog", CommandClass::read()),
+    ("describe_mcp_install", CommandClass::read()),
+    ("plan_mcp_install", CommandClass::idempotent()),
+    // A plan commits once (a repeat is `MCP_PLAN_CONSUMED`), and the reply
+    // carries the entry's secret values.
+    ("commit_mcp_install", CommandClass::command(Replay::Never)),
+    ("cancel_mcp_install", CommandClass::idempotent()),
+    ("get_mcp_catalog_status", CommandClass::read()),
+    ("set_mcp_catalog_sync", CommandClass::idempotent()),
+    ("get_mcp_catalog_icon", CommandClass::read()),
     ("install_acp_agent", CommandClass::command(Replay::Payload)),
     (
         "acp_deliver_auth_redirect",
@@ -207,11 +241,14 @@ fn identifying_fields(request_type: &str) -> &'static [&'static str] {
         "record_agent_switch" => &["sessionId", "fromConfigId", "toConfigId", "newSessionId"],
         "respond_permission" => &["agentId", "requestId", "optionId"],
         "answer_question" => &["agentId", "questionId"],
+        "browser_stop" => &["sessionId"],
         "authenticate_agent" => &["agentId", "methodId"],
         "respond_elicitation" => &["agentId", "requestId", "action"],
         "acp_deliver_auth_redirect" | "install_acp_agent" | "logout_agent" | "kill_agent" => {
             &["agentId"]
         }
+        "add_claude_account" => &["name"],
+        "finish_claude_link_login" => &["accountId"],
         _ => &[],
     }
 }

@@ -3,14 +3,22 @@ import { describe, expect, it, vi } from 'vitest'
 import { ColumnTabs } from './ColumnTabs'
 
 describe('ColumnTabs', () => {
-  it('renders Chats, Explorer, Changes in order as a tablist', () => {
+  it('renders Chats, Explorer, Changes, GitHub in order as a tablist', () => {
     render(<ColumnTabs selected="chats" onSelect={vi.fn()} changedCount={0} />)
     expect(screen.getByRole('tablist')).toBeInTheDocument()
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
-      'Chats',
-      'Explorer',
-      'Changes'
-    ])
+    expect(
+      screen.getAllByRole('tab').map((t) => t.getAttribute('aria-label') ?? t.textContent)
+    ).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
+  })
+
+  it('shows GitHub as an icon whose label is its name and tooltip', () => {
+    const onSelect = vi.fn()
+    render(<ColumnTabs selected="chats" onSelect={onSelect} changedCount={0} />)
+    const github = screen.getByRole('tab', { name: 'GitHub' })
+    expect(github).toHaveAttribute('title', 'GitHub')
+    expect(github).toHaveTextContent('')
+    fireEvent.click(github)
+    expect(onSelect).toHaveBeenCalledWith('github')
   })
 
   it('marks the selected tab and roves the tabindex', () => {
@@ -33,7 +41,7 @@ describe('ColumnTabs', () => {
   it('moves and selects with Left and Right, wrapping at both ends', () => {
     const onSelect = vi.fn()
     render(<ColumnTabs selected="chats" onSelect={onSelect} changedCount={0} />)
-    const [chats, explorer, changes] = screen.getAllByRole('tab')
+    const [chats, explorer, , github] = screen.getAllByRole('tab')
 
     chats.focus()
     fireEvent.keyDown(chats, { key: 'ArrowRight' })
@@ -41,10 +49,10 @@ describe('ColumnTabs', () => {
     expect(explorer).toHaveFocus()
 
     fireEvent.keyDown(chats, { key: 'ArrowLeft' })
-    expect(onSelect).toHaveBeenLastCalledWith('changes')
-    expect(changes).toHaveFocus()
+    expect(onSelect).toHaveBeenLastCalledWith('github')
+    expect(github).toHaveFocus()
 
-    fireEvent.keyDown(changes, { key: 'ArrowRight' })
+    fireEvent.keyDown(github, { key: 'ArrowRight' })
     expect(onSelect).toHaveBeenLastCalledWith('chats')
   })
 

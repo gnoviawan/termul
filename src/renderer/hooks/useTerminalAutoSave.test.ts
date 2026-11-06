@@ -32,7 +32,9 @@ vi.mock('../utils/terminal-registry', () => ({
     return undefined
   }),
   // R3: no tracker registered in tests → undefined (content-only restore).
-  getTerminalModes: vi.fn(() => undefined)
+  getTerminalModes: vi.fn(() => undefined),
+  // session-adapter subscribes at import; the unsubscribe must be callable.
+  onTerminalModesChanged: vi.fn(() => () => {})
 }))
 
 vi.mock('@/lib/terminal-continuity-instrumentation', () => ({

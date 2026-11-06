@@ -60,6 +60,7 @@ async fn state_with_store(root: &std::path::Path) -> AppState {
         allow_remote_writes: false,
         shared_live_writes_denied: false,
         connections: Default::default(),
+        server_admin: None,
     }
 }
 
@@ -88,6 +89,7 @@ async fn state_without_store() -> AppState {
         allow_remote_writes: false,
         shared_live_writes_denied: false,
         connections: Default::default(),
+        server_admin: None,
     }
 }
 

@@ -474,7 +474,7 @@ fn the_guest_fades_when_the_turn_ends_and_when_the_session_closes() {
     let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
     let frames = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, |frame| {
         Some(Ok(match frame.method.as_str() {
-            "engine.execute" => r#"{"id":7}"#.to_string(),
+            "engine.execute" => r#"{"result":{"id":7},"issues":[]}"#.to_string(),
             _ => node_with_bounds(7, 0.0, 0.0).to_string(),
         }))
     });

@@ -58,7 +58,10 @@ describe('blockSaveOnDraftConflict', () => {
   })
 
   it('reveals the conflicted file tab and tells the user to resolve it first', () => {
-    mocks.openFiles.set('/a.ts', { draftConflict: { draftContent: 'd', draftSavedAt: 1 } })
+    mocks.openFiles.set('/a.ts', {
+      kind: 'text',
+      draftConflict: { draftContent: 'd', draftSavedAt: 1 }
+    })
 
     expect(blockSaveOnDraftConflict(['/a.ts'])).toBe(true)
     expect(mocks.setActivePane).toHaveBeenCalledWith('pane-1')
@@ -68,7 +71,10 @@ describe('blockSaveOnDraftConflict', () => {
 
   it('blocks a multi-file save when any one file is conflicted', () => {
     mocks.openFiles.set('/clean.ts', {})
-    mocks.openFiles.set('/a.ts', { draftConflict: { draftContent: 'd', draftSavedAt: 1 } })
+    mocks.openFiles.set('/a.ts', {
+      kind: 'text',
+      draftConflict: { draftContent: 'd', draftSavedAt: 1 }
+    })
 
     expect(blockSaveOnDraftConflict(new Set(['/clean.ts', '/a.ts']))).toBe(true)
     expect(mocks.setActiveTab).toHaveBeenCalledWith('pane-1', 'edit-/a.ts')
@@ -76,7 +82,10 @@ describe('blockSaveOnDraftConflict', () => {
 
   it('leaves fullscreen when the conflicted tab lives in a different pane', () => {
     mocks.fullscreenPaneId = 'pane-other'
-    mocks.openFiles.set('/a.ts', { draftConflict: { draftContent: 'd', draftSavedAt: 1 } })
+    mocks.openFiles.set('/a.ts', {
+      kind: 'text',
+      draftConflict: { draftContent: 'd', draftSavedAt: 1 }
+    })
 
     blockSaveOnDraftConflict(['/a.ts'])
 
@@ -86,7 +95,10 @@ describe('blockSaveOnDraftConflict', () => {
 
   it('keeps fullscreen when the conflicted tab is in the fullscreen pane', () => {
     mocks.fullscreenPaneId = 'pane-1'
-    mocks.openFiles.set('/a.ts', { draftConflict: { draftContent: 'd', draftSavedAt: 1 } })
+    mocks.openFiles.set('/a.ts', {
+      kind: 'text',
+      draftConflict: { draftContent: 'd', draftSavedAt: 1 }
+    })
 
     blockSaveOnDraftConflict(['/a.ts'])
 

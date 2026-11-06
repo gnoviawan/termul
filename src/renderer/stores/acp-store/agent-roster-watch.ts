@@ -17,17 +17,27 @@ import type {
   AgentCrashedEvent,
   AgentDisconnectedEvent,
   AgentErrorEvent,
+  AgentSignInRequestEvent,
+  AgentSignInResolvedEvent,
   AgentSpawnedEvent,
   BrowserOpenRequestEvent
 } from '@/lib/acp-api'
 import type { WatchClient } from '@/lib/acp-transport/watch-client'
+import { publishAutomationChange, requestAutomationResync } from '@/lib/automation-api'
+import { publishBrowserPolicyChange, requestBrowserPolicyResync } from '@/lib/browser-policy-api'
 import { logFrontendError } from '@/lib/log-api'
 import type { AcpState } from './types'
 
 /** Start watching the roster; returns the unsubscribe. */
 export function attachAgentRosterWatch(watches: WatchClient, getState: () => AcpState): () => void {
   return watches.subscribe<WsAgentSummary[], AgentsWatchDelta>('agents', {
-    onState: (summaries) => reconcileRoster(getState(), summaries),
+    onState: (summaries) => {
+      reconcileRoster(getState(), summaries)
+      // A resubscribe means deltas may have been lost, and a policy change
+      // hint travels as a delta that no state repairs.
+      requestBrowserPolicyResync()
+      requestAutomationResync()
+    },
     onDelta: (delta) => applyRosterDelta(getState(), delta)
   })
 }
@@ -50,6 +60,25 @@ function reconcileRoster(state: AcpState, summaries: WsAgentSummary[]): void {
 }
 
 function applyRosterDelta(state: AcpState, delta: AgentsWatchDelta): void {
+  if (delta?.event === 'browser_policy_changed') {
+    // Not roster state: a hint that one browser policy scope changed.
+    publishBrowserPolicyChange(delta.payload)
+    return
+  }
+  if (delta?.event === 'automation_changed') {
+    publishAutomationChange(delta.payload)
+    return
+  }
+  if (delta?.event === 'automation_resync') {
+    const missed = (delta.payload as { missed?: unknown } | null | undefined)?.missed
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp-store.agentRosterWatch',
+      message: `host dropped ${String(missed)} automation change(s); re-reading automations`
+    })
+    requestAutomationResync()
+    return
+  }
   const agentId = (delta?.payload as { agentId?: unknown } | null | undefined)?.agentId
   if (typeof agentId !== 'string') {
     void logFrontendError({
@@ -81,6 +110,12 @@ function applyRosterDelta(state: AcpState, delta: AgentsWatchDelta): void {
     case 'browser_open_request':
       // Not roster state: the host's browser-open shim captured an auth URL.
       state._onBrowserOpenRequest(delta.payload as BrowserOpenRequestEvent)
+      return
+    case 'agent_sign_in_request':
+      state._onAgentSignInRequest(delta.payload as AgentSignInRequestEvent)
+      return
+    case 'agent_sign_in_resolved':
+      state._onAgentSignInResolved(delta.payload as AgentSignInResolvedEvent)
       return
     default:
       void logFrontendError({

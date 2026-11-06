@@ -78,22 +78,23 @@ impl ExitCodeTracker {
     /// Called by PtyManager when new data is received from the PTY.
     /// Emits "terminal-exit-code-changed" event if exit code changes.
     pub fn process_data(&self, terminal_id: &str, data: &str) {
-        let exit_code = Self::parse_exit_code(data);
-        if let Some(code) = exit_code {
-            let mut states = self.terminal_states.write();
-
-            if let Some(state) = states.get_mut(terminal_id) {
-                // Only emit if the exit code has changed
-                if state.last_exit_code != Some(code) {
-                    state.last_exit_code = Some(code);
-
-                    // Emit the event (drop lock first)
-                    let term_id = terminal_id.to_string();
-                    drop(states);
-                    self.emit_exit_code_changed(&term_id, code);
-                }
-            }
+        if let Some(code) = Self::parse_exit_code(data) {
+            self.record_exit_code(terminal_id, code);
         }
+    }
+
+    /// Record an authenticated command exit code, emitting only when it changes.
+    pub fn record_exit_code(&self, terminal_id: &str, code: i32) {
+        let mut states = self.terminal_states.write();
+        let Some(state) = states.get_mut(terminal_id) else {
+            return;
+        };
+        if state.last_exit_code == Some(code) {
+            return;
+        }
+        state.last_exit_code = Some(code);
+        drop(states);
+        self.emit_exit_code_changed(terminal_id, code);
     }
 
     /// Initialize tracking for a terminal

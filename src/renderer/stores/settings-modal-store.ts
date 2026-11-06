@@ -9,8 +9,16 @@ interface SettingsModalState {
   appPage: string | null
   /** Active Project Settings page id, or `null` for the first page. */
   projectPage: string | null
-  /** Open the Project Settings modal, optionally on one page. */
-  openProject: (page?: string) => void
+  /**
+   * Project the Project Settings modal edits, or `null` for the active
+   * project. Set on open so a menu can edit a project without selecting it.
+   */
+  projectId: string | null
+  /**
+   * Open the Project Settings modal, optionally on one page and for one
+   * project. Without a `projectId` it edits the active project.
+   */
+  openProject: (page?: string, projectId?: string) => void
   /** Open the App Preferences modal, optionally on one page. */
   openApp: (page?: string) => void
   /** Change the active App Preferences page. */
@@ -25,13 +33,14 @@ export const useSettingsModalStore = create<SettingsModalState>((set) => ({
   view: null,
   appPage: null,
   projectPage: null,
+  projectId: null,
 
-  openProject: (page?: string): void => {
-    set({ view: 'project', projectPage: page ?? null })
+  openProject: (page?: string, projectId?: string): void => {
+    set({ view: 'project', projectPage: page ?? null, projectId: projectId || null })
   },
 
   openApp: (page?: string): void => {
-    set({ view: 'app', appPage: page ?? null })
+    set({ view: 'app', appPage: page ?? null, projectId: null })
   },
 
   setAppPage: (page: string): void => {
@@ -43,7 +52,7 @@ export const useSettingsModalStore = create<SettingsModalState>((set) => ({
   },
 
   close: (): void => {
-    set({ view: null })
+    set({ view: null, projectId: null })
   }
 }))
 

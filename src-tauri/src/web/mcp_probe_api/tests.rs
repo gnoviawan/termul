@@ -45,6 +45,7 @@ fn test_app_with(allow_remote_writes: bool, shared_live_writes_denied: bool) -> 
         allow_remote_writes,
         shared_live_writes_denied,
         connections: Default::default(),
+        server_admin: None,
     };
     axum::Router::new()
         .route("/mcp-servers/probe", post(super::probe))
@@ -123,7 +124,10 @@ fn marker_probe_payload(marker: &std::path::Path) -> Value {
         "type": "stdio",
         "name": "spawn-canary",
         "command": "sh",
-        "args": ["-c", format!("touch {}", marker.display())],
+        // The path goes in as an argument, never into the script text: the
+        // shell would read a Windows path's backslashes as escapes and touch
+        // a mangled relative name in the working directory.
+        "args": ["-c", "touch \"$1\"", "sh", marker.to_string_lossy()],
         "env": []
     })
 }

@@ -10,7 +10,138 @@ pub fn git_get_status_detail(cwd: &str) -> Result<Vec<GitStatusDetail>, String> 
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(git_get_status_detail_from_output(&stdout))
+    Ok(git_get_status_detail_from_output(&expand_untracked_dirs(
+        cwd, &stdout,
+    )))
+}
+
+/// Undo Git's C-style path quoting (`core.quotePath`): handles `\\`, `\"`,
+/// `\t`, `\n`, `\r`, and `\nnn` octal escapes. Octal escapes are the bytes
+/// of a UTF-8 name, so they are decoded as UTF-8. Unquoted input returns
+/// unchanged.
+fn unquote_git_path(path: &str) -> String {
+    if !path.starts_with('"') {
+        return path.to_string();
+    }
+    let inner = path
+        .strip_prefix('"')
+        .and_then(|p| p.strip_suffix('"'))
+        .unwrap_or(path);
+    let mut out: Vec<u8> = Vec::with_capacity(inner.len());
+    let mut chars = inner.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => out.push(b'\\'),
+            Some('"') => out.push(b'"'),
+            Some('t') => out.push(b'\t'),
+            Some('n') => out.push(b'\n'),
+            Some('r') => out.push(b'\r'),
+            Some(d @ '0'..='7') => {
+                let mut code = d.to_digit(8).unwrap_or(0);
+                for _ in 0..2 {
+                    match chars.peek().and_then(|c| c.to_digit(8)) {
+                        Some(digit) => {
+                            code = code * 8 + digit;
+                            chars.next();
+                        }
+                        None => break,
+                    }
+                }
+                out.push((code & 0xff) as u8);
+            }
+            Some(other) => {
+                out.push(b'\\');
+                let mut buf = [0u8; 4];
+                out.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
+            }
+            None => out.push(b'\\'),
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Rewrite `?? <dir>/` porcelain lines into one `?? <file>` line per file
+/// inside the directory (#1492). Git collapses a wholly-untracked directory
+/// to a single entry (trailing `/`, quoted when the name needs it); the
+/// Changes panel is file-granular, so the directory itself would later be
+/// handed to the single-file diff loader and fail with "Is a directory".
+///
+/// Porcelain paths are REPOSITORY-ROOT-relative even when `cwd` is nested,
+/// while `ls-files` run from a nested `cwd` emits cwd-relative paths. To stay
+/// consistent with the incoming status rows, expansion resolves the repo
+/// root (`rev-parse --show-toplevel`) and runs
+/// `ls-files --others --exclude-standard` FROM the root, so every expanded
+/// row is root-relative exactly like the line it replaces. Ignored files
+/// stay hidden; an empty directory (nothing to stage) drops out; on any git
+/// failure the original line is kept so status never regresses.
+fn expand_untracked_dirs(cwd: &str, output: &str) -> String {
+    // Lazy: only pay the rev-parse round-trip when an untracked dir exists.
+    let mut repo_root_cache: Option<Option<String>> = None;
+    let root = |cache: &mut Option<Option<String>>| -> Option<String> {
+        if cache.is_none() {
+            *cache = Some(
+                GitTracker::run_git_command(cwd, &["rev-parse", "--show-toplevel"])
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    .filter(|r| !r.is_empty()),
+            );
+        }
+        cache.clone().flatten()
+    };
+
+    let mut out = String::with_capacity(output.len());
+    for line in output.lines() {
+        if let Some(raw) = line.strip_prefix("?? ") {
+            let unquoted = unquote_git_path(raw);
+            // A wholly-untracked directory ends with `/` (outside the quotes
+            // when quoted: `"dir name/"`).
+            let is_dir_entry = unquoted.ends_with('/');
+            if is_dir_entry {
+                let dir_arg = unquoted.as_str();
+                if let Some(git_root) = root(&mut repo_root_cache) {
+                    // `:(literal)` disables pathspec magic: a directory
+                    // literally named `:(exclude)…` must be treated as a
+                    // path, not as an exclusion directive.
+                    let literal_arg = format!(":(literal){dir_arg}");
+                    let expanded = GitTracker::run_git_command(
+                        &git_root,
+                        &[
+                            "ls-files",
+                            "--others",
+                            "--exclude-standard",
+                            "--",
+                            &literal_arg,
+                        ],
+                    )
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                    .unwrap_or_default();
+
+                    let mut any = false;
+                    for file in expanded.lines().filter(|l| !l.is_empty()) {
+                        any = true;
+                        // ls-files quotes the same names porcelain does; keep
+                        // the quoted form so the status parser decodes every
+                        // path exactly once.
+                        out.push_str("?? ");
+                        out.push_str(file);
+                        out.push('\n');
+                    }
+                    if any {
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 pub(super) fn git_get_status_detail_from_output(output: &str) -> Vec<GitStatusDetail> {
@@ -29,10 +160,11 @@ pub(super) fn git_get_status_detail_from_output(output: &str) -> Vec<GitStatusDe
                 .rsplit_once(" -> ")
                 .map(|(_, new_path)| new_path)
                 .unwrap_or(raw_path)
-                .to_string()
         } else {
-            raw_path.to_string()
+            raw_path
         };
+        // Quoted names must match the unquoted `diff -z` / `ls-files -z` paths.
+        let path = unquote_git_path(path);
 
         if index_status != ' ' && index_status != '?' {
             details.push(GitStatusDetail {
@@ -89,6 +221,15 @@ pub(super) fn build_diff_args(path: &str, is_untracked: bool, staged: bool) -> V
 
 pub fn git_get_diff(cwd: &str, path: &str, staged: bool) -> Result<String, String> {
     if is_git_ignored(cwd, path)? {
+        return Ok(String::new());
+    }
+
+    // Defense in depth (#1492): a directory path must never reach the
+    // single-file diff machinery — `diff --no-index /dev/null <dir>` fails
+    // and the read_to_string fallback surfaces "Is a directory (os error
+    // 21)". The status expansion upstream keeps directories out of the
+    // panel; this guard covers any other caller (web twin, stale selection).
+    if std::path::Path::new(cwd).join(path).is_dir() {
         return Ok(String::new());
     }
 

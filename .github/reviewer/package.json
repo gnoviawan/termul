@@ -1,0 +1,11 @@
+{
+  "name": "termul-pr-reviewer",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "@cursor/sdk": "1.0.38"
+  }
+}

@@ -9,6 +9,9 @@ const Tooltip = TooltipPrimitive.Root
 
 const TooltipTrigger = TooltipPrimitive.Trigger
 
+/** Renders content at the document body, outside clipping scroll containers. */
+const TooltipPortal = TooltipPrimitive.Portal
+
 /**
  * Tooltip surface — transitions.dev open/close adapted for Radix:
  * fade + scale(0.98→1) on open (150ms), short leave (50ms, no delay).
@@ -31,4 +34,4 @@ const TooltipContent = React.forwardRef<
 ))
 TooltipContent.displayName = TooltipPrimitive.Content.displayName
 
-export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger }
+export { Tooltip, TooltipContent, TooltipPortal, TooltipProvider, TooltipTrigger }
