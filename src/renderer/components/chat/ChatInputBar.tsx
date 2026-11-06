@@ -34,6 +34,7 @@ import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
 import { AgentModelSelector } from './agent-model-selector/AgentModelSelector'
 import { useCurrentAgentConfigId } from './agent-model-selector/use-agent-switch'
+import { BrowserShareChips, useBrowserShareAttachments } from './BrowserShareChips'
 import { ChatContextStrip } from './ChatContextStrip'
 import { ComposerBeamShell } from './ComposerBeamShell'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
@@ -53,7 +54,7 @@ import {
   type SelectionContextInsertRequest,
   useSelectionContextInsertRequest
 } from './composer/insert-selection-context'
-import { buildComposerSend } from './composer-send-blocks'
+import { buildComposerSend, withBrowserShares } from './composer-send-blocks'
 import { FileMentionMenu } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
 import { PermissionPrompt } from './PermissionPrompt'
@@ -263,6 +264,7 @@ export function ChatInputBar({
     canPickImages,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled: disabled || sending })
+  const browserShares = useBrowserShareAttachments(session.id)
   // Drag feedback for the attachment drop zone (shared with AgentLauncher):
   // depth-counted dragenter/dragleave pairs; the overlay stays local.
   const { dragActive, dropProps } = useAttachmentDropZone({ canDropPaste, addFiles })
@@ -348,19 +350,22 @@ export function ChatInputBar({
     handlePaste
   })
 
-  const canSend = !disabled && !sending && (value.trim().length > 0 || attachments.length > 0)
+  const canSend =
+    !disabled &&
+    !sending &&
+    (value.trim().length > 0 || attachments.length > 0 || browserShares.blocks.length > 0)
   const showStop = busy && !canSend
 
   const submit = useCallback(async () => {
-    const hasAttachments = attachments.length > 0
+    const hasAttachments = attachments.length > 0 || browserShares.blocks.length > 0
     const hasText = value.trim().length > 0
     if ((!hasText && !hasAttachments) || disabled || sending) return
 
     await holdComposer(async () => {
       const contexts = conversationContexts()
-      const send = buildComposerSend(
-        buildPromptParts(contexts ? await contexts : undefined),
-        attachments
+      const send = withBrowserShares(
+        buildComposerSend(buildPromptParts(contexts ? await contexts : undefined), attachments),
+        browserShares.blocks
       )
       if (!send) return
       if (send.kind === 'text') onSend(send.text)
@@ -374,6 +379,7 @@ export function ChatInputBar({
       setValue((current) => (current === value ? '' : current))
       skillPathsRef.current = {}
       clearAttachments(attachments)
+      browserShares.markSent()
       resetMentions()
     }).catch((err: unknown) => {
       // Skill path resolution throws a specific user-facing message — keep it.
@@ -383,6 +389,7 @@ export function ChatInputBar({
   }, [
     value,
     attachments,
+    browserShares,
     disabled,
     sending,
     clearAttachments,
@@ -636,6 +643,7 @@ export function ChatInputBar({
             )}
             {permission && <PermissionPrompt permission={permission} isVisible={isVisible} />}
             {!controlsDisabled && <ClaudeLimitWarning sessionId={session.id} atTop={!permission} />}
+            <BrowserShareChips sessionId={session.id} />
             <AttachmentPreviewGroup
               attachments={attachments}
               onRemove={removeAttachment}

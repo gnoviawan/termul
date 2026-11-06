@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { BrowserConsentStrip } from './BrowserConsentStrip'
 import { BrowserControls } from './BrowserControls'
+import { BrowserShareStrip } from './BrowserShareStrip'
 
 interface BrowserPanelProps {
   browserTabId: string
@@ -37,6 +38,7 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
     >
       {isVisible && <BrowserControls browserTabId={browserTabId} />}
       {isVisible && <BrowserConsentStrip browserTabId={browserTabId} />}
+      {isVisible && <BrowserShareStrip browserTabId={browserTabId} />}
       <div className="flex flex-1 overflow-hidden">
         <div ref={containerRef} className="flex-1 bg-background relative">
           {loading && (
