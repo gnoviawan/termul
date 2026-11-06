@@ -8,11 +8,16 @@
 //! format from the path's extension when none is given, so without the path
 //! Termul names the format itself. Every other command or method that reads
 //! or writes a path is refused with `UNSUPPORTED_IN_KIOSK`, and so is every
-//! command that would leave the project's one document behind ([`Why`]).
+//! command that would leave the project's one document behind or make the
+//! editor contact a server ([`Why`]). A call that runs another command,
+//! named in its params (`command.batch`, `text.preview`) or bound to the key
+//! it presses (`ui.key`), is routed as each command it runs. Termul decides
+//! by reading a command's params, so a command whose whole params are a
+//! reference the engine fills in from an earlier batch step is refused.
 
 use std::path::{Component, Path, PathBuf};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::acp::host_mcp::canvas::{CanvasError, CanvasErrorCode};
 
@@ -55,11 +60,16 @@ enum Why {
     /// It clears the unsaved mark without writing anything, so Termul's
     /// autosave, which waits for that mark, would skip the changes.
     SkipsSave,
-    /// It hands the document to a server or a live session.
-    LeavesTermul,
+    /// It reaches past the canvas: it hands the document to a server or a
+    /// live session, opens a link, or contacts or writes outside Termul. The
+    /// text says what it does.
+    Outside(&'static str),
     /// It installs, updates or publishes plugin code. An installed plugin's
     /// code runs on this machine, so an agent may not bring new code in.
     PluginCode,
+    /// It runs the editor's last command again. That command and its params
+    /// live in the editor, may be the user's, and were never routed here.
+    RepeatsUnseen,
 }
 
 #[derive(Clone, Copy)]
@@ -75,8 +85,24 @@ const DIR: &[When] = &[When::Path("dir")];
 const FILES: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::Files { instead: None });
 const FILE_AT_PATH: CommandPolicy = CommandPolicy::Refuse(PATH, Why::Files { instead: None });
 const OTHER_DOCUMENT: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::OtherDocument);
-const LEAVES_TERMUL: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::LeavesTermul);
+const LEAVES_TERMUL: CommandPolicy =
+    outside("shares the document outside Termul, with a server or a live session");
 const PLUGIN_CODE: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::PluginCode);
+/// The kiosk has no live sessions or online files, and their commands ask
+/// sharing servers for files, links and people (`collab.files` with
+/// `refresh` asks the server `pref.publishServer` names).
+const LIVE_SESSIONS: CommandPolicy =
+    outside("is for live sessions and files kept on a sharing server outside Termul");
+/// Loading a linked library asks a team library's server for it, or reads a
+/// library file outside the project.
+const LINKED_LIBRARIES: CommandPolicy = outside(
+    "loads the document's linked libraries, which contacts the servers of its team libraries \
+     and reads library files outside the project",
+);
+
+const fn outside(does: &'static str) -> CommandPolicy {
+    CommandPolicy::Refuse(ALWAYS, Why::Outside(does))
+}
 
 const fn files_unless(when: &'static [When], instead: &'static str) -> CommandPolicy {
     CommandPolicy::Refuse(
@@ -112,6 +138,10 @@ const COMMANDS: &[(&str, CommandPolicy)] = &[
     ),
     ("file.placeImage", FILE_AT_PATH),
     ("image.place", FILE_AT_PATH),
+    (
+        "image.replace",
+        files_unless(PATH, "pass the image's bytes as base64 `data`"),
+    ),
     ("variable.export", FILE_AT_PATH),
     (
         "variable.import",
@@ -151,7 +181,33 @@ const COMMANDS: &[(&str, CommandPolicy)] = &[
     ("collab.join", OTHER_DOCUMENT),
     ("collab.openFile", OTHER_DOCUMENT),
     ("collab.recoverFile", OTHER_DOCUMENT),
+    ("collab.cursor", LIVE_SESSIONS),
+    ("collab.cursorChat", LIVE_SESSIONS),
+    ("collab.diff", LIVE_SESSIONS),
+    ("collab.files", LIVE_SESSIONS),
+    ("collab.follow", LIVE_SESSIONS),
+    ("collab.forgetFile", LIVE_SESSIONS),
+    ("collab.leave", LIVE_SESSIONS),
+    ("collab.manageFile", LIVE_SESSIONS),
+    ("collab.peers", LIVE_SESSIONS),
+    ("collab.removePerson", LIVE_SESSIONS),
+    ("collab.report", LIVE_SESSIONS),
+    ("collab.serverInfo", LIVE_SESSIONS),
+    ("collab.spotlight", LIVE_SESSIONS),
+    ("collab.stop", LIVE_SESSIONS),
+    (
+        "collab.registerLinks",
+        outside("makes this app the opener of figcraft:// invite links on this machine"),
+    ),
+    (
+        "pref.publishServer",
+        outside("sets the sharing server the editor contacts for online files and join codes"),
+    ),
     ("window.new", OTHER_DOCUMENT),
+    (
+        "edit.repeat",
+        CommandPolicy::Refuse(ALWAYS, Why::RepeatsUnseen),
+    ),
     (
         "file.markSaved",
         CommandPolicy::Refuse(ALWAYS, Why::SkipsSave),
@@ -160,12 +216,46 @@ const COMMANDS: &[(&str, CommandPolicy)] = &[
     ("collab.host", LEAVES_TERMUL),
     ("collab.publish", LEAVES_TERMUL),
     ("collab.share", LEAVES_TERMUL),
-    // Listing plugins and running, using or closing an installed one stay
-    // allowed: they bring in no code.
+    ("text.openLink", outside("opens a link in a web browser")),
+    (
+        "help.page",
+        outside("opens FigCraft's help page in a web browser"),
+    ),
+    (
+        "library.check",
+        outside(
+            "contacts the servers of the document's team libraries, and lets the editor contact \
+             them by itself from then on",
+        ),
+    ),
+    ("library.list", LINKED_LIBRARIES),
+    ("library.updates", LINKED_LIBRARIES),
+    ("library.usage", LINKED_LIBRARIES),
+    ("library.acceptUpdates", LINKED_LIBRARIES),
+    ("library.place", LINKED_LIBRARIES),
+    ("library.import", LINKED_LIBRARIES),
+    ("library.swap", LINKED_LIBRARIES),
+    ("library.swapAt", LINKED_LIBRARIES),
+    ("library.applyStyle", LINKED_LIBRARIES),
+    ("library.importVariable", LINKED_LIBRARIES),
+    ("library.bindVariable", LINKED_LIBRARIES),
+    ("library.aliasVariable", LINKED_LIBRARIES),
+    ("library.setVariableMode", LINKED_LIBRARIES),
+    ("library.extendCollection", LINKED_LIBRARIES),
+    (
+        "font.download",
+        outside("downloads a font family and installs it into this machine's shared font folder"),
+    ),
+    // Listing installed plugins and running, using or closing one stay
+    // allowed: they bring in no code and contact no server.
     ("plugin.directory.install", PLUGIN_CODE),
     ("plugin.import", PLUGIN_CODE),
     ("plugin.directory.publish", PLUGIN_CODE),
     ("plugin.directory.unpublish", PLUGIN_CODE),
+    (
+        "plugin.directory.list",
+        outside("asks a plugin directory server for its plugins"),
+    ),
 ];
 
 /// Control methods other than `engine.execute` that can name a file.
@@ -174,12 +264,20 @@ const METHODS: &[(&str, &[When])] = &[("ui.render", PATH), ("ui.screenshot", PAT
 const EXECUTE: &str = "engine.execute";
 const EXPORT: &str = "file.export";
 const BATCH: &str = "command.batch";
+const PREVIEW: &str = "text.preview";
+const KEY: &str = "ui.key";
+/// The keys that make a value in a batch step's params a reference to an
+/// earlier step's result (figcraft `automation/batch.rs`). The engine swaps
+/// it for that value only after Termul routed the batch.
+const REFERENCE_KEYS: [&str; 3] = ["$step", "$ref", "$name"];
 
 /// Route one call. `params` is the call's parsed params.
 #[must_use]
 pub fn route(method: &str, params: &Value) -> CanvasRoute {
-    if method == EXECUTE {
-        return route_execute(params);
+    match method {
+        EXECUTE => return route_execute(params),
+        KEY => return route_key(params),
+        _ => {}
     }
     match METHODS.iter().find(|(name, _)| *name == method) {
         Some((_, when)) if applies(when, params) => {
@@ -194,12 +292,26 @@ fn route_execute(execute: &Value) -> CanvasRoute {
         return CanvasRoute::Forward;
     };
     let params = execute.get("params").unwrap_or(&Value::Null);
-    if command == BATCH {
-        return route_batch(params);
+    if is_reference(params) {
+        return CanvasRoute::Refuse(CanvasError::new(
+            CanvasErrorCode::UnsupportedInKiosk,
+            format!(
+                "`{command}`'s params come from an earlier batch step, so Termul cannot check \
+                 them; pass them directly"
+            ),
+        ));
+    }
+    match command {
+        BATCH => return route_batch(params),
+        PREVIEW => return route_preview(params),
+        _ => {}
     }
     match COMMANDS.iter().find(|(name, _)| *name == command) {
         None => CanvasRoute::Forward,
         Some((_, CommandPolicy::HostSave)) => CanvasRoute::HostSave,
+        Some((_, CommandPolicy::ExportTo)) if unresolved(params, "path") => {
+            CanvasRoute::Refuse(refusal(command, Why::Files { instead: None }))
+        }
         Some((_, CommandPolicy::ExportTo)) => match string_param(params, "path") {
             None => CanvasRoute::Forward,
             Some(path) => {
@@ -227,6 +339,27 @@ fn route_execute(execute: &Value) -> CanvasRoute {
     }
 }
 
+/// Route `inner`, the `engine.execute` call a wrapper runs, as the wrapper:
+/// forwarded when `inner` would be, else refused with `context` and why
+/// `inner` is.
+fn route_as(inner: &Value, context: &str) -> CanvasRoute {
+    let why = match route_execute(inner) {
+        CanvasRoute::Forward => return CanvasRoute::Forward,
+        CanvasRoute::Refuse(error) if error.code == CanvasErrorCode::UnsupportedInKiosk => {
+            error.message
+        }
+        _ => format!(
+            "`{}` saves or touches files; run it on its own (save_file saves, export returns \
+             bytes or writes inside the project)",
+            inner.get("command").and_then(Value::as_str).unwrap_or("?")
+        ),
+    };
+    CanvasRoute::Refuse(CanvasError::new(
+        CanvasErrorCode::UnsupportedInKiosk,
+        format!("{context}{why}"),
+    ))
+}
+
 /// A batch runs as one undo step inside the editor, so a step Termul would
 /// have to handle itself refuses the whole batch, and a step the kiosk
 /// refuses on its own refuses it for the same reason.
@@ -236,33 +369,99 @@ fn route_batch(params: &Value) -> CanvasRoute {
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_default();
-    for (index, step) in steps.iter().enumerate() {
-        let command = step.get("command").and_then(Value::as_str).unwrap_or("?");
-        let message = match route_execute(step) {
-            CanvasRoute::Forward => continue,
-            CanvasRoute::Refuse(error) if error.code == CanvasErrorCode::UnsupportedInKiosk => {
-                format!("batch step {index}: {}", error.message)
-            }
-            _ => format!(
-                "batch step {index} (`{command}`) saves or touches files; run it on its own \
-                 (save_file saves, export returns bytes or writes inside the project)"
-            ),
-        };
-        return CanvasRoute::Refuse(CanvasError::new(
-            CanvasErrorCode::UnsupportedInKiosk,
-            message,
-        ));
-    }
-    CanvasRoute::Forward
+    steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| route_as(step, &format!("batch step {index}: ")))
+        .find(|route| *route != CanvasRoute::Forward)
+        .unwrap_or(CanvasRoute::Forward)
 }
 
+/// `text.preview` runs the command named in its `command` param with its
+/// `params`, the shape of an `engine.execute` call, so it is routed as that
+/// command, whatever the engine lets it preview.
+fn route_preview(params: &Value) -> CanvasRoute {
+    let context = format!("`{PREVIEW}` runs the command it previews: ");
+    if unresolved(params, "command") {
+        return CanvasRoute::Refuse(CanvasError::new(
+            CanvasErrorCode::UnsupportedInKiosk,
+            format!(
+                "{context}its `command` is taken from an earlier batch step, which Termul cannot \
+                 check before the batch runs; name the command itself"
+            ),
+        ));
+    }
+    route_as(params, &context)
+}
+
+/// `ui.key` runs the command its key is bound to (figcraft `keymap`), so it
+/// is routed as that command. The editor looks the key up on the platform
+/// the browser reports and in the context it is in (on the canvas or editing
+/// text), which Termul cannot see, so the key is routed as its binding on
+/// every platform in every context.
+fn route_key(params: &Value) -> CanvasRoute {
+    use figcraft_engine::keymap::{lookup, Context, Mods, Platform};
+    let Some(key) = string_param(params, "key") else {
+        return CanvasRoute::Forward;
+    };
+    let held = |name: &str| params.get(name).and_then(Value::as_bool) == Some(true);
+    let mods = Mods {
+        shift: held("shift"),
+        alt: held("alt"),
+        cmd: held("cmd"),
+        ctrl: held("ctrl"),
+    };
+    let pressed = [
+        ("cmd", mods.cmd),
+        ("ctrl", mods.ctrl),
+        ("alt", mods.alt),
+        ("shift", mods.shift),
+    ]
+    .into_iter()
+    .filter_map(|(name, held)| held.then_some(name))
+    .chain([key])
+    .collect::<Vec<_>>()
+    .join("+");
+    [Platform::Mac, Platform::Other]
+        .into_iter()
+        .flat_map(|platform| {
+            [Context::Canvas, Context::Text].map(|context| lookup(platform, context, key, mods))
+        })
+        .flatten()
+        .map(|binding| {
+            route_as(
+                &json!({"command": binding.id}),
+                &format!("`{KEY}` {pressed} runs the shortcut `{}`: ", binding.id),
+            )
+        })
+        .find(|route| *route != CanvasRoute::Forward)
+        .unwrap_or(CanvasRoute::Forward)
+}
+
+/// A param taken from an earlier batch step counts as given: the engine
+/// fills it in after Termul checked the batch.
 fn applies(when: &[When], params: &Value) -> bool {
-    when.iter().any(|when| match when {
-        When::Always => true,
-        When::Path(name) => string_param(params, name).is_some(),
-        When::VariablesPath => string_param(params, "variables")
-            .is_some_and(|text| serde_json::from_str::<Value>(text).is_err()),
-    })
+    is_reference(params)
+        || when.iter().any(|when| match when {
+            When::Always => true,
+            When::Path(name) => string_param(params, name).is_some() || unresolved(params, name),
+            When::VariablesPath => {
+                unresolved(params, "variables")
+                    || string_param(params, "variables")
+                        .is_some_and(|text| serde_json::from_str::<Value>(text).is_err())
+            }
+        })
+}
+
+fn is_reference(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| REFERENCE_KEYS.iter().any(|key| object.contains_key(*key)))
+}
+
+/// Whether param `name` is a reference to an earlier batch step's result.
+fn unresolved(params: &Value, name: &str) -> bool {
+    params.get(name).is_some_and(is_reference)
 }
 
 fn string_param<'a>(params: &'a Value, name: &str) -> Option<&'a str> {
@@ -319,9 +518,13 @@ fn refusal(name: &str, why: Why) -> CanvasError {
              not allow: Termul saves the canvas while it has unsaved changes, so they would \
              never be written. Save with save_file"
         ),
-        Why::LeavesTermul => format!(
-            "`{name}` shares the document outside Termul, with a server or a live session, \
-             which the Termul canvas does not allow"
+        Why::Outside(does) => {
+            format!("`{name}` {does}, which the Termul canvas does not allow")
+        }
+        Why::RepeatsUnseen => format!(
+            "`{name}` runs the editor's last command again, which may be one the user ran and \
+             which Termul cannot check, so the Termul canvas does not allow it. Run that command \
+             itself instead"
         ),
         Why::PluginCode => format!(
             "`{name}` installs, updates or publishes plugin code, which isn't available from \

@@ -8,11 +8,16 @@
 //! no document state. Errors come back as the JSON encoding of `{code,
 //! message}`, the only shape `Backend` can carry.
 //!
+//! `events.poll` is the one call that sends several frames: the editor page
+//! answers it at once, so the bridge gives `wait_for_changes` the long poll
+//! figcraft's own control server gives it ([`Bridge::poll_events`]).
+//!
 //! The trait is synchronous, so the bridge uses blocking std sockets: callers
 //! on an async runtime run it on a blocking thread.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use figcraft_mcp::Backend;
@@ -25,6 +30,9 @@ use crate::acp::host_mcp::{FrameKind, FrameReply, FrameRequest, MAX_REQUEST_FRAM
 /// Replies carry rendered PNGs and exports as base64, so the cap is far above
 /// the other host tools' 1 MiB.
 pub const MAX_REPLY_BYTES: u64 = 256 * 1024 * 1024;
+
+const EVENTS_POLL: &str = "events.poll";
+const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 pub struct Bridge {
     config: ChildConfig,
@@ -108,6 +116,49 @@ impl Bridge {
             )
         })
     }
+
+    /// The page's one thread draws the editor and runs its commands, so it
+    /// answers `events.poll` at once rather than wait for events no one could
+    /// add meanwhile. Poll it again with the same params until events arrive,
+    /// the event log resets, or the wait passes, then return the last reply.
+    /// A later poll that times out (a busy editor near the deadline) returns
+    /// the last reply instead, so the wait never ends in `CANVAS_TIMEOUT`
+    /// after the editor has answered once.
+    fn poll_events(&self, params: &Value) -> Result<Value, CanvasError> {
+        let deadline = Instant::now() + poll_wait(params);
+        let mut last: Option<Value> = None;
+        loop {
+            let reply = match (self.request(EVENTS_POLL, params), last.take()) {
+                (Ok(reply), _) => reply,
+                (Err(error), Some(previous)) if error.code == CanvasErrorCode::CanvasTimeout => {
+                    return Ok(previous)
+                }
+                (Err(error), _) => return Err(error),
+            };
+            let woke = reply["events"]
+                .as_array()
+                .is_some_and(|events| !events.is_empty())
+                || reply["reset"] == true;
+            let left = deadline.saturating_duration_since(Instant::now());
+            if woke || left.is_zero() {
+                return Ok(reply);
+            }
+            last = Some(reply);
+            std::thread::sleep(left.min(POLL_INTERVAL));
+        }
+    }
+}
+
+/// How long `events.poll` waits for events, as figcraft's control server has
+/// it (`control_server.rs` `event_poll`): `timeoutMs`, 20 s by default and at
+/// most 25 s.
+fn poll_wait(params: &Value) -> Duration {
+    let millis = params
+        .get("timeoutMs")
+        .and_then(Value::as_u64)
+        .unwrap_or(20_000)
+        .min(25_000);
+    Duration::from_millis(millis)
 }
 
 /// One encoded frame line out, one newline-terminated reply in, on a fresh
@@ -128,8 +179,12 @@ fn exchange(port: u16, line: &[u8]) -> Result<FrameReply, String> {
 
 impl Backend for Bridge {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        self.request(method, &params)
-            .map_err(|error| error.to_backend_string_for(self.tool.as_deref()))
+        let reply = if method == EVENTS_POLL {
+            self.poll_events(&params)
+        } else {
+            self.request(method, &params)
+        };
+        reply.map_err(|error| error.to_backend_string_for(self.tool.as_deref()))
     }
 
     fn has_ui(&self) -> bool {

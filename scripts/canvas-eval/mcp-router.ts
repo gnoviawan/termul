@@ -39,6 +39,7 @@ const READ_ONLY = new Set([
   'screenshot',
   'export',
   'inspect_ui',
+  'wait_for_changes',
   ...HARNESS_TOOLS
 ])
 
