@@ -731,6 +731,83 @@ describe('acp-store', () => {
     }
   })
 
+  it('issue #1736: clearing the last busy-retry prompt does not leave idle sends stuck', async () => {
+    // After a busy rejection the map entry survives when the timer fires and
+    // nulls itself. If the queue is empty by then, a later idle send must
+    // dispatch — not stay enqueued forever behind `busyQueueRetries.has`.
+    vi.useFakeTimers()
+    try {
+      seedSession('s1', 'agent-1', false)
+      const first: ContentBlock[] = [{ type: 'text', text: 'FIRST' }]
+      const later: ContentBlock[] = [{ type: 'text', text: 'LATER' }]
+      useAcpStore.getState().seedLaunchUserMessage('s1', first)
+      const sendPromptBlocks = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new AcpTransportError('rate_limited', 'ACP_TURN_IN_PROGRESS: session s1')
+        )
+        .mockReturnValue(new Promise(() => {}))
+      _setAcpTransportForTests({
+        sendPrompt: sendPromptBlocks,
+        sendPromptBlocks,
+        dispose: vi.fn()
+      } as unknown as AcpTransport)
+
+      await useAcpStore.getState().sendPromptBlocks('s1', first, { skipUserAppend: true })
+      expect(useAcpStore.getState().promptQueues['s1']).toHaveLength(1)
+
+      // Empty the queue while the retry timer is still armed (race: user
+      // removed the last item). Leave the map entry so the timer can fire.
+      useAcpStore.setState((s) => ({
+        promptQueues: { ...s.promptQueues, s1: [] }
+      }))
+
+      await vi.advanceTimersByTimeAsync(COMMAND_RESEND_DELAYS_MS[0])
+      // Flush saw an empty queue — no second send, session stays idle.
+      expect(sendPromptBlocks).toHaveBeenCalledTimes(1)
+      expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+
+      // Brand-new idle send must dispatch, not enqueue behind a stale marker.
+      // Do not await the hanging transport promise — only the dispatch side effects.
+      void useAcpStore.getState().sendPromptBlocks('s1', later)
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(useAcpStore.getState().promptQueues['s1'] ?? []).toHaveLength(0)
+      expect(sendPromptBlocks).toHaveBeenCalledTimes(2)
+      expect(sendPromptBlocks.mock.calls[1][2]).toEqual(later)
+      expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
+
+      // removeQueuedPrompt also cancels an armed busy-retry when it empties
+      // the queue (so we never wait for the timer to clear the marker).
+      _resetBusyQueueRetriesForTesting()
+      useAcpStore.setState(FRESH)
+      seedSession('s1', 'agent-1', false)
+      useAcpStore.getState().seedLaunchUserMessage('s1', first)
+      const send2 = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new AcpTransportError('rate_limited', 'ACP_TURN_IN_PROGRESS: session s1')
+        )
+        .mockReturnValue(new Promise(() => {}))
+      _setAcpTransportForTests({
+        sendPrompt: send2,
+        sendPromptBlocks: send2,
+        dispose: vi.fn()
+      } as unknown as AcpTransport)
+      await useAcpStore.getState().sendPromptBlocks('s1', first, { skipUserAppend: true })
+      const queueId = useAcpStore.getState().promptQueues['s1'][0].id
+      useAcpStore.getState().removeQueuedPrompt('s1', queueId)
+      void useAcpStore.getState().sendPromptBlocks('s1', later)
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(useAcpStore.getState().promptQueues['s1'] ?? []).toHaveLength(0)
+      expect(send2).toHaveBeenCalledTimes(2)
+      expect(send2.mock.calls[1][2]).toEqual(later)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('queues a prompt sent while a history reopen is in flight, then flushes onto the repointed agent', async () => {
     // Mid-reopen shape: the install stamps status 'closed' while
     // `openingHistoryIds` marks the open in flight. A send typed in that

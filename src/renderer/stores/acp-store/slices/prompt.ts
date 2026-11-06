@@ -139,7 +139,12 @@ export function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId):
   if (!session || session.status === 'closed' || sessionTurnBusy(session)) return
 
   const queue = state.promptQueues[sessionId] ?? []
-  if (queue.length === 0) return
+  if (queue.length === 0) {
+    // Timer may have fired after the user cleared the queue; drop the stale
+    // marker so idle sends are not held behind `busyQueueRetries.has`.
+    clearBusyQueueRetry(sessionId)
+    return
+  }
 
   const [next, ...rest] = queue
   set((s) => ({
@@ -194,6 +199,14 @@ function scheduleBusyQueueRetry(set: TurnEndSetter, sessionId: SessionId): void 
     source: 'acp-store.busyQueueRetry',
     message: `Prompt on session ${sessionId} was rejected as busy with no turn running here; retrying the queue in ${delayMs}ms (attempt ${retry.attempts})`
   })
+}
+
+/** Cancel + drop a session's busy-retry marker (armed timer or stale entry). */
+function clearBusyQueueRetry(sessionId: SessionId): void {
+  const retry = busyQueueRetries.get(sessionId)
+  if (!retry) return
+  if (retry.timer) clearTimeout(retry.timer)
+  busyQueueRetries.delete(sessionId)
 }
 
 /**
@@ -398,8 +411,13 @@ export async function runPromptTurn(
     // `queuedOrigin` is a dequeue/send-now flush of an item already pulled off
     // the queue — it must start even while siblings remain queued or a busy
     // retry timer is still armed. Only brand-new sends honour queuePending.
+    // Only an *armed* busy-retry timer counts as pending. After the timer
+    // fires it nulls itself but the map entry can linger (e.g. user removed
+    // the last queued item before flush ran) — `has()` would then keep every
+    // later idle send enqueued forever (#1736 cubic).
     const queuePending =
-      (s.promptQueues[sessionId] ?? []).length > 0 || busyQueueRetries.has(sessionId)
+      (s.promptQueues[sessionId] ?? []).length > 0 ||
+      Boolean(busyQueueRetries.get(sessionId)?.timer)
     const holdForPriorQueue = !queuedOrigin && queuePending
     if ((sessionTurnBusy(current) || awaitingAgent || holdForPriorQueue) && !skipUserAppend) {
       enqueued = true
@@ -655,11 +673,11 @@ export async function runPromptTurn(
     }
     dispatchedAgentId = liveSession.agentId
     settleDispatch(await send(liveSession, turnId))
-    busyQueueRetries.delete(sessionId)
+    clearBusyQueueRetry(sessionId)
   } catch (err) {
     // Only a busy rejection keeps the retry ladder; any other outcome (an
     // echo-accepted or reconciled turn, a definite failure) starts it over.
-    if (!isPromptTurnInProgressError(err)) busyQueueRetries.delete(sessionId)
+    if (!isPromptTurnInProgressError(err)) clearBusyQueueRetry(sessionId)
     if (isPromptTurnInProgressError(err)) {
       settleCommand(turnId, 'rejected')
       activeWirePromptTurns.delete(sessionId)
@@ -924,6 +942,11 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
         [sessionId]: (s.promptQueues[sessionId] ?? []).filter((item) => item.id !== queueId)
       }
     }))
+    // Removing the last queued item must also cancel any busy-retry so a later
+    // idle send is not held forever behind a stale map entry.
+    if ((get().promptQueues[sessionId] ?? []).length === 0) {
+      clearBusyQueueRetry(sessionId)
+    }
   },
 
   sendQueuedPromptNow: async (sessionId, queueId) => {
