@@ -741,6 +741,62 @@ describe('failed session lifecycle (story 5)', () => {
     expect(commands).toContain('acp_send_prompt')
   })
 
+  it('gh-1741: overlapping deletes keep the retry guard until the last one settles', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    const placeholderId = useAcpStore
+      .getState()
+      .createLaunchPlaceholder({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn boom'))
+    await expect(
+      useAcpStore.getState().finalizeChatLaunch({
+        placeholderId,
+        configId: 'cfg-1',
+        cwd: '/work',
+        projectId: 'p1',
+        initialBlocks: [{ type: 'text', text: 'fix the failing CI checks' }]
+      })
+    ).rejects.toBeTruthy()
+
+    const commands: string[] = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (command: string) => {
+      commands.push(command)
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 'sess-after-overlap' }
+      if (command === 'acp_send_prompt') return 'end_turn'
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    let failFirst: (error: Error) => void = () => {}
+    let failSecond: (error: Error) => void = () => {}
+    vi.mocked(queueSessionPayloadDelete)
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            failFirst = reject
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            failSecond = reject
+          })
+      )
+
+    const first = useAcpStore.getState().deleteHistorySession(placeholderId)
+    const second = useAcpStore.getState().deleteHistorySession(placeholderId)
+    failFirst(new Error('disk full'))
+    await first
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+    expect(commands).toEqual([])
+
+    failSecond(new Error('disk full'))
+    await second
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+    expect(commands).toContain('acp_send_prompt')
+  })
+
   it('retryFailedLaunch rejects when no failed launch is recorded for the session', async () => {
     seedSession('s1', 'agent-1', false)
     await expect(useAcpStore.getState().retryFailedLaunch('s1')).rejects.toThrow(

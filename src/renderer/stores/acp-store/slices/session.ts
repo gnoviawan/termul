@@ -358,11 +358,12 @@ let sessionIndexAppliedGeneration = 0
  * Dedupes concurrent Retry clicks so only one reopen+send runs per session. */
 const inFlightCrashedRetries = new Set<SessionId>()
 
-/** Sessions with an in-flight `deleteHistorySession`. `retryFailedLaunch`
- * refuses them: a retry started before the durable delete settles would see
- * no cancellation tombstone and re-send the deleted chat's first turn
- * (gh-1741). Cleared when the delete settles, so a failed delete can retry. */
-const pendingHistoryDeletes = new Set<SessionId>()
+/** In-flight `deleteHistorySession` calls per session. `retryFailedLaunch`
+ * refuses a session with any: a retry started before the durable delete
+ * settles would see no cancellation tombstone and re-send the deleted chat's
+ * first turn (gh-1741). Counted, not a set, so overlapping deletes keep the
+ * guard until the last one settles; a failed delete can then retry. */
+const pendingHistoryDeletes = new Map<SessionId, number>()
 
 const RESTORE_PRELOAD_MIN_MS = 400
 
@@ -2144,7 +2145,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
   deleteHistorySession: async (id) => {
     // Retry guard: set before the cancellation tombstone below so no retry
     // can start in the window before it (gh-1741).
-    pendingHistoryDeletes.add(id)
+    pendingHistoryDeletes.set(id, (pendingHistoryDeletes.get(id) ?? 0) + 1)
     try {
       invalidateSessionReopen(id)
       forgetAgentWorkingReports(id)
@@ -2218,7 +2219,9 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         })
       }
     } finally {
-      pendingHistoryDeletes.delete(id)
+      const remaining = (pendingHistoryDeletes.get(id) ?? 1) - 1
+      if (remaining > 0) pendingHistoryDeletes.set(id, remaining)
+      else pendingHistoryDeletes.delete(id)
     }
   },
 
