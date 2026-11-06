@@ -90,7 +90,7 @@ export function attachCommandSeparators(terminal: Terminal): void {
     const cursorRow = buffer.baseY + buffer.cursorY
     const currentMarkers = terminalMarkersMap.get(terminal) ?? []
     for (const marker of currentMarkers) {
-      if (!marker.isDisposed && marker.line === cursorRow) marker.dispose()
+      if (!marker.isDisposed && marker.line >= cursorRow) marker.dispose()
     }
     return false
   })

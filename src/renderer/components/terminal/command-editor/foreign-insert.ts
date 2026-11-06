@@ -5,7 +5,7 @@ import { commandDraftStore } from '@/lib/command-lifecycle/draft-store'
 import { canTerminalWriteToPty } from '@/lib/command-lifecycle/input-guard'
 import type { InputMode } from '@/lib/command-lifecycle/transition'
 import { logFrontendError } from '@/lib/log-api'
-import { handleTerminalPaste } from './editor-keys'
+import { containsEditorDisallowedControls, handleTerminalPaste } from './editor-keys'
 
 export interface EditorInputTarget {
   ptyId: () => string | null
@@ -40,9 +40,11 @@ export function routeForeignInsert(
 ): void | Promise<void> {
   if (!target.allowWrite()) return
   const mode = target.mode()
-  const textToValidate =
-    mode === 'Editor' && kind === 'history' ? text.replace(/[\n\t]/g, '') : text
-  if (containsDisallowedControls(textToValidate)) {
+  const disallowed =
+    mode === 'Editor' && kind === 'history'
+      ? containsEditorDisallowedControls(text)
+      : containsDisallowedControls(text)
+  if (disallowed) {
     const message = 'Refused to insert a command containing control characters'
     void logFrontendError({ level: 'warn', source: 'foreign-insert', message })
     onError?.(message)

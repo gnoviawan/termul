@@ -61,11 +61,8 @@ export function draftPersistence(terminalId: string, draftStore: DraftStore) {
         if (pending && !view.composing && !view.compositionStarted) {
           // Android CodeMirror schedules the committed DOM mutation in an rAF;
           // force its observer to reconcile it before this plugin is destroyed.
-          const observer = (view as FlushableEditorView).observer
-          if (observer?.forceFlush) {
-            observer.forceFlush()
-            storeIfIdle()
-          }
+          ;(view as FlushableEditorView).observer?.forceFlush?.()
+          storeIfIdle()
         }
         destroyed = true
       }

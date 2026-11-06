@@ -331,3 +331,30 @@ it('stores committed IME text when the editor unmounts before the deferred flush
   expect(remounted.view.state.doc.toString()).toBe('ls日本')
   expect(draftStore.read('ime')).toBe('ls日本')
 })
+
+it('stores the reconciled draft on unmount when CodeMirror has no forceFlush', async () => {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(androidChrome126)
+  vi.stubGlobal('EditContext', undefined)
+  const nextFrame = controlFrames()
+  const draftStore = createCommandDraftStore()
+  const { view, offer, unmount } = await mountEditor('ls', draftStore)
+
+  fireEvent.compositionStart(view.contentDOM)
+  act(() => replaceDOMText(view, 'ls日本'))
+  await act(async () => {})
+  act(() => {
+    fireEvent.compositionEnd(view.contentDOM, { data: '日本' })
+  })
+  await act(async () => {})
+  expect(view.composing).toBe(false)
+  expect(view.state.doc.toString()).toBe('ls日本')
+  expect(draftStore.read('ime')).toBe('ls')
+
+  const observer = (view as EditorView & { observer: { forceFlush?: () => void } }).observer
+  Object.defineProperty(observer, 'forceFlush', { configurable: true, value: undefined })
+  offer.mockClear()
+  unmount()
+  nextFrame()
+  expect(offer).toHaveBeenCalledExactlyOnceWith('ime', 'Editor', 'ls日本')
+  expect(draftStore.read('ime')).toBe('ls日本')
+})

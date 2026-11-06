@@ -50,18 +50,14 @@ export function MobileTerminalControls({
   terminalId
 }: MobileTerminalControlsProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(true)
-  const currentTerminal = useRef({ id: terminalId, generation: 0 })
-  if (currentTerminal.current.id !== terminalId) {
-    currentTerminal.current = {
-      id: terminalId,
-      generation: currentTerminal.current.generation + 1
-    }
-  }
+  const pasteGeneration = useRef(0)
+  // Cleanup runs when terminalId changes and on unmount, invalidating in-flight pastes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: terminalId is the invalidation trigger, not a value the effect reads.
   useEffect(
     () => () => {
-      currentTerminal.current.generation += 1
+      pasteGeneration.current += 1
     },
-    []
+    [terminalId]
   )
   const keyGroupId = useId()
   // The bar exists only on the mobile shell. It reports its top edge so a toast
@@ -86,9 +82,9 @@ export function MobileTerminalControls({
   }
 
   const paste = async (): Promise<void> => {
-    const generation = currentTerminal.current.generation
+    const generation = pasteGeneration.current
     const result = await clipboardApi.readText()
-    if (currentTerminal.current.generation !== generation) return
+    if (pasteGeneration.current !== generation) return
     if (!result.success) {
       toast.error(`Clipboard read failed: ${result.error}`)
       return

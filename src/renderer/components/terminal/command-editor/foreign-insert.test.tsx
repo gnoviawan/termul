@@ -257,6 +257,26 @@ it('Editor history permits multiline drafts but refuses other controls', () => {
   expect(errors).toHaveLength(62)
 })
 
+it('Editor history accepts the Unicode joiners that editor paste keeps', () => {
+  const write = vi.fn()
+  const onError = vi.fn()
+  const view = mountEditor('keep draft', 4)
+  const zwj = 'echo \u{1f469}\u200d\u{1f4bb}'
+  const zwnj = 'echo \u0645\u06cc\u200c\u0634\u0648\u062f'
+
+  routeForeignInsert(target(view), 'history', zwj, write, onError)
+  expect(view.state.doc.toString()).toBe(zwj)
+  routeForeignInsert(target(null), 'history', zwnj, write, onError)
+  expect(commandDraftStore.read(terminalId)).toBe(zwnj)
+  expect(onError).not.toHaveBeenCalled()
+
+  const pty: EditorInputTarget = { ...target(null), mode: () => 'PTY' }
+  routeForeignInsert(pty, 'history', zwj, write, onError)
+  routeForeignInsert(target(view), 'assist', zwnj, write, onError)
+  expect(onError).toHaveBeenCalledTimes(2)
+  expect(write).not.toHaveBeenCalled()
+})
+
 it('PTY history refuses control characters before writing, but permits ordinary commands', () => {
   const write = vi.fn()
   const onError = vi.fn()

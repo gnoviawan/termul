@@ -19,20 +19,20 @@ import type { InputMode } from '@/lib/command-lifecycle/transition'
 import type { KeyboardShortcutsConfig } from '@/types/settings'
 import { isAppOwnedTerminalShortcut } from '../keymap'
 
+// Newline, tab, ZWNJ and ZWJ are legitimate editor text that the PTY control check rejects.
+const EDITOR_ALLOWED_CONTROLS = /[\n\t\u200c\u200d]/g
+
+export function containsEditorDisallowedControls(text: string): boolean {
+  return containsDisallowedControls(text.replace(EDITOR_ALLOWED_CONTROLS, ''))
+}
+
 export function sanitizeEditorPaste(text: string): string {
   const normalized = text
     .replaceAll('\x1b[200~', '')
     .replaceAll('\x1b[201~', '')
     .replace(/\r\n?/g, '\n')
   return Array.from(normalized)
-    .filter(
-      (char) =>
-        char === '\n' ||
-        char === '\t' ||
-        char === '\u200c' ||
-        char === '\u200d' ||
-        !containsDisallowedControls(char)
-    )
+    .filter((char) => !containsEditorDisallowedControls(char))
     .join('')
 }
 

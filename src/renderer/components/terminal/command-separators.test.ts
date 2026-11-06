@@ -217,6 +217,24 @@ describe('command-separators', () => {
     expect(earlierDecoration?.isDisposed).toBe(false)
   })
 
+  it('ED 0 disposes a pending-wrap marker anchored below the bottom row', async () => {
+    const { terminal, write } = setupTerminal({ cols: 10, rows: 3 })
+    const decSpy = vi.spyOn(terminal, 'registerDecoration')
+    attachCommandSeparators(terminal)
+
+    // The blank row fills the last viewport row, so the cursor sits in pending wrap there.
+    await write(`content\r\n\r\n${' '.repeat(10)}`)
+    expect(terminal.buffer.active.cursorX).toBe(10)
+    await write('\x1b]133;A;termul\x07')
+    expect(decSpy).toHaveBeenCalledOnce()
+    const marker = decSpy.mock.calls[0][0].marker
+    expect(marker.line).toBe(3)
+
+    await write('\x1b[J')
+
+    expect(marker.isDisposed).toBe(true)
+  })
+
   it('disposes markers on scrollback trimming and dedupe ignores disposed markers', async () => {
     const { terminal, write } = setupTerminal({ rows: 5, scrollback: 5 })
     const decSpy = vi.spyOn(terminal, 'registerDecoration')
