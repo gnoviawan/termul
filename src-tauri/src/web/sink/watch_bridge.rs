@@ -52,9 +52,10 @@ impl WsRelaySink {
 
     /// Issue #1727: the first `user_prompt` titles the session when the
     /// writer appends it, which is not an event `notify_history_for` sees.
-    /// Call once that prompt is durable (after `flush_prompt_record`), with
-    /// `was_untitled` read by [`Self::index_title_unset`] before the prompt
-    /// was recorded. Publishes one `chat_history` delta only when the title
+    /// Call after the `flush_prompt_record` attempt, also when it failed (the
+    /// writer may already have applied the prompt), with `was_untitled` read
+    /// by [`Self::index_title_unset`] before the prompt was recorded. Publishes
+    /// one `chat_history` delta only when the index already holds a title that
     /// went from unset to one derived from this prompt, so later prompts never
     /// nudge the watchers and a concurrent `session_info_update` or
     /// `local_title_generated` (which publishes its own delta) is not doubled.
