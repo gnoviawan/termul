@@ -19,9 +19,22 @@ export type StoredMcpServer = McpServerConfig & {
   catalog?: McpEntryCatalogProvenance
 }
 
+export type McpValidationIssue =
+  | 'name-required'
+  | 'command-required'
+  | 'url-required'
+  | 'url-invalid'
+
+export const MCP_VALIDATION_MESSAGES: Record<McpValidationIssue, string> = {
+  'name-required': 'Name is required.',
+  'command-required': 'Command is required for stdio.',
+  'url-required': 'URL is required.',
+  'url-invalid': 'URL is invalid.'
+}
+
 export interface McpValidation {
   valid: boolean
-  errors: string[]
+  issues: McpValidationIssue[]
 }
 
 export interface SkippedMcpServer {
@@ -41,27 +54,25 @@ export function transportOf(server: McpServerConfig): McpTransport {
 }
 
 export function validateMcpServer(server: Partial<McpServerConfig>): McpValidation {
-  const errors: string[] = []
-  if (!server.name || server.name.trim().length === 0) errors.push('Name is required.')
+  const issues: McpValidationIssue[] = []
+  if (!server.name || server.name.trim().length === 0) issues.push('name-required')
   const type = (server.type ?? 'stdio') as McpTransport
   if (type === 'stdio') {
     const value = server as Partial<{ command: string }>
-    if (!value.command || value.command.trim().length === 0) {
-      errors.push('Command is required for stdio.')
-    }
+    if (!value.command || value.command.trim().length === 0) issues.push('command-required')
   } else {
     const value = server as Partial<{ url: string }>
     if (!value.url || value.url.trim().length === 0) {
-      errors.push('URL is required.')
+      issues.push('url-required')
     } else {
       try {
         new URL(value.url)
       } catch {
-        errors.push('URL is invalid.')
+        issues.push('url-invalid')
       }
     }
   }
-  return { valid: errors.length === 0, errors }
+  return { valid: issues.length === 0, issues }
 }
 
 function toWireServer(entry: StoredMcpServer): McpServer {

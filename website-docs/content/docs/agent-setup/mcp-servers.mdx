@@ -7,20 +7,44 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs'
 
 An MCP server is a small program or web service that gives an agent extra tools, for example "list open issues" or "query the database". MCP stands for Model Context Protocol. You add a server once in Termul, and Termul offers it to every new agent chat.
 
-## Add MCP servers
-
-You add servers by pasting JSON. Termul reads the `mcpServers` format that Claude Desktop and many MCP server READMEs use, so you can usually copy the config from the server's own docs.
+## Add an MCP server
 
 1. Open Settings with `Ctrl+,` (`Cmd+,` on macOS) and click **MCP Servers**.
 2. Click **Add server**.
-3. Paste the JSON in **MCP JSON**.
-4. Click **Save**.
+3. Pick where the server runs: **On the internet** or **On this computer**. The server's setup page or README usually tells you.
+4. Enter a **Name**. Termul shows it in the server list and in chat tool calls.
+5. Fill in the fields for that kind of server, as the next two sections describe.
+6. Click **Add server**.
+
+### A server on the internet
+
+Enter the **Server URL** from the server's docs. It usually ends in `/mcp` or `/sse`.
+
+Leave **Sign-in** at **Browser sign-in, if the server asks** unless the docs give you an API key. When the server asks you to sign in, its row in the list offers **Connect**. If the docs do give you a key, pick **API key or token** and enter the value of the `Authorization` header, for example `Bearer lin_api_123`. Termul sends header values exactly as you type them and saves them as plain text. It does not replace `$VARIABLE` in a header.
+
+Termul picks the connection type from the URL. A URL that ends in `/sse` uses SSE, and any other URL uses Streamable HTTP. To change it, open **Advanced**. With **API key or token**, the **Headers** rows sit under **Sign-in**, and you add other headers there. With browser sign-in, add headers under **Advanced**.
+
+### A server on this computer
+
+Enter the whole command that starts the server in **Command**, for example `npx -y @acme/issues-mcp`. Put quotes around an argument that has spaces. The **Common** buttons start the command with `npx -y`, `uvx`, or `docker run -i --rm`.
+
+Add the variables the server reads under **Environment variables**. If the docs put a variable in front of the command, as in `GITHUB_TOKEN=$GITHUB_TOKEN npx -y @modelcontextprotocol/server-github`, Termul moves it into the variable list for you.
+
+A row that has a name and no value shows **Needs a value.** Termul does not save the server until you fill in the value or remove the row.
+
+## Paste JSON
+
+To add many servers at once, or to copy a config from a server's README, paste JSON instead. Termul reads the `mcpServers` format that Claude Desktop and many MCP server READMEs use.
+
+1. Click **Add server**, then click **Import JSON instead**.
+2. Paste the JSON in **MCP JSON**.
+3. Click **Save**.
 
 ![The Add MCP servers dialog with three servers pasted in: issues, docs and metrics](/screenshots/agent-setup-mcp-add.png)
 
-You can paste many servers at once in an `mcpServers` block, or a single server object on its own. If one server in the block has a mistake, Termul adds the others and tells you which one failed.
+You can paste many servers at once in an `mcpServers` block, or a single server object on its own. If any server in the block has a mistake, Termul adds none of them and lists each mistake, so you can fix the JSON and save again.
 
-There are three kinds of server:
+Each server in the JSON is one of three kinds:
 
 - **stdio**: a program that runs on your computer. Give its `command`, and optional `args` and `env`.
 
@@ -42,7 +66,9 @@ There are three kinds of server:
 
 If you leave out `type`, Termul treats a server with a `command` as stdio and a server with only a `url` as HTTP. Fields that Termul does not use are dropped.
 
-<Callout type="warn">Termul saves `env` values and `headers` as plain text. Put a reference such as `$GITHUB_TOKEN` in the config instead of the token itself.</Callout>
+To edit a server as JSON, open its row menu, click **Edit**, and then click **Edit as JSON**.
+
+<Callout type="warn">Termul saves `env` values and `headers` as plain text. In an `env` value, put a reference such as `$GITHUB_TOKEN` instead of the token itself. Header values are sent as written, so a reference does not work there.</Callout>
 
 ## Check that a server works
 
@@ -64,7 +90,7 @@ When Termul tests a server, it replaces `$NAME` references in `env` with the val
 Use the other buttons on the row to manage the server:
 
 - The switch turns the server on or off. Agents get only the servers that are on.
-- The pencil button opens the server's JSON for editing. Edit one server object here, without the `mcpServers` wrapper.
+- The pencil button opens the server in the same form you added it with. Click **Edit as JSON** to edit one server object instead, without the `mcpServers` wrapper.
 - The trash button deletes the server.
 
 ## Sign in to a server
