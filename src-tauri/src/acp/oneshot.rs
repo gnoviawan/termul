@@ -6,18 +6,25 @@
 //! [`ReplyCollector`] sink and never the WS relay: nothing is shown to,
 //! persisted for, or replayed to a client, on desktop and `termul-server`
 //! alike. The session is ephemeral, so the host injects no MCP server and the
-//! driver auto-cancels permission requests, questions and elicitations.
+//! driver auto-cancels questions and elicitations. Permission requests are
+//! answered from the request's [`ToolAllowlist`]. A session that does not
+//! start in a mode known to ask is moved to one, so every tool the agent
+//! gates reaches that allowlist. The host never selects a bypass mode, and
+//! asks Claude Agent ACP to load no settings files and offer no bypass mode.
 
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use agent_client_protocol::schema::v1::{ContentBlock, StopReason, TextContent};
+use agent_client_protocol::schema::v1::{
+    ContentBlock, SessionModeState, StopReason, TextContent,
+};
 use parking_lot::Mutex;
 
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
 use crate::acp::events::{self, SessionModelState};
 use crate::acp::manager::{AcpManager, SessionCreationContext, ACP_AUTH_REQUIRED_PREFIX};
+use crate::acp::session::ToolAllowlist;
 use crate::web::sink::{AcpEvent, EventSink};
 
 /// How long a timed-out turn may take to settle after its cancel. The driver
@@ -37,7 +44,14 @@ pub struct OneShotRequest {
     pub model: Option<String>,
     /// Selects the Claude account of a managed Claude agent.
     pub project_id: Option<String>,
+    /// The tool kinds the host allows when the agent asks; it refuses the rest.
+    pub tools: ToolAllowlist,
 }
+
+/// Modes known to ask before a tool acts (Claude Agent, Cursor, Codex,
+/// Gemini), most preferred first. A session moves to the first one its agent
+/// offers: `plan` only as a last resort, since it blocks edits and commands.
+const ASKING_MODES: [&str; 4] = ["default", "read-only", "ask", "plan"];
 
 /// A completed turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +115,7 @@ impl OneShotSession {
             cwd,
             model,
             project_id,
+            tools,
         } = request;
         let agent_name = config.name.clone();
         let collector = Arc::new(ReplyCollector::default());
@@ -123,6 +138,7 @@ impl OneShotSession {
                 SessionCreationContext {
                     project_id,
                     ephemeral: true,
+                    tool_allowlist: Some(tools),
                     ..SessionCreationContext::default()
                 },
             )
@@ -136,6 +152,7 @@ impl OneShotSession {
             })?;
         let session_id = created.session_id;
         let _ = collector.session_id.set(session_id.0.clone());
+        ensure_asking_mode(manager, &agent.agent_id, &session_id, created.modes).await?;
         if let Some(model) = &model {
             select_model(manager, &agent.agent_id, &session_id, created.models, model).await?;
         }
@@ -282,6 +299,42 @@ async fn select_model(
         .map_err(|error| {
             log::warn!("[acp-oneshot] agent {agent_id} model switch failed: {error}");
             OneShotError::ModelUnavailable(error)
+        })
+}
+
+async fn ensure_asking_mode(
+    manager: &Arc<AcpManager>,
+    agent_id: &AgentId,
+    session_id: &SessionId,
+    modes: Option<SessionModeState>,
+) -> Result<(), OneShotError> {
+    let Some(modes) = modes else {
+        return Ok(());
+    };
+    let current = modes.current_mode_id.0.as_ref();
+    let preferred = ASKING_MODES
+        .into_iter()
+        .find(|id| modes.available_modes.iter().any(|m| m.id.0.as_ref() == *id));
+    let target = match preferred {
+        Some(target) if target == current => return Ok(()),
+        None if ASKING_MODES.contains(&current) => return Ok(()),
+        target => target,
+    };
+    let Some(target) = target else {
+        log::warn!(
+            "[acp-oneshot] agent {agent_id} starts in mode {current} and offers no known mode that asks"
+        );
+        return Err(OneShotError::Spawn(format!(
+            "the session runs in mode `{current}`, which may use tools without asking, and the agent offers no known mode that asks"
+        )));
+    };
+    log::info!("[acp-oneshot] agent {agent_id} starts in mode {current}; switching to {target}");
+    manager
+        .set_mode(agent_id, session_id.clone(), target.to_string())
+        .await
+        .map_err(|error| {
+            log::warn!("[acp-oneshot] agent {agent_id} mode switch failed: {error}");
+            OneShotError::Spawn(format!("could not leave mode `{current}`: {error}"))
         })
 }
 

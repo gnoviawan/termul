@@ -179,6 +179,9 @@ pub struct SessionCreationContext {
     /// record so a resend finds the session after ledger eviction or a host
     /// restart. Ephemeral sessions are live-only and carry no durable stamp.
     pub command_id: Option<String>,
+    /// How the host answers an ephemeral session's permission requests.
+    /// `None` cancels every request.
+    pub tool_allowlist: Option<crate::acp::session::ToolAllowlist>,
 }
 
 /// Commands sent from Tauri command handlers to an agent's driver thread.
@@ -198,6 +201,7 @@ enum AcpCommand {
         worktree_branch: Option<String>,
         additional_directories: Vec<PathBuf>,
         command_id: Option<String>,
+        tool_allowlist: Option<crate::acp::session::ToolAllowlist>,
         reply: oneshot::Sender<Result<NewSessionOutcome, String>>,
     },
     LoadSession {
@@ -272,6 +276,11 @@ enum AcpCommand {
     /// (issue #837: `list_agents` payload extension). A session id appears
     /// here exactly when `OwnsSession` for it would answer `true`.
     SessionIds {
+        reply: oneshot::Sender<Result<Vec<String>, String>>,
+    },
+    /// Session ids the agent works in outside a prompt turn now
+    /// (`session::unprompted`).
+    WorkingSessionIds {
         reply: oneshot::Sender<Result<Vec<String>, String>>,
     },
     /// The canonical workspace root of every session registered on this
@@ -410,6 +419,9 @@ pub struct AgentSummary {
     /// answer "which live agent owns this session" from the `list_agents`
     /// reply alone, without a per-agent round-trip.
     pub owns_session: Vec<String>,
+    /// Owned sessions the agent works in outside a prompt turn now, so a
+    /// client that opens one later shows it busy. Always serialized.
+    pub working_sessions: Vec<String>,
     /// The `commandId` of the `spawn_agent` that created this agent. In-process
     /// only: never serialized to clients.
     #[serde(skip)]
@@ -972,6 +984,7 @@ impl AcpManager {
                 namespace: entry.stable_namespace.clone(),
                 capabilities: entry.capabilities.clone(),
                 owns_session: Vec::new(),
+                working_sessions: Vec::new(),
                 command_id: entry.stamp.command_id.clone(),
             })
             .collect()
@@ -1017,6 +1030,15 @@ impl AcpManager {
                         "[acp] session-ownership query failed for agent {}: {error}",
                         summary.id.0
                     );
+                    continue;
+                }
+            }
+            // Best effort like ownership: a failed query shows no session busy.
+            if let Ok(tx) = self.command_tx(&summary.id) {
+                if let Ok(ids) =
+                    send_command(&tx, |reply| AcpCommand::WorkingSessionIds { reply }).await
+                {
+                    summary.working_sessions = ids;
                 }
             }
         }
@@ -1128,6 +1150,7 @@ impl AcpManager {
                 worktree_branch: context.worktree_branch,
                 additional_directories,
                 command_id: context.command_id,
+                tool_allowlist: context.tool_allowlist,
                 reply,
             })
             .await
@@ -2064,6 +2087,7 @@ impl AcpManager {
                 running_terminals: 0,
                 running_subagents: 0,
                 reopens_in_flight: 0,
+                unprompted_sessions: 0,
                 last_active_at: std::time::Instant::now(),
             }),
             probes: Mutex::new(0),

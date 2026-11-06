@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{json, Map, Value};
 
 use super::executor::{RunScope, Walk};
-use super::{agent, control, http};
+use super::{agent, control, http, mcp};
 use crate::automation::graph;
 use crate::automation::model::{ConditionOp, NamedTemplate, NodeId, NodeSpec, Port, Template};
 use crate::automation::template::{self, LoopFrame, RenderContext, RenderError};
@@ -106,6 +106,7 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: &NodeSpec) -> Result<NodeSu
             output_schema,
             timeout_ms,
             max_attempts,
+            tools,
         } => {
             let request = agent::AgentSpec {
                 agent_id,
@@ -114,6 +115,7 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: &NodeSpec) -> Result<NodeSu
                 output_schema,
                 timeout_ms: *timeout_ms,
                 max_attempts: *max_attempts,
+                tools,
             };
             agent::run(scope, request).await.map(out)
         }
@@ -133,6 +135,20 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: &NodeSpec) -> Result<NodeSu
             message,
             timeout_ms,
         } => Err(control::approval(scope, message, *timeout_ms)),
+        NodeSpec::McpTool {
+            server_id,
+            tool,
+            arguments,
+            timeout_ms,
+        } => {
+            let request = mcp::McpSpec {
+                server_id,
+                tool,
+                arguments,
+                timeout_ms: *timeout_ms,
+            };
+            mcp::run(scope, request).await.map(out)
+        }
     }
 }
 

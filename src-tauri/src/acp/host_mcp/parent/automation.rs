@@ -15,6 +15,7 @@ use crate::acp::host_mcp::automation_tools::{
 };
 use crate::acp::host_mcp::FrameReply;
 use crate::acp::session_persistence::UNASSIGNED_PROJECT_ID;
+use crate::automation::mcp::ServerTools;
 use crate::automation::model::{AutomationId, Op, Trigger};
 use crate::automation::service::{AutomationDetail, AutomationService, ServiceError};
 
@@ -116,8 +117,18 @@ impl HostPlanServer {
             .reply();
         };
         let input = input.unwrap_or(Value::Null);
-        let answered =
-            tokio::task::spawn_blocking(move || answer(&service, &caller, tool, input)).await;
+        // Listing servers is network I/O, so it happens here and not on the
+        // blocking answer.
+        let mcp_servers = match tool {
+            AutomationTool::Capabilities => {
+                service.engine().mcp().refresh(&caller.project_id).await
+            }
+            _ => Vec::new(),
+        };
+        let answered = tokio::task::spawn_blocking(move || {
+            answer(&service, &caller, tool, input, mcp_servers)
+        })
+        .await;
         match answered {
             Ok(Ok(result)) => FrameReply::ok_with(result),
             Ok(Err(refusal)) => {
@@ -170,11 +181,14 @@ impl HostPlanServer {
     }
 }
 
+/// `mcp_servers` is the fresh listing for `automation_capabilities`, empty
+/// for every other tool.
 fn answer(
     service: &AutomationService,
     caller: &Caller,
     tool: AutomationTool,
     input: Value,
+    mcp_servers: Vec<ServerTools>,
 ) -> Result<Value, Refusal> {
     let project = caller.project_id.as_str();
     let session = caller.session.as_str();
@@ -191,14 +205,16 @@ fn answer(
                 .filter(|id| agents.iter().any(|agent| &agent.agent_id == *id));
             let secret_names = service.list_secret_names(project)?;
             log::info!(
-                "[host-mcp] automation_capabilities for session {session}: {} agent(s), {} secret name(s)",
+                "[host-mcp] automation_capabilities for session {session}: {} agent(s), {} secret name(s), {} MCP server(s)",
                 agents.len(),
-                secret_names.len()
+                secret_names.len(),
+                mcp_servers.len()
             );
             Ok(json!({
                 "agents": agents,
                 "secret_names": secret_names,
                 "calling_agent_id": calling_agent_id,
+                "mcp_servers": mcp_servers,
             }))
         }
         AutomationTool::List => {

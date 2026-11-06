@@ -165,7 +165,6 @@ import {
   initAcpEventListeners,
   useAcpStore
 } from '@/stores/acp-store'
-import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { agentReuseKey } from '../acp-reuse-keys'
 import { selectAgentIdentity } from './helpers'
 import { FRESH, flushTurnEnd, seedSession } from './testkit'
@@ -839,38 +838,6 @@ describe('acp-store', () => {
         questionId: 'q-1'
       })
       expect(Object.keys(useAcpStore.getState().pendingQuestions)).toEqual(['q-2'])
-    } finally {
-      teardown()
-    }
-  })
-
-  it('notes a live turn end at the log epoch of the session cursor (cross-surface unread)', async () => {
-    const listeners = new Map<string, (payload: unknown, eventSeq?: number) => void>()
-    _setAcpTransportForTests({
-      onEvent: vi.fn((name: string, cb: (payload: unknown, eventSeq?: number) => void) => {
-        listeners.set(name, cb)
-        return () => {}
-      }),
-      getSessionCursor: (sessionId: string) =>
-        sessionId === 's1' ? { lastSeq: 7, logEpoch: 'epoch-live' } : null,
-      setReconnectListener: vi.fn(),
-      setRecoveryHandler: vi.fn(),
-      setReconnectPriorityProvider: vi.fn(),
-      dispose: vi.fn()
-    } as unknown as AcpTransport)
-    useAgentChatUnreadStore.setState({ seenTurnEnd: {} })
-    seedSession('s1', 'agent-1')
-    const teardown = initAcpEventListeners()
-    try {
-      listeners.get('acp:prompt_complete')?.(
-        { agentId: 'agent-1', sessionId: 's1', stopReason: 'end_turn' },
-        7
-      )
-      await flushTurnEnd()
-
-      expect(useAgentChatUnreadStore.getState().seenTurnEnd).toEqual({
-        s1: { logEpoch: 'epoch-live', seq: 7 }
-      })
     } finally {
       teardown()
     }

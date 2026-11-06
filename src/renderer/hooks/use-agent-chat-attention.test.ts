@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { resetChatActivity, seedChatActivity } from '@/lib/test-utils/chat-activity'
 import {
   _addEphemeralSessionIdForTesting,
   _resetEphemeralSessionIdsForTesting,
@@ -10,27 +11,11 @@ import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useAgentChatProjectSignals } from './use-agent-chat-attention'
 
-function addElicitation(sessionId: string): void {
-  act(() => {
-    useAcpStore.setState({
-      pendingElicitations: {
-        [`e-${sessionId}`]: {
-          requestId: `e-${sessionId}`,
-          agentId: 'agent-1',
-          sessionId,
-          mode: 'form',
-          message: 'Pick a branch',
-          fields: []
-        }
-      }
-    })
-  })
-}
-
 describe('useAgentChatProjectSignals', () => {
   beforeEach(() => {
     useAcpStore.setState(FRESH)
     _resetEphemeralSessionIdsForTesting()
+    resetChatActivity()
     useAgentChatLifetimeStore.setState({ retainedByProject: {} })
     useAcpStore.setState({ agentStatus: { 'agent-1': 'connected' } })
   })
@@ -43,58 +28,95 @@ describe('useAgentChatProjectSignals', () => {
 
     expect(result.current.attentionCounts).toEqual({})
     expect(result.current.firstNeedsYouSessionId).toEqual({})
+    expect([...result.current.workingProjectIds]).toEqual([])
   })
 
-  it('counts a chat with a pending elicitation for the pill, status bar and sidebar', () => {
+  it('counts a chat this surface never opened under the project the host names', () => {
+    seedChatActivity({ elsewhere: { needsYou: true, projectId: 'p1' } })
+
+    const { result } = renderHook(() => useAgentChatProjectSignals())
+
+    expect(result.current.attentionCounts).toEqual({ p1: 1 })
+    expect(result.current.firstNeedsYouSessionId).toEqual({ p1: 'elsewhere' })
+    expect([...result.current.needsYouChats]).toEqual([['elsewhere', 'p1']])
+  })
+
+  it('marks a project working while the host has a turn open in a chat this surface never opened', () => {
+    seedChatActivity({ elsewhere: { busy: true, projectId: 'p2' } })
+
+    const { result } = renderHook(() => useAgentChatProjectSignals())
+
+    expect([...result.current.workingProjectIds]).toEqual(['p2'])
+    expect(result.current.attentionCounts).toEqual({})
+  })
+
+  it("marks an open chat's project working from this surface's own turn before the host echoes it", () => {
+    seedOptionsSession('s1', 'agent-1', { projectId: 'p1' })
+    useAgentChatLifetimeStore.setState({ retainedByProject: { p1: ['s1'] } })
+    act(() => {
+      useAcpStore.setState((state) => ({
+        sessions: { ...state.sessions, s1: { ...state.sessions.s1, openTurnId: 'turn-1' } }
+      }))
+    })
+
+    const { result } = renderHook(() => useAgentChatProjectSignals())
+
+    expect([...result.current.workingProjectIds]).toEqual(['p1'])
+  })
+
+  it("counts an opened chat's pending prompt once, from the host, in tab order first", () => {
     seedOptionsSession('s1', 'agent-1', { projectId: 'p1' })
     useAgentChatLifetimeStore.setState({ retainedByProject: { p1: ['s1'] } })
     const { result } = renderHook(() => useAgentChatProjectSignals())
     expect(result.current.attentionCounts.p1).toBeUndefined()
 
-    addElicitation('s1')
+    act(() => {
+      seedChatActivity({
+        a: { needsYou: true, projectId: 'p1' },
+        s1: { needsYou: true, projectId: 'p1' }
+      })
+    })
+
+    expect(result.current.attentionCounts).toEqual({ p1: 2 })
+    expect(result.current.firstNeedsYouSessionId).toEqual({ p1: 's1' })
+
+    act(() => {
+      seedChatActivity({ a: { needsYou: true, projectId: 'p1' } })
+    })
 
     expect(result.current.attentionCounts).toEqual({ p1: 1 })
-    expect(result.current.firstNeedsYouSessionId).toEqual({ p1: 's1' })
+    expect(result.current.firstNeedsYouSessionId).toEqual({ p1: 'a' })
   })
 
-  it('does not count an elicitation on a chat of another project in this project', () => {
+  it("falls back to this surface's session for the project of a record that names none", () => {
     seedOptionsSession('s1', 'agent-1', { projectId: 'p1' })
-    seedOptionsSession('s2', 'agent-1', { projectId: 'p2' })
-    useAgentChatLifetimeStore.setState({ retainedByProject: { p1: ['s1'], p2: ['s2'] } })
-    addElicitation('s2')
+    seedChatActivity({ s1: { needsYou: true, busy: true, projectId: null } })
 
     const { result } = renderHook(() => useAgentChatProjectSignals())
 
-    expect(result.current.attentionCounts.p1).toBeUndefined()
-    expect(result.current.attentionCounts.p2).toBe(1)
-    expect(result.current.firstNeedsYouSessionId.p1).toBeUndefined()
-    expect(result.current.firstNeedsYouSessionId.p2).toBe('s2')
+    expect(result.current.attentionCounts).toEqual({ p1: 1 })
+    expect([...result.current.workingProjectIds]).toEqual(['p1'])
   })
 
-  it('ignores an elicitation on an ephemeral warm-up session', () => {
+  it('ignores a record with no project and no session to name one', () => {
+    seedChatActivity({ unknown: { needsYou: true, busy: true, projectId: null } })
+
+    const { result } = renderHook(() => useAgentChatProjectSignals())
+
+    expect(result.current.attentionCounts).toEqual({})
+    expect([...result.current.workingProjectIds]).toEqual([])
+  })
+
+  it('ignores an ephemeral warm-up session', () => {
     seedOptionsSession('s1', 'agent-1', { projectId: 'p1' })
     _addEphemeralSessionIdForTesting('s1')
     useAgentChatLifetimeStore.setState({ retainedByProject: { p1: ['s1'] } })
-    addElicitation('s1')
+    seedChatActivity({ s1: { needsYou: true, busy: true, projectId: 'p1' } })
 
     const { result } = renderHook(() => useAgentChatProjectSignals())
 
     expect(result.current.attentionCounts).toEqual({})
-    expect(result.current.firstNeedsYouSessionId).toEqual({})
-  })
-
-  it('drops the count when the elicitation is answered', () => {
-    seedOptionsSession('s1', 'agent-1', { projectId: 'p1' })
-    useAgentChatLifetimeStore.setState({ retainedByProject: { p1: ['s1'] } })
-    addElicitation('s1')
-    const { result } = renderHook(() => useAgentChatProjectSignals())
-    expect(result.current.attentionCounts).toEqual({ p1: 1 })
-
-    act(() => {
-      useAcpStore.setState({ pendingElicitations: {} })
-    })
-
-    expect(result.current.attentionCounts).toEqual({})
+    expect([...result.current.workingProjectIds]).toEqual([])
   })
 
   it('counts a closed chat only when it cannot resume by itself', () => {
@@ -110,5 +132,16 @@ describe('useAgentChatProjectSignals', () => {
 
     expect(result.current.attentionCounts).toEqual({ p1: 1 })
     expect(result.current.firstNeedsYouSessionId).toEqual({ p1: 'failed' })
+  })
+
+  it('counts a chat whose agent disconnected once, even when the host also holds its prompt', () => {
+    seedOptionsSession('s1', 'agent-1', { projectId: 'p1' })
+    useAgentChatLifetimeStore.setState({ retainedByProject: { p1: ['s1'] } })
+    useAcpStore.setState({ agentStatus: { 'agent-1': 'disconnected' } })
+    seedChatActivity({ s1: { needsYou: true, projectId: 'p1' } })
+
+    const { result } = renderHook(() => useAgentChatProjectSignals())
+
+    expect(result.current.attentionCounts).toEqual({ p1: 1 })
   })
 })

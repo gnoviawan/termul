@@ -16,7 +16,7 @@ import {
   readComposerOptions,
   savedModelValues
 } from '@/stores/acp-store/composer-options'
-import { waitForTurnClear } from '@/stores/prompt-queue-orchestration'
+import { sessionTurnBusy, waitForTurnClear } from '@/stores/prompt-queue-orchestration'
 import { runningBackgroundSubagents } from '../subagent-strip'
 
 const EMPTY_CONFIGS: readonly StoredAgentConfig[] = []
@@ -68,8 +68,9 @@ export async function armModelPick(
 }
 
 /**
- * The current agent config of a chat: the live reuse-key map first, then the
- * session index (a restored chat before its agent reconnects).
+ * The current agent config of a chat: the live reuse-key map first, then a
+ * launch placeholder's config (before its agent spawns), then the session
+ * index (a restored chat before its agent reconnects).
  */
 export function useCurrentAgentConfigId(sessionId: string): string | null {
   return useAcpStore((s) => {
@@ -79,6 +80,7 @@ export function useCurrentAgentConfigId(sessionId: string): string | null {
         if (id === session.agentId) return key.split('\0')[0]
       }
     }
+    if (session?.launchConfigId) return session.launchConfigId
     return s.sessionIndex?.find((entry) => entry.id === sessionId)?.agentConfigId ?? null
   })
 }
@@ -103,7 +105,7 @@ export function useSwitchGate(sessionId: string): { blocked: boolean; turnBusy: 
   const blocked = useAcpStore((s) => {
     const session = s.sessions?.[sessionId]
     if (!session) return false
-    if (session.activeTurn || session.openTurnId || session.replaying) return true
+    if (sessionTurnBusy(session) || session.replaying) return true
     if (s.launchingSessionIds?.[sessionId]) return true
     if ((s.promptQueues?.[sessionId] ?? []).length > 0) return true
     if (Object.values(s.pendingPermissions ?? {}).some((p) => p.sessionId === sessionId)) {
@@ -115,7 +117,7 @@ export function useSwitchGate(sessionId: string): { blocked: boolean; turnBusy: 
   })
   const turnBusy = useAcpStore((s) => {
     const session = s.sessions?.[sessionId]
-    if (!session?.activeTurn && !session?.openTurnId) return false
+    if (!sessionTurnBusy(session)) return false
     if ((s.promptQueues?.[sessionId] ?? []).length > 0) return false
     if (Object.values(s.pendingPermissions ?? {}).some((p) => p.sessionId === sessionId)) {
       return false

@@ -56,7 +56,7 @@ The **Run policy** card shows what the automation will do once it is approved:
 
 - **Trigger**. The schedule, for example a cron expression with its time zone, an interval such as every 30 min, or one date and time. **Run manually** means it only runs when you click **Run now**.
 - **Next runs**. Up to the next three times it will run.
-- **Agents**. Each step that runs an AI agent, with the agent, its model and its time limit. **no tools** means the agent can only answer, not run tools.
+- **Agents**. Each step that runs an AI agent, with the agent, its model, its time limit and the tools it may use. **no tools** means the agent can only answer. When the agent asks to use a tool, Termul allows it only if the tool is on that list, and refuses all other tools. File tools work only inside the automation's folder, and never on `.git`, `.github`, `.claude`, editor settings or `.env` files. **run commands (full access)** lets the agent run any command-line tool installed on the machine and do anything you can do in a terminal, so approve it only when you trust the step. An agent that reads web content, or the output of an agent that can reach the web, cannot run commands, fetch from the network, use MCP and other tools, or edit files. An agent that can fetch from the network or use MCP and other tools cannot also read or edit files. Claude agent steps run without your Claude settings files, so rules you saved with "don't ask again" do not apply to them. Settings such as a proxy address or an API key helper in your Claude settings file do not apply either.
 - **Secrets**. The secrets each step uses. See [Secrets](#secrets).
 - **Outbound hosts**. The web addresses each step may send requests to. A step cannot reach any other host.
 - **On failure**. How long Termul waits before the next run after failures in a row. The wait grows from 30 seconds up to 1 hour.
@@ -67,7 +67,18 @@ If the automation has problems, they are listed above the card under a heading s
 
 When everything looks right, click **Approve and arm**. The automation turns **Armed** and runs on its schedule. If the automation is switched off, the button says **Approve** instead: approving does not turn it on, so it stays **Disabled** until you turn on **Enabled**.
 
-Below the card, **Diagram** shows the automation's steps and how they connect. A step can make a web request (HTTP), run an AI agent (Agent), reshape data (Transform), choose a path (Condition), stop the run with an error (Fail) or wait for you to approve or reject (Approval). See [Approve a waiting run](#approve-a-waiting-run).
+Below the card, **Diagram** shows the automation's steps and how they connect. A step can:
+
+- make a web request (HTTP);
+- run an AI agent (Agent);
+- call a tool on one of the project's [MCP servers](/docs/agent-setup/mcp-servers) directly, with no AI agent (MCP tool). The **Run policy** card lists each tool call with the server's name, so you can check it before you approve. If the tool asks for your input, or the server needs you to sign in, the step fails;
+- reshape data (Transform);
+- choose a path (Condition);
+- repeat its steps once for each item in a list, up to 100 items (For each). A longer list fails the step;
+- join two paths into one (Merge);
+- pause the run for a set time, up to 7 days (Wait). The run picks up on time, even after Termul or the machine restarts;
+- stop the run with an error (Fail);
+- wait for you to approve or reject (Approval). See [Approve a waiting run](#approve-a-waiting-run).
 
 ## Run, pause or delete an automation
 
@@ -81,7 +92,7 @@ If the machine was off or Termul was closed when a run was due, Termul runs the 
 
 The **Runs** list shows each run with its status, start time and duration. A run in progress is listed first, then the others, newest first. A run is **Running**, **Waiting for approval**, **Succeeded**, **Failed**, **Cancelled** or **Skipped**. Click a run to open it.
 
-The run shows how it was started (**Scheduled**, **Catch-up** or **Manual**), when it started, how long it took and which revision ran. Below that is each step in order with its status. A step that did not run shows **Not reached**. If a step failed, its error is shown under it. Click **Output** to see what a step produced.
+The run shows how it was started (**Scheduled**, **Catch-up** or **Manual**), when it started, how long it took and which revision ran. Below that is each step in order with its status. A step that did not run shows **Not reached**. Steps inside a **For each** are grouped by item. A paused **Wait** step shows **Waiting until** and the time it resumes. If a step failed, its error is shown under it. Click **Output** to see what a step produced.
 
 While a run is in progress or waiting for approval, click **Cancel run** to stop it. To go back, click **Back to automation**. On a phone, tap **Automation** at the top.
 

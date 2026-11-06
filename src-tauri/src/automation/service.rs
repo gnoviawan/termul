@@ -13,9 +13,10 @@ use tokio::sync::broadcast;
 use super::agents::{self, AgentRegistry, KnownAgent};
 use super::engine::{Engine, EngineDeps, HttpConfig, ProjectRoots, SystemClock};
 use super::graph::{self, OpError};
+use super::mcp::{Lookup, McpFailure, McpServerEntry, ProjectMcpServers, RmcpClient, ToolSchema};
 use super::model::{
-    ApplyOpsResult, Automation, AutomationChanged, AutomationId, Issue, IssueCode, NodeId,
-    NodeKind, NodeSpec, Op, Run, RunId, RunPolicy, RunTrigger, Schedule, Step,
+    ApplyOpsResult, Automation, AutomationChanged, AutomationId, Issue, IssueCode, NamedTemplate,
+    NodeId, NodeKind, NodeSpec, Op, Run, RunId, RunPolicy, RunTrigger, Schedule, Step,
 };
 use super::policy;
 use super::schedule;
@@ -144,11 +145,13 @@ impl AutomationService {
 
     /// The production wiring: `automations.sqlite` and the known-agents file
     /// in `data_dir`, secrets in the OS keychain or, without one, the file
-    /// vault in `data_dir`, suggestions from the chats `acp` persists.
+    /// vault in `data_dir`, suggestions from the chats `acp` persists, and
+    /// `mcp_tool` nodes calling the servers `mcp_servers` lists over rmcp.
     pub fn open(
         data_dir: &Path,
         acp: Arc<AcpManager>,
         project_roots: ProjectRoots,
+        mcp_servers: ProjectMcpServers,
     ) -> Result<Self, String> {
         let store = Arc::new(
             AutomationStore::open(&data_dir.join(DB_FILE_NAME))
@@ -166,6 +169,8 @@ impl AutomationService {
             project_roots,
             clock: Arc::new(SystemClock),
             http: HttpConfig::default(),
+            mcp_servers,
+            mcp_client: Arc::new(RmcpClient),
         })?;
         Ok(Self::new(engine, history))
     }
@@ -184,9 +189,10 @@ impl AutomationService {
 
     pub fn get(&self, id: &AutomationId) -> ServiceResult<AutomationDetail> {
         let automation = self.load(id)?;
+        let servers = self.mcp_servers(&automation);
         Ok(AutomationDetail {
-            issues: self.issues(&automation),
-            policy: policy::run_policy(&automation, self.engine.now_ms()),
+            issues: self.issues_with(&automation, &servers),
+            policy: self.policy_with(&automation, &servers),
             automation,
         })
     }
@@ -397,7 +403,32 @@ impl AutomationService {
     }
 
     pub fn policy(&self, id: &AutomationId) -> ServiceResult<RunPolicy> {
-        Ok(policy::run_policy(&self.load(id)?, self.engine.now_ms()))
+        let automation = self.load(id)?;
+        Ok(self.policy_with(&automation, &self.mcp_servers(&automation)))
+    }
+
+    fn policy_with(&self, automation: &Automation, servers: &[McpServerEntry]) -> RunPolicy {
+        let server_name = |id: &str| {
+            servers
+                .iter()
+                .find(|s| s.server_id == id)
+                .map(|s| s.name.clone())
+        };
+        policy::run_policy(automation, self.engine.now_ms(), &server_name)
+    }
+
+    /// The project's MCP servers, read only when a node calls one.
+    fn mcp_servers(&self, automation: &Automation) -> Vec<McpServerEntry> {
+        let calls_mcp = automation
+            .graph
+            .nodes
+            .iter()
+            .any(|n| matches!(n.spec, NodeSpec::McpTool { .. }));
+        if calls_mcp {
+            self.engine.mcp().servers(&automation.project_id)
+        } else {
+            Vec::new()
+        }
     }
 
     pub fn list_agents(&self) -> Vec<KnownAgent> {
@@ -522,9 +553,14 @@ impl AutomationService {
             .ok_or_else(|| ServiceError::NotFound(id.to_string()))
     }
 
-    /// The pure validator's issues plus agent nodes naming an agent this host
-    /// has never spawned.
     fn issues(&self, automation: &Automation) -> Vec<Issue> {
+        self.issues_with(automation, &self.mcp_servers(automation))
+    }
+
+    /// The pure validator's issues, agent nodes naming an agent this host
+    /// has never spawned, and `mcp_tool` nodes checked against the live
+    /// `tools/list` of `servers`. Never waits on a server.
+    fn issues_with(&self, automation: &Automation, servers: &[McpServerEntry]) -> Vec<Issue> {
         let mut issues = graph::validate(automation);
         let agents = self.engine.agents();
         issues.extend(
@@ -543,6 +579,19 @@ impl AutomationService {
                     _ => None,
                 }),
         );
+        let mcp = self.engine.mcp();
+        for node in &automation.graph.nodes {
+            if let NodeSpec::McpTool {
+                server_id,
+                tool,
+                arguments,
+                ..
+            } = &node.spec
+            {
+                let lookup = mcp.lookup(&automation.project_id, servers, server_id);
+                issues.extend(mcp_issues(&node.id, server_id, tool, arguments, lookup));
+            }
+        }
         issues
     }
 
@@ -550,6 +599,92 @@ impl AutomationService {
         self.engine
             .notify(&automation.project_id, Some(&automation.id));
     }
+}
+
+fn mcp_issues(
+    node_id: &NodeId,
+    server_id: &str,
+    tool: &str,
+    arguments: &[NamedTemplate],
+    lookup: Lookup,
+) -> Vec<Issue> {
+    let issue = |code, message: String| Issue {
+        node_id: Some(node_id.clone()),
+        code,
+        message,
+    };
+    let tools = match lookup {
+        Lookup::UnknownServer => {
+            return vec![issue(
+                IssueCode::UnknownMcpServer,
+                format!(
+                    "{server_id:?} is not an enabled MCP server of this project; pick a server_id from automation_capabilities"
+                ),
+            )]
+        }
+        Lookup::Pending => {
+            return vec![issue(
+                IssueCode::McpToolsPending,
+                format!("the tools of MCP server {server_id:?} are still being checked; read the automation again in a moment"),
+            )]
+        }
+        Lookup::Failed(McpFailure::AuthRequired) => {
+            return vec![issue(
+                IssueCode::McpServerUnavailable,
+                format!("MCP server {server_id:?} needs a sign-in; sign in to it in the MCP settings"),
+            )]
+        }
+        Lookup::Failed(failure) => {
+            let reason = match failure {
+                McpFailure::Unavailable(reason) => reason,
+                McpFailure::AuthRequired | McpFailure::UnknownTool => "no tool list".to_string(),
+            };
+            return vec![issue(
+                IssueCode::McpServerUnavailable,
+                format!("MCP server {server_id:?} did not list its tools: {reason}"),
+            )];
+        }
+        Lookup::Ready(tools) => tools,
+    };
+    let Some(schema) = tools.iter().find(|t| t.name == tool) else {
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        return vec![issue(
+            IssueCode::UnknownMcpTool,
+            format!(
+                "MCP server {server_id:?} has no tool {tool:?}; it has: {}",
+                names.join(", ")
+            ),
+        )];
+    };
+    argument_issues(schema, arguments)
+        .into_iter()
+        .map(|message| issue(IssueCode::InvalidMcpArguments, message))
+        .collect()
+}
+
+/// A `required` input property with no argument, and an argument the
+/// schema does not declare while it sets `additionalProperties: false`.
+fn argument_issues(tool: &ToolSchema, arguments: &[NamedTemplate]) -> Vec<String> {
+    let given = |name: &str| arguments.iter().any(|a| a.name == name);
+    let schema = &tool.input_schema;
+    let mut problems: Vec<String> = schema["required"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|name| name.as_str())
+        .filter(|name| !given(name))
+        .map(|name| format!("tool {} requires argument {name}", tool.name))
+        .collect();
+    if schema["additionalProperties"] == serde_json::Value::Bool(false) {
+        let properties = schema["properties"].as_object();
+        problems.extend(
+            arguments
+                .iter()
+                .filter(|a| properties.is_none_or(|p| !p.contains_key(&a.name)))
+                .map(|a| format!("tool {} takes no argument {}", tool.name, a.name)),
+        );
+    }
+    problems
 }
 
 fn suggestion_key<'a>(

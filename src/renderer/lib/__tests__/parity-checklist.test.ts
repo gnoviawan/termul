@@ -2090,21 +2090,19 @@ describe('Shared chat read marker parity (cross-surface unread)', () => {
     'utf-8'
   )
 
-  it('one host service owns the marker and the relay serves it to every carrier', () => {
+  it('one host service owns the marker and every carrier moves it', () => {
     const service = readFileSync(join(SRC_TAURI, 'web', 'chat_reads.rs'), 'utf-8')
     expect(service).toMatch(
       /pub fn mark\(\s*&self,\s*session_id: &str,\s*head: &LogHead,\s*log_epoch: Option<&str>,\s*seq: u64,?\s*\)/
     )
     const dispatch = readFileSync(join(SRC_TAURI, 'web', 'ws', 'dispatch.rs'), 'utf-8')
     expect(dispatch).toMatch(/"mark_chat_read" => handle_mark_chat_read/)
-    const sources = readFileSync(join(SRC_TAURI, 'web', 'watch', 'sources.rs'), 'utf-8')
-    expect(sources).toMatch(/WatchKind::ChatReads/)
   })
 
-  it('the protocol declares the request, its class and the watch payloads', () => {
+  it('the protocol declares the request and its class, and no chat_reads watch', () => {
     expect(protocol).toMatch(/'mark_chat_read',/)
     expect(protocol).toMatch(/mark_chat_read: \['idempotent', null\]/)
-    expect(protocol).toMatch(/interface ChatReadsWatchState/)
+    expect(protocol).not.toMatch(/'chat_reads'/)
   })
 
   it('the transport facade and the shell tracker carry it on both renderer roots', () => {
@@ -2114,10 +2112,65 @@ describe('Shared chat read marker parity (cross-surface unread)', () => {
     )
     expect(transport).toMatch(/'mark_chat_read'/)
     const shell = readFileSync(join(LIB_DIR, '..', 'hooks', 'use-shell-unread-tracker.ts'), 'utf-8')
-    expect(shell).toMatch(/startChatReadSync\(\)/)
     expect(shell).toMatch(/useChatReadMarker\(activeSessionIds\)/)
     const layout = readFileSync(join(LIB_DIR, '..', 'layouts', 'WorkspaceLayout.tsx'), 'utf-8')
     expect(layout).toMatch(/useShellUnreadTracker\(\)/)
+  })
+})
+
+describe('Host-owned chat activity parity (chat list status on every surface)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const rust = (...parts: string[]) => readFileSync(join(SRC_TAURI, ...parts), 'utf-8')
+  const protocol = readFileSync(
+    join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts'),
+    'utf-8'
+  )
+
+  it('the relay derives one record per chat from every numbered session event', () => {
+    expect(rust('web', 'chat_activity.rs')).toMatch(/pub struct ChatActivity \{/)
+    expect(rust('web', 'sink', 'session_log.rs')).toMatch(
+      /self\.observe_activity\(sid, type_, &event\.payload, event\.seq\)/
+    )
+    expect(rust('web', 'sink', 'fanout.rs')).toMatch(/self\.end_agent_activity\(agent_id\)/)
+    expect(rust('web', 'ws', 'chat_reads.rs')).toMatch(/relay\.refresh_chat_activity\(/)
+    expect(
+      rust('web', 'ws', 'dispatch.rs').match(/relay\.refresh_pending_chat_activity\(\)/g)
+    ).toHaveLength(3)
+  })
+
+  it('one watch serves it to the /ws socket and the desktop Channel alike', () => {
+    expect(rust('web', 'watch', 'hub.rs')).toMatch(/Self::ChatActivity => "chat_activity"/)
+    expect(rust('web', 'ws', 'watch.rs')).toMatch(
+      /WatchKind::ChatActivity => chat_activity_state\(relay\)/
+    )
+    expect(rust('web', 'ws', 'harness', 'chat_activity_tests.rs')).toMatch(
+      /on_both_carriers!\(an_unsubscribed_watcher_follows_the_turn\)/
+    )
+  })
+
+  it('the protocol declares the watch and its payloads', () => {
+    expect(protocol).toMatch(/'chat_activity'\n\] as const/)
+    expect(protocol).toMatch(/interface ChatActivityRecord \{/)
+    expect(protocol).toMatch(/interface ChatActivityWatchState/)
+  })
+
+  it('both renderer roots mirror it from the shell, and every chat list reads it', () => {
+    const shell = readFileSync(join(LIB_DIR, '..', 'hooks', 'use-shell-unread-tracker.ts'), 'utf-8')
+    expect(shell).toMatch(/startChatActivitySync\(\)/)
+    const signals = readFileSync(
+      join(LIB_DIR, '..', 'components', 'workspace', 'tabs', 'agent-chat-status.tsx'),
+      'utf-8'
+    )
+    expect(signals).toMatch(/useChatActivityStore\(/)
+    for (const consumer of [
+      ['components', 'shell', 'ChatCard.tsx'],
+      ['components', 'mobile', 'MobileRecentsList.tsx'],
+      ['components', 'workspace', 'tabs', 'agent-chat-tab.tsx']
+    ]) {
+      expect(readFileSync(join(LIB_DIR, '..', ...consumer), 'utf-8')).toMatch(
+        /useAgentChatStatusSignals\(/
+      )
+    }
   })
 })
 

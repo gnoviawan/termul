@@ -167,7 +167,8 @@ export function ChatStatusPill({
       title: 'Changed files',
       icon: <FileDiff size={13} className="shrink-0" aria-hidden="true" />,
       count: fileCount,
-      caption: changes.source === 'git' ? 'Uncommitted in this checkout' : 'Edited this session',
+      caption:
+        changes.source === 'git' ? 'Edited this session, uncommitted' : 'Edited this session',
       meta: (
         <>
           {totals}

@@ -53,6 +53,16 @@ If you already have the agent on your computer, click **Custom path** instead of
 
 Some agents ask you to sign in the first time you use them. The chat shows the sign-in choices the agent offers. For Claude, see [Claude accounts](/docs/agent-setup/claude-accounts).
 
+### Sign in to an agent
+
+The sign-in choices depend on the agent:
+
+- **A sign-in that runs in a terminal.** Termul opens a login terminal. Follow the steps there. When the terminal ends without an error, Termul finishes the sign-in and loads the agent's models, even if you already closed the model menu.
+- **An API key.** Some agents, such as Codex and Gemini CLI, take a key. Type it in the key field and submit it. Termul passes the key to the agent once and does not save it. If the key is already set on the computer that runs the agent, submit the field empty.
+- **A device code.** Codex can sign in to ChatGPT with a code, which works on a server without a browser, for example from a phone. Termul shows the code large, with **Copy code**, **Copy link** and **Open sign-in page**. Open the page, enter the code there, and finish the sign-in. Click **Cancel sign-in** to stop.
+
+You can also sign in to another agent from a chat. Open the model menu and pick the agent's tab. If the agent is signed out, the tab lists its sign-in choices under the error. After you sign in, the tab shows the agent's models, so you can pick one without leaving the chat. On a phone, see [Pick a model](/docs/remote/phone#pick-a-model).
+
 ## Point Termul at an agent you installed
 
 Agents marked **Manual install** must come from the vendor. The agent's row in Settings shows the command Termul expects, after **Expected:**.

@@ -764,19 +764,80 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
     useGitStatusStore.setState({ errors: {} })
   })
 
-  it('lists the uncommitted files of the checkout with their git line counts', async () => {
+  it('lists only the uncommitted files this session edited, with their git line counts', async () => {
     setGit([
       ['src/a.ts', 'modified', 3, 1],
-      ['src/new.ts', 'untracked', 5, 0]
+      ['src/new.ts', 'untracked', 5, 0],
+      ['src/other.ts', 'modified', 7, 2]
     ])
-    // The agent edited only a.ts; git also reports an untracked file.
-    render(panel([edit('e1', 'src/a.ts')]))
-    expect(await screen.findByText('2')).toBeInTheDocument()
-    expect(screen.getByText('+8')).toBeInTheDocument()
+    // The session edited a.ts and new.ts; other.ts is dirty from outside the session.
+    render(panel([edit('e1', 'src/a.ts'), edit('e2', '/work/src/new.ts')]))
+    expect(await screen.findByText('+8')).toBeInTheDocument()
+    expect(pill()).toHaveAccessibleName('Session status: 2 changed files')
     expect(screen.getByText('−1')).toBeInTheDocument()
     fireEvent.click(pill())
     const row = await screen.findByRole('button', { name: '/work/src/new.ts, Untracked' })
     expect(row).toHaveTextContent('+5')
+    expect(screen.queryByRole('button', { name: '/work/src/other.ts, Modified' })).toBeNull()
+  })
+
+  it('hides when the checkout has changes but this session edited none of them', async () => {
+    setGit([['src/other.ts', 'modified', 7, 2]])
+    render(panel([edit('e1', 'src/a.ts')]))
+    await waitFor(() => expect(gitApiMock.getDiffStat).toHaveBeenCalledWith('/work'))
+    await act(async () => {})
+    noPill()
+  })
+
+  it('leaves out a dirty file whose only session edit failed', async () => {
+    setGit([['src/other.ts', 'modified', 7, 2]])
+    render(panel([makeToolCall({ toolCallId: 'e1', path: 'src/other.ts', status: 'failed' })]))
+    await waitFor(() => expect(gitApiMock.getDiffStat).toHaveBeenCalledWith('/work'))
+    await act(async () => {})
+    noPill()
+  })
+
+  it('lists both ends of a moved file', async () => {
+    setGit([
+      ['src/old.ts', 'deleted', 0, 3],
+      ['src/new.ts', 'untracked', 3, 0]
+    ])
+    render(
+      panel([
+        makeToolCall({
+          toolCallId: 'm1',
+          kind: 'move',
+          content: [],
+          rawInput: {},
+          locations: [{ path: 'src/old.ts' }, { path: 'src/new.ts' }]
+        })
+      ])
+    )
+    expect(await screen.findByText('+3')).toBeInTheDocument()
+    expect(pill()).toHaveAccessibleName('Session status: 2 changed files')
+  })
+
+  it('lists every file of a multi-file edit call that has no locations', async () => {
+    setGit([
+      ['src/a.ts', 'modified', 1, 1],
+      ['src/b.ts', 'modified', 2, 0],
+      ['src/c.ts', 'untracked', 4, 0]
+    ])
+    render(
+      panel([
+        makeToolCall({
+          toolCallId: 'multi',
+          rawInput: {},
+          content: [
+            { type: 'diff', path: 'src/a.ts', oldText: 'a', newText: 'A' },
+            { type: 'diff', path: 'src/b.ts', oldText: 'b', newText: 'b\nB\nC' },
+            { type: 'diff', path: 'src/c.ts', oldText: null, newText: 'c' }
+          ]
+        })
+      ])
+    )
+    expect(await screen.findByText('+7')).toBeInTheDocument()
+    expect(pill()).toHaveAccessibleName('Session status: 3 changed files')
   })
 
   it('drops files that the agent committed', async () => {
@@ -860,7 +921,7 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
       removed: 0,
       files: [{ path: 'src/a.ts', added: 7, removed: 0 }]
     })
-    render(panel([]))
+    render(panel([edit('e1', 'src/a.ts')]))
     expect(await screen.findByText('1')).toBeInTheDocument()
     fireEvent.click(pill())
     expect(await screen.findByRole('button', { name: '/work/src/a.ts, Added' })).toBeInTheDocument()
@@ -868,7 +929,7 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
 
   it('shows a file deleted in git as a deleted row that does not open', async () => {
     setGit([['src/gone.ts', 'deleted', 0, 9]])
-    render(panel([]))
+    render(panel([makeToolCall({ toolCallId: 'd1', kind: 'delete', path: 'src/gone.ts' })]))
     fireEvent.click(await screen.findByRole('button', { name: /^Session status:/ }))
     expect(
       await screen.findByRole('group', { name: 'Deleted: /work/src/gone.ts' })
@@ -877,7 +938,7 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
 
   it('opens a git row in the editor', async () => {
     setGit([['src/a.ts', 'modified', 1, 0]])
-    render(panel([]))
+    render(panel([edit('e1', 'src/a.ts')]))
     fireEvent.click(await screen.findByRole('button', { name: /^Session status:/ }))
     fireEvent.click(await screen.findByRole('button', { name: '/work/src/a.ts, Modified' }))
     await waitFor(() => expect(openFileRef.current).toHaveBeenCalledWith('/work/src/a.ts'))
@@ -899,7 +960,15 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
       ],
       root: '/work'
     })
-    render(<Pill cwd="/work/sub" toolCalls={[]} />)
+    render(
+      <Pill
+        cwd="/work/sub"
+        toolCalls={[
+          makeToolCall({ toolCallId: 'e1', path: 'file.ts' }),
+          edit('e2', '/work/top.ts')
+        ]}
+      />
+    )
     fireEvent.click(await screen.findByRole('button', { name: /^Session status:/ }))
     expect(
       await screen.findByRole('button', { name: '/work/sub/file.ts, Modified' })
@@ -912,7 +981,7 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
       { path: 'src/a.ts', status: 'modified', staged: false }
     ])
     gitApiMock.getDiffStat.mockRejectedValue(new Error('diff stat timed out'))
-    render(panel([]))
+    render(panel([edit('e1', 'src/a.ts')]))
     fireEvent.click(await screen.findByRole('button', { name: /^Session status:/ }))
     expect(
       await screen.findByRole('button', { name: '/work/src/a.ts, Modified' })

@@ -150,6 +150,7 @@ pub(super) async fn run_command_loop(
                 worktree_branch,
                 additional_directories,
                 command_id,
+                tool_allowlist,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -164,8 +165,12 @@ pub(super) async fn run_command_loop(
                     let mut request = NewSessionRequest::new(cwd.clone())
                         .mcp_servers(mcp_servers)
                         .additional_directories(additional_directories);
-                    if profile.summarize_thinking {
-                        request = request.meta(summarized_thinking_meta());
+                    let mut meta = profile.summarize_thinking.then(summarized_thinking_meta);
+                    if let Some(allowlist) = &tool_allowlist {
+                        meta = Some(with_headless_options(meta.unwrap_or_default(), allowlist));
+                    }
+                    if let Some(meta) = meta {
+                        request = request.meta(meta);
                     }
                     let timeout = session_new_timeout();
                     log::debug!(
@@ -245,6 +250,9 @@ pub(super) async fn run_command_loop(
                                 state.set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
                                 if ephemeral {
                                     state.mark_ephemeral(session_id.0.clone());
+                                    if let Some(allowlist) = tool_allowlist {
+                                        state.set_tool_allowlist(session_id.0.clone(), allowlist);
+                                    }
                                     state.note_promotable_registration(
                                         session_id.0.clone(),
                                         registration,
@@ -677,6 +685,11 @@ pub(super) async fn run_command_loop(
                 driver_state
                     .lock()
                     .set_active_turn_id(&session_id.0, turn_id.clone());
+                // The prompt turn takes over from any work the agent did on
+                // its own in this session.
+                if driver_state.lock().unprompted().end(&session_id.0) {
+                    crate::acp::events::emit_agent_working(&sinks, &agent_id, &session_id.0, false);
+                }
                 // Sequence + fan out the carrier's `user_prompt` NOW — the
                 // driver has accepted the prompt and nothing of its turn has
                 // been emitted yet, so the record can never trail one of its
@@ -885,6 +898,10 @@ pub(super) async fn run_command_loop(
 
             AcpCommand::SessionIds { reply } => {
                 let _ = reply.send(Ok(driver_state.lock().active_session_ids()));
+            }
+
+            AcpCommand::WorkingSessionIds { reply } => {
+                let _ = reply.send(Ok(driver_state.lock().unprompted().session_ids()));
             }
 
             AcpCommand::SessionRoots { reply } => {
@@ -1124,6 +1141,24 @@ pub(super) async fn run_command_loop(
                     cancel_elicitation(elicitation);
                 }
                 let result = cx.send_notification(CancelNotification::new(&session_id));
+                // Stop with no prompt turn open ends the agent's own work at
+                // once instead of after the quiet period. An agent that keeps
+                // going reports working again with its next update. Clients
+                // hear the end even when no work is recorded here: each
+                // `agent_working` is emitted after the state lock is released,
+                // so a `true` can land after the `false` that ended its work,
+                // and Stop is how the user clears that.
+                let stopped_working = {
+                    let mut state = driver_state.lock();
+                    let no_turn = !state.is_turn_active(&session_id.0);
+                    if no_turn {
+                        state.unprompted().end(&session_id.0);
+                    }
+                    no_turn
+                };
+                if stopped_working {
+                    crate::acp::events::emit_agent_working(&sinks, &agent_id, &session_id.0, false);
+                }
                 let _ = reply.send(result.map_err(|e| e.to_string()));
             }
 
@@ -1485,17 +1520,30 @@ pub(super) async fn run_command_loop(
                 let req_cx = cx.clone();
                 let req_state = driver_state.clone();
                 let req_plan_server = host_plan_server.clone();
+                let req_sinks = sinks.clone();
+                let req_agent_id = agent_id.clone();
                 spawn_request(&cx, slot, async move {
                     let result = req_cx
                         .send_request(DeleteSessionRequest::new(&session_id))
                         .block_task()
                         .await;
                     if result.is_ok() {
-                        let pending = {
+                        let (pending, stopped_working) = {
                             let mut state = req_state.lock();
+                            // No `session_closed` follows a delete, so clients
+                            // hear the end of the agent's own work here.
+                            let stopped_working = state.unprompted().end(&session_id.0);
                             let (_ephemeral, pending) = state.begin_close_session(&session_id.0);
-                            pending
+                            (pending, stopped_working)
                         };
+                        if stopped_working {
+                            crate::acp::events::emit_agent_working(
+                                &req_sinks,
+                                &req_agent_id,
+                                &session_id.0,
+                                false,
+                            );
+                        }
                         for permission in pending {
                             let _ = permission.responder.respond(RequestPermissionResponse::new(
                                 RequestPermissionOutcome::Cancelled,

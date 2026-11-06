@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 const MOCK_AGENT: &str = r#"
-import json, os, subprocess, sys
+import json, os, subprocess, sys, time
 
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
@@ -66,6 +66,11 @@ for line in sys.stdin:
         if text == "ok":
             chunk("hello")
             send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": "end_turn"}})
+        elif text == "autonomous":
+            # Ends the turn, then keeps working with no prompt open.
+            send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": "end_turn"}})
+            time.sleep(0.3)
+            chunk("on my own")
         elif text == "rpcfail":
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32000, "message": "mock failure"}})
@@ -1176,6 +1181,88 @@ async fn a_reopen_of_a_session_the_agent_holds_never_reaches_the_agent() {
     );
     let error = unheld.expect_err("a session the agent does not hold still reopens on the agent");
     assert!(error.contains("reopen reached the agent"), "{error}");
+    h.finish().await;
+}
+
+/// The `working` value of every `agent_working` event in `log`, in order.
+fn working_events(log: &EventLog) -> Vec<bool> {
+    log.0
+        .lock()
+        .iter()
+        .filter(|(type_, _)| type_ == crate::acp::events::EVENT_AGENT_WORKING)
+        .map(|(_, payload)| payload["working"].as_bool().expect("working flag"))
+        .collect()
+}
+
+async fn wait_for_working_events(log: &EventLog, expected: &[bool]) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while working_events(log) != expected {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "agent_working events {:?}, want {expected:?}",
+            working_events(log)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// An agent that streams after its prompt turn ended works on its own (Claude
+/// Code after a background task finished). Every sink hears it, the agent
+/// listing names the session for clients that open it later, the idle reaper
+/// keeps the agent, and the next prompt turn takes over.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_after_a_turn_reports_the_agent_working_until_the_next_prompt() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let first = spawn_turn(&h, "autonomous", "t1").await;
+    tokio::time::timeout(RUN_TIMEOUT, first)
+        .await
+        .expect("the turn ends")
+        .expect("turn task")
+        .expect("turn ok");
+    for log in &h.logs {
+        wait_for_working_events(log, &[true]).await;
+    }
+    let summaries = h.acp.list_agent_summaries_with_ownership().await;
+    let summary = summaries
+        .iter()
+        .find(|summary| summary.id == h.agent_id)
+        .expect("the agent is listed");
+    assert_eq!(summary.working_sessions, vec![h.session_id.0.clone()]);
+    wait_for_activity(&h, |activity| activity.unprompted_sessions == 1).await;
+
+    let second = spawn_turn(&h, "ok", "t2").await;
+    let _ = tokio::time::timeout(RUN_TIMEOUT, second).await;
+    for log in &h.logs {
+        wait_for_working_events(log, &[true, false]).await;
+    }
+    h.finish().await;
+}
+
+/// Stop with no prompt turn open ends the agent's own work at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stop_without_a_turn_ends_the_agents_own_work() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let first = spawn_turn(&h, "autonomous", "t1").await;
+    tokio::time::timeout(RUN_TIMEOUT, first)
+        .await
+        .expect("the turn ends")
+        .expect("turn task")
+        .expect("turn ok");
+    wait_for_working_events(&h.logs[0], &[true]).await;
+
+    h.acp
+        .cancel_prompt(&h.agent_id, h.session_id.clone())
+        .await
+        .expect("cancel reaches the agent");
+
+    for log in &h.logs {
+        wait_for_working_events(log, &[true, false]).await;
+    }
+    wait_for_activity(&h, |activity| activity.unprompted_sessions == 0).await;
     h.finish().await;
 }
 

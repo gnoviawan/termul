@@ -194,6 +194,9 @@ pub const EVENT_LOCAL_TITLE_GENERATED: &str = "acp:local_title_generated";
 pub const EVENT_WORKTREE_BRANCH_RENAMED: &str = "acp:worktree_branch_renamed";
 /// Event name: the agent reported context window utilization (and optional cost).
 pub const EVENT_USAGE_UPDATE: &str = "acp:usage_update";
+/// The agent started or stopped working in a session outside a prompt turn
+/// (live only, never persisted: see `session::unprompted`).
+pub const EVENT_AGENT_WORKING: &str = "acp:agent_working";
 /// Event name: the agent tried to open a browser URL on a headless host and
 /// the POSIX browser shim captured it (spec-acp-terminal-auth). Agent-level
 /// (`sid = None`); the payload carries `{agentId, url}` so the renderer can
@@ -1059,6 +1062,36 @@ pub struct SessionClosedEvent {
     pub agent_id: AgentId,
     pub session_id: SessionId,
     pub reason: AgentExitReason,
+}
+
+/// Payload of [`EVENT_AGENT_WORKING`].
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentWorkingEvent {
+    pub agent_id: AgentId,
+    pub session_id: SessionId,
+    pub working: bool,
+}
+
+/// Tell every sink that `agent_id` started or stopped working in
+/// `session_id` outside a prompt turn.
+pub fn emit_agent_working(
+    sinks: &[std::sync::Arc<dyn crate::web::EventSink>],
+    agent_id: &AgentId,
+    session_id: &str,
+    working: bool,
+) {
+    log::info!(
+        "[acp] session {} {} working outside a prompt turn",
+        crate::logging::redact_session_id(session_id),
+        if working { "started" } else { "stopped" }
+    );
+    let event = AgentWorkingEvent {
+        agent_id: agent_id.clone(),
+        session_id: SessionId::new(session_id.to_string()),
+        working,
+    };
+    fan_out(sinks, Some(session_id), EVENT_AGENT_WORKING, &event);
 }
 
 /// OpenCode compaction marker carried on `session_info_update` `_meta`.

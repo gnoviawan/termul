@@ -471,6 +471,7 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
   },
 
   createLaunchPlaceholder: ({
+    configId,
     cwd,
     projectId,
     models,
@@ -516,7 +517,8 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
           replaying: null,
           worktreePath,
           worktreeBranch,
-          worktreeProgressId
+          worktreeProgressId,
+          launchConfigId: configId
         }
       },
       messages: {

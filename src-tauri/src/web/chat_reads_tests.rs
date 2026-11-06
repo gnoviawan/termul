@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use super::*;
 
 fn head(log_epoch: &str, head_seq: u64) -> LogHead {
@@ -54,16 +52,4 @@ fn a_read_from_another_log_epoch_never_moves_the_marker() {
     reads.mark("s1", &e2, Some("e2"), 3);
     assert_eq!(reads.mark("s1", &e2, Some("e1"), 50), MarkOutcome::OtherEpoch(read("e2", 3)));
     assert_eq!(reads.get("s1"), Some(read("e2", 3)));
-}
-
-#[test]
-fn the_snapshot_lists_every_session_marker() {
-    let reads = ChatReads::default();
-    reads.mark("b", &head("e", 9), Some("e"), 9);
-    reads.mark("a", &head("e", 5), Some("e"), 2);
-    assert_eq!(
-        reads.snapshot(),
-        BTreeMap::from([("a".to_string(), read("e", 2)), ("b".to_string(), read("e", 9))])
-    );
-    assert_eq!(reads.get("unknown"), None);
 }

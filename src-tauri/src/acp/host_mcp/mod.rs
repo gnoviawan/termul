@@ -71,10 +71,26 @@ pub const ENV_TOKEN: &str = "TERMUL_PLAN_TOKEN";
 pub const ENV_SESSION_ID: &str = "TERMUL_PLAN_SESSION_ID";
 pub const ENV_AGENT_ID: &str = "TERMUL_PLAN_AGENT_ID";
 
-/// Server `instructions` returned in the child's MCP `initialize` result.
-/// Agents that connect the injected `termul` server surface this guidance in
-/// model context, so it doubles as the advertisement for the chat renderer's
-/// markdown affordances.
+/// Opens the session `instructions`: names the host tools an agent should
+/// reach for. Claude Code defers MCP tools behind tool search and shows only
+/// their names, so a tool's own description never reaches the model unless
+/// the agent loads it; this paragraph is what makes the agent look.
+pub const TERMUL_TOOL_INSTRUCTIONS: &str = "Termul tools: if your client lists one of these \
+tools by name only, load its definition (for example with tool search) before you call it. \
+Track your work in Termul's plan panel with the `plan` tool: call it whenever you would create \
+or update a todo list, send the full list with each item's status every time, and keep no todo \
+list of your own. In the first turn, once the user's intent is clear, call `set_session_title` \
+once with a short title and a kebab-case `branch` slug. When you need a decision or missing \
+details from the user, ask with the `ask_user` tool or your client's own question tool, not in \
+plain text.";
+
+/// The context budget Claude Code gives a server's `instructions`: it keeps
+/// this many UTF-16 code units (`CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`,
+/// default 4096) and drops the rest. Every Termul-owned paragraph must fit
+/// inside it; figcraft's guide, last, may be cut.
+pub const CLAUDE_INSTRUCTIONS_BUDGET: usize = 4096;
+
+/// Markdown affordances of the chat renderer.
 pub const TERMUL_CHAT_INSTRUCTIONS: &str = "Termul renders your markdown replies in a rich chat UI. \
 Embed images and videos inline with `![alt](path)`, for generated charts, screenshots, diagrams, \
 and screen recordings: paths relative to the session working directory, absolute paths, \
@@ -95,12 +111,16 @@ background automation?\" with the options \"Yes, schedule it\" and \"Not now\". 
 `automation_guide` and build it with the automation tools. After either answer, do not ask \
 again in this chat. Skip the question when the user is already asking for an automation.";
 
-/// The full `instructions` of the child's `initialize` result: the chat
-/// guidance, the repeatable-work offer, then the design canvas guide.
+/// The full `instructions` of the child's `initialize` result: the host
+/// tools, the chat guidance, the repeatable-work offer, then the design
+/// canvas guide. Agents surface it in model context, so it is the
+/// advertisement for the host tools and the chat renderer's markdown
+/// affordances. Most-needed first: Claude Code keeps only the first
+/// [`CLAUDE_INSTRUCTIONS_BUDGET`] code units.
 #[must_use]
 pub fn session_instructions() -> String {
     format!(
-        "{TERMUL_CHAT_INSTRUCTIONS}\n\n{AUTOMATION_SUGGESTION_INSTRUCTIONS}\n\n{}",
+        "{TERMUL_TOOL_INSTRUCTIONS}\n\n{TERMUL_CHAT_INSTRUCTIONS}\n\n{AUTOMATION_SUGGESTION_INSTRUCTIONS}\n\n{}",
         canvas_tools::instructions()
     )
 }

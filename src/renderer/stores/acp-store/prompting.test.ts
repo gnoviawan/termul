@@ -1505,4 +1505,48 @@ describe('read-only GitHub chats (CAP-6)', () => {
     await useAcpStore.getState().sendPromptBlocks('s3', [{ type: 'text', text: 'hello' }])
     expect(sent).toEqual([[{ type: 'text', text: 'hello' }]])
   })
+
+  // The agent works on its own after its prompt turn ended (Claude Code wakes
+  // when a background task finishes); the host reports it with `agent_working`.
+  it('queues a send while the agent works outside a turn and sends it when the work ends', async () => {
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) =>
+      cmd === 'acp_send_prompt' ? 'end_turn' : undefined
+    )
+    useAcpStore.getState()._onAgentWorking({ agentId: 'agent-1', sessionId: 's1', working: true })
+
+    await useAcpStore.getState().sendPrompt('s1', 'after you')
+    expect(invoke).not.toHaveBeenCalledWith('acp_send_prompt', expect.anything())
+    expect(useAcpStore.getState().promptQueues['s1']?.map((q) => q.blocks)).toEqual([
+      [{ type: 'text', text: 'after you' }]
+    ])
+
+    useAcpStore.getState()._onAgentWorking({ agentId: 'agent-1', sessionId: 's1', working: false })
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        'acp_send_prompt',
+        expect.objectContaining({ agentId: 'agent-1', sessionId: 's1' })
+      )
+    )
+    expect(useAcpStore.getState().promptQueues['s1'] ?? []).toHaveLength(0)
+  })
+
+  it('ignores a working report from a process the chat no longer runs on', () => {
+    seedSession('s1', 'agent-new', false)
+    useAcpStore.getState()._onAgentWorking({ agentId: 'agent-old', sessionId: 's1', working: true })
+    expect(useAcpStore.getState().sessions['s1']?.agentWorking).toBeFalsy()
+  })
+
+  it('Stop cancels agent work while no prompt turn is open', async () => {
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+    useAcpStore.getState()._onAgentWorking({ agentId: 'agent-1', sessionId: 's1', working: true })
+
+    await useAcpStore.getState().cancelPrompt('s1')
+
+    expect(invoke).toHaveBeenCalledWith('acp_cancel_prompt', {
+      agentId: 'agent-1',
+      sessionId: 's1'
+    })
+  })
 })

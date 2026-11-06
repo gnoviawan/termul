@@ -418,6 +418,23 @@
     @apply border-border;
   }
 
+  /* The shell is the page: `ShellFrame` is `h-screen overflow-hidden` and
+     every pane owns its own scroller. Nothing may scroll the document —
+     macOS WKWebView rubber-bands the root scroll view, so any root scroll
+     range (even a 1 px rounding of `100vh` at a fractional UI zoom) lets a
+     trackpad gesture drag the whole shell down and expose the background
+     above it. Lock the root; inner scrollers keep their own behavior. */
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  #root {
+    height: 100%;
+  }
+
   html {
     /* Crisp font rendering on Linux/Wayland (sub-pixel AA off by default) */
     -webkit-font-smoothing: antialiased;

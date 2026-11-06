@@ -5,8 +5,9 @@ use serde_json::{json, Value};
 
 use super::graph::validate;
 use super::model::{
-    ApplyOpsResult, Automation, Edge, EdgeSource, Isolation, LastRun, NodeId, Op, Parked, Port,
-    Run, RunPolicy, RunStatus, RunTrigger, Step, StepStatus, Trigger,
+    ApplyOpsResult, Automation, Edge, EdgeSource, Isolation, LastRun, NamedTemplate, NodeId,
+    NodeSpec, Op, Parked, Port, Run, RunPolicy, RunStatus, RunTrigger, Step, StepStatus, Template,
+    Trigger,
 };
 use super::policy::run_policy;
 use super::suggest::{Cadence, Suggestion};
@@ -192,8 +193,19 @@ fn build_fixture() -> WireFixture {
             wait_until: Some(1_773_133_261_000),
         },
     ];
+    let with_tools = super::test_support::apply(
+        &automation,
+        json!([
+            { "op": "add_node", "node": { "id": "issues", "label": "Open issues", "spec": {
+                "kind": "mcp_tool", "server_id": "srv-github", "tool": "list_issues",
+                "arguments": [{ "name": "state", "value": "open" }], "timeout_ms": 30000 } } },
+            { "op": "add_node", "node": { "id": "ping", "label": "Ping", "spec": {
+                "kind": "mcp_tool", "server_id": "srv-removed", "tool": "ping" } } }
+        ]),
+    );
+    let server_name = |id: &str| (id == "srv-github").then(|| "GitHub".to_string());
     WireFixture {
-        run_policy: run_policy(&automation, 1_772_798_400_000),
+        run_policy: run_policy(&with_tools, 1_772_798_400_000, &server_name),
         apply_ops_result: ApplyOpsResult {
             issues: validate(&fresh),
             automation: fresh,
@@ -204,6 +216,7 @@ fn build_fixture() -> WireFixture {
             { "op": "add_node", "node": { "id": "note", "label": "Note", "spec": { "kind": "transform", "fields": [{ "name": "text", "value": "hi" }] } } },
             { "op": "update_node", "id": "note", "label": "Renamed" },
             { "op": "update_node", "id": "check", "spec": { "kind": "condition", "left": "{{nodes.extract.output.urgent}}", "op": "exists", "right": null } },
+            { "op": "add_node", "node": { "id": "lookup", "label": "Lookup", "spec": { "kind": "mcp_tool", "server_id": "srv-github", "tool": "search" } } },
             { "op": "remove_node", "id": "note" },
             { "op": "add_node", "node": { "id": "gate", "label": "Gate", "spec": { "kind": "merge", "mode": "all" } } },
             { "op": "connect", "edge": { "from": "check", "port": "false", "to": "alert" } },
@@ -246,6 +259,48 @@ fn wire_fixture_matches_the_shared_typescript_fixture() {
     );
     let parsed: WireFixture = serde_json::from_value(on_disk).unwrap();
     assert_eq!(parsed, build_fixture());
+}
+
+#[test]
+fn an_mcp_tool_node_defaults_its_arguments_and_timeout_and_round_trips() {
+    let wire = json!({ "kind": "mcp_tool", "server_id": "srv-1", "tool": "search" });
+    let spec: NodeSpec = serde_json::from_value(wire).unwrap();
+    assert_eq!(
+        spec,
+        NodeSpec::McpTool {
+            server_id: "srv-1".into(),
+            tool: "search".into(),
+            arguments: vec![],
+            timeout_ms: 60_000,
+        }
+    );
+    let full = NodeSpec::McpTool {
+        server_id: "srv-1".into(),
+        tool: "search".into(),
+        arguments: vec![NamedTemplate {
+            name: "query".into(),
+            value: Template("{{nodes.fetch.output}}".into()),
+        }],
+        timeout_ms: 5_000,
+    };
+    let encoded = serde_json::to_value(&full).unwrap();
+    assert_eq!(
+        encoded,
+        json!({ "kind": "mcp_tool", "server_id": "srv-1", "tool": "search",
+                "arguments": [{ "name": "query", "value": "{{nodes.fetch.output}}" }],
+                "timeout_ms": 5000 })
+    );
+    assert_eq!(serde_json::from_value::<NodeSpec>(encoded).unwrap(), full);
+    assert_eq!(
+        full.templates()
+            .into_iter()
+            .map(|(field, t)| (field, t.0.clone()))
+            .collect::<Vec<_>>(),
+        vec![(
+            "arguments.query".to_string(),
+            "{{nodes.fetch.output}}".to_string()
+        )]
+    );
 }
 
 #[test]

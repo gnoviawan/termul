@@ -86,7 +86,7 @@ Both transports share the same Rust service and typed error codes. Every facade 
 ## The bundle
 
 - **Pin.** `canvas/figcraft.pin` holds the fork's release tag, download URL and sha256. CI fails when it disagrees with the `figcraft-mcp` dependency tag in `src-tauri/Cargo.toml`.
-- **Fetch.** `bun scripts/canvas/fetch-figcraft-bundle.mjs` downloads the pinned zip, verifies the checksum and unpacks it to `canvas/bundle/`. `--zip <file>` uses a local zip. The release workflow runs it before the Rust build, and the bundle is embedded alongside the web UI.
+- **Fetch.** `bun scripts/canvas/fetch-figcraft-bundle.mjs` downloads the pinned zip, verifies the checksum and unpacks it to `canvas/bundle/`. `--zip <file>` uses a local zip. The release and nightly workflows run it before their Rust builds, and the bundle is embedded alongside the web UI.
 - **Dev override.** Set `TERMUL_FIGCRAFT_BUNDLE` to a built bundle directory (a figcraft checkout's `dist-web`) to serve it instead of the embedded one.
 - **Missing bundle.** A build without a bundle logs one warning and answers the canvas routes with a typed error. The rest of Termul is unaffected.
 - **Fork.** The bundle comes from `gnoviawan/figcraft` (branch `termul`). Its patches are limited to the web host API, the kiosk flag, the brand knob, the theme hook and guest presence (the agent cursor).

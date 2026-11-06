@@ -99,6 +99,38 @@ import {
 } from './prompt-reconcile'
 import { clampLiveToolCallFields, flushCoalescedSync } from './transcript'
 
+/**
+ * The newest `agent_working` report per session and agent. A reopen reads the
+ * agent listing over a round trip; a report from the adopted owner that
+ * arrives meanwhile is newer and wins. Keyed by agent too, so a late report of
+ * a former owner never hides the current owner's.
+ */
+const latestAgentWorking = new Map<string, { working: boolean; seq: number }>()
+let agentWorkingSeq = 0
+
+const agentWorkingKey = (sessionId: SessionId, agentId: AgentId): string =>
+  `${sessionId}\u0000${agentId}`
+
+/** The sequence number of the newest `agent_working` report seen so far. */
+export function agentWorkingReportSeq(): number {
+  return agentWorkingSeq
+}
+
+export function latestAgentWorkingReport(
+  sessionId: SessionId,
+  agentId: AgentId
+): { working: boolean; seq: number } | undefined {
+  return latestAgentWorking.get(agentWorkingKey(sessionId, agentId))
+}
+
+/** Forget a deleted chat's reports. */
+export function forgetAgentWorkingReports(sessionId: SessionId): void {
+  const prefix = `${sessionId}\u0000`
+  for (const key of latestAgentWorking.keys()) {
+    if (key.startsWith(prefix)) latestAgentWorking.delete(key)
+  }
+}
+
 /** Send the next queued prompt after the current turn closes. */
 export function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
   const state = useAcpStore.getState()
@@ -774,6 +806,7 @@ type PromptSliceState = Pick<
   | '_onQuestionCancelled'
   | '_onElicitationRequest'
   | '_onPromptComplete'
+  | '_onAgentWorking'
 >
 
 /** The host's stable `already_resolved` reply: the approval/question ticket was
@@ -832,7 +865,12 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
 
   cancelPrompt: async (sessionId) => {
     const session = get().sessions[sessionId]
-    if (!session?.activeTurn) return
+    if (!session?.activeTurn) {
+      // No prompt turn here, but the agent works on its own: `session/cancel`
+      // stops that work too, and the host answers with `agent_working` false.
+      if (session?.agentWorking) await acpApi.cancelPrompt(session.agentId, sessionId)
+      return
+    }
     // A prompt still waiting to be confirmed may never have reached the host:
     // Stop abandons the command (no more same-id resends — a late resend must
     // not start a turn the user cancelled) and ends the local turn view itself,
@@ -1342,6 +1380,31 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
       delete pendingQuestions[e.questionId]
       return { pendingQuestions }
     })
+  },
+
+  _onAgentWorking: (e) => {
+    agentWorkingSeq += 1
+    latestAgentWorking.set(agentWorkingKey(e.sessionId, e.agentId), {
+      working: e.working,
+      seq: agentWorkingSeq
+    })
+    // Only the agent the chat runs on speaks for it: a stopped process can
+    // still report after the chat moved to a new one.
+    const session = get().sessions[e.sessionId]
+    if (!session || session.agentId !== e.agentId) return
+    if (Boolean(session.agentWorking) === e.working) return
+    set((s) => {
+      const current = s.sessions[e.sessionId]
+      if (!current) return {}
+      return { sessions: { ...s.sessions, [e.sessionId]: { ...current, agentWorking: e.working } } }
+    })
+    void logFrontendError({
+      level: 'info',
+      source: 'acp-store.agentWorking',
+      message: `Agent ${e.working ? 'started' : 'stopped'} working on session ${e.sessionId} outside a prompt turn`
+    })
+    // A message sent meanwhile waited in the queue; it goes out now.
+    if (!e.working) flushNextQueuedPrompt(set, e.sessionId)
   },
 
   _onPromptComplete: (e, eventSeq) => {

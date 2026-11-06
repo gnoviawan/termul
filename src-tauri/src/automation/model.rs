@@ -273,6 +273,8 @@ pub enum NodeSpec {
         output_schema: JsonSchemaSubset,
         timeout_ms: u64,
         max_attempts: u8,
+        #[serde(default)]
+        tools: Vec<AgentTool>,
     },
     Transform {
         fields: Vec<NamedTemplate>,
@@ -307,6 +309,61 @@ pub enum NodeSpec {
         message: Template,
         timeout_ms: u64,
     },
+    /// Calls `tool` on the project's MCP server `server_id` (the registry
+    /// entry id) with no LLM. The server's credentials come from its stored
+    /// config, never from templates.
+    McpTool {
+        server_id: String,
+        tool: String,
+        /// Rendered into the `tools/call` arguments object; a hole that is
+        /// the whole value keeps its JSON type.
+        #[serde(default)]
+        arguments: Vec<NamedTemplate>,
+        #[serde(default = "default_mcp_timeout_ms")]
+        timeout_ms: u64,
+    },
+}
+
+/// A class of tool an agent node may use. When the agent asks to use a
+/// tool, the host allows it only if its class is on the node's list.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTool {
+    Read,
+    Search,
+    /// Write, delete or move files.
+    Edit,
+    /// Run commands.
+    Execute,
+    /// Fetch from the network.
+    Fetch,
+    /// Any other tool, such as an MCP tool.
+    Other,
+}
+
+impl AgentTool {
+    /// Tools that reach past the host: they can send data out and bring
+    /// untrusted data in.
+    pub fn reaches_out(self) -> bool {
+        matches!(self, Self::Execute | Self::Fetch | Self::Other)
+    }
+
+    /// Tools that read or change the project's files.
+    pub fn touches_files(self) -> bool {
+        matches!(self, Self::Read | Self::Search | Self::Edit)
+    }
 }
 
 pub const AGENT_MAX_TIMEOUT_MS: u64 = 900_000;
@@ -323,6 +380,13 @@ pub enum MergeMode {
     All,
 }
 
+pub const MCP_DEFAULT_TIMEOUT_MS: u64 = 60_000;
+pub const MCP_MAX_TIMEOUT_MS: u64 = 300_000;
+
+fn default_mcp_timeout_ms() -> u64 {
+    MCP_DEFAULT_TIMEOUT_MS
+}
+
 impl NodeSpec {
     pub fn kind(&self) -> NodeKind {
         match self {
@@ -335,6 +399,7 @@ impl NodeSpec {
             NodeSpec::Merge { .. } => NodeKind::Merge,
             NodeSpec::Wait { .. } => NodeKind::Wait,
             NodeSpec::Approval { .. } => NodeKind::Approval,
+            NodeSpec::McpTool { .. } => NodeKind::McpTool,
         }
     }
 
@@ -369,6 +434,10 @@ impl NodeSpec {
             }
             NodeSpec::ForEach { items, .. } => vec![("items".to_string(), items)],
             NodeSpec::Merge { .. } | NodeSpec::Wait { .. } => Vec::new(),
+            NodeSpec::McpTool { arguments, .. } => arguments
+                .iter()
+                .map(|a| (format!("arguments.{}", a.name), &a.value))
+                .collect(),
         }
     }
 }
@@ -384,6 +453,7 @@ pub enum NodeKind {
     Merge,
     Wait,
     Approval,
+    McpTool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -522,6 +592,8 @@ pub enum IssueCode {
     AgentMaxAttemptsOutOfRange,
     MissingConditionOperand,
     InvalidSchedule,
+    UntrustedAgentOutboundTool,
+    OutboundAgentFileTool,
     ForEachMaxIterationsOutOfRange,
     WaitDurationOutOfRange,
     LoopBodyNotClosed,
@@ -531,6 +603,13 @@ pub enum IssueCode {
     ApprovalTimeoutOutOfRange,
     /// Added by the service, which owns the agent registry.
     UnknownAgent,
+    McpTimeoutOutOfRange,
+    InvalidMcpArguments,
+    /// The rest are added by the service from the live `tools/list`.
+    UnknownMcpServer,
+    McpToolsPending,
+    McpServerUnavailable,
+    UnknownMcpTool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -649,6 +728,7 @@ pub struct RunPolicy {
     pub agents: Vec<AgentPolicy>,
     pub secrets: Vec<NodeSecrets>,
     pub outbound_hosts: Vec<NodeHosts>,
+    pub mcp_tools: Vec<McpToolPolicy>,
     pub untrusted_flow: bool,
     pub failure_policy: String,
 }
@@ -659,20 +739,24 @@ pub struct AgentPolicy {
     pub agent_id: String,
     pub model: Option<String>,
     pub timeout_ms: u64,
-    pub tools: AgentTools,
-}
-
-/// v1 agents run with no tools; the enum leaves room for allowlists.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentTools {
-    None,
+    /// Sorted and deduplicated; empty means no tools.
+    pub tools: Vec<AgentTool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct NodeSecrets {
     pub node_id: NodeId,
     pub names: Vec<String>,
+}
+
+/// An `mcp_tool` node: which tool it calls on which server. `server_name` is
+/// `None` when the project has no enabled server of that id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct McpToolPolicy {
+    pub node_id: NodeId,
+    pub server_id: String,
+    pub server_name: Option<String>,
+    pub tool: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

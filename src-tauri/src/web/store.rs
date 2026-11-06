@@ -527,6 +527,12 @@ impl WebStore {
         })
     }
 
+    /// The stored value of a shared `key` as a host-side reader sees it: no
+    /// client identity, so no presence touch, adoption or flush.
+    pub fn peek(&self, key: &str) -> Result<Option<Value>, StoreError> {
+        self.with_state(|state| Ok(state.data.get(key).map(|record| record.v.clone())))
+    }
+
     /// Write `value` under `key` with the semantics of the key's scope.
     pub fn write(
         &self,

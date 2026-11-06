@@ -72,6 +72,7 @@ export async function launchSuggestionChat(
 
   const blocks: ContentBlock[] = [{ type: 'text', text }]
   const placeholderId = store.createLaunchPlaceholder({
+    configId: config.id,
     cwd,
     projectId,
     initialUserBlocks: blocks

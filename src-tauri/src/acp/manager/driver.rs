@@ -314,19 +314,47 @@ pub(super) async fn handle_session_notification(
     if is_replayed_history(&notification.update) && state.lock().note_replayed_update(&session_id) {
         return Ok(());
     }
-    let tool_call_id = match &notification.update {
-        agent_client_protocol::schema::v1::SessionUpdate::ToolCall(tool_call) => {
-            Some(tool_call.tool_call_id.0.to_string())
-        }
-        agent_client_protocol::schema::v1::SessionUpdate::ToolCallUpdate(update) => {
-            Some(update.tool_call_id.0.to_string())
-        }
+    let paths = |locations: &[agent_client_protocol::schema::v1::ToolCallLocation]| {
+        locations.iter().map(|l| l.path.clone()).collect::<Vec<_>>()
+    };
+    let tool_call = match &notification.update {
+        agent_client_protocol::schema::v1::SessionUpdate::ToolCall(tool_call) => Some((
+            tool_call.tool_call_id.0.to_string(),
+            Some(tool_call.kind),
+            Some(paths(&tool_call.locations)),
+        )),
+        agent_client_protocol::schema::v1::SessionUpdate::ToolCallUpdate(update) => Some((
+            update.tool_call_id.0.to_string(),
+            update.fields.kind,
+            update.fields.locations.as_deref().map(paths),
+        )),
         _ => None,
     };
-    if let Some(tool_call_id) = tool_call_id {
-        state
-            .lock()
-            .bind_tool_call(tool_call_id, session_id.clone());
+    // An update while no prompt turn runs is the agent working on its own
+    // (`session::unprompted`). `sweep_unprompted_work` reports its end. Only a
+    // session the driver holds counts, and a subagent dispatch never does:
+    // the host stamps only changed dispatch records, so the registry decides.
+    let started_working = {
+        let mut state = state.lock();
+        let is_dispatch = tool_call
+            .as_ref()
+            .is_some_and(|(call, _, _)| state.subagent_records().get(&session_id, call).is_some());
+        !is_dispatch
+            && !state.is_turn_active(&session_id)
+            && state.session_root(&session_id).is_some()
+            && state.unprompted().note(
+                &session_id,
+                &notification.update,
+                tokio::time::Instant::now(),
+            )
+    };
+    if started_working {
+        crate::acp::events::emit_agent_working(sinks, agent_id, &session_id, true);
+    }
+    if let Some((tool_call_id, kind, paths)) = tool_call {
+        let mut state = state.lock();
+        state.note_tool_call(&session_id, &tool_call_id, kind, paths);
+        state.bind_tool_call(tool_call_id, session_id.clone());
     }
     // AD-8: gate native `session_info_update` fan-out. When the host already
     // owns a higher-precedence title (`BackgroundGenerated` from a prior
@@ -386,6 +414,37 @@ fn session_info_notices(
             crate::acp::events::opencode_notices(info.meta.as_ref())
         }
         _ => crate::acp::events::OpenCodeNotices::default(),
+    }
+}
+
+/// Report the end of agent work outside a prompt turn
+/// (`session::unprompted`): sleep until a working session can go quiet, then
+/// tell every sink which sessions did. Waits without a timer while no session
+/// can go quiet.
+pub(super) async fn sweep_unprompted_work(
+    state: Arc<Mutex<DriverState>>,
+    sinks: Vec<Arc<dyn EventSink>>,
+    agent_id: AgentId,
+) {
+    let wake = state.lock().unprompted().wake();
+    loop {
+        let deadline = state.lock().unprompted().next_deadline();
+        match deadline {
+            None => wake.notified().await,
+            Some(deadline) => {
+                tokio::select! {
+                    () = tokio::time::sleep_until(deadline) => {}
+                    () = wake.notified() => {}
+                }
+            }
+        }
+        let quiet = state
+            .lock()
+            .unprompted()
+            .take_quiet(tokio::time::Instant::now());
+        for session_id in quiet {
+            crate::acp::events::emit_agent_working(&sinks, &agent_id, &session_id, false);
+        }
     }
 }
 
@@ -494,6 +553,10 @@ pub(super) async fn drive_connection(
     let notif_sinks = sinks.clone();
     let notif_agent_id = agent_id.clone();
     let notif_state = driver_state.clone();
+    // Lives as long as this connection: dropping the handle aborts it.
+    let _unprompted_sweeper = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+        sweep_unprompted_work(driver_state.clone(), sinks.clone(), agent_id.clone()),
+    ));
     // AD-8: capture persistence into the notification closure so the host can
     // gate `session_info_update` fan-out on `title_source`. When a background
     // title (`BackgroundGenerated`) or a future local alias (`LocalAlias`) owns
@@ -614,9 +677,24 @@ pub(super) async fn drive_connection(
                 } = request;
                 let session_string = perm_state.lock().chat_session_for(session_id.0.as_ref());
                 if perm_state.lock().is_ephemeral(&session_string) {
-                    let _ = responder.respond(RequestPermissionResponse::new(
-                        RequestPermissionOutcome::Cancelled,
-                    ));
+                    let decision =
+                        perm_state
+                            .lock()
+                            .answer_permission(&session_string, &tool_call, &options);
+                    let outcome = match decision {
+                        Some(decision) => {
+                            log::info!(
+                                "[acp] {perm_agent_id} headless session {}: {} {:?} tool call {}",
+                                crate::logging::redact_session_id(&session_string),
+                                if decision.allowed { "allowed" } else { "refused" },
+                                decision.kind,
+                                tool_call.tool_call_id.0
+                            );
+                            decision.outcome
+                        }
+                        None => RequestPermissionOutcome::Cancelled,
+                    };
+                    let _ = responder.respond(RequestPermissionResponse::new(outcome));
                     return Ok(());
                 }
                 // A permission request is agent activity — the turn is waiting

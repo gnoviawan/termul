@@ -272,9 +272,7 @@ vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 vi.mock('@/components/git/GitDiffView', () => ({ GitDiffView: () => null }))
 vi.mock('@/stores/acp-store', () => ({
   useAcpStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({ selectedAgentConfigId: 'cfg-1', agentConfigs: [{ id: 'cfg-1' }] }),
-  // Desktop branch only: ProjectSidebar reads this for activity indicators.
-  useProjectsWithActiveAgentChat: () => []
+    selector({ selectedAgentConfigId: 'cfg-1', agentConfigs: [{ id: 'cfg-1' }] })
 }))
 const { gitState } = vi.hoisted(() => ({
   gitState: {

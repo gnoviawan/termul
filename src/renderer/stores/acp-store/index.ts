@@ -45,6 +45,7 @@ import {
   type AgentSignInResolvedEvent,
   type AgentSpawnedEvent,
   type AgentSwitchEvent,
+  type AgentWorkingEvent,
   type AskUserQuestionEvent,
   type AvailableCommand,
   acpApi,
@@ -77,7 +78,6 @@ import {
 } from '@/lib/acp-api'
 import { AcpConnectionCoordinator, type AcpRecovery } from '@/lib/acp-connection'
 import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transport'
-import { noteTurnEndSeq } from '@/lib/chat-read-sync'
 import { splitReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { logFrontendError } from '@/lib/log-api'
 import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
@@ -85,7 +85,6 @@ import { getAgentChatSessionIdsInAllTrees, useWorkspaceStore } from '@/stores/wo
 import type { QueuedPrompt } from '../prompt-queue-orchestration'
 import { attachAgentRosterWatch } from './agent-roster-watch'
 import {
-  collectProjectsWithActiveAgentChat,
   dropHiddenToolCalls,
   dropRecordKey,
   normalizeUserMessages,
@@ -488,11 +487,6 @@ async function installTransportRecovery(
         : current.sessions
     }
   })
-  for (const event of recovery.events) {
-    if (event.type === 'prompt_complete') {
-      noteTurnEndSeq(recovery.sessionId, event.seq, recovery.logEpoch ?? null)
-    }
-  }
   // AD-6: a prompt that lost its reply resolves from the recovered log.
   reconcilePromptAfterRecovery(recovery.sessionId, recovery.events)
 }
@@ -633,6 +627,9 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<UsageUpdateEvent>(ACP_EVENTS.usageUpdate, (e) =>
       useAcpStore.getState()._onUsageUpdate(e)
     ),
+    acpApi.onEvent<AgentWorkingEvent>(ACP_EVENTS.agentWorking, (e) =>
+      useAcpStore.getState()._onAgentWorking(e)
+    ),
     acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, (e, eventSeq) =>
       useAcpStore.getState()._onPermissionRequest(e, eventSeq)
     ),
@@ -645,11 +642,9 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<ElicitationRequestEvent>(ACP_EVENTS.elicitationRequest, (e, eventSeq) =>
       useAcpStore.getState()._onElicitationRequest(e, eventSeq)
     ),
-    acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e, eventSeq) => {
-      const logEpoch = getAcpTransport().getSessionCursor?.(e.sessionId)?.logEpoch ?? null
-      noteTurnEndSeq(e.sessionId, eventSeq, logEpoch)
+    acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e, eventSeq) =>
       useAcpStore.getState()._onPromptComplete(e, eventSeq)
-    }),
+    ),
     acpApi.onEvent<AgentCrashedEvent>(ACP_EVENTS.agentCrashed, (e) => {
       useAcpStore.getState()._onAgentCrashed(e)
       toast.error(e.message || 'Agent crashed')
@@ -764,10 +759,6 @@ export function useAgentIcon(agentId: AgentId | null, agentConfigId?: string): s
       return selectAgentIdentity(s, agentId).icon
     })
   )
-}
-
-export function useProjectsWithActiveAgentChat(): string[] {
-  return useAcpStore(useShallow((state) => collectProjectsWithActiveAgentChat(state.sessions)))
 }
 
 export const useConfigWarmState = (configId: string): ConfigWarmState =>

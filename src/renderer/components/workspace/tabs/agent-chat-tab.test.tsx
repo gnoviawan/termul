@@ -1,26 +1,24 @@
+import type { ChatActivityRecord } from '@shared/types/web-protocol.types'
 import { act, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useAgentChatUnreadTracker } from '@/hooks/use-agent-chat-unread-tracker'
+import { chatActivityRecord, resetChatActivity } from '@/lib/test-utils/chat-activity'
 import {
   _addEphemeralSessionIdForTesting,
   _resetEphemeralSessionIdsForTesting,
   useAcpStore
 } from '@/stores/acp-store'
 import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
-import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
+import { useChatActivityStore } from '@/stores/chat-activity-store'
 import { agentChatTabId } from '@/stores/workspace-store'
 import { AgentChatTabInline } from './agent-chat-tab'
 
 /**
- * Spec: agent-chat-tab-activity-indicator. The lamp slot is now a
- * turn-lifecycle cue — a Working spinner while `sessionTurnBusy`, then an
- * unread dot when a turn finishes while the tab is inactive. The unread flag
- * lives in `useAgentChatUnreadStore`, driven by the shell-level tracker, so the
- * harness below mounts `useAgentChatUnreadTracker` the way `WorkspaceLayout`
- * does (the pane's active chat is the tab's `isActive`). The
- * tests seed the real `useAcpStore` (the
- * WorkspaceTabBar suite mocks `useAcpStore` away, so it cannot cover this)
- * and drive busy + `isActive` transitions through rerender/`setState`.
+ * Spec: agent-chat-tab-activity-indicator. The lamp slot is a turn-lifecycle
+ * cue from the host's `chat_activity` record: a Working spinner while the host
+ * has a turn open, then an unread dot for a turn end nobody has read, hidden
+ * while this renderer shows the chat. The harness drives host deltas through
+ * the real `useChatActivityStore`, the way `chat-activity-sync` applies them,
+ * and marks the active chip's chat as shown the way the shell mount does.
  */
 
 const BASE_PROPS = {
@@ -36,9 +34,7 @@ const BASE_PROPS = {
   onDrop: () => {}
 } as const
 
-/** Stand-in for the shell: the one tracker mount plus the chip it serves. */
-function ChipWithShellTracker({ isActive, sessionId }: { isActive: boolean; sessionId: string }) {
-  useAgentChatUnreadTracker(isActive ? [sessionId] : [])
+function chipElement(isActive: boolean, sessionId = 's1') {
   return (
     <AgentChatTabInline
       tab={{ type: 'agent-chat', id: agentChatTabId(sessionId), sessionId }}
@@ -48,12 +44,19 @@ function ChipWithShellTracker({ isActive, sessionId }: { isActive: boolean; sess
   )
 }
 
-function chipElement(isActive: boolean, sessionId = 's1') {
-  return <ChipWithShellTracker isActive={isActive} sessionId={sessionId} />
+/** Render a chip; an active chip's chat is one this renderer shows. */
+function renderChip(isActive: boolean, sessionId = 's1') {
+  useChatActivityStore.getState().setViewing(isActive ? [sessionId] : [])
+  return render(chipElement(isActive, sessionId))
 }
 
-function renderChip(isActive: boolean, sessionId = 's1') {
-  return render(chipElement(isActive, sessionId))
+function rerenderChip(
+  rerender: (ui: React.ReactElement) => void,
+  isActive: boolean,
+  sessionId = 's1'
+) {
+  act(() => useChatActivityStore.getState().setViewing(isActive ? [sessionId] : []))
+  rerender(chipElement(isActive, sessionId))
 }
 
 /** The chip root is the first aria-labelled element (the close button comes later in DOM order). */
@@ -63,72 +66,79 @@ function chipRoot(container: HTMLElement): HTMLElement {
   return root
 }
 
-/** Drive a turn-busy transition through the real store. */
-function setTurn(sessionId: string, busy: boolean): void {
-  act(() => {
-    const state = useAcpStore.getState()
-    const session = state.sessions[sessionId]
-    if (!session) throw new Error(`session ${sessionId} not seeded`)
-    useAcpStore.setState({
-      sessions: {
-        ...state.sessions,
-        [sessionId]: { ...session, activeTurn: busy, openTurnId: busy ? 'turn-1' : null }
-      }
-    })
-  })
+/** Apply one host `chat_activity` delta. */
+function hostSays(sessionId: string, record: Partial<ChatActivityRecord>): void {
+  act(() => useChatActivityStore.getState().apply({ sessionId, ...chatActivityRecord(record) }))
 }
 
-/** Drive a session status transition (e.g. close mid-turn) through the store. */
-function setSessionStatus(sessionId: string, status: 'active' | 'closed' | 'error'): void {
-  act(() => {
-    const state = useAcpStore.getState()
-    const session = state.sessions[sessionId]
-    if (!session) throw new Error(`session ${sessionId} not seeded`)
-    useAcpStore.setState({
-      sessions: { ...state.sessions, [sessionId]: { ...session, status } }
-    })
-  })
+let turnSeq = 0
+
+/** The host opens a turn, or ends it with a turn end nobody has read yet. */
+function setTurn(sessionId: string, busy: boolean): void {
+  if (busy) {
+    const current = useChatActivityStore.getState().sessions[sessionId]
+    hostSays(sessionId, { ...current, busy: true })
+    return
+  }
+  turnSeq += 1
+  hostSays(sessionId, { busy: false, unread: true, turnEnd: { seq: turnSeq, logEpoch: 'e1' } })
 }
 
 const WORKING = 'Working'
 const UNREAD = 'New activity'
 const NEEDS_YOU = 'Needs you'
 
-function seedChat(sessionId = 's1', title = 'My Chat', busy = false): void {
-  seedOptionsSession(sessionId, 'agent-1', {
-    title,
-    activeTurn: busy,
-    openTurnId: busy ? 'turn-1' : null
-  })
+function seedChat(sessionId = 's1', title = 'My Chat'): void {
+  seedOptionsSession(sessionId, 'agent-1', { title })
 }
 
 beforeEach(() => {
   useAcpStore.setState(FRESH)
   _resetEphemeralSessionIdsForTesting()
-  useAgentChatUnreadStore.setState({ unread: {} })
+  resetChatActivity()
 })
 
 describe('AgentChatTabInline activity indicator', () => {
-  it('spins while a turn streams on an inactive tab — and no lamp dot exists anywhere', () => {
-    seedChat('s1', 'My Chat', true)
+  it('spins while the host has a turn open on an inactive tab, with no lamp dot', () => {
+    seedChat()
+    setTurn('s1', true)
 
     const { container } = renderChip(false)
 
     expect(screen.getByTitle(WORKING)).toBeInTheDocument()
     expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-    // The connection lamp is gone from the chip entirely.
     expect(screen.queryByTitle('Connected')).not.toBeInTheDocument()
-    expect(screen.queryByTitle('Disconnected')).not.toBeInTheDocument()
     expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, Working')
   })
 
-  it('spins while a turn streams on the active tab too', () => {
-    seedChat('s1', 'My Chat', true)
-
-    renderChip(true)
-
+  it('spins for a chat this renderer never opened', () => {
+    setTurn('remote', true)
+    renderChip(false, 'remote')
     expect(screen.getByTitle(WORKING)).toBeInTheDocument()
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
+  })
+
+  it('spins as soon as this renderer submits, before the host echoes the turn', () => {
+    seedOptionsSession('s1', 'agent-1', { title: 'My Chat', activeTurn: true, openTurnId: 't1' })
+    renderChip(false)
+    expect(screen.getByTitle(WORKING)).toBeInTheDocument()
+  })
+
+  it('ignores turn flags left on a session record that is not live', () => {
+    seedOptionsSession('s1', 'agent-1', {
+      title: 'My Chat',
+      status: 'closed',
+      activeTurn: true,
+      openTurnId: 't1'
+    })
+    renderChip(false)
+    expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
+  })
+
+  it('spins on the active tab too', () => {
+    seedChat()
+    setTurn('s1', true)
+    renderChip(true)
+    expect(screen.getByTitle(WORKING)).toBeInTheDocument()
   })
 
   it('shows the unread dot when the turn finishes while the tab is inactive', () => {
@@ -137,177 +147,34 @@ describe('AgentChatTabInline activity indicator', () => {
 
     setTurn('s1', true)
     expect(screen.getByTitle(WORKING)).toBeInTheDocument()
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-
     setTurn('s1', false)
     expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
     expect(screen.getByTitle(UNREAD)).toBeInTheDocument()
     expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, New activity')
   })
 
-  it('clears the unread dot when the tab becomes active', () => {
+  it('hides the unread dot while the tab is active and clears it once the host says read', () => {
     seedChat()
     const { container, rerender } = renderChip(false)
-
     setTurn('s1', true)
     setTurn('s1', false)
     expect(screen.getByTitle(UNREAD)).toBeInTheDocument()
 
-    rerender(chipElement(true))
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-    expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
-    expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat')
-  })
-
-  it('never shows the unread dot when the turn finishes while the tab is active', () => {
-    seedChat()
-    renderChip(true)
-
-    setTurn('s1', true)
-    expect(screen.getByTitle(WORKING)).toBeInTheDocument()
-    setTurn('s1', false)
-    expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-  })
-
-  it('banks the dot when a turn finishes while inactive even if the chip mounted mid-turn', () => {
-    seedChat('s1', 'My Chat', true)
-    renderChip(false)
-
-    expect(screen.getByTitle(WORKING)).toBeInTheDocument()
-    setTurn('s1', false)
-    expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
-    expect(screen.getByTitle(UNREAD)).toBeInTheDocument()
-  })
-
-  it('spins on an openTurnId-only busy signal (activeTurn false)', () => {
-    seedOptionsSession('s1', 'agent-1', { title: 'My Chat', activeTurn: false, openTurnId: 't1' })
-    renderChip(false)
-    expect(screen.getByTitle(WORKING)).toBeInTheDocument()
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-  })
-
-  it.each([
-    'closed',
-    'error'
-  ] as const)('shows no activity indicator for a %s session with stale turn flags', (status) => {
-    seedOptionsSession('s1', 'agent-1', {
-      title: 'My Chat',
-      status,
-      activeTurn: true,
-      openTurnId: 't1'
-    })
-    renderChip(false)
-    expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-  })
-
-  it('banks no dot when the turn ends because the session closed', () => {
-    seedChat('s1', 'My Chat', true)
-    renderChip(false)
-    expect(screen.getByTitle(WORKING)).toBeInTheDocument()
-
-    setSessionStatus('s1', 'closed')
-    expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-  })
-
-  it('re-banks the dot when a second turn finishes while inactive', () => {
-    seedChat()
-    const { rerender } = renderChip(false)
-
-    setTurn('s1', true)
-    setTurn('s1', false)
-    expect(screen.getByTitle(UNREAD)).toBeInTheDocument()
-
-    rerender(chipElement(true))
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-
-    rerender(chipElement(false))
-    setTurn('s1', true)
-    setTurn('s1', false)
-    expect(screen.getByTitle(UNREAD)).toBeInTheDocument()
-  })
-
-  it('banks no dot and composes no aria suffix when the session is deleted mid-turn', () => {
-    seedChat('s1', 'My Chat', true)
-    const { container } = renderChip(false)
-    expect(screen.getByTitle(WORKING)).toBeInTheDocument()
-
-    act(() => {
-      useAcpStore.setState({ sessions: {} })
-    })
-
-    expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-    expect(chipRoot(container)).toHaveAttribute('aria-label', 'Agent Chat')
-  })
-
-  it('renders no activity indicator when the chip mounts on an idle session', () => {
-    seedChat()
-    const { container } = renderChip(false)
-
-    expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
+    rerenderChip(rerender, true)
     expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
     expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat')
-  })
 
-  it('keeps the unread dot when the chip remounts (the store owns Done)', () => {
-    seedChat()
-    const first = renderChip(false)
-
-    setTurn('s1', true)
-    setTurn('s1', false)
-    expect(screen.getByTitle(UNREAD)).toBeInTheDocument()
-
-    first.unmount()
-    renderChip(false)
-    expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
-    expect(screen.getByTitle(UNREAD)).toBeInTheDocument()
-  })
-
-  it('reads Done from the unread store so a card and the tab agree', () => {
-    seedChat()
-    const { container } = render(
-      <AgentChatTabInline
-        tab={{ type: 'agent-chat', id: agentChatTabId('s1'), sessionId: 's1' }}
-        isActive={false}
-        {...BASE_PROPS}
-      />
-    )
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-
-    act(() => useAgentChatUnreadStore.getState().markUnread('s1'))
-    expect(screen.getByTitle(UNREAD)).toBeInTheDocument()
-    expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, New activity')
-
-    act(() => useAgentChatUnreadStore.getState().clearUnread('s1'))
+    hostSays('s1', { unread: false, turnEnd: { seq: turnSeq, logEpoch: 'e1' } })
+    rerenderChip(rerender, false)
     expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
   })
 
   it('keeps the unread dot after the session is stopped (closed)', () => {
-    seedChat('s1', 'My Chat', true)
-    const { container } = renderChip(false)
+    seedOptionsSession('s1', 'agent-1', { title: 'My Chat', status: 'closed' })
     setTurn('s1', false)
-    expect(screen.getByTitle(UNREAD)).toBeInTheDocument()
-
-    setSessionStatus('s1', 'closed')
+    const { container } = renderChip(false)
     expect(screen.getByTitle(UNREAD)).toBeInTheDocument()
     expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, New activity')
-    expect(useAgentChatUnreadStore.getState().unread).toEqual({ s1: true })
-  })
-
-  it('shows the unread dot on a closed chat with stale turn flags (not Working)', () => {
-    seedOptionsSession('s1', 'agent-1', {
-      title: 'My Chat',
-      status: 'closed',
-      activeTurn: true,
-      openTurnId: 't1'
-    })
-    useAgentChatUnreadStore.setState({ unread: { s1: true } })
-    renderChip(false)
-    expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
-    expect(screen.getByTitle(UNREAD)).toBeInTheDocument()
   })
 
   it('mutes a stopped chat title without striking it through', () => {
@@ -319,23 +186,15 @@ describe('AgentChatTabInline activity indicator', () => {
   })
 
   it('shows no activity indicators for an ephemeral session', () => {
-    seedChat('s-eph', 'Warm chat', true)
+    seedChat('s-eph', 'Warm chat')
     _addEphemeralSessionIdForTesting('s-eph')
+    hostSays('s-eph', { busy: true, needsYou: true, unread: true })
 
     renderChip(false, 's-eph')
 
     expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
     expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-
-    // Even a finished ephemeral turn leaves no dot.
-    setTurn('s-eph', false)
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-
-    // Nor does an unread flag set by any other path, live or closed.
-    act(() => useAgentChatUnreadStore.getState().markUnread('s-eph'))
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-    setSessionStatus('s-eph', 'closed')
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
+    expect(screen.queryByTitle(NEEDS_YOU)).not.toBeInTheDocument()
   })
 
   it('falls back to the plain Agent Chat label when the session is gone', () => {
@@ -364,35 +223,24 @@ describe('AgentChatTabInline activity indicator', () => {
 
   it('pins the Needs you slot over working and unread in the single status slot', () => {
     seedChat()
-    useAcpStore.setState({
-      pendingPermissions: {
-        'req-1': {
-          requestId: 'req-1',
-          agentId: 'agent-1',
-          sessionId: 's1',
-          options: [],
-          toolCall: null
-        }
-      }
-    })
+    hostSays('s1', { needsYou: true })
 
     const { container } = renderChip(false)
 
     expect(screen.getByTitle(NEEDS_YOU)).toBeInTheDocument()
     expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, Needs you')
 
-    setTurn('s1', true)
+    hostSays('s1', { needsYou: true, busy: true })
     expect(screen.getByTitle(NEEDS_YOU)).toBeInTheDocument()
     expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
     expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, Needs you')
 
-    setTurn('s1', false)
+    hostSays('s1', { needsYou: true, unread: true, turnEnd: { seq: 3, logEpoch: 'e1' } })
     expect(screen.getByTitle(NEEDS_YOU)).toBeInTheDocument()
     expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-    expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, Needs you')
   })
 
-  it('reads Needs you in the tab chrome for a pending elicitation', () => {
+  it("reads Needs you from the host, not from this renderer's pending prompts", () => {
     seedChat()
     useAcpStore.setState({
       pendingElicitations: {
@@ -406,10 +254,17 @@ describe('AgentChatTabInline activity indicator', () => {
         }
       }
     })
-
     const { container } = renderChip(false)
+    expect(screen.queryByTitle(NEEDS_YOU)).not.toBeInTheDocument()
 
-    expect(screen.getByTitle(NEEDS_YOU)).toBeInTheDocument()
+    hostSays('s1', { needsYou: true })
     expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, Needs you')
+  })
+
+  it('still flags a disconnected agent this renderer knows about', () => {
+    seedChat()
+    useAcpStore.setState({ agentStatus: { 'agent-1': 'disconnected' } } as never)
+    renderChip(false)
+    expect(screen.getByTitle(NEEDS_YOU)).toBeInTheDocument()
   })
 })

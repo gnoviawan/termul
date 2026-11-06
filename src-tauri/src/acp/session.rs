@@ -31,10 +31,17 @@ mod activity;
 mod commands;
 mod sign_in;
 mod subagents;
+mod tool_policy;
+mod unprompted;
 pub(crate) use activity::ActivityClock;
 pub use activity::AgentActivity;
 pub(crate) use sign_in::{RequestElicitationRoute, SignInPrompt, SignInSlot};
 pub(crate) use subagents::ChildRoute;
+pub use tool_policy::ToolAllowlist;
+pub(crate) use tool_policy::{ToolDecision, PROTECTED_DIRS, PROTECTED_FILES};
+pub(crate) use unprompted::UnpromptedWork;
+#[cfg(test)]
+pub(crate) use unprompted::UNPROMPTED_QUIET;
 
 /// A permission request awaiting the user's decision.
 ///
@@ -149,12 +156,16 @@ pub(crate) struct DriverState {
     last_commands: commands::LastCommands,
     /// Native subagent child sessions and the chat each one belongs to.
     subagents: subagents::SubagentRoutes,
+    /// Host answers to the permission requests of headless sessions.
+    tool_policies: tool_policy::ToolPolicies,
     /// Subagent records per chat (`crate::acp::subagents`), for native child
     /// sessions and tool-mapped dispatches alike.
     subagent_records: crate::acp::subagents::SubagentRecords,
     /// The agent-level sign-in prompt and the `authenticate` requests that
     /// may raise one.
     sign_in: SignInSlot,
+    /// Sessions the agent works in outside a prompt turn.
+    unprompted: UnpromptedWork,
 }
 
 /// State of one session's replay window: how many reopens are in flight and
@@ -274,6 +285,10 @@ impl DriverState {
 
     pub(crate) fn sign_in(&mut self) -> &mut SignInSlot {
         &mut self.sign_in
+    }
+
+    pub(crate) fn unprompted(&mut self) -> &mut UnpromptedWork {
+        &mut self.unprompted
     }
 
     /// Register a pending permission request and return its globally-unique
@@ -455,6 +470,45 @@ impl DriverState {
     pub(crate) fn unmark_ephemeral(&mut self, session_id: &str) {
         self.ephemeral_sessions.remove(session_id);
         self.promotable_sessions.remove(session_id);
+        self.tool_policies.forget(session_id);
+    }
+
+    /// Answer the session's permission requests from `allowlist` instead of
+    /// cancelling them. Only meaningful for an ephemeral session.
+    pub(crate) fn set_tool_allowlist(&mut self, session_id: String, allowlist: ToolAllowlist) {
+        self.tool_policies.set(session_id, allowlist);
+    }
+
+    /// Remember a tool call's kind and paths for a later permission request
+    /// that omits them.
+    pub(crate) fn note_tool_call(
+        &mut self,
+        session_id: &str,
+        tool_call_id: &str,
+        kind: Option<agent_client_protocol::schema::v1::ToolKind>,
+        paths: Option<Vec<PathBuf>>,
+    ) {
+        let root = self.subagents.root_of(session_id).to_string();
+        self.tool_policies
+            .note_call(&root, tool_call_id, kind, paths);
+    }
+
+    /// The host's answer to a permission request, or `None` when the session
+    /// has no allowlist. A native subagent uses the allowlist of its chat.
+    pub(crate) fn answer_permission(
+        &self,
+        session_id: &str,
+        tool_call: &agent_client_protocol::schema::v1::ToolCallUpdate,
+        options: &[agent_client_protocol::schema::v1::PermissionOption],
+    ) -> Option<ToolDecision> {
+        let root = self.session_root(session_id);
+        let root = root.map(|r| r.canonicalize().unwrap_or(r));
+        self.tool_policies.answer(
+            self.subagents.root_of(session_id),
+            root.as_deref(),
+            tool_call,
+            options,
+        )
     }
 
     /// Look up the canonicalized workspace root for a session, if known. A
@@ -487,9 +541,13 @@ impl DriverState {
         self.model_config_ids.remove(session_id);
         self.legacy_model_sessions.remove(session_id);
         self.promotable_sessions.remove(session_id);
+        self.tool_policies.forget(session_id);
         self.last_commands.forget(session_id);
         self.subagents.forget_root(session_id);
         self.subagent_records.forget_root(session_id);
+        // A closed or deleted session no longer works. A close tells clients
+        // with `session_closed`; a delete reports `agent_working` itself.
+        self.unprompted.end(session_id);
     }
 
     /// Whether an `available_commands_update` repeats the set last fanned
@@ -841,6 +899,7 @@ impl DriverState {
                     .values()
                     .map(|w| w.open_count)
                     .sum::<usize>(),
+            unprompted_sessions: self.unprompted.count(),
             last_active_at: self.last_active.last(),
         }
     }

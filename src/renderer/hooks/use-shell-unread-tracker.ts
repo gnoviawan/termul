@@ -1,10 +1,10 @@
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect } from 'react'
 import { useShallow } from 'zustand/shallow'
-import { useAgentChatUnreadTracker } from '@/hooks/use-agent-chat-unread-tracker'
 import { useChatReadMarker } from '@/hooks/use-chat-read-marker'
 import { resolveMobileActiveLeaf } from '@/hooks/use-mobile-active-leaf'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
-import { startChatReadSync } from '@/lib/chat-read-sync'
+import { startChatActivitySync } from '@/lib/chat-activity-sync'
+import { useChatActivityStore } from '@/stores/chat-activity-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 import type { LeafNode, PaneNode } from '@/types/workspace.types'
 
@@ -37,17 +37,23 @@ export function activeChatSessionIds(
 }
 
 /**
- * The one `useAgentChatUnreadTracker` mount per renderer, with the host's
- * shared last-read markers that clear a dot when the chat is read on another
- * surface. Called from `WorkspaceLayout`, which serves both `TauriApp.tsx` and
- * `App.tsx`.
+ * The one per-renderer mount of the host's chat activity: it mirrors the
+ * `chat_activity` watch every chat list reads, tells the store which chats this
+ * renderer shows (their "New activity" dot stays hidden here), and reports
+ * those chats read so the dot clears on every surface. Called from
+ * `WorkspaceLayout`, which serves both `TauriApp.tsx` and `App.tsx`.
  */
 export function useShellUnreadTracker(): void {
   const mobile = useMobileWebShell()
   const activeSessionIds = useWorkspaceStore(
     useShallow((state) => activeChatSessionIds(state.root, state.activePaneId, mobile))
   )
-  useEffect(() => startChatReadSync(), [])
-  useAgentChatUnreadTracker(activeSessionIds)
+  useEffect(() => startChatActivitySync(), [])
+  const activeKey = activeSessionIds.join('\u0000')
+  // Before paint: a chat switched to must not show its own dot for a frame.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: activeKey is the stable identity of activeSessionIds
+  useLayoutEffect(() => {
+    useChatActivityStore.getState().setViewing(activeSessionIds)
+  }, [activeKey])
   useChatReadMarker(activeSessionIds)
 }

@@ -179,7 +179,7 @@ async fn an_automation_is_built_approved_and_run_over_its_routes() {
             "issues": [],
             "policy": {
                 "trigger_summary": "manual only", "next_runs": [], "agents": [],
-                "secrets": [], "outbound_hosts": [], "untrusted_flow": false,
+                "secrets": [], "outbound_hosts": [], "mcp_tools": [], "untrusted_flow": false,
                 "failure_policy": "backoff 30s/1m/5m/15m/60m"
             }
         }))

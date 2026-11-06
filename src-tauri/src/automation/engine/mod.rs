@@ -8,6 +8,7 @@ mod agent;
 mod control;
 mod executor;
 mod http;
+mod mcp;
 mod nodes;
 mod park;
 mod workdir;
@@ -24,7 +25,10 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use super::agents::AgentRegistry;
-use super::model::{Automation, AutomationChanged, AutomationId, Run, RunId, RunStatus, RunTrigger};
+use super::mcp::{McpClient, McpTools, OnListingChanged, ProjectMcpServers};
+use super::model::{
+    Automation, AutomationChanged, AutomationId, NodeSpec, Run, RunId, RunStatus, RunTrigger,
+};
 use super::secrets::Secrets;
 use super::store::{AutomationStore, ClaimOutcome, StoreResult};
 use executor::WalkResult;
@@ -56,7 +60,8 @@ pub type ProjectRoots = Arc<dyn Fn(&str) -> Option<PathBuf> + Send + Sync>;
 pub struct HttpConfig {
     /// Wall-clock budget of one request, body included.
     pub request_timeout: Duration,
-    /// Response bytes kept in the step output; the rest is cut.
+    /// Response bytes kept in the step output; the rest is cut. An
+    /// `mcp_tool` step whose structured output is larger fails instead.
     pub body_cap: usize,
     /// DNS overrides, so tests can serve a real hostname locally.
     pub resolve: Vec<(String, SocketAddr)>,
@@ -80,6 +85,8 @@ pub struct EngineDeps {
     pub project_roots: ProjectRoots,
     pub clock: Arc<dyn Clock>,
     pub http: HttpConfig,
+    pub mcp_servers: ProjectMcpServers,
+    pub mcp_client: Arc<dyn McpClient>,
 }
 
 struct ActiveRun {
@@ -95,6 +102,7 @@ pub struct Engine {
     project_roots: ProjectRoots,
     clock: Arc<dyn Clock>,
     http: http::HttpRunner,
+    mcp: Arc<McpTools>,
     changes: broadcast::Sender<AutomationChanged>,
     /// One entry per automation with a run in flight: the overlap guard and
     /// the cancel handle.
@@ -115,7 +123,17 @@ impl Engine {
             project_roots,
             clock,
             http,
+            mcp_servers,
+            mcp_client,
         } = deps;
+        let changes = broadcast::channel(256).0;
+        let mcp = McpTools::new(
+            mcp_servers,
+            project_roots.clone(),
+            mcp_client,
+            clock.clone(),
+            listing_changed(store.clone(), changes.clone()),
+        );
         Ok(Arc::new(Self {
             store,
             agents,
@@ -124,7 +142,8 @@ impl Engine {
             project_roots,
             clock,
             http: http::HttpRunner::new(http)?,
-            changes: broadcast::channel(256).0,
+            mcp,
+            changes,
             active: Mutex::new(HashMap::new()),
             tasks: TaskTracker::new(),
             shutdown: CancellationToken::new(),
@@ -142,6 +161,10 @@ impl Engine {
 
     pub fn secrets(&self) -> &Arc<Secrets> {
         &self.secrets
+    }
+
+    pub fn mcp(&self) -> &Arc<McpTools> {
+        &self.mcp
     }
 
     pub fn now_ms(&self) -> i64 {
@@ -458,6 +481,36 @@ fn forget(active: &mut HashMap<AutomationId, ActiveRun>, run: &Run) {
     }
 }
 
+/// A server's tools changed: every automation of the project with an
+/// `mcp_tool` node on it has new issues, so its open screens read it again.
+fn listing_changed(
+    store: Arc<AutomationStore>,
+    changes: broadcast::Sender<AutomationChanged>,
+) -> OnListingChanged {
+    Arc::new(move |project_id, server_id| {
+        let automations = match store.list(Some(project_id)) {
+            Ok(automations) => automations,
+            Err(error) => {
+                log::warn!("[Automation] list for an MCP listing change failed: {error}");
+                return;
+            }
+        };
+        let uses_server = |a: &Automation| {
+            a.graph.nodes.iter().any(|n| {
+                matches!(&n.spec, NodeSpec::McpTool { server_id: id, .. } if id == server_id)
+            })
+        };
+        for automation in automations.iter().filter(|a| uses_server(a)) {
+            let _ = changes.send(AutomationChanged {
+                project_id: project_id.to_string(),
+                automation_id: Some(automation.id.clone()),
+                proposed: false,
+                proposed_by: None,
+            });
+        }
+    })
+}
+
 pub struct EngineHandle {
     engine: Arc<Engine>,
     running: Mutex<
@@ -484,5 +537,7 @@ impl EngineHandle {
 mod approval_tests;
 #[cfg(test)]
 mod control_tests;
+#[cfg(test)]
+mod mcp_tests;
 #[cfg(test)]
 mod tests;

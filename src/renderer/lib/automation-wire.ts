@@ -7,6 +7,7 @@
 
 import type {
   AgentPolicy,
+  AgentTool,
   ApplyOpsResult,
   ApprovalDecision,
   ApprovalStepOutput,
@@ -25,6 +26,7 @@ import type {
   JsonSchemaSubset,
   KnownAgent,
   LastRun,
+  McpToolPolicy,
   NodeId,
   NodeSpec,
   Parked,
@@ -89,6 +91,12 @@ const RUN_TRIGGERS = ['scheduled', 'catch_up', 'manual'] as const
 const PORTS = ['out', 'error', 'true', 'false', 'item'] as const
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const
 const CONDITION_OPS = ['eq', 'ne', 'contains', 'gt', 'lt', 'exists'] as const
+const AGENT_TOOLS: readonly AgentTool[] = ['read', 'search', 'edit', 'execute', 'fetch', 'other']
+
+function agentTools(v: unknown, p: string): AgentTool[] {
+  return arr(v, p, (tool, tp) => oneOf(tool, tp, AGENT_TOOLS))
+}
+
 const MERGE_MODES = ['any', 'all'] as const
 
 const automationId = (v: unknown, p: string): AutomationId => str(v, p) as AutomationId
@@ -151,7 +159,8 @@ function nodeSpec(v: unknown, p: string): NodeSpec {
         // The host validated the schema subset; the renderer only displays it.
         output_schema: obj(o.output_schema, `${p}.output_schema`) as JsonSchemaSubset,
         timeout_ms: num(o.timeout_ms, `${p}.timeout_ms`),
-        max_attempts: num(o.max_attempts, `${p}.max_attempts`)
+        max_attempts: num(o.max_attempts, `${p}.max_attempts`),
+        tools: agentTools(o.tools, `${p}.tools`)
       }
     case 'transform':
       return { kind: 'transform', fields: arr(o.fields, `${p}.fields`, namedTemplate) }
@@ -164,6 +173,14 @@ function nodeSpec(v: unknown, p: string): NodeSpec {
       }
     case 'fail':
       return { kind: 'fail', message: str(o.message, `${p}.message`) }
+    case 'mcp_tool':
+      return {
+        kind: 'mcp_tool',
+        server_id: str(o.server_id, `${p}.server_id`),
+        tool: str(o.tool, `${p}.tool`),
+        arguments: arr(o.arguments, `${p}.arguments`, namedTemplate),
+        timeout_ms: num(o.timeout_ms, `${p}.timeout_ms`)
+      }
     case 'for_each':
       return {
         kind: 'for_each',
@@ -181,7 +198,10 @@ function nodeSpec(v: unknown, p: string): NodeSpec {
         timeout_ms: num(o.timeout_ms, `${p}.timeout_ms`)
       }
     default:
-      return fail(`${p}.kind`, 'http|agent|transform|condition|fail|for_each|merge|wait|approval')
+      return fail(
+        `${p}.kind`,
+        'http|agent|transform|condition|fail|for_each|merge|wait|approval|mcp_tool'
+      )
   }
 }
 
@@ -266,7 +286,17 @@ function agentPolicy(v: unknown, p: string): AgentPolicy {
     agent_id: str(o.agent_id, `${p}.agent_id`),
     model: nullable(o.model, `${p}.model`, str),
     timeout_ms: num(o.timeout_ms, `${p}.timeout_ms`),
-    tools: oneOf(o.tools, `${p}.tools`, ['none'] as const)
+    tools: agentTools(o.tools, `${p}.tools`)
+  }
+}
+
+function mcpToolPolicy(v: unknown, p: string): McpToolPolicy {
+  const o = obj(v, p)
+  return {
+    node_id: nodeId(o.node_id, `${p}.node_id`),
+    server_id: str(o.server_id, `${p}.server_id`),
+    server_name: nullable(o.server_name, `${p}.server_name`, str),
+    tool: str(o.tool, `${p}.tool`)
   }
 }
 
@@ -288,6 +318,7 @@ function runPolicy(v: unknown, p: string): RunPolicy {
     agents: arr(o.agents, `${p}.agents`, agentPolicy),
     secrets: arr(o.secrets, `${p}.secrets`, perNode('names')),
     outbound_hosts: arr(o.outbound_hosts, `${p}.outbound_hosts`, perNode('hosts')),
+    mcp_tools: arr(o.mcp_tools, `${p}.mcp_tools`, mcpToolPolicy),
     untrusted_flow: bool(o.untrusted_flow, `${p}.untrusted_flow`),
     failure_policy: str(o.failure_policy, `${p}.failure_policy`)
   }
