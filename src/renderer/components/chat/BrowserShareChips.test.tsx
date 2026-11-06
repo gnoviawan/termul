@@ -24,7 +24,13 @@ const store = () => useBrowserShareStore.getState()
 beforeEach(() => {
   revoke.mockReset()
   runtime.tauri = true
-  useBrowserShareStore.setState({ shares: {}, pending: {}, revoking: {}, consentTabId: null })
+  useBrowserShareStore.setState({
+    shares: {},
+    pending: {},
+    ended: {},
+    revoking: {},
+    consentTabId: null
+  })
 })
 
 afterEach(() => {
@@ -40,9 +46,7 @@ describe('BrowserShareChips', () => {
     const chips = screen.getAllByRole('listitem')
     expect(chips).toHaveLength(1)
     expect(chips[0]).toHaveTextContent('https://app.example.com')
-    expect(chips[0]).toHaveTextContent(
-      'Page content · Screenshot · Sends with your message · 10 min left'
-    )
+    expect(chips[0]).toHaveTextContent('Page content · Screenshot · Ready to share · 10 min left')
   })
 
   it('stops a live share in one action', async () => {

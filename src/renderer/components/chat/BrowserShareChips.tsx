@@ -1,9 +1,10 @@
 /**
  * Browser tabs shared with this chat, shown in the composer: origin, shared
- * scopes, time left or why sharing ended, and one-action stop. Pending
- * shares go out with the next message as the host's reference block; a sent
- * share stays listed while it is live so the user always sees what the agent
- * can still read.
+ * scopes, time left or why sharing ended, and one-action stop. A ready
+ * (pending) share goes out with the next message as the host's reference
+ * block. "Shared" means only that a message carrying it left this composer,
+ * not that the agent read it; a sent share stays listed while it is live so
+ * the user always sees what the agent can still read.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -86,11 +87,7 @@ export function BrowserShareChips({ sessionId }: { sessionId: string }): React.J
     >
       {shares.map((share) => {
         const live = share.status === 'active' && share.expiresAtMs > now
-        const state = pending[share.shareId]
-          ? live
-            ? 'Sends with your message'
-            : 'Not sent'
-          : 'Shared'
+        const state = pending[share.shareId] ? (live ? 'Ready to share' : 'Not sent') : 'Shared'
         const status = browserShareStatusLabel(share.status, share.expiresAtMs, now)
         return (
           <li

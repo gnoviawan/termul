@@ -107,9 +107,13 @@ function BrowserShareIndicator({
 }): React.JSX.Element | null {
   const shares = useBrowserShareStore(useShallow((s) => selectTabActiveShares(s, browserTabId)))
   const revoking = useBrowserShareStore((s) => s.revoking)
+  const pending = useBrowserShareStore((s) => s.pending)
   const revoke = useBrowserShareStore((s) => s.revoke)
   const [failed, setFailed] = useState(false)
   if (shares.length === 0) return null
+  const label = shares.some((share) => !pending[share.shareId])
+    ? 'Shared with chat'
+    : 'Ready to share with chat'
   const scopes = BROWSER_SHARE_SCOPES.filter((scope) =>
     shares.some((share) => share.scopes.includes(scope))
   )
@@ -121,12 +125,12 @@ function BrowserShareIndicator({
   }
   return (
     <section
-      aria-label="Shared with chat"
+      aria-label={label}
       className="flex shrink-0 items-center gap-2 border-l-2 border-primary border-b border-border bg-card px-3 py-1.5 text-2xs"
     >
       <MessageSquarePlus size={14} className="shrink-0 text-primary" aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate">
-        <span className="font-medium text-foreground">Shared with chat:</span>{' '}
+        <span className="font-medium text-foreground">{label}:</span>{' '}
         <span className="text-muted-foreground">{browserShareScopeSummary(scopes)}</span>
         {failed ? <span className="text-destructive"> · Could not stop. Try again.</span> : null}
       </span>

@@ -4,10 +4,17 @@
  * mirrors what the host reports, so a share is shown until the host says it
  * ended or confirms a revoke.
  *
- * A share is `pending` from creation until the next prompt of its session
- * carries its reference. A pending share that ends stays listed with its
- * status so the user sees why it will not be sent; an ended share that was
- * already sent is dropped.
+ * A share is `pending` ("ready to share") until a prompt of its session
+ * that carries its reference goes out from this renderer. That includes a
+ * live share this renderer first hears of from a host event or the host
+ * list (after a reload it cannot know whether one was sent). A pending share
+ * that ends stays listed with its status so the user sees why it will not be
+ * sent; an ended share that was already sent is dropped.
+ *
+ * The host may report a share's end before the create reply arrives, so
+ * every share id the host reported ended is remembered in `ended`: a later
+ * active view of that id (the create reply, a host list) never makes it live
+ * again.
  */
 
 import { create } from 'zustand'
@@ -22,6 +29,8 @@ import { logFrontendError } from '@/lib/log-api'
 interface BrowserShareState {
   shares: Readonly<Record<string, BrowserShareView>>
   pending: Readonly<Record<string, true>>
+  /** The last ended view of every share id that ended, by id. */
+  ended: Readonly<Record<string, BrowserShareView>>
   revoking: Readonly<Record<string, true>>
   /** The user tab whose share consent strip is open, if any. */
   consentTabId: string | null
@@ -42,25 +51,39 @@ function without<T>(record: Readonly<Record<string, T>>, key: string): Record<st
 export const useBrowserShareStore = create<BrowserShareState>((set, get) => ({
   shares: {},
   pending: {},
+  ended: {},
   revoking: {},
   consentTabId: null,
   upsert: (view, options) =>
     set((s) => {
-      const pending = options?.pending ? { ...s.pending, [view.shareId]: true as const } : s.pending
-      if (view.status !== 'active' && !pending[view.shareId]) {
-        return {
-          shares: without(s.shares, view.shareId),
-          revoking: without(s.revoking, view.shareId)
+      const id = view.shareId
+      const markPending = (): Record<string, true> => ({ ...s.pending, [id]: true })
+      if (view.status !== 'active') {
+        const ended = { ...s.ended, [id]: view }
+        if (s.pending[id] || options?.pending) {
+          return { ended, shares: { ...s.shares, [id]: view }, pending: markPending() }
         }
+        return { ended, shares: without(s.shares, id), revoking: without(s.revoking, id) }
       }
-      return { shares: { ...s.shares, [view.shareId]: view }, pending }
+      const endedView = s.ended[id]
+      if (endedView) {
+        // A create reply after its end: list it ended, so the user sees why.
+        if (!options?.pending || s.shares[id]) return s
+        return { shares: { ...s.shares, [id]: endedView }, pending: markPending() }
+      }
+      const unsent = options?.pending || !(id in s.shares)
+      return { shares: { ...s.shares, [id]: view }, pending: unsent ? markPending() : s.pending }
     }),
   remove: (shareId) =>
-    set((s) => ({
-      shares: without(s.shares, shareId),
-      pending: without(s.pending, shareId),
-      revoking: without(s.revoking, shareId)
-    })),
+    set((s) => {
+      const view = s.shares[shareId]
+      return {
+        shares: without(s.shares, shareId),
+        pending: without(s.pending, shareId),
+        revoking: without(s.revoking, shareId),
+        ended: view ? { ...s.ended, [shareId]: { ...view, status: 'revoked' } } : s.ended
+      }
+    }),
   markSent: (shareIds) =>
     set((s) => {
       let pending = s.pending

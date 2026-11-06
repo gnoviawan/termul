@@ -2739,12 +2739,24 @@ describe('ChatInputBar browser share', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsTauri.mockReturnValue(true)
-    useBrowserShareStore.setState({ shares: {}, pending: {}, revoking: {}, consentTabId: null })
+    useBrowserShareStore.setState({
+      shares: {},
+      pending: {},
+      ended: {},
+      revoking: {},
+      consentTabId: null
+    })
   })
 
   afterEach(() => {
     mockIsTauri.mockReturnValue(false)
-    useBrowserShareStore.setState({ shares: {}, pending: {}, revoking: {}, consentTabId: null })
+    useBrowserShareStore.setState({
+      shares: {},
+      pending: {},
+      ended: {},
+      revoking: {},
+      consentTabId: null
+    })
   })
 
   it('sends a pending share as the host reference block once, then keeps it listed as shared', async () => {
@@ -2756,7 +2768,7 @@ describe('ChatInputBar browser share', () => {
     )
     const onSendBlocks = vi.fn()
     renderInputBar({ onSendBlocks })
-    expect(screen.getByText(/Sends with your message/)).toBeInTheDocument()
+    expect(screen.getByText(/Ready to share/)).toBeInTheDocument()
 
     setComposerValue('why does login fail?')
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
@@ -2778,6 +2790,25 @@ describe('ChatInputBar browser share', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     await waitFor(() => expect(getComposerValue()).toBe(''))
     expect(onSendBlocks).not.toHaveBeenCalled()
+  })
+
+  it('sends a share the host listed after a reload with the next message, then calls it shared', async () => {
+    const s = session()
+    act(() => useBrowserShareStore.getState().upsert(browserShareView({ sessionId: s.id })))
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+    expect(screen.getByText(/Ready to share/)).toBeInTheDocument()
+    expect(screen.queryByText(/· Shared ·/)).toBeNull()
+
+    setComposerValue('look')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() =>
+      expect(onSendBlocks).toHaveBeenCalledWith([
+        { type: 'text', text: 'look' },
+        { type: 'resource_link', uri: 'termul-browser-share://host-share-1', name: 'Browser page' }
+      ])
+    )
+    expect(screen.getByText(/· Shared ·/)).toBeInTheDocument()
   })
 
   it('does not send a share that ended before the message went out', async () => {

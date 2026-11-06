@@ -82,7 +82,13 @@ beforeEach(() => {
   acpState.sessions = {
     'sess-1': { id: 'sess-1', agentId: 'live-claude', status: 'active', title: 'Fix login' }
   }
-  useBrowserShareStore.setState({ shares: {}, pending: {}, revoking: {}, consentTabId: null })
+  useBrowserShareStore.setState({
+    shares: {},
+    pending: {},
+    ended: {},
+    revoking: {},
+    consentTabId: null
+  })
   setTabUrl(USER_TAB, 'https://app.example.com/login?token=secret#frag')
 })
 
@@ -174,7 +180,7 @@ describe('BrowserShareStrip consent', () => {
     const state = useBrowserShareStore.getState()
     expect(state.pending['host-share-1']).toBe(true)
     expect(state.consentTabId).toBeNull()
-    expect(screen.getByRole('region', { name: 'Shared with chat' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Ready to share with chat' })).toBeInTheDocument()
     const logged = JSON.stringify(logs)
     expect(logged).not.toContain('example.com')
     expect(logged).not.toContain('host-share-1')
@@ -187,6 +193,37 @@ describe('BrowserShareStrip consent', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/changed to another site/)
     expect(useBrowserShareStore.getState().shares).toEqual({})
     expect(JSON.stringify(logs)).toContain('code=ORIGIN_CHANGED')
+  })
+
+  it('a share the host ended before its create reply arrived stays ended', async () => {
+    create.mockImplementation(async () => {
+      const store = useBrowserShareStore.getState()
+      store.upsert(browserShareView({ tabId: USER_TAB }))
+      store.upsert(browserShareView({ tabId: USER_TAB, status: 'navigated' }))
+      return { success: true, data: browserShareView({ tabId: USER_TAB }) }
+    })
+    open()
+    await act(async () => fireEvent.click(shareButton()))
+    expect(useBrowserShareStore.getState().shares['host-share-1']?.status).toBe('navigated')
+    expect(screen.queryByRole('region', { name: /share with chat|Shared with chat/i })).toBeNull()
+  })
+
+  it('does not share into a stopped chat', () => {
+    acpState.sessions['sess-1'].status = 'closed'
+    open()
+    expect(screen.getByText(/Open a chat first/)).toBeInTheDocument()
+    expect(shareButton()).toBeDisabled()
+  })
+
+  it.each([
+    ['SCOPE_UNAVAILABLE', /cannot be shared from this tab/],
+    ['ORIGIN_NOT_SHAREABLE', /This page cannot be shared/],
+    ['SHARE_LIMIT', /Too many pages are shared/]
+  ])('says why the host refused with %s', async (code, message) => {
+    create.mockResolvedValue({ success: false, code })
+    open()
+    await act(async () => fireEvent.click(shareButton()))
+    expect(screen.getByRole('alert')).toHaveTextContent(message)
   })
 
   it('cancel closes without sharing', () => {
@@ -204,6 +241,7 @@ describe('BrowserShareStrip indicator', () => {
     store.upsert(browserShareView({ tabId: USER_TAB, scopes: ['content'] }))
     store.upsert(browserShareView({ shareId: 'two', tabId: USER_TAB, scopes: ['screenshot'] }))
     store.upsert(browserShareView({ shareId: 'other-tab', tabId: 'tab-x' }))
+    store.markSent(['two'])
     renderPane()
     const region = screen.getByRole('region', { name: 'Shared with chat' })
     expect(region).toHaveTextContent('Page content · Screenshot')
@@ -218,7 +256,7 @@ describe('BrowserShareStrip indicator', () => {
     useBrowserShareStore.getState().upsert(browserShareView({ tabId: USER_TAB }))
     renderPane()
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Stop sharing' })))
-    expect(screen.getByRole('region', { name: 'Shared with chat' })).toHaveTextContent(
+    expect(screen.getByRole('region', { name: 'Ready to share with chat' })).toHaveTextContent(
       'Could not stop'
     )
   })

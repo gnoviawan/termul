@@ -35,7 +35,13 @@ import {
 const store = () => useBrowserShareStore.getState()
 
 beforeEach(() => {
-  useBrowserShareStore.setState({ shares: {}, pending: {}, revoking: {}, consentTabId: null })
+  useBrowserShareStore.setState({
+    shares: {},
+    pending: {},
+    ended: {},
+    revoking: {},
+    consentTabId: null
+  })
   api.revoke.mockReset()
   api.list.mockReset().mockResolvedValue({ success: true, data: [] })
   api.changed.length = 0
@@ -76,6 +82,52 @@ describe('upsert and ending', () => {
     store().upsert(view({ shareId: 'b', sessionId: 'sess-2', tabId: 'tab-2' }))
     expect(selectSessionShares(store(), 'sess-1').map((v) => v.shareId)).toEqual(['host-share-1'])
     expect(selectTabActiveShares(store(), 'tab-2').map((v) => v.shareId)).toEqual(['b'])
+  })
+})
+
+describe('share identity and order', () => {
+  it('an ended event before the create reply keeps the share ended and unsendable', () => {
+    store().upsert(view())
+    store().upsert(view({ status: 'navigated' }))
+    store().upsert(view(), { pending: true })
+    expect(store().shares['host-share-1']?.status).toBe('navigated')
+    expect(selectTabActiveShares(store(), 'tab-1')).toEqual([])
+  })
+
+  it('an ended event that is the first word on a share beats the late create reply', () => {
+    store().upsert(view({ status: 'closed' }))
+    store().upsert(view(), { pending: true })
+    expect(store().shares['host-share-1']?.status).toBe('closed')
+    expect(selectTabActiveShares(store(), 'tab-1')).toEqual([])
+  })
+
+  it('an ending of one share leaves another share of the same tab and session alone', () => {
+    store().upsert(view({ shareId: 'a' }))
+    store().upsert(view({ shareId: 'b', status: 'revoked' }))
+    store().upsert(view({ shareId: 'a' }), { pending: true })
+    expect(store().shares.a?.status).toBe('active')
+    expect(store().pending.a).toBe(true)
+  })
+
+  it('a share this renderer never sent is ready to share, never sent', () => {
+    store().upsert(view({ shareId: 'listed' }))
+    expect(store().pending.listed).toBe(true)
+  })
+
+  it('a sent share stays sent when the host reports it again', () => {
+    store().upsert(view(), { pending: true })
+    store().markSent(['host-share-1'])
+    store().upsert(view())
+    expect(store().pending).toEqual({})
+    expect(store().shares['host-share-1']?.status).toBe('active')
+  })
+
+  it('a late host list does not bring back a share the user stopped', async () => {
+    api.revoke.mockResolvedValue({ success: true, data: undefined })
+    store().upsert(view(), { pending: true })
+    await store().revoke('host-share-1')
+    store().upsert(view())
+    expect(store().shares).toEqual({})
   })
 })
 
@@ -128,6 +180,7 @@ describe('retainBrowserShareSync', () => {
     const b = retainBrowserShareSync()
     expect(api.changed).toHaveLength(1)
     await vi.waitFor(() => expect(store().shares.listed).toBeDefined())
+    expect(store().pending.listed).toBe(true)
     api.changed[0](view({ shareId: 'evt' }))
     expect(store().shares.evt).toBeDefined()
     a()
