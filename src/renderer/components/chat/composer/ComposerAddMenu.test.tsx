@@ -71,7 +71,7 @@ async function openConnectors(): Promise<void> {
   const trigger = screen.getByRole('menuitem', { name: /Connectors/ })
   act(() => trigger.focus())
   fireEvent.keyDown(trigger, { key: 'ArrowRight' })
-  await screen.findByRole('menuitem', { name: 'Browse connectors' })
+  await screen.findByRole('menuitem', { name: 'Manage connectors' })
 }
 
 describe('ComposerAddMenu', () => {
@@ -176,11 +176,11 @@ describe('ComposerAddMenu', () => {
     expect(screen.getByText('Takes effect on the next chat.')).toBeInTheDocument()
   })
 
-  it('shows an empty registry with a way to browse', async () => {
+  it('shows an empty registry with a way to add one', async () => {
     renderMenu('chat-stale', { servers: [] })
     await openConnectors()
     expect(screen.getByText('No connectors yet')).toBeInTheDocument()
-    expect(screen.getByRole('menuitem', { name: 'Browse connectors' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Manage connectors' })).toBeInTheDocument()
     expect(screen.queryByText('This chat still uses the previous servers.')).toBeNull()
   })
 })

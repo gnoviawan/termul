@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { Paperclip, Plus, RefreshCw, Search, Server, Settings2, Wrench } from '@/components/icons'
+import { Paperclip, Plus, RefreshCw, Server, Settings2, Wrench } from '@/components/icons'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -167,15 +167,6 @@ export function ComposerAddMenu({
             Connectors
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="max-h-[min(26rem,var(--radix-dropdown-menu-content-available-height))] w-64 overflow-y-auto">
-            <DropdownMenuItem
-              onSelect={() => {
-                afterCloseRef.current = 'keep'
-                openConnectorSettings()
-              }}
-            >
-              <Search size={14} aria-hidden="true" className={ICON} />
-              Browse connectors
-            </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => {
                 afterCloseRef.current = 'keep'
