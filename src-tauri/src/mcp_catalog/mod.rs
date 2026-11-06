@@ -89,6 +89,9 @@ pub struct McpCatalogService {
     state_dir: Arc<Mutex<Option<PathBuf>>>,
     /// Last sync cursor. Lets the next sync plan a delta without parsing rows.
     sync_cursor: Arc<Mutex<Option<McpCatalogSource>>>,
+    /// Source of the catalog a restart starts from: the embedded snapshot, or
+    /// the catalog the service was built with.
+    snapshot: McpCatalogSource,
     catalog: Arc<RwLock<Option<Arc<LoadedCatalog>>>>,
     plans: PlanStore,
 }
@@ -210,6 +213,9 @@ impl McpCatalogService {
             load_gate: Arc::new(Mutex::new(())),
             state_dir: Arc::new(Mutex::new(None)),
             sync_cursor: Arc::new(Mutex::new(None)),
+            snapshot: catalog
+                .as_ref()
+                .map_or_else(snapshot::embedded_source, |catalog| catalog.source.clone()),
             catalog: Arc::new(RwLock::new(catalog.map(Arc::new))),
             plans: PlanStore::new(ttl),
         }

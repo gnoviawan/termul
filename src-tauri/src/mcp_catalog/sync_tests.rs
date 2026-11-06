@@ -547,6 +547,7 @@ fn a_cache_older_than_the_snapshot_never_loads() {
     commit(
         dir.path(),
         &base(&[], false),
+        &base(&[], false).source,
         SyncPlan::Full,
         delta,
         synced_at,
@@ -792,6 +793,7 @@ fn a_failed_snapshot_ignores_an_incremental_cache_and_keeps_a_full_one() {
     commit(
         dir.path(),
         &base(&[], false),
+        &base(&[], false).source,
         SyncPlan::Full,
         full,
         synced_at,
@@ -811,7 +813,8 @@ fn a_failed_snapshot_ignores_an_incremental_cache_and_keeps_a_full_one() {
     commit(
         incremental_dir.path(),
         &base(&["io.example/alpha"], false),
-        SyncPlan::Since(synced_at),
+        &base(&[], false).source,
+        SyncPlan::Since(SNAPSHOT_AT.parse().unwrap()),
         delta,
         "2026-10-29T00:00:00Z".parse().unwrap(),
     )
@@ -822,6 +825,64 @@ fn a_failed_snapshot_ignores_an_incremental_cache_and_keeps_a_full_one() {
     assert!(waiting.items.is_empty());
     assert!(waiting.source.sample);
     assert!(waiting.source.updated_at.is_none());
+}
+
+/// Commits an incremental sync from `from` with no cache on disk. The loaded
+/// catalog's cursor is `from`, as `SyncPlan::for_catalog` plans it.
+fn commit_beta_over_stamp(
+    stamp: Option<&str>,
+    from: DateTime<Utc>,
+) -> (tempfile::TempDir, std::io::Result<LoadedCatalog>) {
+    let dir = tempfile::tempdir().unwrap();
+    if let Some(stamp) = stamp {
+        std::fs::write(dir.path().join("registry-cursor.json"), stamp).unwrap();
+    }
+    let mut delta = Delta::default();
+    delta.rows.insert(
+        "io.example/beta".to_string(),
+        Some(raw_row("io.example/beta")),
+    );
+    let mut current = base(&["io.example/alpha"], false);
+    current.source.updated_at = Some(from.to_rfc3339());
+    let outcome = commit(
+        dir.path(),
+        &current,
+        &base(&[], false).source,
+        SyncPlan::Since(from),
+        delta,
+        "2026-10-28T00:00:00Z".parse().unwrap(),
+    );
+    (dir, outcome)
+}
+
+#[test]
+fn an_incremental_commit_without_a_cache_trusts_only_a_stamp_older_than_the_snapshot() {
+    let snapshot_at: DateTime<Utc> = SNAPSHOT_AT.parse().unwrap();
+    let old_stamp = r#"{"cursor":"2026-10-01T00:00:00.000Z","full":true}"#;
+    for stamp in [Some(old_stamp), None] {
+        let (dir, started) = commit_beta_over_stamp(stamp, snapshot_at);
+        assert_eq!(started.unwrap().items.len(), 2, "{stamp:?}");
+        let cache = read_cache(dir.path(), &base(&[], false).source).unwrap();
+        assert!(!cache.full);
+        let cached: Vec<_> = cache.servers.keys().map(String::as_str).collect();
+        assert_eq!(cached, ["io.example/beta"]);
+    }
+
+    // A catalog that synced past the snapshot holds changes a delta from its
+    // cursor would not, so a restart onto the snapshot would lose them.
+    let synced_past: DateTime<Utc> = "2026-10-27T12:00:00Z".parse().unwrap();
+    let snapshot_stamp = format!(r#"{{"cursor":"{SNAPSHOT_AT}","full":true}}"#);
+    let refused = [
+        (Some(snapshot_stamp.as_str()), snapshot_at),
+        (Some("not json"), snapshot_at),
+        (Some(old_stamp), synced_past),
+        (None, synced_past),
+    ];
+    for (stamp, from) in refused {
+        let (_dir, outcome) = commit_beta_over_stamp(stamp, from);
+        let error = outcome.expect_err(&format!("{stamp:?} from {from}"));
+        assert_eq!(error.to_string(), "registry cache missing or invalid");
+    }
 }
 
 #[tokio::test]
@@ -869,6 +930,7 @@ async fn a_rejected_attach_keeps_the_accepted_hosts_directory() {
     commit(
         dir_a.path(),
         &base(&[], true),
+        &base(&[], false).source,
         SyncPlan::Full,
         alpha,
         synced_at,
@@ -882,6 +944,7 @@ async fn a_rejected_attach_keeps_the_accepted_hosts_directory() {
     commit(
         dir_b.path(),
         &base(&[], true),
+        &base(&[], false).source,
         SyncPlan::Full,
         beta,
         synced_at,
@@ -983,14 +1046,8 @@ async fn assert_full_crawl_survives_restart(
     .await;
     assert!(!status.source.sample);
     assert_named(&rows(service).await, expected);
-    let first_pages: Vec<bool> = mock
-        .requests()
-        .iter()
-        .filter(|request| request.starts_with("/v0.1/servers?") && !request.contains("cursor="))
-        .map(|request| request.contains("version=latest"))
-        .collect();
     // One incremental attempt, then exactly one full crawl.
-    assert_eq!(first_pages, [false, true]);
+    assert_eq!(first_pages(mock), [false, true]);
 
     write_setting(dir, false);
     let restarted = counting_service(&Arc::new(AtomicUsize::new(0)));
@@ -1020,10 +1077,24 @@ async fn assert_full_crawl_survives_restart(
     assert_named(&last, expected);
 }
 
+fn first_pages(mock: &MockRegistry) -> Vec<bool> {
+    mock.requests()
+        .iter()
+        .filter(|request| request.starts_with("/v0.1/servers?") && !request.contains("cursor="))
+        .map(|request| request.contains("version=latest"))
+        .collect()
+}
+
+fn read_stamp_file(dir: &Path) -> Option<Value> {
+    serde_json::from_slice(&std::fs::read(dir.join("registry-cursor.json")).ok()?).ok()
+}
+
+/// An upgrade ships a snapshot newer than the stamp. The sync crawls from the
+/// snapshot and starts a fresh delta cache instead of a full registry crawl.
 #[tokio::test]
-async fn an_older_cache_than_the_loaded_snapshot_recovers_with_a_full_crawl() {
-    let expected = [("io.example/alpha", "2.0.0"), ("io.example/gamma", "1.0.0")];
-    let mock = MockRegistry::new(registry_rows(&expected), vec![]);
+async fn an_older_cache_than_the_loaded_snapshot_starts_a_fresh_delta_cache() {
+    let delta = [("io.example/alpha", "2.0.0"), ("io.example/gamma", "1.0.0")];
+    let mock = MockRegistry::new(registry_rows(&delta), vec![]);
     let registry = serve(&mock).await;
     let dir = tempfile::tempdir().unwrap();
     let old: DateTime<Utc> = "2026-10-01T00:00:00Z".parse().unwrap();
@@ -1032,14 +1103,50 @@ async fn an_older_cache_than_the_loaded_snapshot_recovers_with_a_full_crawl() {
         "io.example/stale".to_string(),
         Some(raw_row("io.example/stale")),
     );
-    commit(dir.path(), &base(&[], false), SyncPlan::Full, stale, old).unwrap();
+    commit(
+        dir.path(),
+        &base(&[], false),
+        &base(&[], false).source,
+        SyncPlan::Full,
+        stale,
+        old,
+    )
+    .unwrap();
     let service = start(
         base(&["io.example/stale", "io.example/alpha"], false),
         dir.path(),
         &registry,
     );
 
-    assert_full_crawl_survives_restart(&mock, dir.path(), &service, &expected).await;
+    let restamped = |status: &McpCatalogStatus| {
+        idle(status)
+            && read_stamp_file(dir.path()).is_some_and(|stamp| {
+                stamp["cursor"]
+                    .as_str()
+                    .and_then(|at| at.parse::<DateTime<Utc>>().ok())
+                    > Some(old)
+            })
+    };
+    until(&service, restamped).await;
+    assert_eq!(first_pages(&mock), [false], "{:?}", mock.requests());
+    assert!(
+        mock.requests()[0].contains("updated_since=2026-10-27T00%3A00%3A00.000Z"),
+        "the crawl starts from the snapshot: {:?}",
+        mock.requests()
+    );
+    assert_named(
+        &rows(&service).await,
+        &[
+            ("io.example/alpha", "2.0.0"),
+            ("io.example/gamma", "1.0.0"),
+            ("io.example/stale", "1.0.0"),
+        ],
+    );
+    assert_eq!(read_stamp_file(dir.path()).unwrap()["full"], false);
+    let cache = read_cache(dir.path(), &base(&[], false).source).expect("a fresh delta cache");
+    assert!(!cache.full);
+    let cached: Vec<_> = cache.servers.keys().map(String::as_str).collect();
+    assert_eq!(cached, ["io.example/alpha", "io.example/gamma"]);
 }
 
 #[tokio::test]
