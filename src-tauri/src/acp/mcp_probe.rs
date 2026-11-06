@@ -528,19 +528,28 @@ async fn connect_http(
         }
         config = config.custom_headers(headers);
     }
-    // If the server has a stored OAuth token, inject it as a Bearer auth
+    // If the server has a stored OAuth token and no configured Authorization
+    // header, inject the token as a Bearer auth
     // header so the probe succeeds without re-prompting. This is the
     // "connect once, use forever" path — after the OAuth flow completes and
     // the token is persisted, every subsequent probe loads and uses it.
-    let stored_token = match crate::acp::mcp_oauth::get_valid_token(url).await {
-        Ok(token) => token,
-        Err(e) => {
-            tracing::warn!(
-                server = %server.name,
-                transport,
-                "MCP probe: token lookup failed (url redacted): {e}"
-            );
-            None
+    let has_auth_header = server
+        .headers
+        .iter()
+        .any(|pair| pair.name.eq_ignore_ascii_case("Authorization"));
+    let stored_token = if has_auth_header {
+        None
+    } else {
+        match crate::acp::mcp_oauth::get_valid_token(url).await {
+            Ok(token) => token,
+            Err(e) => {
+                tracing::warn!(
+                    server = %server.name,
+                    transport,
+                    "MCP probe: token lookup failed (url redacted): {e}"
+                );
+                None
+            }
         }
     };
     if let Some(ref token) = stored_token {
