@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Read;
+use std::sync::Arc;
 
 use flate2::read::GzDecoder;
 use serde::de::{SeqAccess, Visitor};
@@ -63,8 +64,9 @@ pub struct McpCatalogSource {
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct LoadedCatalog {
-    /// Sorted by name, one per name.
-    pub items: Vec<CatalogItem>,
+    /// Sorted by name, one per name. Shared, so applying a sync delta copies
+    /// pointers instead of every row of a release catalog.
+    pub items: Vec<Arc<CatalogItem>>,
     pub source: McpCatalogSource,
 }
 
@@ -83,14 +85,14 @@ impl LoadedCatalog {
         changes: impl IntoIterator<Item = (String, Option<CatalogItem>)>,
         source: McpCatalogSource,
     ) -> Self {
-        let mut items: BTreeMap<String, CatalogItem> = self
+        let mut items: BTreeMap<String, Arc<CatalogItem>> = self
             .items
             .iter()
-            .map(|item| (item.name.clone(), item.clone()))
+            .map(|item| (item.name.clone(), Arc::clone(item)))
             .collect();
         for (name, item) in changes {
             match item {
-                Some(item) => items.insert(name, item),
+                Some(item) => items.insert(name, Arc::new(item)),
                 None => items.remove(&name),
             };
         }
@@ -140,7 +142,7 @@ struct SnapshotMeta {
 struct SnapshotFile {
     format_version: u32,
     #[serde(deserialize_with = "deserialize_items")]
-    servers: Vec<CatalogItem>,
+    servers: Vec<Arc<CatalogItem>>,
 }
 
 pub(crate) fn load_embedded() -> LoadedCatalog {
@@ -219,20 +221,21 @@ pub(crate) fn load(gz: &[u8], meta: &str) -> Result<LoadedCatalog, SnapshotError
 }
 
 /// Converts each row as it is read, so the full catalog is never held as a
-/// JSON tree.
+/// JSON tree. Each item gets its own allocation as it is read, so sorting moves
+/// pointers and no catalog-sized buffer of items is ever grown or freed.
 fn deserialize_items<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<Vec<CatalogItem>, D::Error> {
+) -> Result<Vec<Arc<CatalogItem>>, D::Error> {
     struct Rows;
     impl<'de> Visitor<'de> for Rows {
-        type Value = Vec<CatalogItem>;
+        type Value = Vec<Arc<CatalogItem>>;
         fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("an array of registry rows")
         }
         fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
             let mut items = Vec::with_capacity(seq.size_hint().unwrap_or(0));
             while let Some(row) = seq.next_element::<Value>()? {
-                items.extend(item_from_row(row));
+                items.extend(item_from_row(row).map(Arc::new));
             }
             Ok(items)
         }

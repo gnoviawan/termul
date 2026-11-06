@@ -983,6 +983,14 @@ async fn assert_full_crawl_survives_restart(
     .await;
     assert!(!status.source.sample);
     assert_named(&rows(service).await, expected);
+    let first_pages: Vec<bool> = mock
+        .requests()
+        .iter()
+        .filter(|request| request.starts_with("/v0.1/servers?") && !request.contains("cursor="))
+        .map(|request| request.contains("version=latest"))
+        .collect();
+    // One incremental attempt, then exactly one full crawl.
+    assert_eq!(first_pages, [false, true]);
 
     write_setting(dir, false);
     let restarted = counting_service(&Arc::new(AtomicUsize::new(0)));

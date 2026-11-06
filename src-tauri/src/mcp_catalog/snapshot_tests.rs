@@ -318,8 +318,8 @@ fn a_row_that_does_not_parse_is_unsupported_without_failing_the_load() {
     let names: Vec<String> = load(&gz, &meta)
         .unwrap()
         .items
-        .into_iter()
-        .map(|item| item.name)
+        .iter()
+        .map(|item| item.name.clone())
         .collect();
     assert_eq!(names, ["io.example/ok"]);
 }
