@@ -391,3 +391,47 @@ async fn approving_a_run_of_a_deleted_automation_cancels_it_instead() {
         ]
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_resume_whose_worktree_directory_is_gone_fails_instead_of_running_elsewhere() {
+    let f = fixture().await;
+    let repo = f.root.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "init",
+    ]);
+    let mut a = manual(&f.te, gated_graph(&f, true));
+    a.isolation = crate::automation::model::Isolation::WorktreePerRun;
+    let run = f.te.engine.start_run(&a, RunTrigger::Manual, 1_000).unwrap();
+    parked(&f.te, &a, &run.id).await;
+    let dir = repo
+        .join(".termul/worktrees")
+        .join(run.worktree_id.clone().unwrap());
+    assert!(dir.is_dir(), "{dir:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    assert!(f.te.engine.decide(&run.id, &node_id("gate"), true).unwrap());
+    let run = settled(&f.te.store, &run.id).await;
+
+    assert_eq!(
+        (run.status, run.stop_reason.as_deref()),
+        (RunStatus::Failed, Some("worktree_missing"))
+    );
+    assert!(f.seen.posts.lock().is_empty());
+}
