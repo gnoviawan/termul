@@ -6,7 +6,7 @@ import {
   resetNativeWebviewOcclusionForTests
 } from '@/hooks/use-native-webview-occlusion'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
-import { commandToken } from '@/lib/skill-tokens'
+import { commandToken, conversationToken } from '@/lib/skill-tokens'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import { endedState, subagentToolCall } from '@/lib/test-utils/subagent'
 import type { AcpSession } from '@/stores/acp-store'
@@ -210,6 +210,12 @@ vi.mock('@/components/automations/ChatAutomationSuggestion', () => ({
   ChatAutomationSuggestion: () => null
 }))
 
+vi.mock('@/lib/conversation-transcript', () => ({
+  resolveConversationContexts: vi.fn(async () => ({
+    blocks: [{ type: 'text', text: '<conversation transcript>' }],
+    gaps: new Map()
+  }))
+}))
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn()
 }))
@@ -1768,6 +1774,28 @@ describe('AgentChatPanel live-turn retry wire rebuild', () => {
     // The live-turn path never routes through the crashed/failed relaunches.
     expect(mockRetryCrashed).not.toHaveBeenCalled()
     expect(mockRetryFailed).not.toHaveBeenCalled()
+  })
+
+  it('retries a conversation mention with its wire label and the re-read transcript', async () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    const displayBlocks = [
+      { type: 'text', text: `see ${conversationToken('Fix login', 'chat-7')} please` }
+    ]
+    messagesRef.current = [{ id: 'm1', role: 'user', blocks: displayBlocks }]
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await act(async () => {
+      chatMessageListPropsRef.current?.onRetry?.()
+    })
+
+    expect(mockSendPromptBlocks).toHaveBeenCalledWith(
+      's1',
+      [
+        { type: 'text', text: 'see (conversation: Fix login [termul-chat:chat-7]) please' },
+        { type: 'text', text: '<conversation transcript>' }
+      ],
+      { displayBlocks }
+    )
   })
 })
 

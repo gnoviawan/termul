@@ -2,7 +2,6 @@ import type { Editor } from '@tiptap/core'
 import type { MutableRefObject, RefObject } from 'react'
 import { useCallback, useMemo, useRef } from 'react'
 import { toast } from 'sonner'
-import { buildPromptWithLoadedSkills } from '@/hooks/use-agent-skills'
 import type {
   AvailableCommand,
   ContentBlock,
@@ -11,7 +10,7 @@ import type {
 } from '@/lib/acp-api'
 import { docOffsetToDisplayOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { hasSelectionContexts, serializeSelectionContexts } from '@/lib/composer/selection-context'
-import { conversationWireLabel } from '@/lib/conversation-envelope'
+import { composerWireText } from '@/lib/composer/wire-text'
 import {
   type ConversationContexts,
   resolveConversationContexts
@@ -26,8 +25,6 @@ import {
   isFolderTokenPath,
   parseFileSegments,
   replaceCommandTokensInline,
-  replaceConversationTokensInline,
-  replaceFileTokensInline,
   SKILL_TOKEN_START
 } from '@/lib/skill-tokens'
 import type { AgentSkillSummary } from '@/lib/skills-api'
@@ -386,15 +383,8 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
       // second pick).
       const commandNames = extractCommandNames(value)
       const commandName = commandNames[0] ?? null
-      // Selection contexts become the leading quote blocks + `[Context N]`
-      // markers first, while a leading command token is still recognizable.
-      const valueWithCommandText = replaceCommandTokensInline(serializeSelectionContexts(value))
-      // Extract the inline skill tokens and resolve each name to its SKILL.md
-      // path. Paths come from `skillPathsRef` (captured at pick time) first,
-      // then fall back to the currently-available skills list — so editing +
-      // re-sending a chip message (where the ref is empty because paths aren't
-      // persisted with the message) still resolves paths from the live skills
-      // list. A skill surfaced without a path in either blocks the send.
+      // Paths come from the pick-time ref, then the live skills list: an
+      // edited and re-sent message has no ref entries. No path blocks the send.
       const skillNames = extractSkillNames(value)
       const resolvedSkills = skillNames.map((name) => ({
         name,
@@ -410,7 +400,9 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
       // the timeline renders inline file pills; the wire text replaces each
       // token with `(display)` so the agent sees a readable reference alongside
       // the `resource_link` block carrying the real path.
-      const fileSegments = parseFileSegments(valueWithCommandText)
+      const fileSegments = parseFileSegments(
+        replaceCommandTokensInline(serializeSelectionContexts(value))
+      )
       const fileBlocks: ContentBlock[] = []
       const seenPaths = new Set<string>()
       for (const seg of fileSegments) {
@@ -428,19 +420,7 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
           )
         }
       }
-      // Replace file tokens with `(display)` for the wire user-text portion
-      // (mirrors `replaceSkillTokensInline` for skills). Applied BEFORE the
-      // skill framer so the skill framing header wraps the de-filed text.
-      const valueDefiled = replaceConversationTokensInline(
-        replaceFileTokensInline(valueWithCommandText),
-        (title, sessionId) =>
-          conversationWireLabel(
-            title,
-            sessionId,
-            contexts === undefined ? 'unavailable' : (contexts.gaps.get(sessionId) ?? null)
-          )
-      )
-      const wireText = buildPromptWithLoadedSkills(resolvedSkills, valueDefiled)
+      const wireText = composerWireText(value, resolvedSkills, contexts)
       // Display keeps every pill token where the user typed it. Wire text is
       // the same sentence with command tokens already replaced by `/<name>`.
       const displayText = value

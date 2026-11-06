@@ -14,7 +14,7 @@ import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { useAcpStoreVisible } from '@/hooks/use-acp-visible-store'
-import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
+import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { RECONNECT_GRACE_MS, useDelayedFlag } from '@/hooks/use-delayed-flag'
 import { useDockClearance } from '@/hooks/use-dock-clearance'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
@@ -24,13 +24,11 @@ import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } f
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import { formatAcpAgentError } from '@/lib/agents/acp-spawn-errors'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
-import { type SelectionContext, serializeSelectionContexts } from '@/lib/composer/selection-context'
+import type { SelectionContext } from '@/lib/composer/selection-context'
+import { composerWireText } from '@/lib/composer/wire-text'
+import { resolveConversationContexts } from '@/lib/conversation-transcript'
 import { logFrontendError } from '@/lib/log-api'
-import {
-  extractSkillNames,
-  replaceCommandTokensInline,
-  replaceFileTokensInline
-} from '@/lib/skill-tokens'
+import { extractConversationRefs, extractSkillNames } from '@/lib/skill-tokens'
 import { getProjectRootPath } from '@/lib/worktree-context'
 import {
   type ChatMessage,
@@ -616,17 +614,12 @@ export function AgentChatPanel({
     }
     // Re-frame the wire from the token text in the last user message's text
     // blocks + the currently-available skills' paths (skill paths are not
-    // persisted with the message — the spec's Never forbids a new ContentBlock
-    // type, so the wire is reconstructed at retry time like the composer does).
-    // The display (token) blocks are passed through unchanged so the timeline
-    // keeps rendering inline chips. If a skill name no longer resolves to a
-    // path (e.g. the skill was uninstalled), surface a clear error and abort.
-    // Mirrors `buildPromptParts`: command tokens become `/<name>` where the
-    // user typed them. They are not moved to the front of the prompt.
+    // persisted with the message, so the wire is rebuilt at retry time like
+    // the composer does). The display (token) blocks go through unchanged so
+    // the timeline keeps rendering inline chips. A skill that no longer
+    // resolves to a path (uninstalled) aborts with a clear error.
     const tokenText = lastUserText
-    const valueWithCommandText = replaceCommandTokensInline(serializeSelectionContexts(tokenText))
-    const skillNames = extractSkillNames(tokenText)
-    const skills = skillNames.map((name) => ({
+    const skills = extractSkillNames(tokenText).map((name) => ({
       name,
       path: availableSkills.find((s) => s.name === name)?.path ?? ''
     }))
@@ -635,22 +628,22 @@ export function AgentChatPanel({
       toast.error(`Skill '${missingPath.name}' is missing a path`)
       return
     }
-    // File tokens → `(display)` before the skill framer (buildPromptParts'
-    // `valueDefiled`) so file-mention sentinels never leak to the wire either.
-    const valueDefiled = replaceFileTokensInline(valueWithCommandText)
-    const wireText =
-      skills.length > 0 ? buildPromptWithLoadedSkills(skills, valueDefiled) : valueDefiled
-    const wireWithCommand = wireText
-    // Build wire blocks: replace the text payload with the re-framed wire text,
-    // preserving non-text (image/resource) blocks from the original message.
-    const wireBlocks: ContentBlock[] = []
-    const wireTrimmed = wireWithCommand.trim()
-    if (wireTrimmed) wireBlocks.push({ type: 'text', text: wireWithCommand })
-    for (const b of lastUserBlocks) {
-      if (b.type !== 'text') wireBlocks.push(b)
+    const userBlocks = lastUserBlocks
+    const send = async (): Promise<void> => {
+      // Mentioned conversations are re-read like a fresh send: the display
+      // blocks hold only the pill, not the transcript the agent saw.
+      const refs = extractConversationRefs(tokenText)
+      const contexts = refs.length > 0 ? await resolveConversationContexts(refs) : undefined
+      const wireText = composerWireText(tokenText, skills, contexts)
+      // Keep the original non-text (image/resource) blocks after the text.
+      const wireBlocks: ContentBlock[] = wireText.trim() ? [{ type: 'text', text: wireText }] : []
+      for (const b of userBlocks) {
+        if (b.type !== 'text') wireBlocks.push(b)
+      }
+      wireBlocks.push(...(contexts?.blocks ?? []))
+      await sendPromptBlocks(sessionId, wireBlocks, { displayBlocks: userBlocks })
     }
-    // Display = the original (token) blocks so the timeline keeps chips.
-    void sendPromptBlocks(sessionId, wireBlocks, { displayBlocks: lastUserBlocks }).catch((err) => {
+    void send().catch((err) => {
       if (isAgentDeadError(err)) return
       toast.error('Could not send your message. Try again.')
     })
