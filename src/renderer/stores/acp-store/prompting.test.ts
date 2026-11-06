@@ -882,6 +882,43 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
   })
 
+  it('a new send on an idle chat drains a queue a failed send left behind, in order', async () => {
+    seedSession('s1', 'agent-1', true)
+    await useAcpStore.getState().sendPrompt('s1', 'queued A')
+    await useAcpStore.getState().sendPrompt('s1', 'queued B')
+
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error('agent rejected the prompt'))
+      .mockReturnValue(new Promise(() => {}))
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const queueText = () => (useAcpStore.getState().promptQueues['s1'] ?? []).map((q) => q.blocks)
+    const userText = () =>
+      useAcpStore
+        .getState()
+        .messages['s1'].filter((m) => m.role === 'user')
+        .map((m) => m.blocks)
+    expect(queueText()).toEqual([[{ type: 'text', text: 'queued B' }]])
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+
+    await useAcpStore.getState().sendPrompt('s1', 'new C')
+    await Promise.resolve()
+
+    expect(userText()).toEqual([
+      [{ type: 'text', text: 'queued A' }],
+      [{ type: 'text', text: 'queued B' }]
+    ])
+    expect(queueText()).toEqual([[{ type: 'text', text: 'new C' }]])
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
+  })
+
   it('preserves FIFO order when a flushed prompt hits ACP_TURN_IN_PROGRESS', async () => {
     seedSession('s1', 'agent-1', true)
     await useAcpStore.getState().sendPrompt('s1', 'queued A')

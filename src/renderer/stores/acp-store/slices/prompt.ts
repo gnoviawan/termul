@@ -140,8 +140,7 @@ export function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId):
 
   const queue = state.promptQueues[sessionId] ?? []
   if (queue.length === 0) {
-    // Timer may have fired after the user cleared the queue; drop the stale
-    // marker so idle sends are not held behind `busyQueueRetries.has`.
+    // Nothing is left to retry, so the busy-retry ladder starts over.
     clearBusyQueueRetry(sessionId)
     return
   }
@@ -372,6 +371,7 @@ export async function runPromptTurn(
   const displayBlocks = options?.displayBlocks ?? userBlocks
 
   let enqueued = false
+  let drainStalledQueue = false
   let userMessage: ChatMessage | null = null
   let openTurnId = ''
   const skipUserAppend = Boolean(options?.skipUserAppend)
@@ -401,26 +401,20 @@ export async function runPromptTurn(
     // repoints `agentId` at the resolved live agent, dispatching would hit the
     // old (possibly dead) agent with `unknown agent`. Queue here; the open's
     // finally flushes once agentId is repointed and the transcript installed.
-    //
-    // Also queue when this session already has prompts waiting (including a
-    // busy-rejected launch prompt sitting on the ~2s retry ladder). The host
-    // may call the session idle while that retry is pending, and a follow-up
-    // send must not overtake the recovered prompt (#1726).
     const isUnboundLaunchPlaceholder = !current.agentId
     const awaitingAgent = s.openingHistoryIds[sessionId] || isUnboundLaunchPlaceholder
-    // `queuedOrigin` is a dequeue/send-now flush of an item already pulled off
-    // the queue — it must start even while siblings remain queued or a busy
-    // retry timer is still armed. Only brand-new sends honour queuePending.
-    // Only an *armed* busy-retry timer counts as pending. After the timer
-    // fires it nulls itself but the map entry can linger (e.g. user removed
-    // the last queued item before flush ran) — `has()` would then keep every
-    // later idle send enqueued forever (#1736 cubic).
-    const queuePending =
-      (s.promptQueues[sessionId] ?? []).length > 0 ||
-      Boolean(busyQueueRetries.get(sessionId)?.timer)
-    const holdForPriorQueue = !queuedOrigin && queuePending
+    // A new send also waits behind prompts already queued here, including a
+    // busy-rejected prompt on its retry timer: the host may report the session
+    // idle meanwhile, and the follow-up must not overtake it (#1726). A
+    // dequeue (`queuedOrigin`) is the queue head itself and always starts.
+    const retryArmed = Boolean(busyQueueRetries.get(sessionId)?.timer)
+    const holdForPriorQueue =
+      !queuedOrigin && ((s.promptQueues[sessionId] ?? []).length > 0 || retryArmed)
     if ((sessionTurnBusy(current) || awaitingAgent || holdForPriorQueue) && !skipUserAppend) {
       enqueued = true
+      // Nothing else will flush a queue left behind on an idle session (a
+      // queued send that failed outright), so this send drains it in order.
+      drainStalledQueue = !sessionTurnBusy(current) && !awaitingAgent && !retryArmed
       if (queuedOrigin) {
         return {
           promptQueues: {
@@ -573,6 +567,7 @@ export async function runPromptTurn(
   if (enqueued || !openTurnId) {
     // Nothing is dispatched under this id: it is not an unresolved command.
     settleCommand(turnId, 'rejected')
+    if (drainStalledQueue) flushNextQueuedPrompt(set, sessionId)
     if (enqueued) return
   }
   // `userMessage` is absent ONLY in the deliberate empty-display dispatch —
@@ -942,8 +937,8 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
         [sessionId]: (s.promptQueues[sessionId] ?? []).filter((item) => item.id !== queueId)
       }
     }))
-    // Removing the last queued item must also cancel any busy-retry so a later
-    // idle send is not held forever behind a stale map entry.
+    // An armed busy retry holds new sends; with nothing left to retry it must
+    // not keep holding them.
     if ((get().promptQueues[sessionId] ?? []).length === 0) {
       clearBusyQueueRetry(sessionId)
     }
