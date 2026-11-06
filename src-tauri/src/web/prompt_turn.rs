@@ -309,6 +309,10 @@ async fn start_claimed_prompt(
         }) as PromptAcceptHook
     });
 
+    // Issue #1727: the claim serializes prompts of this session, so an unset
+    // title here means this prompt is the one that derives it.
+    let was_untitled = !ephemeral && relay.index_title_unset(&session_id.0);
+
     let started = acp
         .start_prompt(&agent_id, session_id.clone(), content, turn_id, on_accept)
         .await
@@ -317,11 +321,17 @@ async fn start_claimed_prompt(
     // The record was sequenced and enqueued, so a flush failure must not
     // unwind the accepted turn. The error text may embed the raw session
     // id/path, so only the redacted id is logged.
-    if !ephemeral && relay.flush_prompt_record(&session_id.0).await.is_err() {
-        warn!(
-            "[prompt] failed to flush accepted user_prompt for session {}",
-            crate::logging::redact_session_id(&session_id.0)
-        );
+    if !ephemeral {
+        if relay.flush_prompt_record(&session_id.0).await.is_err() {
+            warn!(
+                "[prompt] failed to flush accepted user_prompt for session {}",
+                crate::logging::redact_session_id(&session_id.0)
+            );
+        } else {
+            // The durable index now holds the derived title: tell the other
+            // clients' chat lists to refetch it.
+            relay.notify_prompt_title(&session_id.0, was_untitled);
+        }
     }
     Ok(RunningPrompt { started, claim })
 }
