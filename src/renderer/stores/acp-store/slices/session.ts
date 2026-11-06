@@ -2170,7 +2170,10 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
             status: 'closed',
             activeTurn: false,
             openTurnId: null,
-            replaying: null
+            replaying: null,
+            // A deleted chat can never be retried: drop the saved first turn
+            // so its prompt does not outlive the deletion (gh-1741).
+            launchFirstTurnBlocks: null
           }
         }
         return {

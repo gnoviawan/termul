@@ -668,6 +668,32 @@ describe('failed session lifecycle (story 5)', () => {
     ])
   })
 
+  it('gh-1741: deleting a failed hand-off launch drops its saved first turn', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    const placeholderId = useAcpStore
+      .getState()
+      .createLaunchPlaceholder({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn boom'))
+    await expect(
+      useAcpStore.getState().finalizeChatLaunch({
+        placeholderId,
+        configId: 'cfg-1',
+        cwd: '/work',
+        projectId: 'p1',
+        initialBlocks: [{ type: 'text', text: 'fix the failing CI checks' }]
+      })
+    ).rejects.toBeTruthy()
+    expect(useAcpStore.getState().sessions[placeholderId]?.launchFirstTurnBlocks).toEqual([
+      { type: 'text', text: 'fix the failing CI checks' }
+    ])
+
+    await useAcpStore.getState().deleteHistorySession(placeholderId)
+
+    expect(useAcpStore.getState().sessions[placeholderId]?.launchFirstTurnBlocks).toBeNull()
+  })
+
   it('retryFailedLaunch rejects when no failed launch is recorded for the session', async () => {
     seedSession('s1', 'agent-1', false)
     await expect(useAcpStore.getState().retryFailedLaunch('s1')).rejects.toThrow(
