@@ -57,6 +57,57 @@ fn a_framed_handoff_draft_with_skills_titles_from_the_user_text() {
     );
 }
 
+// The wire literals match `src/renderer/lib/composer/__tests__/tool-pill.test.ts`.
+#[test]
+fn a_prompt_opening_with_a_tool_pill_titles_from_the_tool_name() {
+    assert_eq!(
+        title_of(
+            "(Use the browser tool from the termul MCP server) open localhost and check the login"
+        ),
+        "Browser open localhost and check the login"
+    );
+}
+
+#[test]
+fn a_tool_pill_mid_prompt_becomes_its_label() {
+    assert_eq!(
+        title_of("schedule it (Use the automation tools from the termul MCP server) daily"),
+        "schedule it Automations daily"
+    );
+}
+
+#[test]
+fn two_tool_pills_both_become_labels() {
+    assert_eq!(
+        title_of("(Use the browser tool from the termul MCP server) open localhost and (Use the canvas tools from the termul MCP server)"),
+        "Browser open localhost and Canvas"
+    );
+}
+
+#[test]
+fn a_tool_pill_only_prompt_titles_as_the_tool() {
+    assert_eq!(
+        title_of("(Use the canvas tools from the termul MCP server)"),
+        "Canvas"
+    );
+}
+
+#[test]
+fn an_unknown_tool_hint_is_dropped() {
+    assert_eq!(
+        title_of("(Use the terminal tools from the termul MCP server) list the panes"),
+        "list the panes"
+    );
+}
+
+#[test]
+fn a_prompt_without_a_tool_pill_is_unchanged() {
+    assert_eq!(
+        title_of("(Use the browser) to open  localhost"),
+        "(Use the browser) to open  localhost"
+    );
+}
+
 fn durable_tool_meta(type_: &str, meta: serde_json::Value) -> serde_json::Value {
     let key = if type_ == "tool_call" {
         "toolCall"

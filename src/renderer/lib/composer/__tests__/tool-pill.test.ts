@@ -19,6 +19,7 @@ const schema = getSchema([StarterKit, ConversationPill, ToolPill])
 const roundTrip = (value: string): string =>
   docToDisplayText(schema.nodeFromJSON(draftFromTokens(value)))
 
+// The host titles chats from these literals; normalize_tests.rs pins the same strings.
 const BROWSER_WIRE = '(Use the browser tool from the termul MCP server)'
 
 describe('Termul tool pill', () => {
