@@ -119,12 +119,12 @@ describe('BrowserShareStrip consent', () => {
     expect(screen.getByText('With Claude · Fix login')).toBeInTheDocument()
   })
 
-  it('defaults to page content and console errors, with screenshot and network off', () => {
+  it('defaults to page content only, offers screenshot, and offers no console or network scope', () => {
     open()
     expect(screen.getByRole('checkbox', { name: /Page content/ })).toBeChecked()
-    expect(screen.getByRole('checkbox', { name: /Console errors/ })).toBeChecked()
     expect(screen.getByRole('checkbox', { name: /Screenshot/ })).not.toBeChecked()
-    expect(screen.getByRole('checkbox', { name: /Failed requests/ })).not.toBeChecked()
+    expect(screen.queryByRole('checkbox', { name: /Console errors/ })).toBeNull()
+    expect(screen.queryByRole('checkbox', { name: /Failed requests/ })).toBeNull()
   })
 
   it('warns about sensitive data only when the screenshot scope is on', () => {
@@ -132,8 +132,6 @@ describe('BrowserShareStrip consent', () => {
     expect(screen.queryByText(/including personal or secret data/)).toBeNull()
     fireEvent.click(screen.getByRole('checkbox', { name: /Screenshot/ }))
     expect(screen.getByText(/including personal or secret data/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('checkbox', { name: /Failed requests/ }))
-    expect(screen.getByText(/Never headers, cookies/)).toBeInTheDocument()
   })
 
   it('stays disabled until armed, with no chat, or with no scope', () => {
@@ -152,7 +150,6 @@ describe('BrowserShareStrip consent', () => {
     acpState.activeSessionId = 'sess-1'
     open()
     fireEvent.click(screen.getByRole('checkbox', { name: /Page content/ }))
-    fireEvent.click(screen.getByRole('checkbox', { name: /Console errors/ }))
     expect(shareButton()).toBeDisabled()
   })
 
@@ -171,7 +168,7 @@ describe('BrowserShareStrip consent', () => {
     expect(create).toHaveBeenCalledWith({
       tabId: USER_TAB,
       sessionId: 'sess-1',
-      scopes: ['content', 'screenshot', 'console_errors'],
+      scopes: ['content', 'screenshot'],
       expectedOrigin: 'https://app.example.com'
     })
     const state = useBrowserShareStore.getState()

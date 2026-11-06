@@ -32,18 +32,15 @@ import { isTauriContext } from './tauri-runtime'
 
 export type BrowserShareScope = 'content' | 'screenshot' | 'console_errors' | 'network_failures'
 
-export const BROWSER_SHARE_SCOPES: readonly BrowserShareScope[] = [
-  'content',
-  'screenshot',
-  'console_errors',
-  'network_failures'
-]
+/**
+ * The scopes the host grants today. User tabs carry no console or network
+ * observer, so the host refuses `console_errors` and `network_failures`
+ * with `SCOPE_UNAVAILABLE` instead of dropping them.
+ */
+export const BROWSER_SHARE_SCOPES: readonly BrowserShareScope[] = ['content', 'screenshot']
 
-/** Least data by default: no screenshot, no network failures. */
-export const DEFAULT_BROWSER_SHARE_SCOPES: readonly BrowserShareScope[] = [
-  'content',
-  'console_errors'
-]
+/** Least data by default: page content only; screenshot is opt-in. */
+export const DEFAULT_BROWSER_SHARE_SCOPES: readonly BrowserShareScope[] = ['content']
 
 /** `navigated`: the page left the granted document, so the user must share again. */
 export type BrowserShareStatus = 'active' | 'expired' | 'revoked' | 'navigated' | 'closed'

@@ -8,7 +8,7 @@ export function browserShareView(overrides: Partial<BrowserShareView> = {}): Bro
     sessionId: 'sess-1',
     tabId: 'tab-1',
     origin: 'https://app.example.com',
-    scopes: ['content', 'console_errors'],
+    scopes: ['content'],
     expiresAtMs: Date.now() + 10 * 60_000,
     status: 'active',
     reference: { uri: `termul-browser-share://${shareId}`, name: 'Browser page' },
