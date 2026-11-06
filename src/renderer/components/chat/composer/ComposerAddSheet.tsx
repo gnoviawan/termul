@@ -12,12 +12,13 @@ import { Sheet, SheetTrigger } from '@/components/ui/sheet'
 import type { BrowserPickOptions } from '@/lib/composer-attachments-io'
 import { logFrontendError } from '@/lib/log-api'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
-import { McpServerList, type McpServerListProps } from '../McpBadge'
+import { McpServerList, type McpServerListProps } from '../McpServerList'
+import { connectorsMenuModel } from './connectors-menu-model'
 
 /**
- * What the + sheet can ask of the composer. `ChatInputBar` owns the attachments
- * hook and the editor, so it hands these four capabilities down instead of the
- * sheet reaching into either.
+ * What the + sheet and the desktop + menu can ask of the composer. The host
+ * (`ChatInputBar`, `AgentLauncher`) owns the attachments hook and the editor,
+ * so it hands these capabilities down instead of the menus reaching into either.
  */
 export interface ComposerAddHandle {
   /** Whether attaching is allowed (false while the session is closed). */
@@ -29,6 +30,8 @@ export interface ComposerAddHandle {
   insertTrigger: (trigger: '@' | '/') => boolean
   /** Blur the editor synchronously (dismisses the on-screen keyboard). */
   blurEditor: () => void
+  /** Return focus to the editor (the desktop menu's close). */
+  focusEditor: () => void
 }
 
 interface ComposerAddSheetProps extends Omit<McpServerListProps, 'listClassName'> {
@@ -39,7 +42,7 @@ interface ComposerAddSheetProps extends Omit<McpServerListProps, 'listClassName'
 
 const LOG_SOURCE = 'composer-add-sheet'
 
-type AddSheetView = 'mcp'
+type AddSheetView = 'connectors'
 
 const TILE =
   'flex h-24 flex-col items-center justify-center gap-2 rounded-2xl bg-foreground/[0.05] text-sm text-foreground transition-colors duration-150 ease-out enabled:active:bg-foreground/[0.1] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:text-disabled-foreground'
@@ -63,10 +66,10 @@ function AttachTile({
   )
 }
 
-function mcpSummary(servers: McpServerListProps['servers']): string {
+function connectorsSummary(servers: McpServerListProps['servers']): string {
   if (servers.length === 0) return 'None added'
-  const on = servers.filter((server) => server.enabled).length
-  return `${on} of ${servers.length} on`
+  const { onCount } = connectorsMenuModel(servers, undefined, 'launcher')
+  return `${onCount} of ${servers.length} on`
 }
 
 export function ComposerAddSheet({
@@ -130,7 +133,7 @@ export function ComposerAddSheet({
         </button>
       </SheetTrigger>
       <MobileSheetContent
-        title={nav.top === 'mcp' ? 'MCP servers' : 'Add to chat'}
+        title={nav.top === 'connectors' ? 'Connectors' : 'Add to chat'}
         nav={nav}
         aria-describedby={undefined}
         onEscapeKeyDown={nav.onEscapeKeyDown}
@@ -140,7 +143,7 @@ export function ComposerAddSheet({
           keepEditorFocusRef.current = false
         }}
       >
-        {nav.top === 'mcp' ? (
+        {nav.top === 'connectors' ? (
           <div className="rounded-2xl bg-foreground/[0.05] px-4 py-3 text-xs">
             {/* The sheet scrolls itself, so lift the popover's nested 300px scroller.
                 `max-h-fit` rather than `max-h-none`: tailwind-merge 2.x does not know
@@ -192,11 +195,11 @@ export function ComposerAddSheet({
                     <Server size={16} />
                   </SheetIconWell>
                 }
-                title="MCP servers"
-                subtitle={mcpSummary(mcp.servers)}
+                title="Connectors"
+                subtitle={connectorsSummary(mcp.servers)}
                 accessory="chevron"
-                subview="mcp"
-                onSelect={() => nav.push('mcp')}
+                subview="connectors"
+                onSelect={() => nav.push('connectors')}
               />
             </SheetGroup>
           </>

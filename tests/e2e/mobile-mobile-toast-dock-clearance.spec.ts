@@ -869,7 +869,8 @@ test.describe('desktop browser', () => {
 
     // A toast keeps the desktop offset of 20px above the viewport bottom.
     const chooserOpened = page.waitForEvent('filechooser')
-    await page.getByRole('button', { name: 'Attach files' }).click()
+    await page.getByRole('button', { name: 'Add to chat' }).click()
+    await page.getByRole('menuitem', { name: /^Add files/ }).click()
     const chooser = await chooserOpened
     await chooser.setFiles({
       name: 'notes.txt',

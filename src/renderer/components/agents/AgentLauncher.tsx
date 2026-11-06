@@ -515,7 +515,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       canPickImages,
       pickFiles,
       insertTrigger: (trigger: '@' | '/') => insertComposerTrigger(editorRef.current, trigger),
-      blurEditor: () => blurComposerEditor(editorRef.current)
+      blurEditor: () => blurComposerEditor(editorRef.current),
+      focusEditor: () => editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
     }),
     [canPick, canPickImages, pickFiles]
   )

@@ -58,4 +58,15 @@ const Switch = React.forwardRef<
 })
 Switch.displayName = SwitchPrimitives.Root.displayName
 
-export { Switch }
+/** The look of `Switch`, for a menu item that is itself the control. */
+function SwitchMark({ on }: { on: boolean }): React.JSX.Element {
+  const state = on ? 'checked' : 'unchecked'
+  const { track, thumb } = switchClasses('sm')
+  return (
+    <span aria-hidden="true" data-state={state} data-switch-size="sm" className={track}>
+      <span data-state={state} className={thumb} />
+    </span>
+  )
+}
+
+export { Switch, SwitchMark }

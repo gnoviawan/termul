@@ -1,6 +1,4 @@
-import { useState } from 'react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import type { McpToolInfo, ProbeStatus } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
@@ -9,60 +7,6 @@ export interface McpServerSummary {
   id: string
   name: string
   enabled?: boolean
-}
-
-interface McpBadgeProps {
-  /** Number of MCP servers attached to this session (badge summary count). */
-  count: number
-  className?: string
-  /**
-   * Per-server enable/disable popover (chatbox). When omitted (or empty), the
-   * badge degrades to the read-only count pill (backward-compat — no popover).
-   * When provided with at least one server, the badge becomes a Popover that
-   * lists each server with a status dot + enable/disable radio — discoverable
-   * even when `count` is 0 (mirrors GH-287's `onManage` pattern).
-   */
-  servers?: McpServerSummary[]
-  /** Toggle a server's `enabled` flag. Reuses `setMcpServerEnabled` (optimistic + rollback). */
-  onToggle?: (id: string, enabled: boolean) => void
-  /** Per-server probe status (Termul's own rmcp client connection, NOT the agent's). */
-  probeStatus?: Record<string, ProbeStatus>
-  /**
-   * Per-server probe error (the backend's redacted `ProbeResult.error`). Shown
-   * as the tooltip on the "Probe failed" line so the reason is diagnosable.
-   */
-  probeError?: Record<string, string | undefined>
-  /** Per-server cached `tools/list` output (for the collapsible tool list). */
-  tools?: Record<string, McpToolInfo[]>
-  /** Auto-probe on first expand of a server's tool list. */
-  onLoadTools?: (id: string) => void
-  onReloadChat?: () => void
-  reloadDisabled?: boolean
-  reloadDisabledReason?: string | null
-  reloading?: boolean
-}
-
-function McpIcon({ className }: { className?: string }): React.JSX.Element {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="1em"
-      height="1em"
-      viewBox="0 0 24 24"
-      className={className}
-      aria-hidden="true"
-    >
-      <title>MCP</title>
-      <path
-        fill="currentColor"
-        d="M9.795 1.694a4.287 4.287 0 0 1 6.061 0a4.28 4.28 0 0 1 1.181 3.819a4.28 4.28 0 0 1 3.819 1.181a4.287 4.287 0 0 1 0 6.061l-6.793 6.793a.25.25 0 0 0 0 .353l2.617 2.618a.75.75 0 1 1-1.061 1.061l-2.617-2.618a1.75 1.75 0 0 1 0-2.475l6.793-6.793a2.785 2.785 0 1 0-3.939-3.939l-5.9 5.9a.7.7 0 0 1-.249.165a.749.749 0 0 1-.812-1.225l5.9-5.901a2.785 2.785 0 1 0-3.939-3.939L2.931 10.68A.75.75 0 1 1 1.87 9.619z"
-      />
-      <path
-        fill="currentColor"
-        d="M12.42 4.069a.75.75 0 0 1 1.061 0a.75.75 0 0 1 0 1.061L7.33 11.28a2.79 2.79 0 0 0 0 3.94a2.79 2.79 0 0 0 3.94 0l6.15-6.151a.75.75 0 0 1 1.061 0a.75.75 0 0 1 0 1.061l-6.151 6.15a4.285 4.285 0 1 1-6.06-6.06z"
-      />
-    </svg>
-  )
 }
 
 function statusColor(status: ProbeStatus | undefined): string {
@@ -85,132 +29,6 @@ function statusLabel(status: ProbeStatus | undefined): string {
   if (status === 'disconnected') return 'Disconnected (Termul could not reach this server)'
   if (status === 'authRequired') return 'Authentication required — connect in MCP Server settings'
   return 'Not probed yet — click to test'
-}
-
-/**
- * MCP badge in the composer. Read-only count pill by default; when `servers`
- * is provided, swaps to a Popover with per-server enable/disable + a
- * collapsible tool list. The probe reflects Termul's own client connection
- * (NOT the agent's — see the spec's Design Notes). Per-tool enable/disable is
- * deferred — UI shows the tool list read-only for awareness.
- */
-export function McpBadge({
-  count,
-  className,
-  servers,
-  onToggle,
-  probeStatus,
-  probeError,
-  tools,
-  onLoadTools,
-  onReloadChat,
-  reloadDisabled,
-  reloadDisabledReason,
-  reloading
-}: McpBadgeProps): React.JSX.Element | null {
-  const hasServerList = servers != null && servers.length > 0
-  if (count <= 0 && !hasServerList) return null
-
-  // Count-only pill (backward-compat — no server list passed).
-  if (!hasServerList) {
-    return (
-      <button
-        type="button"
-        className={cn(
-          'relative flex size-8 items-center justify-center text-muted-foreground transition-[color,transform] ease-out',
-          "after:absolute after:-inset-1.5 after:content-['']",
-          'hover:text-foreground',
-          className
-        )}
-        aria-label={`MCP servers — ${count} attached`}
-      >
-        <McpIcon className="size-4" />
-      </button>
-    )
-  }
-
-  return (
-    <McpPopover
-      count={count}
-      servers={servers!}
-      onToggle={onToggle}
-      probeStatus={probeStatus}
-      probeError={probeError}
-      tools={tools}
-      onLoadTools={onLoadTools}
-      onReloadChat={onReloadChat}
-      reloadDisabled={reloadDisabled}
-      reloadDisabledReason={reloadDisabledReason}
-      reloading={reloading}
-      className={className}
-    />
-  )
-}
-
-interface PopoverProps {
-  count: number
-  servers: McpServerSummary[]
-  onToggle?: (id: string, enabled: boolean) => void
-  probeStatus?: Record<string, ProbeStatus>
-  probeError?: Record<string, string | undefined>
-  tools?: Record<string, McpToolInfo[]>
-  onLoadTools?: (id: string) => void
-  onReloadChat?: () => void
-  reloadDisabled?: boolean
-  reloadDisabledReason?: string | null
-  reloading?: boolean
-  className?: string
-}
-
-function McpPopover({
-  count,
-  servers,
-  onToggle,
-  probeStatus,
-  probeError,
-  tools,
-  onLoadTools,
-  onReloadChat,
-  reloadDisabled,
-  reloadDisabledReason,
-  reloading,
-  className
-}: PopoverProps): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            'relative flex size-8 items-center justify-center text-muted-foreground transition-[color,transform] ease-out',
-            "after:absolute after:-inset-1.5 after:content-['']",
-            'hover:text-foreground',
-            className
-          )}
-          aria-label={`MCP servers — ${count} attached. Click to manage per-server enable/disable.`}
-        >
-          <McpIcon className="size-4" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 p-3 text-xs">
-        <p className="font-medium text-foreground">MCP servers</p>
-        <McpServerList
-          count={count}
-          servers={servers}
-          onToggle={onToggle}
-          probeStatus={probeStatus}
-          probeError={probeError}
-          tools={tools}
-          onLoadTools={onLoadTools}
-          onReloadChat={onReloadChat}
-          reloadDisabled={reloadDisabled}
-          reloadDisabledReason={reloadDisabledReason}
-          reloading={reloading}
-        />
-      </PopoverContent>
-    </Popover>
-  )
 }
 
 export interface McpServerListProps {
@@ -238,8 +56,8 @@ export interface McpServerListProps {
 }
 
 /**
- * Summary line, per-server rows and the next-chat footnote shared by the
- * desktop popover and the mobile + sheet. Rows and footnote render only when
+ * Summary line, per-server rows and the next-chat footnote of the phone
+ * + sheet's Connectors view. Rows and footnote render only when
  * there is at least one server; the host owns its own heading.
  */
 export function McpServerList({

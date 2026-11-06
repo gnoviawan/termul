@@ -332,7 +332,7 @@ test('the + sheet lists its sections and dismisses back to the + button', async 
   // The agent, model and effort live in the selector pill, not in this sheet.
   await expect(sheet.getByRole('heading', { name: 'Chat options' })).toHaveCount(0)
   await expect(sheet.getByRole('button', { name: 'Medium', exact: true })).toHaveCount(0)
-  await expect(sheet.getByRole('heading', { name: 'MCP servers' })).toBeVisible()
+  await expect(sheet.getByRole('heading', { name: 'Connectors' })).toBeVisible()
   await expect(sheet.getByText('No servers attached yet.')).toBeVisible()
   await expect(sheet.getByText('Takes effect on the next chat.')).toHaveCount(0)
   // The sheet sits at the bottom edge of the phone and never outgrows it.
