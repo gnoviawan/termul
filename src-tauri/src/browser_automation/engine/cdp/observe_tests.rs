@@ -47,6 +47,32 @@ fn exceptions_and_engine_log_entries_are_console_entries() {
 }
 
 #[test]
+fn engine_messages_that_quote_a_request_url_lose_its_query() {
+    let mut t = NetworkTracker::default();
+    let cors = json!({ "entry": {
+        "source": "javascript",
+        "level": "error",
+        "text": "Access to fetch at 'https://api.example.com/me?session=abc#f' from origin 'https://app.example.com' has been blocked by CORS policy",
+        "url": "https://app.example.com/?next=/x"
+    } });
+    assert_eq!(
+        parse(&mut t, "", "Log.entryAdded", &cors),
+        console(
+            ConsoleLevel::Error,
+            "Access to fetch at 'https://api.example.com/me' from origin 'https://app.example.com' has been blocked by CORS policy",
+            Some("https://app.example.com/")
+        )
+    );
+    let thrown = json!({ "exceptionDetails": { "exception": {
+        "description": "Error: 401\n    at https://app.example.com/main.js?token=t:3:9"
+    } } });
+    assert_eq!(
+        parse(&mut t, "", "Runtime.exceptionThrown", &thrown),
+        console(ConsoleLevel::Error, "Error: 401\n    at https://app.example.com/main.js", None)
+    );
+}
+
+#[test]
 fn a_request_reports_once_it_ends_and_redirect_hops_report_their_status() {
     let mut t = NetworkTracker::default();
     let sent = |url: &str, redirect: Option<u16>, at: f64| {

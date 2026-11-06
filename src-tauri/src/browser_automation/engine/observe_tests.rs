@@ -24,6 +24,30 @@ fn console_text_is_capped_on_a_char_boundary() {
 }
 
 #[test]
+fn console_text_quotes_urls_without_credentials_query_or_fragment() {
+    for (raw, want) in [
+        (
+            "Access to fetch at 'https://api.example.com/v1/me?access_token=s3cret' from origin 'https://app.example.com' has been blocked by CORS policy",
+            "Access to fetch at 'https://api.example.com/v1/me' from origin 'https://app.example.com' has been blocked by CORS policy",
+        ),
+        (
+            "TypeError: x is undefined\n    at load (https://cdn.example.com/app.js?sig=abc:10:5)\n    at HTTPS://User:Pw@Example.com/b.js#k",
+            "TypeError: x is undefined\n    at load (https://cdn.example.com/app.js)\n    at HTTPS://Example.com/b.js",
+        ),
+        (
+            "Failed to load resource: http://user:pw@127.0.0.1:5191/api?code=1 and wss://h/socket?auth=x",
+            "Failed to load resource: http://127.0.0.1:5191/api and wss://h/socket",
+        ),
+        ("https://h?x=1#y é https://h/p#only", "https://h é https://h/p"),
+        ("no url, nohttps://x?y=1, é", "no url, nohttps://x?y=1, é"),
+    ] {
+        assert_eq!(ConsoleEntry::new(ConsoleLevel::Error, raw, None).text, want, "{raw}");
+    }
+    let shim = serde_json::json!({ "batches": [r#"[{"level":"error","text":"GET https://h/a?token=t 401"}]"#] });
+    assert_eq!(parse_console_batches(&shim)[0].text, "GET https://h/a 401");
+}
+
+#[test]
 fn levels_map_console_methods_and_engine_levels() {
     for (name, want) in [
         ("log", ConsoleLevel::Log),

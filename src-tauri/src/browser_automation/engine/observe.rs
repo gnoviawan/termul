@@ -48,7 +48,7 @@ impl ConsoleEntry {
     pub fn new(level: ConsoleLevel, text: &str, source: Option<&str>) -> Self {
         Self {
             level,
-            text: cap(text, TEXT_MAX).to_string(),
+            text: cap(&scrub_urls(text), TEXT_MAX).to_string(),
             source: source.filter(|s| !s.is_empty()).map(strip_url),
         }
     }
@@ -87,6 +87,53 @@ pub fn strip_url(raw: &str) -> String {
         }
         scheme => format!("{scheme}:"),
     }
+}
+
+const TEXT_URL_SCHEMES: [&str; 4] = ["https://", "http://", "wss://", "ws://"];
+
+/// `text` with every http(s) and ws(s) URL in it cut like [`strip_url`]:
+/// no credentials, query string or fragment. Engines quote request URLs
+/// in their own messages (CORS refusals, failed loads, stack traces), so
+/// console text needs the same cut as the URL fields.
+pub fn scrub_urls(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let at_word_start = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+        let scheme = at_word_start
+            .then(|| {
+                TEXT_URL_SCHEMES
+                    .iter()
+                    .find(|s| bytes.len() - i >= s.len() && bytes[i..i + s.len()].eq_ignore_ascii_case(s.as_bytes()))
+            })
+            .flatten();
+        let Some(scheme) = scheme else {
+            i += 1;
+            continue;
+        };
+        let end = bytes[i..]
+            .iter()
+            .position(|b| b.is_ascii_whitespace() || br#""'`<>()[]{}\"#.contains(b))
+            .map_or(bytes.len(), |n| i + n);
+        out.push_str(&text[copied..i]);
+        out.push_str(&scrub_url_token(&text[i..end], scheme.len()));
+        copied = end;
+        i = end;
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
+/// One URL token: drop `user:pass@` from the authority and everything
+/// from the first `?` or `#`.
+fn scrub_url_token(token: &str, scheme_len: usize) -> String {
+    let (scheme, rest) = token.split_at(scheme_len);
+    let rest = rest.find(['?', '#']).map_or(rest, |cut| &rest[..cut]);
+    let authority_end = rest.find('/').unwrap_or(rest.len());
+    let host_start = rest[..authority_end].rfind('@').map_or(0, |at| at + 1);
+    format!("{scheme}{}", &rest[host_start..])
 }
 
 /// Entries the console shim handed over: `{batches: [json text of
