@@ -5,6 +5,7 @@
 import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
 import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
+import { newerBackgroundCommands } from '@/components/chat/background-commands'
 import {
   alignSessionModelProjection,
   isUsableConfigOption,
@@ -68,7 +69,7 @@ import {
   waitForReadvertisedOptions,
   writeAgentOptionsCache
 } from '../helpers'
-import { recordHostReport } from '../host-session-reports'
+import { latestHostReport, recordHostReport } from '../host-session-reports'
 import { useAcpStore } from '../index'
 import { forgetAnswering, noteAnswering } from '../pending-permission-sync'
 import { withoutRejectedRateLimit } from '../rate-limit'
@@ -1418,13 +1419,22 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   },
 
   _onBackgroundCommands: (e) => {
-    recordHostReport(e.sessionId, e.agentId, 'backgroundCommands', e.commands)
+    // One agent's lists can arrive out of order: one older than a list it
+    // already sent is stale wherever the chat stands.
+    const reported = latestHostReport(e.sessionId, e.agentId, 'backgroundCommands')
+    if (reported && e.revision <= reported.value.revision) return
+    const list = { revision: e.revision, commands: e.commands }
+    recordHostReport(e.sessionId, e.agentId, 'backgroundCommands', list)
     // Only the agent the chat runs on speaks for it, like `_onAgentWorking`.
     if (get().sessions[e.sessionId]?.agentId !== e.agentId) return
     set((s) => {
       const current = s.sessions[e.sessionId]
       if (!current) return {}
-      const backgroundCommands = { agentId: e.agentId, commands: e.commands }
+      const backgroundCommands = newerBackgroundCommands(current.backgroundCommands, {
+        agentId: e.agentId,
+        ...list
+      })
+      if (backgroundCommands === current.backgroundCommands) return {}
       return { sessions: { ...s.sessions, [e.sessionId]: { ...current, backgroundCommands } } }
     })
   },

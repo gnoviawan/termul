@@ -222,6 +222,7 @@ describe('claude account switch', () => {
   describe('with a command still running in the background', () => {
     const commands = (state: 'running' | 'ended') => ({
       agentId: 'agent-c1',
+      revision: state === 'running' ? 1 : 2,
       commands: [
         {
           toolCallId: 'exec-1',
@@ -251,6 +252,25 @@ describe('claude account switch', () => {
 
       setCommands('ended')
       await expect(restart).resolves.toBe(true)
+      expect(killAgent).toHaveBeenCalledWith('agent-c1')
+    })
+
+    it('stops waiting when the chat closes, like a subagent wait', async () => {
+      setCommands('running')
+      const restart = restartClaudeSession('c1')
+      await Promise.resolve()
+      useAcpStore.setState((s) => ({
+        sessions: { ...s.sessions, c1: { ...s.sessions.c1, status: 'closed' } }
+      }))
+      await expect(restart).resolves.toBe(false)
+      expect(killAgent).not.toHaveBeenCalled()
+    })
+
+    it('does not wait for it when continuing after a limit, like a subagent', async () => {
+      setCommands('running')
+      await expect(restartClaudeSession('c1', { resend: true, cancelTurn: true })).resolves.toBe(
+        true
+      )
       expect(killAgent).toHaveBeenCalledWith('agent-c1')
     })
   })

@@ -1,5 +1,5 @@
 import type { BackgroundCommand } from '@/lib/acp-api'
-import type { AcpSession } from '@/stores/acp-store/types'
+import type { AcpSession, HeldBackgroundCommands } from '@/stores/acp-store/types'
 
 const NONE: readonly BackgroundCommand[] = []
 
@@ -15,6 +15,20 @@ export function sessionBackgroundCommands(
   if (session.status === 'closed' || session.status === 'error') return NONE
   if (session.backgroundCommands.agentId !== session.agentId) return NONE
   return session.backgroundCommands.commands
+}
+
+/**
+ * The newer of two held lists: `next` from another agent replaces `held`, and
+ * of one agent's lists, which can arrive in any order, the higher revision
+ * wins.
+ */
+export function newerBackgroundCommands(
+  held: HeldBackgroundCommands | undefined,
+  next: HeldBackgroundCommands | undefined
+): HeldBackgroundCommands | undefined {
+  if (!held || !next) return next ?? held
+  if (held.agentId !== next.agentId) return next
+  return next.revision > held.revision ? next : held
 }
 
 export function runningBackgroundCommands(

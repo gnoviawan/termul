@@ -30,7 +30,7 @@ function seed(command: BackgroundCommand): void {
         id: 's1',
         agentId: 'agent-1',
         status: 'active',
-        backgroundCommands: { agentId: 'agent-1', commands: [command] }
+        backgroundCommands: { agentId: 'agent-1', revision: 1, commands: [command] }
       } as unknown as AcpSession
     }
   })

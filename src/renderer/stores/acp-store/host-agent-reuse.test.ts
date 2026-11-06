@@ -686,7 +686,7 @@ describe('acp-store: reopening a chat its agent works in outside a turn', () => 
           configId: 'acp-registry:claude-acp',
           capabilities: { loadSession: true },
           ownsSession: ['s-bg'],
-          backgroundCommands: { 's-bg': [watch] }
+          backgroundCommands: { revision: 4, sessions: { 's-bg': [watch] } }
         }
       ],
       { 's-bg': finishedPayload('s-bg') }
@@ -714,7 +714,7 @@ describe('acp-store: reopening a chat its agent works in outside a turn', () => 
           configId: 'acp-registry:claude-acp',
           capabilities: { loadSession: true },
           ownsSession: ['s-bg-race'],
-          backgroundCommands: { 's-bg-race': [running] }
+          backgroundCommands: { revision: 4, sessions: { 's-bg-race': [running] } }
         }
       ],
       { 's-bg-race': finishedPayload('s-bg-race') }
@@ -728,6 +728,7 @@ describe('acp-store: reopening a chat its agent works in outside a turn', () => 
         useAcpStore.getState()._onBackgroundCommands({
           agentId: HOST_AGENT,
           sessionId: 's-bg-race',
+          revision: 5,
           commands: [ended]
         })
         return summaries
@@ -737,5 +738,49 @@ describe('acp-store: reopening a chat its agent works in outside a turn', () => 
     await useAcpStore.getState().openHistorySession('s-bg-race')
 
     expect(sessionBackgroundCommands(useAcpStore.getState().sessions['s-bg-race'])).toEqual([ended])
+  })
+
+  it('drops a background commands report older than the listing that arrives while it is read', async () => {
+    const running = {
+      toolCallId: 'exec-1',
+      title: 'npm run watch',
+      command: 'npm run watch',
+      startedAtMs: 1_000,
+      state: 'running' as const
+    }
+    const transport = fakeWebTransport(
+      [
+        {
+          id: HOST_AGENT,
+          name: 'Claude',
+          configId: 'acp-registry:claude-acp',
+          capabilities: { loadSession: true },
+          ownsSession: ['s-bg-late'],
+          backgroundCommands: { revision: 4, sessions: { 's-bg-late': [running] } }
+        }
+      ],
+      { 's-bg-late': finishedPayload('s-bg-late') }
+    )
+    const listing = transport.listAgentDetails
+    const started = { ...running, toolCallId: 'exec-0' }
+    ;(transport as unknown as { listAgentDetails: () => Promise<unknown> }).listAgentDetails =
+      async () => {
+        const summaries = await listing?.()
+        // A list the host sent before it built the listing arrives late.
+        useAcpStore.getState()._onBackgroundCommands({
+          agentId: HOST_AGENT,
+          sessionId: 's-bg-late',
+          revision: 3,
+          commands: [started]
+        })
+        return summaries
+      }
+    _setAcpTransportForTests(transport)
+
+    await useAcpStore.getState().openHistorySession('s-bg-late')
+
+    expect(sessionBackgroundCommands(useAcpStore.getState().sessions['s-bg-late'])).toEqual([
+      running
+    ])
   })
 })

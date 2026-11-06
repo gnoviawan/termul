@@ -86,6 +86,34 @@ for line in sys.stdin:
             time.sleep(0.3)
             tool({"sessionUpdate": "tool_call_update", "_meta": {"terminal_exit": {
                 "terminal_id": "bg-1", "exit_code": None, "signal": None}}})
+        elif text in ("shell-hang", "ask-shell", "leave-open"):
+            # A terminal call open when the turn ends: a Codex shell already
+            # running, or a Claude Bash call waiting on its permission.
+            status = "pending" if text == "ask-shell" else "in_progress"
+            send({"jsonrpc": "2.0", "method": "session/update", "params": {
+                "sessionId": "mock-1", "update": {
+                    "sessionUpdate": "tool_call", "toolCallId": "sh-1", "status": status,
+                    "title": "npm run watch", "kind": "execute",
+                    "rawInput": {"command": "npm run watch"},
+                    "_meta": {"terminal_info": {"terminal_id": "sh-1"}}}}})
+            if text == "ask-shell":
+                send({"jsonrpc": "2.0", "id": 901, "method": "session/request_permission",
+                      "params": {"sessionId": "mock-1",
+                                 "toolCall": {"toolCallId": "sh-1", "title": "npm run watch"},
+                                 "options": [{"optionId": "allow", "name": "Allow",
+                                              "kind": "allow_once"}]}})
+            if text == "leave-open":
+                send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": "end_turn"}})
+            else:
+                hung = rid
+        elif text == "stray":
+            # Ends the turn, then opens a call of its own outside any turn.
+            send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": "end_turn"}})
+            time.sleep(0.3)
+            send({"jsonrpc": "2.0", "method": "session/update", "params": {
+                "sessionId": "mock-1", "update": {
+                    "sessionUpdate": "tool_call", "toolCallId": "stray-1",
+                    "status": "in_progress", "title": "Read notes", "kind": "read"}}})
         elif text == "rpcfail":
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32000, "message": "mock failure"}})
@@ -1302,6 +1330,16 @@ fn background_command_events(log: &EventLog) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// The `revision` of every `background_commands` event in `log`.
+fn background_command_revisions(log: &EventLog) -> Vec<u64> {
+    log.0
+        .lock()
+        .iter()
+        .filter(|(type_, _)| type_ == crate::acp::events::EVENT_BACKGROUND_COMMANDS)
+        .map(|(_, payload)| payload["revision"].as_u64().expect("revision"))
+        .collect()
+}
+
 async fn wait_for_background_command_events(log: &EventLog, expected: &[&[&str]]) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while background_command_events(log) != expected {
@@ -1336,8 +1374,13 @@ async fn a_backgrounded_command_is_listed_until_the_prompt_after_it_ended() {
         .iter()
         .find(|summary| summary.id == h.agent_id)
         .expect("the agent is listed");
-    let listed =
-        serde_json::to_value(&summary.background_commands[&h.session_id.0]).expect("serializable");
+    let listed = serde_json::to_value(&summary.background_commands.sessions[&h.session_id.0])
+        .expect("serializable");
+    assert_eq!(
+        summary.background_commands.revision,
+        *background_command_revisions(&h.logs[0]).last().unwrap(),
+        "the listing is as new as the last event"
+    );
     assert_eq!(listed[0]["toolCallId"], "bg-1");
     assert_eq!(listed[0]["title"], "Wait a second");
     assert_eq!(listed[0]["command"], "sleep 1");
@@ -1348,6 +1391,126 @@ async fn a_backgrounded_command_is_listed_until_the_prompt_after_it_ended() {
     let _ = tokio::time::timeout(RUN_TIMEOUT, second).await;
     for log in &h.logs {
         wait_for_background_command_events(log, &[&["running"], &["ended"], &[]]).await;
+    }
+    h.finish().await;
+}
+
+/// Run `text` to its terminator, cancelling it once `cancel_when` holds.
+async fn run_turn_to_end(
+    h: &Harness,
+    text: &str,
+    turn_id: &str,
+    cancel_when: Option<fn(&crate::acp::AgentActivity) -> bool>,
+) {
+    let turn = spawn_turn(h, text, turn_id).await;
+    if let Some(ready) = cancel_when {
+        wait_for_activity(h, ready).await;
+        h.acp
+            .cancel_prompt(&h.agent_id, h.session_id.clone())
+            .await
+            .expect("cancel");
+    }
+    let _ = tokio::time::timeout(RUN_TIMEOUT, turn)
+        .await
+        .expect("the turn ends");
+}
+
+/// A Bash call waiting on its permission when the user cancels never runs:
+/// it is not listed and does not keep the agent from the reaper.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_call_whose_permission_the_cancel_withdrew_is_not_a_background_command() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    run_turn_to_end(&h, "ask-shell", "t1", Some(|a| a.pending_permissions == 1)).await;
+    settle().await;
+    for log in &h.logs {
+        assert_eq!(background_command_events(log), Vec::<Vec<String>>::new());
+    }
+    wait_for_activity(&h, |a| !a.has_evidence()).await;
+    h.finish().await;
+}
+
+/// A shell already running when the user cancels keeps running (Codex).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shell_running_when_the_turn_is_cancelled_is_listed() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    run_turn_to_end(&h, "shell-hang", "t1", Some(|a| a.active_turns == 1)).await;
+    for log in &h.logs {
+        wait_for_background_command_events(log, &[&["running"]]).await;
+    }
+    wait_for_activity(&h, |a| a.running_background_commands == 1).await;
+    h.finish().await;
+}
+
+/// A turn that hits its idle timeout says nothing about what still runs: an
+/// agent that stopped answering lists no command and can be reaped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_timed_out_turn_lists_no_command() {
+    let Some(mut h) = Harness::start().await else {
+        return;
+    };
+    h.set_idle_timeout(1);
+    run_turn_to_end(&h, "shell-hang", "t1", None).await;
+    settle().await;
+    for log in &h.logs {
+        assert_eq!(background_command_events(log), Vec::<Vec<String>>::new());
+    }
+    wait_for_activity(&h, |a| !a.has_evidence()).await;
+    h.finish().await;
+}
+
+/// Closing a chat clears its rows on every client, after the list that
+/// named them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn closing_a_session_clears_its_commands_on_every_client() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    run_turn_to_end(&h, "leave-open", "t1", None).await;
+    for log in &h.logs {
+        wait_for_background_command_events(log, &[&["running"]]).await;
+    }
+    h.acp
+        .close_session(&h.agent_id, h.session_id.clone())
+        .await
+        .expect("close ok");
+    for log in &h.logs {
+        wait_for_background_command_events(log, &[&["running"], &[]]).await;
+        let revisions = background_command_revisions(log);
+        assert!(revisions[0] < revisions[1], "{revisions:?}");
+    }
+    wait_for_activity(&h, |a| a.running_background_commands == 0).await;
+    h.finish().await;
+}
+
+/// A call the agent opened between turns belongs to neither: the next
+/// turn's end does not list it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_call_opened_between_turns_is_not_listed_when_the_next_turn_ends() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    run_turn_to_end(&h, "stray", "t1", None).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !h.logs[0]
+        .0
+        .lock()
+        .iter()
+        .any(|(type_, _)| type_ == crate::acp::events::EVENT_AGENT_WORKING)
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the stray call never arrived"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    run_turn_to_end(&h, "ok", "t2", None).await;
+    settle().await;
+    for log in &h.logs {
+        assert_eq!(background_command_events(log), Vec::<Vec<String>>::new());
     }
     h.finish().await;
 }

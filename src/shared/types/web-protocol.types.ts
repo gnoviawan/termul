@@ -499,10 +499,11 @@ export interface WsAgentSummary {
    */
   workingSessions?: string[]
   /**
-   * The commands the agent left running, by owned session (the list the
-   * `background_commands` event reports live). Older servers omit it.
+   * The commands the agent left running, by owned session (the lists the
+   * `background_commands` event reports live), as of `revision`. A session
+   * left out lists none. Older servers omit it.
    */
-  backgroundCommands?: Record<string, BackgroundCommand[]>
+  backgroundCommands?: { revision: number; sessions: Record<string, BackgroundCommand[]> }
 }
 
 /**
@@ -518,6 +519,15 @@ export type BackgroundCommand = {
   /** Wall clock, when the tool call first appeared. */
   startedAtMs: number
 } & ({ state: 'running' } | { state: 'ended'; endedAtMs: number })
+
+/**
+ * One session's commands as of `revision`. Every change on the agent takes
+ * the next revision, so of two lists from one agent the higher one is newer.
+ */
+export interface BackgroundCommandList {
+  revision: number
+  commands: BackgroundCommand[]
+}
 
 // ============================================================================
 // Server-side key-value store (issue #613) — request payloads + replies

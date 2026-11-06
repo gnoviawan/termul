@@ -1,11 +1,11 @@
-import type { AgentId, BackgroundCommand, SessionId } from '@/lib/acp-api'
+import type { AgentId, BackgroundCommandList, SessionId } from '@/lib/acp-api'
 
 /** Live-only session state the host reports by event and in its agent listing. */
 interface HostSessionState {
   /** `agent_working`: the agent works outside a prompt turn. */
   working: boolean
   /** `background_commands`: the commands the agent left running. */
-  backgroundCommands: BackgroundCommand[]
+  backgroundCommands: BackgroundCommandList
 }
 
 type Report<K extends keyof HostSessionState> = { value: HostSessionState[K]; seq: number }

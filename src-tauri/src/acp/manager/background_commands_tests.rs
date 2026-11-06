@@ -80,11 +80,11 @@ impl Driver {
             .expect("update");
     }
 
-    /// What the command loop does when a prompt turn ends.
-    fn end_turn(&self) -> Option<Vec<crate::acp::session::BackgroundCommand>> {
+    /// What the command loop does when a prompt turn ends with `end_turn`.
+    fn end_turn(&self) -> Option<crate::acp::session::BackgroundCommandList> {
         let mut state = self.state.lock();
         state.finish_turn("sess-1");
-        state.end_turn_background_commands("sess-1")
+        state.end_turn_background_commands("sess-1", crate::acp::session::TurnEnd::Stopped)
     }
 
     fn running(&self) -> usize {
@@ -138,7 +138,10 @@ async fn a_codex_command_open_at_turn_end_is_listed_by_the_turn_end() {
         .await;
     assert!(command_events(&driver.sink).is_empty());
 
-    let listed = driver.end_turn().expect("the turn end lists the command");
+    let listed = driver
+        .end_turn()
+        .expect("the turn end lists the command")
+        .commands;
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].tool_call_id, id);
     assert_eq!(
@@ -192,6 +195,7 @@ async fn deleting_or_closing_a_session_forgets_its_commands() {
         .state
         .lock()
         .background_commands()
-        .by_session()
+        .snapshot()
+        .sessions
         .is_empty());
 }

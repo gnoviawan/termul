@@ -57,7 +57,7 @@ function seed(
         id: 's1',
         agentId: 'agent-1',
         status: 'active',
-        backgroundCommands: { agentId: reportedBy, commands },
+        backgroundCommands: { agentId: reportedBy, revision: 1, commands },
         ...session
       } as unknown as AcpSession
     }

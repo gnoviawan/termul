@@ -184,7 +184,7 @@ describe('background agents and reload', () => {
     )
   })
 
-  it('blocks a switch, not a reload, while a command runs in the background', () => {
+  it('blocks a switch and leaves the reload to its confirm while a command runs in the background', () => {
     const watch = {
       toolCallId: 'exec-1',
       title: 'Watch CI',
@@ -198,6 +198,7 @@ describe('background agents and reload', () => {
           ...session('s1'),
           backgroundCommands: {
             agentId: 'agent-1',
+            revision: 1,
             commands: [{ ...watch, state: 'running' as const }]
           }
         }
@@ -215,6 +216,7 @@ describe('background agents and reload', () => {
           ...session('s1'),
           backgroundCommands: {
             agentId: 'agent-1',
+            revision: 2,
             commands: [{ ...watch, state: 'ended' as const, endedAtMs: 2_000 }]
           }
         }

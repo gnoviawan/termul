@@ -1098,13 +1098,14 @@ pub fn emit_agent_working(
 }
 
 /// Payload of [`EVENT_BACKGROUND_COMMANDS`]: the session's whole list, which
-/// replaces the previous one.
+/// replaces a held list of a lower revision.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundCommandsEvent {
     pub agent_id: AgentId,
     pub session_id: SessionId,
-    pub commands: Vec<crate::acp::session::BackgroundCommand>,
+    #[serde(flatten)]
+    pub list: crate::acp::session::BackgroundCommandList,
 }
 
 /// Tell every sink the commands `agent_id` left running in `session_id` now.
@@ -1112,12 +1113,12 @@ pub fn emit_background_commands(
     sinks: &[std::sync::Arc<dyn crate::web::EventSink>],
     agent_id: &AgentId,
     session_id: &str,
-    commands: Vec<crate::acp::session::BackgroundCommand>,
+    list: crate::acp::session::BackgroundCommandList,
 ) {
     let event = BackgroundCommandsEvent {
         agent_id: agent_id.clone(),
         session_id: SessionId::new(session_id.to_string()),
-        commands,
+        list,
     };
     fan_out(sinks, Some(session_id), EVENT_BACKGROUND_COMMANDS, &event);
 }

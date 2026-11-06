@@ -4,6 +4,7 @@
 
 import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
+import { newerBackgroundCommands } from '@/components/chat/background-commands'
 import { loadAgentConfigs as loadAgentConfigsFromDisk } from '@/lib/acp-agents-persistence'
 import {
   type AgentId,
@@ -135,6 +136,7 @@ import {
   type AcpState,
   ChatLaunchCancelledError,
   type ChatMessage,
+  type HeldBackgroundCommands,
   type OpenHistoryOptions,
   type ReopenControlBaseline,
   type TurnEndSetter
@@ -1000,6 +1002,9 @@ async function openHistorySessionInner(
   // Host reports newer than this belong to the reopen's live agent and win
   // over the listing (see `host-session-reports`).
   const reportSeqBeforeListing = hostReportSeq()
+  // The adopted owner's commands for this chat. A list held from before the
+  // reopen is dropped: the session it described was closed.
+  let listedCommands: HeldBackgroundCommands | undefined
   // Guard both fields: `ensureLiveAgent` trims `cwd` (throws on undefined),
   // and a missing/empty cwd can't map to a live agent anyway — fall through
   // to read-only 'local' instead of throwing (spec: do not throw).
@@ -1029,16 +1034,17 @@ async function openHistorySessionInner(
     // The owner's listing says whether it works in this chat outside a prompt
     // turn now and which commands it left running; later changes arrive as
     // events. A report from the owner during the listing round trip is newer
-    // than the listing.
+    // than the listing; for commands, the higher revision is.
     const agentWorking = adopted
       ? (hostReportAfter(id, adopted, 'working', reportSeqBeforeListing) ?? Boolean(working))
       : Boolean(working)
-    const commands =
-      (adopted
-        ? hostReportAfter(id, adopted, 'backgroundCommands', reportSeqBeforeListing)
-        : undefined) ??
-      backgroundCommands ??
-      []
+    if (adopted) {
+      const reported = latestHostReport(id, adopted, 'backgroundCommands')?.value
+      listedCommands = newerBackgroundCommands(
+        { agentId: adopted, ...(backgroundCommands ?? { revision: 0, commands: [] }) },
+        reported && { agentId: adopted, ...reported }
+      )
+    }
     set((s) => {
       const session = s.sessions[id]
       if (!session) return {}
@@ -1049,7 +1055,7 @@ async function openHistorySessionInner(
           [id]: {
             ...session,
             agentWorking,
-            ...(adopted ? { backgroundCommands: { agentId: adopted, commands } } : {})
+            ...(listedCommands ? { backgroundCommands: listedCommands } : {})
           }
         }
       }
@@ -1228,6 +1234,10 @@ async function openHistorySessionInner(
     'backgroundCommands',
     reportSeqBeforeListing
   )
+  const reopenedCommands = newerBackgroundCommands(
+    listedCommands?.agentId === liveAgentId ? listedCommands : undefined,
+    lateCommands && { agentId: liveAgentId, ...lateCommands }
+  )
   set((s) => {
     const session = s.sessions[id]
     if (!session) return {}
@@ -1240,9 +1250,7 @@ async function openHistorySessionInner(
           // A report from the live agent that the event handlers dropped
           // while the chat still pointed at its persisted agent applies now.
           agentWorking: lateWorking ?? session.agentWorking,
-          backgroundCommands: lateCommands
-            ? { agentId: liveAgentId, commands: lateCommands }
-            : session.backgroundCommands,
+          backgroundCommands: reopenedCommands,
           replaying:
             strategy === 'load'
               ? ('pending' as const)

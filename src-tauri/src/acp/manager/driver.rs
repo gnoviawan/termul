@@ -349,14 +349,16 @@ pub(super) async fn handle_session_notification(
                 &notification.update,
                 tokio::time::Instant::now(),
             );
-        let commands = state.background_commands();
-        let changed = tracked
-            && commands.note(
-                &session_id,
-                &notification.update,
-                crate::web::store::unix_ms(),
-            );
-        (started_working, changed.then(|| commands.list(&session_id)))
+        let commands = tracked
+            .then(|| {
+                state.background_commands().note(
+                    &session_id,
+                    &notification.update,
+                    crate::web::store::unix_ms(),
+                )
+            })
+            .flatten();
+        (started_working, commands)
     };
     if started_working {
         crate::acp::events::emit_agent_working(sinks, agent_id, &session_id, true);
@@ -720,7 +722,11 @@ pub(super) async fn drive_connection(
                         session_string.clone(),
                     );
                     (
-                        state.register_permission(session_string.clone(), responder),
+                        state.register_permission(
+                            session_string.clone(),
+                            tool_call.tool_call_id.0.to_string(),
+                            responder,
+                        ),
                         state.active_turn_id(&session_string),
                     )
                 };

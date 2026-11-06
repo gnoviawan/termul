@@ -178,16 +178,15 @@ fn begin_close_session_captures_ephemeral_mark_before_removal() {
     let mut state = DriverState::new();
     state.set_session_root("warm".to_string(), PathBuf::from("/tmp/ws"));
     state.mark_ephemeral("warm".to_string());
-    let (was_ephemeral, pending) = state.begin_close_session("warm");
-    assert!(was_ephemeral);
-    assert!(pending.is_empty());
+    let closing = state.begin_close_session("warm");
+    assert!(closing.was_ephemeral);
+    assert!(closing.pending.is_empty());
     assert!(!state.is_ephemeral("warm"));
     assert!(state.session_root("warm").is_none());
 
     // A durable session reports false so its close finalizes normally.
     state.set_session_root("durable".to_string(), PathBuf::from("/tmp/ws"));
-    let (was_ephemeral, _) = state.begin_close_session("durable");
-    assert!(!was_ephemeral);
+    assert!(!state.begin_close_session("durable").was_ephemeral);
 }
 
 /// Story 8: disposing/closing an un-promoted warm session drops the

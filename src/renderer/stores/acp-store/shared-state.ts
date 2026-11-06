@@ -7,7 +7,7 @@
 
 import type { WsAgentSummary } from '@shared/types/web-protocol.types'
 import { sessionModelSnapshot } from '@/components/chat/chat-input-bar-config'
-import type { AgentId, BackgroundCommand, SessionId, ToolCall } from '@/lib/acp-api'
+import type { AgentId, BackgroundCommandList, SessionId, ToolCall } from '@/lib/acp-api'
 import {
   deriveTitle,
   isUntitledTitle,
@@ -708,7 +708,7 @@ export async function adoptHostOwnedAgent(
   adopted: AgentId | null
   listingTrusted: boolean
   working?: boolean
-  backgroundCommands?: BackgroundCommand[]
+  backgroundCommands?: BackgroundCommandList
 }> {
   const trimmedCwd = cwd.trim()
   if ((!options?.allowDesktop && isTauriContext()) || trimmedCwd.length === 0) {
@@ -771,7 +771,10 @@ export async function adoptHostOwnedAgent(
     adopted: match.id,
     listingTrusted: true,
     working: match.workingSessions?.includes(sessionId) === true,
-    backgroundCommands: match.backgroundCommands?.[sessionId] ?? []
+    backgroundCommands: {
+      revision: match.backgroundCommands?.revision ?? 0,
+      commands: match.backgroundCommands?.sessions[sessionId] ?? []
+    }
   }
 }
 
