@@ -283,7 +283,7 @@ function RunList({
                 FOCUS_RING_CLASS
               )}
             >
-              <span className={cn('min-w-20 shrink-0 font-medium', status.className)}>
+              <span className={cn('w-20 shrink-0 font-medium', status.className)}>
                 {status.label}
               </span>
               <span className="min-w-0 flex-1 truncate tabular-nums text-foreground">
