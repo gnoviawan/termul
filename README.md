@@ -1,10 +1,10 @@
 <div align="center">
 
-# 🖥️ Termul Manager
+# 🖥️ Troupe
 
 **A modern, project-aware terminal manager built with Tauri**
 
-Termul treats workspaces as first-class citizens, allowing you to organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface. Each project also gets ACP agent chats and Git and worktree tools, and the app adds SSH sessions and remote access from your phone.
+Troupe treats workspaces as first-class citizens, allowing you to organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface. Each project also gets ACP agent chats and Git and worktree tools, and the app adds SSH sessions and remote access from your phone.
 
 [![GitHub Stars](https://img.shields.io/github/stars/gnoviawan/termul?style=social)](https://github.com/gnoviawan/termul/stargazers)
 [![GitHub Issues](https://img.shields.io/github/issues/gnoviawan/termul)](https://github.com/gnoviawan/termul/issues)
@@ -38,7 +38,7 @@ Termul treats workspaces as first-class citizens, allowing you to organize termi
 | Feature                | Description                                                                                                                                                                                 |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Agent Chat**         | Chat with ACP agents such as Claude Agent, Codex, Gemini CLI, Cursor, and OpenCode in any pane, with a model picker, slash commands, `@` mentions of files and other chats, permission prompts, and a plan view |
-| **Saved Chats**        | Termul saves chats per project and lists them in the sidebar. Reopen a chat when its agent can reload a past session                                                                        |
+| **Saved Chats**        | Troupe saves chats per project and lists them in the sidebar. Reopen a chat when its agent can reload a past session                                                                        |
 | **Agent Launcher**     | Start a chat from a prompt in the active pane (`Ctrl+T`), pick the agent and model, and optionally isolate the chat in a new Git worktree                                                   |
 | **Custom ACP Agents**  | Add your own ACP agents in Settings, or paste a Zed-style `agent_servers` config                                                                                                            |
 | **Terminal AI Assist** | Right-click selected terminal output and choose **Explain with AI** or **Fix Command with AI**. Suggested commands insert at the prompt without running                                     |
@@ -61,7 +61,7 @@ Termul treats workspaces as first-class citizens, allowing you to organize termi
 | Feature                   | Description                                                                                                                                                                |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Saved Hosts**           | Save hosts with password, key file, or SSH agent authentication, or import them from `~/.ssh/config`. Passwords and passphrases go to the OS keychain                      |
-| **SSH Sessions**          | Each session tab is one connection, and its remote shell runs as a regular Termul terminal. Termul asks you to confirm a new or changed host key by its SHA256 fingerprint |
+| **SSH Sessions**          | Each session tab is one connection, and its remote shell runs as a regular Troupe terminal. Troupe asks you to confirm a new or changed host key by its SHA256 fingerprint |
 | **SFTP Browser & Editor** | Browse, upload, download, rename, and delete remote files, and edit them in place in a built-in editor                                                                     |
 
 ### 📱 Remote & Mobile
@@ -69,7 +69,7 @@ Termul treats workspaces as first-class citizens, allowing you to organize termi
 | Feature             | Description                                                                                                                                                                                               |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Remote Access**   | Turn on remote access from the desktop status bar to open a cloudflared quick tunnel, then scan the QR code to drive your live agent chats from a phone. Requires `cloudflared` on your `PATH`            |
-| **termul-server**   | Standalone Linux server that serves the Termul web client from a headless host, with token auth and opt-in self-update. See [Installing termul-server](docs/deployment-guide.md#installing-termul-server) |
+| **termul-server**   | Standalone Linux server that serves the Troupe web client from a headless host, with token auth and opt-in self-update. See [Installing termul-server](docs/deployment-guide.md#installing-termul-server) |
 | **Mobile UI & PWA** | Phone-width layout with a chat drawer, a file explorer, and extra terminal keys. Install the web client as a PWA over HTTPS or `localhost`                                                                |
 
 ### 📝 Editor & File Management

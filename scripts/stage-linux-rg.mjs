@@ -4,7 +4,7 @@
 //
 // Linux packages must not ship ripgrep through `bundle.externalBin`: Tauri
 // installs external binaries next to the app in `/usr/bin`, and `/usr/bin/rg`
-// is owned by the distro `ripgrep` package, so dpkg refuses to install Termul
+// is owned by the distro `ripgrep` package, so dpkg refuses to install Troupe
 // next to it (gh-1575). Instead the deb/rpm/AppImage configs copy one fixed
 // file to `/usr/lib/termul-manager/rg`. That `files` entry cannot name the
 // target triple, so this hook copies `src-tauri/bin/rg-<triple>` to a stable,

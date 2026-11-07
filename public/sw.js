@@ -1,4 +1,4 @@
-/* Termul PWA service worker (termul-server / shared-live web client).
+/* Troupe PWA service worker (termul-server / shared-live web client).
  *
  * Hand-rolled caching for the static shell only — no offline data. On install
  * the worker precaches the shell files AND the hashed /assets/* entry bundle

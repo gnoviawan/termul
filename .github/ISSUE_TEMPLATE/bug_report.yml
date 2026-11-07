@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a reproducible problem in Termul Manager
+description: Report a reproducible problem in Troupe
 labels:
   - bug
 body:
@@ -49,7 +49,7 @@ body:
       description: Share the environment where the issue occurs.
       placeholder: |
         - OS:
-        - Termul version:
+        - Troupe version:
         - Node.js version (if relevant):
         - Install method:
     validations:
@@ -62,7 +62,7 @@ body:
       description: |
         Paste relevant logs or add screenshots/videos if helpful.
 
-        Termul writes a log file you can attach. Find it via **Help → Reveal Log File** in the app, or open the folder directly:
+        Troupe writes a log file you can attach. Find it via **Help → Reveal Log File** in the app, or open the folder directly:
         - Windows: `%LOCALAPPDATA%\com.termul-manager.app\logs\termul.log`
         - macOS: `~/Library/Logs/com.termul-manager.app/termul.log`
         - Linux: `~/.local/share/com.termul-manager.app/logs/termul.log`

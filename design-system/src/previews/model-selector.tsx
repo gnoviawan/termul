@@ -140,7 +140,7 @@ function V2Column({
 /**
  * Model picker v2, view only: same source and mock as v1. In the app it is
  * the default; `localStorage['termul.modelPickerV2'] = '0'` brings back v1. Visual direction after
- * volt (MIT, github.com/LeulAria/volt), on Termul tokens.
+ * volt (MIT, github.com/LeulAria/volt), on Troupe tokens.
  */
 export function ModelSelectorV2() {
   return (

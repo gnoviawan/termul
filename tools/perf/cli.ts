@@ -27,7 +27,7 @@ import { soakScenario } from './scenarios/soak.ts'
 import { streamStormScenario } from './scenarios/stream-storm.ts'
 import { type PerfRunResult, summarize } from './types.ts'
 
-const USAGE = `Termul perf toolkit
+const USAGE = `Troupe perf toolkit
 
 Usage: node tools/perf/cli.ts <command> [flags]
 

@@ -1,5 +1,5 @@
 name: Feature Request
-description: Suggest an improvement or new capability for Termul Manager
+description: Suggest an improvement or new capability for Troupe
 labels:
   - enhancement
 body:
@@ -34,7 +34,7 @@ body:
     attributes:
       label: Proposed Solution
       description: Describe the behavior or capability you want.
-      placeholder: It would help if Termul could...
+      placeholder: It would help if Troupe could...
     validations:
       required: true
 
