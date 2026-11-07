@@ -7,7 +7,7 @@
  * once the host stopped waiting is dropped unrun.
  *
  * `host.save` is the one call answered here instead of in the editor: the
- * agent's `save_file` is Termul's save of the project's document (AD-18,
+ * agent's `save_file` is Troupe's save of the project's document (AD-18,
  * AD-23), and it answers with the document's project-relative path.
  *
  * When another window takes a canvas's lease (AD-30), the store shows that

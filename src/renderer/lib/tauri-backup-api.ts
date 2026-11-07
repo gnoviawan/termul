@@ -54,7 +54,7 @@ const MAX_BACKUPS = 3
 
 /**
  * Top-level userData entries the backup leaves out: its own destination, the
- * rollback store, and data Termul downloads or rebuilds by itself (agent
+ * rollback store, and data Troupe downloads or rebuilds by itself (agent
  * binaries, registry catalogs, browser profiles and captures). Agent binaries
  * alone can be gigabytes in thousands of files, and copying them one file at a
  * time held the update download at 0% before it started (#1431).
@@ -71,7 +71,7 @@ const EXCLUDED_TOP_LEVEL_ENTRIES: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Data-lock sidecars (src-tauri/src/data_lock.rs) are held locked while Termul
+ * Data-lock sidecars (src-tauri/src/data_lock.rs) are held locked while Troupe
  * runs. They carry no data, and on Windows reading a locked file fails, which
  * failed the backup.
  */

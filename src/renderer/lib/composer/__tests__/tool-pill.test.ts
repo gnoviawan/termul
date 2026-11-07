@@ -23,7 +23,7 @@ const roundTrip = (value: string): string =>
 // The host titles chats from these literals; normalize_tests.rs pins the same strings.
 const BROWSER_WIRE = '(Use the browser tool from the termul MCP server)'
 
-describe('Termul tool pill', () => {
+describe('Troupe tool pill', () => {
   it('parses a tool token into a pill node carrying the tool id', () => {
     expect(draftFromTokens(`${toolToken('browser')} open localhost`)).toEqual({
       type: 'doc',

@@ -314,7 +314,7 @@ export type McpServerConfig = McpStdioServer | McpHttpServer | McpSseServer
 
 // --- MCP client probe (on-demand `initialize` + `tools/list`) -------------
 
-/** Per-server probe status (Termul's own client connection, not the agent's). */
+/** Per-server probe status (Troupe's own client connection, not the agent's). */
 export type ProbeStatus = 'connected' | 'disconnected' | 'authRequired'
 
 /** A tool exposed by a probed MCP server (`tools/list` output, UI subset). */

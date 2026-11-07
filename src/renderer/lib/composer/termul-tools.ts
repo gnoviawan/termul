@@ -1,5 +1,5 @@
 /**
- * Termul's own agent tools that the composer can point the agent at. Each
+ * Troupe's own agent tools that the composer can point the agent at. Each
  * entry becomes a "tool" pill; on the wire the pill reads as a plain-language
  * request naming the tool and the `termul` MCP server, so any ACP agent can
  * act on it (no agent-specific tool ids such as `mcp__termul__browser`).

@@ -139,9 +139,9 @@ const AGENT_POLICIES: Record<string, AgentPolicy> = {
         'claude-agent-acp'
       ],
       needsRuntimeOldNodeReason:
-        'Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Termul.',
+        'Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Troupe.',
       needsRuntimeNoNpmReason:
-        'Claude Agent ACP requires npm. Install npm alongside Node.js 22 or newer, then restart Termul.',
+        'Claude Agent ACP requires npm. Install npm alongside Node.js 22 or newer, then restart Troupe.',
       manualInstallReason:
         'Install Claude Code CLI from Anthropic, then run `claude auth login` in a terminal.'
     },
