@@ -1078,13 +1078,16 @@ jobs:
         run: |
           registry="ghcr.io/${OWNER,,}"
           version="${STABLE_VERSION//+/-}"
-          if docker buildx imagetools inspect "$registry/troupe-server:$version" > /dev/null 2>&1; then
+          if inspect=$(docker buildx imagetools inspect "$registry/troupe-server:$version" 2>&1); then
             docker buildx imagetools create \
               --tag "$registry/troupe-server:latest" \
               --tag "$registry/termul-server:latest" \
               "$registry/troupe-server:$version"
-          else
+          elif grep -qi 'not found' <<< "$inspect"; then
             docker buildx imagetools create \
               --tag "$registry/termul-server:latest" \
               "$registry/termul-server:$version"
+          else
+            echo "$inspect" >&2
+            exit 1
           fi
