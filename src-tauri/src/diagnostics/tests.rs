@@ -518,14 +518,12 @@ fn staged_body_file_is_owner_only_and_cleaned_up() {
 
 #[test]
 fn parse_issue_url_accepts_both_repo_names() {
-    assert_eq!(
-        parse_issue_url("https://github.com/gnoviawan/termul/issues/7\n"),
-        Some("https://github.com/gnoviawan/termul/issues/7".to_string())
-    );
-    assert_eq!(
-        parse_issue_url("https://github.com/gnoviawan/troupe/issues/8\n"),
-        Some("https://github.com/gnoviawan/troupe/issues/8".to_string())
-    );
+    // Built from the bare names so the rebrand codemod, which rewrites full
+    // repo URLs, cannot turn the old-name case into a second new-name case.
+    for name in ["termul", "troupe"] {
+        let url = format!("https://github.com/gnoviawan/{name}/issues/7");
+        assert_eq!(parse_issue_url(&format!("{url}\n")), Some(url));
+    }
 }
 
 #[test]
