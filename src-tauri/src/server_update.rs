@@ -310,11 +310,14 @@ fn http_client() -> &'static reqwest::Client {
 }
 
 /// Reject a server-binary download URL outside the project's GitHub origin.
+/// The prefix is matched against the parsed URL, whose path has `..` and
+/// `%2e%2e` segments resolved, so a dot segment cannot climb out of the repo.
 pub fn validate_binary_url(url: &str) -> Result<()> {
     let url = url.trim();
+    let normalized = reqwest::Url::parse(url).map(String::from).unwrap_or_default();
     if !ALLOWED_BINARY_URL_PREFIXES
         .iter()
-        .any(|prefix| url.starts_with(prefix))
+        .any(|prefix| normalized.starts_with(prefix))
     {
         bail!(
             "server binary url {url} is outside the allowed origins {}",

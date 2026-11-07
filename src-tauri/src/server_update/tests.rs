@@ -271,6 +271,30 @@ fn validate_binary_url_rejects_a_lookalike_repo() {
 }
 
 #[test]
+fn validate_binary_url_rejects_dot_segments_that_leave_the_repo() {
+    for url in [
+        "https://github.com/gnoviawan/troupe/../../attacker/repo/troupe-server",
+        "https://github.com/gnoviawan/termul/%2e%2e/%2E%2E/attacker/repo/troupe-server",
+    ] {
+        let err = validate_binary_url(url).expect_err("dot segments rejected");
+        assert!(
+            err.to_string().contains("outside the allowed origins"),
+            "unexpected error for {url}: {err}"
+        );
+    }
+}
+
+#[test]
+fn validate_binary_url_rejects_an_unparseable_url() {
+    let err = validate_binary_url("https://github.com:notaport/gnoviawan/termul/troupe-server")
+        .expect_err("unparseable url rejected");
+    assert!(
+        err.to_string().contains("outside the allowed origins"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn server_platform_key_matches_target_arch() {
     if cfg!(target_arch = "aarch64") {
         assert_eq!(SERVER_PLATFORM_KEY, "linux-aarch64-server");

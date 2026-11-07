@@ -298,7 +298,7 @@ fn lock_state_dir(state_dir: &std::path::Path) -> Option<DataLocks> {
         Ok(()) => Some(locks),
         Err(error) if error.is_busy() => {
             eprintln!(
-                "troupe-server claude: install refused — a Termul host (troupe-server or the desktop app) is running on this state directory: {error}"
+                "troupe-server claude: install refused — a Termul host (the standalone server or the desktop app) is running on this state directory: {error}"
             );
             None
         }

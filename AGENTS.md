@@ -5,14 +5,14 @@
 
 ## Termul main app
 
-Termul is a Tauri 2 desktop application with a React/TypeScript renderer and Rust runtime. The same Rust crate supports desktop shared-live remote access, the standalone `troupe-server`, and a responsive browser client. These instructions cover the main application and exclude `landing/`. Deeper documentation is indexed at `docs/index.md`; `docs/project-context.md` is retained as legacy reference material, not as an instruction source.
+Termul is a Tauri 2 desktop application with a React/TypeScript renderer and Rust runtime. The same Rust crate supports desktop shared-live remote access, the standalone `termul-server`, and a responsive browser client. These instructions cover the main application and exclude `landing/`. Deeper documentation is indexed at `docs/index.md`; `docs/project-context.md` is retained as legacy reference material, not as an instruction source.
 
 ## Policy
 
 - Target PRs to `dev`. Before opening one, search open and closed PRs for duplicates, follow `.github/PULL_REQUEST_TEMPLATE.md`, submit one real problem per PR, and obtain human approval of the complete diff.
 - Do not force-push merely to retrigger CI or ask maintainers to bypass failed checks; fix failures and address or technically rebut review findings.
 - Keep PRs to 50 changed files or fewer; CodeRabbit's free tier stops reviewing past 100, and smaller diffs get better reviews anyway. Split larger work into stacked PRs.
-- Add durable boundary and failure logs for every new feature or flow using `log` for desktop Rust, `tracing` for `troupe-server`, or `src/renderer/lib/log-api.ts` for renderer code; never log secrets or credentials.
+- Add durable boundary and failure logs for every new feature or flow using `log` for desktop Rust, `tracing` for `termul-server`, or `src/renderer/lib/log-api.ts` for renderer code; never log secrets or credentials.
 
 ## Where things are
 
@@ -23,7 +23,7 @@ Termul is a Tauri 2 desktop application with a React/TypeScript renderer and Rus
 ## Conventions that differ from defaults
 
 - Keep `src/shared/` limited to runtime-neutral contracts; renderer behavior belongs in `src/renderer/`, and native/backend behavior belongs in `src-tauri/`.
-- Before implementing a feature or behavioral change, evaluate the Tauri desktop, desktop shared-live remote, standalone `troupe-server`, and browser/phone UI. Implement every applicable surface together rather than deferring parity to later manual checks.
+- Before implementing a feature or behavioral change, evaluate the Tauri desktop, desktop shared-live remote, standalone `termul-server`, and browser/phone UI. Implement every applicable surface together rather than deferring parity to later manual checks.
 - Put host-backed behavior in shared Rust services and expose equivalent Tauri and web transports through renderer facades. Add parity tests for both paths; if a capability is intentionally platform-only, gate it explicitly with `isTauriContext()` and test the unsupported state instead of relying on a throwing Tauri stub.
 - Keep both renderer roots consistent when adding routes, providers, hooks, or user-visible behavior: `src/renderer/TauriApp.tsx` and `src/renderer/App.tsx`.
 - Keep files under ~800 prod code lines. When one crosses that, split it: Rust single-file modules become `<name>/` dirs (`web/ws/` pattern — handlers by domain, `pub use` re-exports keep `crate::` paths), TS stores become domain slices (`acp-store/` pattern), large components become leaf components + hooks (`GitPanel`/`AppPreferences` pattern). Move code, never rewrite behavior.

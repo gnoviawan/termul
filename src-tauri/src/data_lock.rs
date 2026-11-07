@@ -81,7 +81,7 @@ impl std::fmt::Display for DataLockError {
                 }
                 write!(
                     f,
-                    "); stop the other host (desktop app or troupe-server) or point this one at a different data directory"
+                    "); stop the other host (desktop app or standalone server) or point this one at a different data directory"
                 )
             }
             Self::Io { path, source } => write!(

@@ -1068,7 +1068,7 @@ jobs:
         run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
 
       # Retag the stable image as `latest` without rebuilding it, under both
-      # image names. An RC published before the rename exists only as
+      # image names. A version published before the rename exists only as
       # termul-server, so fall back to it as the source.
       - name: Retag the stable container image as latest
         env:

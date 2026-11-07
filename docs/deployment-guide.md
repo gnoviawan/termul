@@ -116,6 +116,7 @@ Releases before 0.5.0 named the server `termul-server`. An existing install keep
 - Each release also publishes byte-identical copies named `termul-server` and `termul-server-linux-aarch64` (with their `.sig` files) for scripts that download by name. These copies are dropped after the 0.5 release cycle, so switch download scripts to the new names.
 - `troupe-server onboard` rewrites an existing `termul-server.service` unit instead of adding a second unit. A fresh host gets `troupe-server.service`.
 - The state directory (`~/.local/state/termul`) and the log file names do not change.
+- Log lines from the server's entry point now carry the `troupe_server` tracing target. Change a `RUST_LOG=termul_server=...` filter to `RUST_LOG=troupe_server=...`. Library targets such as `termul_manager_lib` keep their names.
 
 To use the new name for a manual install, install the new file next to the old one and keep a link: `ln -sf troupe-server /usr/local/bin/termul-server`. The updater follows the link and replaces `troupe-server`.
 
