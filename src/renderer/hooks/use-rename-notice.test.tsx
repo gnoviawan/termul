@@ -64,6 +64,29 @@ describe('useRenameNotice', () => {
     expect(screen.queryByText('Termul is now Troupe')).toBeNull()
   })
 
+  it('never shows when the only stored keys belong to another app on the origin', async () => {
+    localStorage.setItem('other-app.session', 'x')
+
+    await launch()
+
+    expect(screen.queryByText('Termul is now Troupe')).toBeNull()
+    expect(localStorage.getItem('termul.renameNotice')).toBe('fresh')
+  })
+
+  it('stays hidden when storage cannot be read', async () => {
+    localStorage.setItem('termul.deviceId', 'device-from-0.4.60')
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage disabled')
+    })
+    try {
+      await launch()
+    } finally {
+      getItem.mockRestore()
+    }
+
+    expect(screen.queryByText('Termul is now Troupe')).toBeNull()
+  })
+
   it('does not show again after Got it', async () => {
     localStorage.setItem('termul.deviceId', 'device-from-0.4.60')
     await launch()

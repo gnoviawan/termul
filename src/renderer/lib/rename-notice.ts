@@ -14,6 +14,7 @@ export const RENAME_NOTICE_DESCRIPTION =
   "It's the same app with a new name. Your projects, chats, settings and sign-ins are unchanged."
 export const RENAME_NOTICE_DISMISS_LABEL = 'Got it'
 export const RENAME_NOTICE_STORAGE_KEY = 'termul.renameNotice'
+const EARLIER_VERSION_KEY_PREFIX = 'termul.'
 
 /** `fresh`: this device started on the new name. `dismissed`: the notice was acknowledged. */
 type RenameNoticeRecord = 'fresh' | 'dismissed'
@@ -50,23 +51,33 @@ function storedKeys(storage: Storage): string[] {
 /**
  * Whether this device ran an earlier version, decided from storage as it was
  * before this page wrote anything. Since 0.4.50 every launch mints
- * `termul.deviceId`, so any key other than ours means an update. A device
- * that jumps from an older version with an empty origin misses the notice,
- * which is the safe way to be wrong. An empty origin is a fresh install,
- * recorded right away so keys written later in this session (device id,
- * sign-in token) never read as an update on the next launch.
+ * `termul.deviceId`, so any other `termul.` key means an update; keys from
+ * other apps on a shared origin do not count. A device that jumps from an
+ * older version without such a key misses the notice, which is the safe way
+ * to be wrong. Otherwise this is a fresh install, recorded right away so keys
+ * written later in this session (device id, sign-in token) never read as an
+ * update on the next launch.
  */
 function classifyBootStorage(storage: Storage | null): boolean {
   if (!storage) return false
+  let updated: boolean
   try {
     if (parseRecord(storage.getItem(RENAME_NOTICE_STORAGE_KEY)) !== null) return false
-    const updated = storedKeys(storage).some((key) => key !== RENAME_NOTICE_STORAGE_KEY)
-    if (!updated) storage.setItem(RENAME_NOTICE_STORAGE_KEY, 'fresh')
-    return updated
+    updated = storedKeys(storage).some(
+      (key) => key.startsWith(EARLIER_VERSION_KEY_PREFIX) && key !== RENAME_NOTICE_STORAGE_KEY
+    )
   } catch {
     reportStorageFailure('read')
     return false
   }
+  if (!updated) {
+    try {
+      storage.setItem(RENAME_NOTICE_STORAGE_KEY, 'fresh')
+    } catch {
+      reportStorageFailure('write')
+    }
+  }
+  return updated
 }
 
 // Runs at module load, which both renderer roots reach through their static
