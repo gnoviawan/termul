@@ -6,7 +6,7 @@ import {
   resetNativeWebviewOcclusionForTests
 } from '@/hooks/use-native-webview-occlusion'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
-import { commandToken, conversationToken } from '@/lib/skill-tokens'
+import { commandToken, conversationToken, fileToken } from '@/lib/skill-tokens'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import { endedState, subagentToolCall } from '@/lib/test-utils/subagent'
 import type { AcpSession } from '@/stores/acp-store'
@@ -1748,7 +1748,7 @@ describe('AgentChatPanel live-turn retry wire rebuild', () => {
     messagesRef.current = []
   })
 
-  it('retries a command-token turn with the /name wire prefix and no sentinel leaks', () => {
+  it('retries a command-token turn with the /name wire prefix and no sentinel leaks', async () => {
     sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
     const displayBlocks = [{ type: 'text', text: `${commandToken('compact')} hello` }]
     messagesRef.current = [{ id: 'm1', role: 'user', blocks: displayBlocks }]
@@ -1756,7 +1756,9 @@ describe('AgentChatPanel live-turn retry wire rebuild', () => {
 
     const onRetry = chatMessageListPropsRef.current?.onRetry
     expect(onRetry).toBeDefined()
-    onRetry?.()
+    await act(async () => {
+      onRetry?.()
+    })
 
     // The re-sent wire text is `/compact hello` (byte-identical to a fresh
     // send of the same composer value) while the display keeps the token.
@@ -1796,6 +1798,43 @@ describe('AgentChatPanel live-turn retry wire rebuild', () => {
       ],
       { displayBlocks }
     )
+  })
+
+  it('re-sends the resource_link of a mentioned file', async () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    const displayBlocks = [{ type: 'text', text: `read ${fileToken('a.ts', '/w/a.ts')} now` }]
+    messagesRef.current = [{ id: 'm1', role: 'user', blocks: displayBlocks }]
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await act(async () => {
+      chatMessageListPropsRef.current?.onRetry?.()
+    })
+
+    const [, wireBlocks] = mockSendPromptBlocks.mock.calls[0] as unknown as [
+      string,
+      Array<{ type: string; uri?: string }>
+    ]
+    expect(wireBlocks.map((b) => b.type)).toEqual(['text', 'resource_link'])
+    expect(wireBlocks[1]?.uri).toContain('/w/a.ts')
+  })
+
+  it('ignores a second Retry while the first is still reading a conversation', async () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    messagesRef.current = [
+      {
+        id: 'm1',
+        role: 'user',
+        blocks: [{ type: 'text', text: `see ${conversationToken('Fix login', 'chat-7')}` }]
+      }
+    ]
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await act(async () => {
+      chatMessageListPropsRef.current?.onRetry?.()
+      chatMessageListPropsRef.current?.onRetry?.()
+    })
+
+    expect(mockSendPromptBlocks).toHaveBeenCalledOnce()
   })
 })
 

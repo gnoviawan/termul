@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { Fragment, useRef } from 'react'
 import { Paperclip, Plus, RefreshCw, Server, Settings2, Wrench } from '@/components/icons'
 import {
   DropdownMenu,
@@ -178,22 +178,9 @@ export function ComposerAddMenu({
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             {model.rows.length === 0 ? <p className={NOTE}>No connectors yet</p> : null}
-            {model.rows.map((row) =>
-              row.needsSignIn ? (
+            {model.rows.map((row) => (
+              <Fragment key={row.id}>
                 <DropdownMenuItem
-                  key={row.id}
-                  aria-label={`Sign in to ${row.name}`}
-                  onSelect={() => {
-                    afterCloseRef.current = 'keep'
-                    openConnectorSettings()
-                  }}
-                >
-                  <span className="min-w-0 flex-1 truncate">{row.name}</span>
-                  <span className={MENU_SHORTCUT_CLASS}>Sign in</span>
-                </DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem
-                  key={row.id}
                   role="menuitemcheckbox"
                   aria-checked={row.on}
                   onSelect={(event) => {
@@ -206,8 +193,21 @@ export function ComposerAddMenu({
                     <SwitchMark on={row.on} />
                   </span>
                 </DropdownMenuItem>
-              )
-            )}
+                {row.needsSignIn ? (
+                  <DropdownMenuItem
+                    aria-label={`Sign in to ${row.name}`}
+                    className="pl-4 text-muted-foreground"
+                    onSelect={() => {
+                      afterCloseRef.current = 'keep'
+                      openConnectorSettings()
+                    }}
+                  >
+                    <span className="min-w-0 flex-1 truncate text-2xs">Needs sign-in</span>
+                    <span className={MENU_SHORTCUT_CLASS}>Sign in</span>
+                  </DropdownMenuItem>
+                ) : null}
+              </Fragment>
+            ))}
             {model.footnote === 'next-chat' ? (
               <p className={NOTE}>Takes effect on the next chat.</p>
             ) : null}

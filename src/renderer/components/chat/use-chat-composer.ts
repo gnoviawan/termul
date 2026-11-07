@@ -9,7 +9,8 @@ import type {
   SessionModeState
 } from '@/lib/acp-api'
 import { docOffsetToDisplayOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
-import { hasSelectionContexts, serializeSelectionContexts } from '@/lib/composer/selection-context'
+import { fileMentionBlocks } from '@/lib/composer/retry-wire'
+import { hasSelectionContexts } from '@/lib/composer/selection-context'
 import { hasToolTokens } from '@/lib/composer/tool-tokens'
 import { composerWireText } from '@/lib/composer/wire-text'
 import {
@@ -23,13 +24,9 @@ import {
   extractSkillNames,
   insertCommandToken,
   insertSkillToken,
-  isFolderTokenPath,
-  parseFileSegments,
-  replaceCommandTokensInline,
   SKILL_TOKEN_START
 } from '@/lib/skill-tokens'
 import type { AgentSkillSummary } from '@/lib/skills-api'
-import { attachmentToBlock, guessMimeType } from './chat-attachments'
 import { tryHandleMentionMenuKeyDown } from './mention-menu-keyboard'
 import type { SlashMenuHandle } from './SlashCommandMenu'
 import type { ComposerKeyboardEvent } from './slash-menu-keyboard'
@@ -398,31 +395,9 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         throw new Error(`Skill '${missingPath.name}' is missing a path`)
       }
       const hasSkills = resolvedSkills.length > 0
-      // Extract inline file-mention tokens and build a `resource_link` block for
-      // each unique file (by absPath). The display text keeps the raw tokens so
-      // the timeline renders inline file pills; the wire text replaces each
-      // token with `(display)` so the agent sees a readable reference alongside
-      // the `resource_link` block carrying the real path.
-      const fileSegments = parseFileSegments(
-        replaceCommandTokensInline(serializeSelectionContexts(value))
-      )
-      const fileBlocks: ContentBlock[] = []
-      const seenPaths = new Set<string>()
-      for (const seg of fileSegments) {
-        // Folder tokens ride as plain relative-path text (no `resource_link`).
-        if (seg.kind === 'file' && !isFolderTokenPath(seg.absPath) && !seenPaths.has(seg.absPath)) {
-          seenPaths.add(seg.absPath)
-          fileBlocks.push(
-            attachmentToBlock({
-              kind: 'file-ref',
-              id: seg.absPath,
-              name: seg.display,
-              mimeType: guessMimeType(seg.display),
-              path: seg.absPath
-            })
-          )
-        }
-      }
+      // A `resource_link` per mentioned file; the display keeps the file pills
+      // and the wire text reads `(display)` in their place.
+      const fileBlocks = fileMentionBlocks(value)
       const wireText = composerWireText(value, resolvedSkills, contexts)
       // Display keeps every pill token where the user typed it. Wire text is
       // the same sentence with command tokens already replaced by `/<name>`.

@@ -965,7 +965,8 @@ describe('mobile composer: closed session', () => {
       'Photos',
       'Files',
       'Mention a file or conversation',
-      'Commands'
+      'Commands',
+      'Termul tools'
     ]) {
       expect(within(sheet).getByRole('button', { name })).toBeDisabled()
     }
@@ -1006,6 +1007,29 @@ describe('mobile composer: Connectors in the sheet', () => {
     const list = within(sheet).getAllByRole('list')[0]
     expect(list).not.toHaveClass('max-h-[300px]')
     expect(list).not.toHaveClass('overflow-y-auto')
+  })
+
+  it("counts the chat's own servers over the project list", () => {
+    mockMcp.servers = [
+      { id: 'github', type: 'stdio', name: 'github', enabled: true },
+      { id: 'playwright', type: 'stdio', name: 'playwright', enabled: true }
+    ]
+    renderBar({ session: { ...session(), mcpServerCount: 1 } })
+    const sheet = openMcp()
+    expect(within(sheet).getByText('1 attached to this session.')).toBeInTheDocument()
+    expect(within(sheet).queryByText('2 attached to this session.')).not.toBeInTheDocument()
+  })
+
+  it('says none are added or attached when the project has no servers', () => {
+    mockMcp.servers = []
+    renderBar()
+    expect(
+      within(openSheet()).getByRole('button', { name: 'Connectors' })
+    ).toHaveAccessibleDescription('None added')
+    fireEvent.click(screen.getByRole('button', { name: 'Connectors' }))
+    const sheet = screen.getByRole('dialog', { name: 'Connectors' })
+    expect(within(sheet).getByText('No servers attached yet.')).toBeInTheDocument()
+    expect(within(sheet).queryByRole('list')).not.toBeInTheDocument()
   })
 
   it('Back, Escape and system back return to Add to chat with focus on the Connectors row', async () => {

@@ -14,31 +14,40 @@ export function toolToken(id: TermulToolId): string {
   return `${TOOL_TOKEN_START}${id}${TOOL_TOKEN_END}`
 }
 
+function stripToolSentinels(text: string): string {
+  return text.replaceAll(TOOL_TOKEN_START, '').replaceAll(TOOL_TOKEN_END, '')
+}
+
 /**
  * Split a composer value into text and tool segments. A token whose id is not
- * in the registry keeps its id as text, and an unterminated token keeps the
- * rest as text, so a stale or damaged draft still loads and never leaks a
- * sentinel.
+ * in the registry keeps its id as text. A start with no end before the next
+ * start is dropped, so it never swallows the pill after it. Every text segment
+ * is stripped of stray sentinels, so a stale or damaged draft still loads and
+ * never leaks one.
  */
 export function parseToolSegments(value: string): ToolSegment[] {
   const segments: ToolSegment[] = []
   let text = ''
+  const flushText = (): void => {
+    const clean = stripToolSentinels(text)
+    if (clean.length > 0) segments.push({ kind: 'text', text: clean })
+    text = ''
+  }
   let i = 0
   while (i < value.length) {
     const start = value.indexOf(TOOL_TOKEN_START, i)
     if (start === -1) break
     text += value.slice(i, start)
     const end = value.indexOf(TOOL_TOKEN_END, start + 1)
-    if (end === -1) {
-      text += value.slice(start + 1)
-      i = value.length
-      break
+    const nextStart = value.indexOf(TOOL_TOKEN_START, start + 1)
+    if (end === -1 || (nextStart !== -1 && nextStart < end)) {
+      i = start + 1
+      continue
     }
     const id = value.slice(start + 1, end)
     const tool = termulTool(id)
     if (tool) {
-      if (text.length > 0) segments.push({ kind: 'text', text })
-      text = ''
+      flushText()
       segments.push({ kind: 'tool', tool })
     } else {
       text += id
@@ -46,21 +55,31 @@ export function parseToolSegments(value: string): ToolSegment[] {
     i = end + 1
   }
   text += value.slice(i)
-  // A stray end sentinel has no start to pair with.
-  text = text.replaceAll(TOOL_TOKEN_END, '')
-  if (text.length > 0) segments.push({ kind: 'text', text })
+  flushText()
   return segments
 }
 
+/** True when the value holds at least one well-formed pill for a known tool. */
 export function hasToolTokens(value: string): boolean {
-  return value.includes(TOOL_TOKEN_START)
+  return (
+    value.includes(TOOL_TOKEN_START) &&
+    parseToolSegments(value).some((segment) => segment.kind === 'tool')
+  )
 }
 
 /** Each tool pill becomes its wire text, where the user placed it. */
 export function replaceToolTokensInline(value: string): string {
-  if (!hasToolTokens(value) && !value.includes(TOOL_TOKEN_END)) return value
+  if (!value.includes(TOOL_TOKEN_START) && !value.includes(TOOL_TOKEN_END)) return value
   return parseToolSegments(value)
     .map((segment) => (segment.kind === 'tool' ? segment.tool.wireText : segment.text))
+    .join('')
+}
+
+/** Each tool pill becomes its label, for a title that names the tool. */
+export function replaceToolTokensWithLabels(value: string): string {
+  if (!value.includes(TOOL_TOKEN_START) && !value.includes(TOOL_TOKEN_END)) return value
+  return parseToolSegments(value)
+    .map((segment) => (segment.kind === 'tool' ? segment.tool.label : segment.text))
     .join('')
 }
 

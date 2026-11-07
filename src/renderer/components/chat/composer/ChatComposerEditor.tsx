@@ -340,7 +340,7 @@ export function ChatComposerEditor({
           onPasteAttachmentsRef.current?.(event as ClipboardEvent)
           if (event.defaultPrevented) return true
           const text = event.clipboardData?.getData('text/plain') ?? ''
-          if (!/[\uE000\uE004\uE006\uE008\uE00A]/.test(text)) return false
+          if (!/[\uE000\uE004\uE006\uE008\uE00A\uE00C]/.test(text)) return false
           event.preventDefault()
           try {
             const parsed = view.state.schema.nodeFromJSON(

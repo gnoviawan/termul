@@ -15,7 +15,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { McpServerList, type McpServerListProps } from '../McpServerList'
 import { TERMUL_TOOL_ICONS } from '../ToolChip'
-import { connectorsMenuModel } from './connectors-menu-model'
+import { type ConnectorsHost, connectorsMenuModel } from './connectors-menu-model'
 import type { TermulToolRow } from './use-termul-tools'
 
 /**
@@ -44,6 +44,7 @@ interface ComposerAddSheetProps extends Omit<McpServerListProps, 'listClassName'
   /** Session closed: the editor is unavailable. */
   disabled: boolean
   termulTools: TermulToolRow[]
+  connectorsHost: ConnectorsHost
 }
 
 const LOG_SOURCE = 'composer-add-sheet'
@@ -87,8 +88,10 @@ export function ComposerAddSheet({
   handle,
   disabled,
   termulTools,
+  connectorsHost,
   ...mcp
 }: ComposerAddSheetProps): React.JSX.Element {
+  const { footnote } = connectorsMenuModel(mcp.servers, mcp.probeStatus, connectorsHost)
   const [open, setOpen] = useState(false)
   // Set while a Mention/Commands tap hands focus to the editor, so the sheet's
   // own focus restore (back to +) does not steal it again.
@@ -181,7 +184,11 @@ export function ComposerAddSheet({
             {/* The sheet scrolls itself, so lift the popover's nested 300px scroller.
                 `max-h-fit` rather than `max-h-none`: tailwind-merge 2.x does not know
                 `max-h-none`, so it would leave `max-h-[300px]` in place. */}
-            <McpServerList {...mcp} listClassName="max-h-fit overflow-visible pr-0" />
+            <McpServerList
+              {...mcp}
+              footnote={footnote}
+              listClassName="max-h-fit overflow-visible pr-0"
+            />
           </div>
         ) : (
           <>
@@ -232,6 +239,7 @@ export function ComposerAddSheet({
                 subtitle="Browser, canvas and automations"
                 accessory="chevron"
                 subview="tools"
+                disabled={disabled}
                 onSelect={() => nav.push('tools')}
               />
               <SheetRow

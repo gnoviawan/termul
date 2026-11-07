@@ -4,9 +4,10 @@ import { describe, expect, it } from 'vitest'
 import { ConversationPill } from '@/components/chat/composer/ConversationPillNode'
 import { ToolPill } from '@/components/chat/composer/ToolPillNode'
 import { buildComposerSend } from '@/components/chat/composer-send-blocks'
+import { deriveTitle } from '@/lib/acp-history-persistence'
 import { docToDisplayText, TOOL_PILL_NODE } from '@/lib/composer/doc-to-prompt'
 import { draftFromTokens } from '@/lib/composer/draft-from-tokens'
-import { toolToken } from '@/lib/composer/tool-tokens'
+import { hasToolTokens, parseToolSegments, toolToken } from '@/lib/composer/tool-tokens'
 import { composerWireText } from '@/lib/composer/wire-text'
 import {
   conversationToken,
@@ -81,7 +82,24 @@ describe('Termul tool pill', () => {
     })
   })
 
-  it('reads as the wire text in copies, previews and titles', () => {
+  it('titles a chat that opens with a tool pill by the tool label', () => {
+    expect(
+      deriveTitle(
+        [
+          {
+            id: 'u1',
+            role: 'user',
+            blocks: [{ type: 'text', text: `${toolToken('browser')} open localhost` }],
+            streaming: false,
+            timestamp: 1
+          }
+        ],
+        'Untitled'
+      )
+    ).toBe('Browser open localhost')
+  })
+
+  it('reads as the wire text in copies and previews', () => {
     expect(sanitizeDisplayText(`${toolToken('browser')} open localhost`)).toBe(
       `${BROWSER_WIRE} open localhost`
     )
@@ -97,6 +115,24 @@ describe('Termul tool pill', () => {
     const value = '\uE00Cscreenshot\uE00D now'
     expect(composerWireText(value, [])).toBe('screenshot now')
     expect(roundTrip(value)).toBe('screenshot now')
+  })
+
+  it('keeps a valid pill after an unclosed start and strips every stray sentinel', () => {
+    const value = `a\uE00Cbroken ${toolToken('browser')} b\uE00D c`
+    expect(parseToolSegments(value)).toEqual([
+      { kind: 'text', text: 'abroken ' },
+      { kind: 'tool', tool: expect.objectContaining({ id: 'browser' }) },
+      { kind: 'text', text: ' b c' }
+    ])
+    expect(composerWireText(`x\uE00D ${toolToken('canvas')}`, [])).toBe(
+      'x (Use the canvas tools from the termul MCP server)'
+    )
+  })
+
+  it('counts only well-formed known tool pills as tools', () => {
+    expect(hasToolTokens(`${toolToken('browser')} go`)).toBe(true)
+    expect(hasToolTokens('\uE00Cscreenshot\uE00D now')).toBe(false)
+    expect(hasToolTokens('\uE00Cbrowser')).toBe(false)
   })
 
   it('lets @ and / open right after a tool pill', () => {

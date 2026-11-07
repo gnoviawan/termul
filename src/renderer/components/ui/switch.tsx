@@ -58,12 +58,20 @@ const Switch = React.forwardRef<
 })
 Switch.displayName = SwitchPrimitives.Root.displayName
 
-/** The look of `Switch`, for a menu item that is itself the control. */
+/**
+ * The look of `Switch`, for a menu item that is itself the control. The item's
+ * highlight and press drive the track's hover and active colors (`.switch-mark`).
+ */
 function SwitchMark({ on }: { on: boolean }): React.JSX.Element {
   const state = on ? 'checked' : 'unchecked'
   const { track, thumb } = switchClasses('sm')
   return (
-    <span aria-hidden="true" data-state={state} data-switch-size="sm" className={track}>
+    <span
+      aria-hidden="true"
+      data-state={state}
+      data-switch-size="sm"
+      className={cn(track, 'switch-mark')}
+    >
       <span data-state={state} className={thumb} />
     </span>
   )

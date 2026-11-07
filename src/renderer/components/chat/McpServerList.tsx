@@ -2,6 +2,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Switch } from '@/components/ui/switch'
 import type { McpToolInfo, ProbeStatus } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
+import type { ConnectorsFootnote } from './composer/connectors-menu-model'
 
 export interface McpServerSummary {
   id: string
@@ -53,6 +54,8 @@ export interface McpServerListProps {
    * scroller classes, so a host that scrolls itself (the + sheet) can lift the cap.
    */
   listClassName?: string
+  /** What shows under the rows; from `connectorsMenuModel`. Defaults to none. */
+  footnote?: ConnectorsFootnote
 }
 
 /**
@@ -72,7 +75,8 @@ export function McpServerList({
   reloadDisabled = false,
   reloadDisabledReason,
   reloading = false,
-  listClassName
+  listClassName,
+  footnote = 'none'
 }: McpServerListProps): React.JSX.Element {
   return (
     <>
@@ -94,12 +98,12 @@ export function McpServerList({
               />
             ))}
           </ul>
-          {onReloadChat ? null : (
+          {footnote === 'next-chat' ? (
             <p className="mt-3 text-2xs text-muted-foreground">Takes effect on the next chat.</p>
-          )}
+          ) : null}
         </>
       )}
-      {onReloadChat ? (
+      {footnote === 'reload-chat' && onReloadChat ? (
         <div className="mt-3 flex items-center gap-2">
           <p className="min-w-0 flex-1 text-2xs text-muted-foreground">
             {servers.length > 0

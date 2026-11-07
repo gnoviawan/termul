@@ -118,9 +118,15 @@ describe('ComposerAddMenu', () => {
 
   it('inserts the @ trigger once the menu has closed', async () => {
     const { handle } = renderMenu('chat-current')
+    let menuOpenAtInsert: boolean | null = null
+    vi.mocked(handle.insertTrigger).mockImplementation(() => {
+      menuOpenAtInsert = screen.queryByRole('menu') !== null
+      return true
+    })
     await openMenu()
     fireEvent.click(screen.getByRole('menuitem', { name: /Mention/ }))
     await waitFor(() => expect(handle.insertTrigger).toHaveBeenCalledWith('@'))
+    expect(menuOpenAtInsert).toBe(false)
     expect(handle.focusEditor).not.toHaveBeenCalled()
   })
 
@@ -145,11 +151,13 @@ describe('ComposerAddMenu', () => {
     expect(screen.getByRole('menuitemcheckbox', { name: 'GitHub' })).toBeInTheDocument()
   })
 
-  it('sends a server that needs sign-in to the connector settings instead of toggling', async () => {
+  it('offers sign-in for a server that needs it and keeps its toggle', async () => {
     const { onToggle } = renderMenu('chat-current')
     await openConnectors()
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Linear' }))
+    expect(onToggle).toHaveBeenCalledWith('linear', false)
     fireEvent.click(screen.getByRole('menuitem', { name: 'Sign in to Linear' }))
-    expect(onToggle).not.toHaveBeenCalled()
+    expect(onToggle).toHaveBeenCalledOnce()
     expect(useSettingsModalStore.getState()).toMatchObject({
       view: 'app',
       appPage: 'mcp-servers'
@@ -177,10 +185,18 @@ describe('ComposerAddMenu', () => {
   })
 
   it('shows an empty registry with a way to add one', async () => {
-    renderMenu('chat-stale', { servers: [] })
+    renderMenu('chat-current', { servers: [] })
     await openConnectors()
     expect(screen.getByText('No connectors yet')).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: 'Manage connectors' })).toBeInTheDocument()
     expect(screen.queryByText('This chat still uses the previous servers.')).toBeNull()
+  })
+
+  it('still offers the reload when the last connector of a stale chat was removed', async () => {
+    const { onReloadChat } = renderMenu('chat-stale', { servers: [] })
+    await openConnectors()
+    expect(screen.getByText('No connectors yet')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reload this chat' }))
+    expect(onReloadChat).toHaveBeenCalledOnce()
   })
 })

@@ -326,15 +326,23 @@ test('the + sheet lists its sections and dismisses back to the + button', async 
   await expect(sheet).toHaveClass(/overflow-y-auto/)
   await expect(sheet).toHaveClass(/overscroll-contain/)
   await expect(sheet).toHaveCSS('max-height', `${VIEWPORT_HEIGHT * 0.85}px`)
-  await expect(sheet.getByRole('button', { name: 'Attach files' })).toBeVisible()
-  await expect(sheet.getByRole('button', { name: 'Mention file' })).toBeVisible()
+  await expect(sheet.getByRole('button', { name: 'Files', exact: true })).toBeVisible()
+  await expect(sheet.getByRole('button', { name: 'Mention a file or conversation' })).toBeVisible()
   await expect(sheet.getByRole('button', { name: 'Commands' })).toBeVisible()
+  await expect(sheet.getByRole('button', { name: 'Termul tools' })).toBeVisible()
   // The agent, model and effort live in the selector pill, not in this sheet.
   await expect(sheet.getByRole('heading', { name: 'Chat options' })).toHaveCount(0)
   await expect(sheet.getByRole('button', { name: 'Medium', exact: true })).toHaveCount(0)
-  await expect(sheet.getByRole('heading', { name: 'Connectors' })).toBeVisible()
-  await expect(sheet.getByText('No servers attached yet.')).toBeVisible()
-  await expect(sheet.getByText('Takes effect on the next chat.')).toHaveCount(0)
+  // Connectors is a row on the root view; its list lives one level down.
+  const connectorsRow = sheet.getByRole('button', { name: 'Connectors' })
+  await expect(connectorsRow).toBeVisible()
+  await connectorsRow.tap()
+  const connectors = page.getByRole('dialog', { name: 'Connectors' })
+  await expect(connectors.getByRole('heading', { name: 'Connectors' })).toBeVisible()
+  await expect(connectors.getByText('No servers attached yet.')).toBeVisible()
+  await expect(connectors.getByText('Takes effect on the next chat.')).toHaveCount(0)
+  await connectors.getByRole('button', { name: 'Back' }).tap()
+  await expect(page.getByRole('dialog', { name: 'Add to chat' })).toBeVisible()
   // The sheet sits at the bottom edge of the phone and never outgrows it.
   // (Poll: it is still sliding in right after it becomes visible.)
   await expect

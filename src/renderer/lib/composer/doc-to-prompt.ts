@@ -44,7 +44,8 @@ import {
   SKILL_TOKEN_START
 } from '@/lib/skill-tokens'
 import { contextFromAttrs, selectionContextToken } from './selection-context'
-import { TOOL_TOKEN_END, TOOL_TOKEN_START } from './tool-tokens'
+import type { TermulToolId } from './termul-tools'
+import { toolToken } from './tool-tokens'
 
 /**
  * The pill node type name. Kept in one place so the (de)serializers and the
@@ -101,10 +102,6 @@ function isPillKind(kind: DocSegment['kind']): kind is PillKind {
  * from persisted drafts.
  */
 export const SKILL_PAD_DEFAULT = SKILL_PAD_CHAR
-
-function toolTokenFromAttr(id: unknown): string {
-  return `${TOOL_TOKEN_START}${String(id ?? '')}${TOOL_TOKEN_END}`
-}
 
 export interface DocSegment {
   kind: 'text' | PillKind
@@ -193,7 +190,7 @@ export function walkDocSegments(doc: PmNode): DocSegment[] {
           kind = 'conversationPill'
           blockEndedInHardBreak = false
         } else if (node.type.name === TOOL_PILL_NODE) {
-          displayText = toolTokenFromAttr(node.attrs.id)
+          displayText = toolToken(String(node.attrs.id ?? '') as TermulToolId)
           kind = 'toolPill'
           blockEndedInHardBreak = false
         } else if (node.type.name === 'hardBreak') {

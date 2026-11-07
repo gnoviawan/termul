@@ -29,10 +29,16 @@ describe('connectorsMenuModel', () => {
   })
 
   it('has no rows, count or footnote for an empty registry', () => {
-    expect(connectorsMenuModel([], undefined, 'chat-stale')).toEqual({
-      rows: [],
-      onCount: 0,
-      footnote: 'none'
-    })
+    for (const host of ['chat-current', 'launcher'] as const) {
+      expect(connectorsMenuModel([], undefined, host)).toEqual({
+        rows: [],
+        onCount: 0,
+        footnote: 'none'
+      })
+    }
+  })
+
+  it('keeps the reload for a stale chat whose last connector was removed', () => {
+    expect(connectorsMenuModel([], undefined, 'chat-stale').footnote).toBe('reload-chat')
   })
 })

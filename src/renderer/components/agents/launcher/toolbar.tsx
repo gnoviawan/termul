@@ -210,6 +210,7 @@ export function LauncherToolbar({
             handle={addHandle}
             disabled={!addHandle.canPick}
             termulTools={termulTools}
+            connectorsHost="launcher"
             {...mcpListProps}
           />
           {selector({

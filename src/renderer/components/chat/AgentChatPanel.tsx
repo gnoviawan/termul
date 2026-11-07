@@ -24,11 +24,10 @@ import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } f
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import { formatAcpAgentError } from '@/lib/agents/acp-spawn-errors'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
+import { retryWireBlocks } from '@/lib/composer/retry-wire'
 import type { SelectionContext } from '@/lib/composer/selection-context'
-import { composerWireText } from '@/lib/composer/wire-text'
-import { resolveConversationContexts } from '@/lib/conversation-transcript'
 import { logFrontendError } from '@/lib/log-api'
-import { extractConversationRefs, extractSkillNames } from '@/lib/skill-tokens'
+import { extractSkillNames } from '@/lib/skill-tokens'
 import { getProjectRootPath } from '@/lib/worktree-context'
 import {
   type ChatMessage,
@@ -572,6 +571,7 @@ export function AgentChatPanel({
     lastUserBlocks?.some((b) => b.type !== 'text' || (b.text ?? '').trim().length > 0)
   )
 
+  const retryInFlightRef = useRef(false)
   const handleRetry = useCallback(() => {
     // Failed launch (prepare/spawn never produced a session): re-run prepare
     // against the recorded launch config. Clear the dismissal FIRST so a
@@ -618,8 +618,7 @@ export function AgentChatPanel({
     // the composer does). The display (token) blocks go through unchanged so
     // the timeline keeps rendering inline chips. A skill that no longer
     // resolves to a path (uninstalled) aborts with a clear error.
-    const tokenText = lastUserText
-    const skills = extractSkillNames(tokenText).map((name) => ({
+    const skills = extractSkillNames(lastUserText).map((name) => ({
       name,
       path: availableSkills.find((s) => s.name === name)?.path ?? ''
     }))
@@ -628,25 +627,20 @@ export function AgentChatPanel({
       toast.error(`Skill '${missingPath.name}' is missing a path`)
       return
     }
+    // Reading a mentioned conversation is async: a second Retry before the
+    // first sends would queue a duplicate turn.
+    if (retryInFlightRef.current) return
+    retryInFlightRef.current = true
     const userBlocks = lastUserBlocks
-    const send = async (): Promise<void> => {
-      // Mentioned conversations are re-read like a fresh send: the display
-      // blocks hold only the pill, not the transcript the agent saw.
-      const refs = extractConversationRefs(tokenText)
-      const contexts = refs.length > 0 ? await resolveConversationContexts(refs) : undefined
-      const wireText = composerWireText(tokenText, skills, contexts)
-      // Keep the original non-text (image/resource) blocks after the text.
-      const wireBlocks: ContentBlock[] = wireText.trim() ? [{ type: 'text', text: wireText }] : []
-      for (const b of userBlocks) {
-        if (b.type !== 'text') wireBlocks.push(b)
-      }
-      wireBlocks.push(...(contexts?.blocks ?? []))
-      await sendPromptBlocks(sessionId, wireBlocks, { displayBlocks: userBlocks })
-    }
-    void send().catch((err) => {
-      if (isAgentDeadError(err)) return
-      toast.error('Could not send your message. Try again.')
-    })
+    void retryWireBlocks(userBlocks, skills)
+      .then((wireBlocks) => sendPromptBlocks(sessionId, wireBlocks, { displayBlocks: userBlocks }))
+      .catch((err) => {
+        if (isAgentDeadError(err)) return
+        toast.error('Could not send your message. Try again.')
+      })
+      .finally(() => {
+        retryInFlightRef.current = false
+      })
   }, [
     lastUserBlocks,
     canRetryLastUserTurn,

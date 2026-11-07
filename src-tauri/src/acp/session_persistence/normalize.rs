@@ -594,7 +594,11 @@ pub(crate) fn normalize_title(text: &str) -> String {
 }
 
 pub(super) fn derive_title(payload: &Value) -> String {
-    let text = user_prompt_text(payload).unwrap_or_else(|| "Untitled Chat".to_string());
+    // Tool pills become their labels in the title only: automation
+    // suggestions read `user_prompt_text` and must keep the instruction.
+    let text = user_prompt_text(payload)
+        .map(|text| tool_pill_labels(&text).unwrap_or(text))
+        .unwrap_or_else(|| "Untitled Chat".to_string());
     normalize_title(&text)
 }
 
@@ -623,7 +627,6 @@ pub fn user_prompt_text(payload: &Value) -> Option<String> {
             },
         )
         .map(|text| skills_framing_title(&text).unwrap_or(text))
-        .map(|text| tool_pill_labels(&text).unwrap_or(text))
 }
 
 /// The tool hints a composer tool pill sends, keyed to the pill's label. Must

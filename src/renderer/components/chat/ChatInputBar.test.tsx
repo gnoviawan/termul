@@ -725,6 +725,17 @@ describe('ChatInputBar + menu', () => {
       'Connectors2 on'
     ])
   })
+
+  it('counts no connectors as 0 on when the project has none', async () => {
+    mockMcpCount.current = 0
+    renderInputBar()
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Add to chat' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    await screen.findByRole('menu')
+    expect(screen.getByRole('menuitem', { name: /Connectors/ })).toHaveTextContent('Connectors0 on')
+  })
 })
 
 describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', () => {
@@ -2480,6 +2491,17 @@ describe('ChatInputBar conversation mentions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'false'))
     expect(onSendBlocks).not.toHaveBeenCalled()
+    // The + menu's editor rows are disabled while the read is pending.
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Add to chat' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    const menu = await screen.findByRole('menu')
+    for (const name of [/Mention/, /Slash commands/, 'Termul tools']) {
+      expect(within(menu).getByRole('menuitem', { name })).toHaveAttribute('data-disabled')
+    }
+    fireEvent.keyDown(menu, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument())
 
     await finishRead()
     await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))

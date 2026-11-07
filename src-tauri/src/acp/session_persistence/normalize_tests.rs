@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use super::derive_title;
+use super::{derive_title, user_prompt_text};
 
 fn title_of(text: &str) -> String {
     derive_title(&json!({ "content": [{ "type": "text", "text": text }] }))
@@ -97,6 +97,15 @@ fn an_unknown_tool_hint_is_dropped() {
     assert_eq!(
         title_of("(Use the terminal tools from the termul MCP server) list the panes"),
         "list the panes"
+    );
+}
+
+#[test]
+fn prompt_text_for_suggestions_keeps_the_tool_instruction() {
+    let text = "(Use the browser tool from the termul MCP server) open localhost";
+    assert_eq!(
+        user_prompt_text(&json!({ "content": [{ "type": "text", "text": text }] })).as_deref(),
+        Some(text)
     );
 }
 

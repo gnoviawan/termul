@@ -10,7 +10,7 @@ export interface ConnectorRow {
   id: string
   name: string
   on: boolean
-  /** The probe needs a sign-in: the row opens settings instead of toggling. */
+  /** The probe needs a sign-in: the row also offers to open settings. */
   needsSignIn: boolean
 }
 
@@ -56,6 +56,8 @@ export function connectorsMenuModel(
   return {
     rows,
     onCount: rows.filter((row) => row.on).length,
-    footnote: rows.length === 0 ? 'none' : FOOTNOTE[host]
+    // A stale chat keeps its reload even with no rows left: deleting the last
+    // connector still leaves the chat running it.
+    footnote: rows.length === 0 && host !== 'chat-stale' ? 'none' : FOOTNOTE[host]
   }
 }

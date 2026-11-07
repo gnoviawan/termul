@@ -42,15 +42,27 @@ describe('McpServerList rows (per-server enable/disable + status dot)', () => {
   it('offers Reload this chat when the host can reload', () => {
     const onReloadChat = vi.fn()
     render(
-      <McpServerList count={1} servers={servers} onToggle={vi.fn()} onReloadChat={onReloadChat} />
+      <McpServerList
+        count={1}
+        servers={servers}
+        onToggle={vi.fn()}
+        onReloadChat={onReloadChat}
+        footnote="reload-chat"
+      />
     )
     expect(screen.getByText('This chat still uses the previous servers.')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Reload this chat' }))
     expect(onReloadChat).toHaveBeenCalledOnce()
   })
 
-  it('discloses that server changes take effect on the next chat', () => {
+  it('shows no footnote and no reload for a chat whose servers are current', () => {
     render(<McpServerList count={1} servers={servers} onToggle={vi.fn()} />)
+    expect(screen.queryByText(/takes effect on the next chat/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Reload this chat' })).not.toBeInTheDocument()
+  })
+
+  it('discloses that server changes take effect on the next chat', () => {
+    render(<McpServerList count={1} servers={servers} onToggle={vi.fn()} footnote="next-chat" />)
     expect(screen.getByText(/takes effect on the next chat/i)).toBeInTheDocument()
     expect(screen.queryByText(/per-tool toggle coming soon/i)).not.toBeInTheDocument()
   })
@@ -130,6 +142,7 @@ describe('McpServerList (the + sheet Connectors view)', () => {
         servers={servers}
         onToggle={vi.fn()}
         probeStatus={{ github: 'connected', playwright: 'disconnected' }}
+        footnote="next-chat"
       />
     )
 
@@ -144,7 +157,7 @@ describe('McpServerList (the + sheet Connectors view)', () => {
   })
 
   it('renders only the empty summary when there are no servers (no rows, no footnote)', () => {
-    const { container } = render(<McpServerList count={0} servers={[]} />)
+    const { container } = render(<McpServerList count={0} servers={[]} footnote="next-chat" />)
 
     expect(screen.getByText('No servers attached yet.')).toBeInTheDocument()
     expect(container.querySelector('ul')).toBeNull()
@@ -152,7 +165,7 @@ describe('McpServerList (the + sheet Connectors view)', () => {
   })
 
   it('keeps the rows and footnote at count 0 when servers exist', () => {
-    render(<McpServerList count={0} servers={servers} onToggle={vi.fn()} />)
+    render(<McpServerList count={0} servers={servers} onToggle={vi.fn()} footnote="next-chat" />)
 
     expect(screen.getByText('No servers attached yet.')).toBeInTheDocument()
     expect(screen.getAllByRole('listitem')).toHaveLength(2)

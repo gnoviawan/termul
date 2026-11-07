@@ -672,6 +672,7 @@ export function ChatInputBar({
                     handle={composerAddHandle}
                     disabled={disabled || sending}
                     termulTools={termulTools}
+                    connectorsHost={connectorsHost}
                     {...connectors}
                   />
                   {modelSelector}

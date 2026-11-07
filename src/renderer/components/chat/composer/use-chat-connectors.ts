@@ -1,4 +1,3 @@
-import { useMemo } from 'react'
 import { toast } from 'sonner'
 import { useReloadChat } from '@/hooks/use-reload-chat'
 import { type AcpSession, useAcpStore } from '@/stores/acp-store'
@@ -27,11 +26,9 @@ export function useChatConnectors(session: AcpSession): {
     session.agentId ? s.agents?.[session.agentId]?.capabilities : undefined
   )
   // A chat with no recorded fingerprint (reopened from history) may be
-  // stale, so it keeps offering the reload.
-  const stale = useMemo(
-    () => registryMcpServersMatch(session.id, mcpServers, capabilities) !== true,
-    [session.id, mcpServers, capabilities]
-  )
+  // stale, so it keeps offering the reload. Not memoized: a reload records
+  // the fingerprint outside the store, and the reload state change re-renders.
+  const stale = registryMcpServersMatch(session.id, mcpServers, capabilities) !== true
   return {
     connectors: {
       // Prefer the session's own count; older sessions fall back to the list.
@@ -48,7 +45,8 @@ export function useChatConnectors(session: AcpSession): {
       onLoadTools: (id: string) => {
         void loadMcpTools(id)
       },
-      onReloadChat: chatReload.reload,
+      // Only a stale chat offers the reload, as on the desktop menu.
+      onReloadChat: stale ? chatReload.reload : undefined,
       reloadDisabled: chatReload.disabled,
       reloadDisabledReason: chatReload.reason,
       reloading: chatReload.reloading
