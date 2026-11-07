@@ -1,6 +1,6 @@
 {
   "name": "termul-manager",
-  "productName": "Termul Manager",
+  "productName": "Troupe",
   "version": "0.4.60",
   "description": "Project-aware terminal that treats workspaces as first-class citizens",
   "author": "gnoviawan",
