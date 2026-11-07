@@ -83,7 +83,7 @@ describe('useUpdateToast download progress', () => {
 
     expect(toast.loading).toHaveBeenCalledWith(`Preparing update ${VERSION}...`, {
       id: `download-progress-${VERSION}`,
-      description: 'Backing up your Termul data before the download starts.',
+      description: 'Backing up your Troupe data before the download starts.',
       duration: Infinity
     })
     expect(toast.loading).not.toHaveBeenCalledWith(

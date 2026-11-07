@@ -75,7 +75,7 @@ function ThreadReply({
 
 /**
  * CAP-3 review threads with file and line, as GitHub reports them. Resolved
- * threads start folded (native `details`); Termul never resolves a thread.
+ * threads start folded (native `details`); Troupe never resolves a thread.
  */
 export function GithubReviewThreads({
   threads,

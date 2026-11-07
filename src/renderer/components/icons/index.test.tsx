@@ -2,7 +2,7 @@ import { render } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { AlertCircle, Columns3, Search, Square } from './index'
 
-describe('Termul functional icons', () => {
+describe('Troupe functional icons', () => {
   it('inherits the UI color and accepts size and stroke overrides', () => {
     const { container } = render(
       <>

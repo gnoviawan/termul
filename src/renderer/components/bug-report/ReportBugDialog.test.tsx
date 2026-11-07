@@ -158,7 +158,7 @@ describe('ReportBugDialog', () => {
     await waitFor(() => {
       expect(preview.textContent).toContain('## Crash on split')
       expect(preview.textContent).toContain('Split a pane and the renderer crashed.')
-      expect(preview.textContent).toContain('- **Termul:** 1.2.3 (debug)')
+      expect(preview.textContent).toContain('- **Troupe:** 1.2.3 (debug)')
       expect(preview.textContent).toContain('log line one')
     })
   })
@@ -178,7 +178,7 @@ describe('ReportBugDialog', () => {
     await screen.findByText(/Host diagnostics could not be collected/)
     const preview = screen.getByTestId('report-markdown-preview')
     await waitFor(() => {
-      expect(preview.textContent).toContain('- **Termul:** unavailable')
+      expect(preview.textContent).toContain('- **Troupe:** unavailable')
       expect(preview.textContent).toContain('no log tail is attached')
     })
 
@@ -212,7 +212,7 @@ describe('ReportBugDialog', () => {
     // The submitted body is the same buildIssueMarkdown document the preview shows.
     expect(request.body).toContain('## Broken scroll')
     expect(request.body).toContain('Scrollback jumps.')
-    expect(request.body).toContain('- **Termul:** 1.2.3 (debug)')
+    expect(request.body).toContain('- **Troupe:** 1.2.3 (debug)')
     expect(request.body).toContain('### Screenshots')
     expect(request.body).toContain('1 screenshot was captured')
 

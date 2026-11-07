@@ -7,7 +7,7 @@ import { CHAT_SPRING } from './chat-motion'
 /**
  * The chat start screen ("Empty chat · V1 Composer in the middle"), shared by
  * the agent launcher (before a session exists) and an empty chat (a session
- * with no messages yet): the Termul mark, one project question, the composer
+ * with no messages yet): the Troupe mark, one project question, the composer
  * in the middle (each surface keeps its own composer), and quiet starter
  * chips under it. One source of truth for this copy, these starters, and
  * this spacing.
