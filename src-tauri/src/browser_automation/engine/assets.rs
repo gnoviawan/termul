@@ -72,6 +72,9 @@ pub const OPEN_FILE_CHOOSER: Helper = helper!("open_file_chooser");
 /// WebKit engines confirm the answered chooser filled the input.
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
 pub const INPUT_FILE_COUNT: Helper = helper!("input_file_count");
+/// WebKit engines also hear the input change, for a page that clears it.
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+pub const WATCH_INPUT_FILES: Helper = helper!("watch_input_files");
 
 /// Main-world script every agent tab frame runs at document start on
 /// engines whose console is observed by page script: it buffers console
@@ -216,6 +219,16 @@ pub fn open_file_chooser(path: &str) -> Script {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn input_file_count(path: &str) -> Script {
     Script::new(INPUT_FILE_COUNT, json!({ "path": path }))
+}
+
+/// Resolves true once the file input at `path` fires a trusted `input` or
+/// `change`, false after `wait` (or at once when `path` names anything
+/// else). Issued before the chooser opens, so it hears the upload land
+/// even when the page clears the input in its handler.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub fn watch_input_files(path: &str, wait: std::time::Duration) -> Script {
+    let ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX);
+    Script::new(WATCH_INPUT_FILES, json!({ "path": path, "ms": ms }))
 }
 
 /// Up to `limit` UTF-16 units of the rendered text of the element at
