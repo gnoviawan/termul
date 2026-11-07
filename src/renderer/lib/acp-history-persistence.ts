@@ -14,6 +14,7 @@ import { acpHistoryApi } from '@/lib/acp-history-api'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { persistenceApi } from '@/lib/api'
 import { replaceSelectionContextsWithMarkers } from '@/lib/composer/selection-context'
+import { replaceToolTokensWithLabels } from '@/lib/composer/tool-tokens'
 import { logFrontendError } from '@/lib/log-api'
 import { startOfToday, startOfYesterday } from '@/lib/relative-time'
 import { sanitizeDisplayText } from '@/lib/skill-tokens'
@@ -384,9 +385,14 @@ export function deriveTitle(messages: ChatMessage[], fallbackTitle: string): str
     // Stored display text may carry private-use pill sentinels (command/skill/
     // file tokens) — sanitize to readable text so a command-first message
     // yields a readable `/compact …` title instead of a blank-looking one.
+    // A tool pill titles as its label, not the instruction the agent reads.
     const text = sanitizeDisplayText(
-      replaceSelectionContextsWithMarkers(
-        firstUser.blocks.map((block) => (block.type === 'text' ? (block.text ?? '') : '')).join(' ')
+      replaceToolTokensWithLabels(
+        replaceSelectionContextsWithMarkers(
+          firstUser.blocks
+            .map((block) => (block.type === 'text' ? (block.text ?? '') : ''))
+            .join(' ')
+        )
       )
     ).trim()
     const firstLine = text.split(/\r?\n/, 1)[0].trim()

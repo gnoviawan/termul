@@ -1790,10 +1790,15 @@ describe('AgentLauncher ACP new thread', () => {
       expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
     )
 
-    // Open the MCP servers popover and toggle the "Files" server off.
-    fireEvent.click(screen.getByRole('button', { name: /mcp servers/i }))
-    const filesSwitch = await screen.findByRole('switch', { name: /Disable Files/i })
-    fireEvent.click(filesSwitch)
+    // Open + > Connectors and toggle the "Files" server off.
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Add to chat' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    const connectors = await screen.findByRole('menuitem', { name: /Connectors/ })
+    act(() => connectors.focus())
+    fireEvent.keyDown(connectors, { key: 'ArrowRight' })
+    fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'Files' }))
 
     // The toggle persists to the registry, then cancels + re-prepares so the
     // next launch resolves MCP from the updated registry instead of the stale
@@ -2053,9 +2058,9 @@ describe('AgentLauncher ACP new thread', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }))
       const sheet = await screen.findByRole('dialog', { name: 'Add to chat' })
-      fireEvent.click(within(sheet).getByRole('button', { name: /MCP servers/ }))
+      fireEvent.click(within(sheet).getByRole('button', { name: /Connectors/ }))
       fireEvent.click(
-        await within(screen.getByRole('dialog', { name: 'MCP servers' })).findByRole('switch', {
+        await within(screen.getByRole('dialog', { name: 'Connectors' })).findByRole('switch', {
           name: /Disable Files/i
         })
       )
@@ -3095,11 +3100,9 @@ describe('AgentLauncher conversation pill launch', () => {
     renderLauncher()
     const editor = await screen.findByLabelText('Agent prompt')
     setComposerValue(`see ${conversationToken('Old chat', 'chat-9')} `)
-    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
 
     fireEvent.click(screen.getByLabelText('Start agent chat'))
     await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'false'))
-    expect(screen.getByRole('button', { name: 'Attach files' })).toBeDisabled()
     expect(mockCreateLaunchPlaceholder).not.toHaveBeenCalled()
 
     await act(async () => finishRead({ blocks: [], gaps: new Map([['chat-9', 'unavailable']]) }))
@@ -3113,7 +3116,6 @@ describe('AgentLauncher conversation pill launch', () => {
       )
     )
     expect(editor).toHaveAttribute('contenteditable', 'true')
-    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
   })
 
   it('ignores a starter pick while the launch holds the composer', async () => {
@@ -4851,16 +4853,14 @@ describe('AgentLauncher Claude account chip', () => {
     mockMobileShell.current = null
   })
 
-  it("shows the project's account next to the attach button and switches it from the menu", async () => {
+  it("shows the project's account next to the + menu and switches it from the menu", async () => {
     renderLauncher()
 
     const chip = await screen.findByRole('button', {
       name: 'Claude account: Personal, 5-hour 37% used. Change account'
     })
     expect(chip).toHaveTextContent('Personal5h 37%')
-    expect(screen.getByRole('button', { name: 'Attach files' }).parentElement).toContainElement(
-      chip
-    )
+    expect(screen.getByRole('button', { name: 'Add to chat' }).parentElement).toContainElement(chip)
 
     fireEvent.pointerDown(chip, { button: 0, ctrlKey: false })
     expect(await screen.findByText('Account for this project')).toBeInTheDocument()

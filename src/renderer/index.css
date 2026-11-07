@@ -938,6 +938,20 @@
   .switch-track[data-state="checked"]:enabled:active {
     background-color: var(--switch-track-on-active);
   }
+  /* `SwitchMark` is a span inside a menu item, so it takes the item's
+     highlight and press for the switch's hover and active. */
+  .switch-mark[data-state="unchecked"]:where([data-highlighted] *) {
+    background-color: var(--switch-track-off-hover);
+  }
+  .switch-mark[data-state="checked"]:where([data-highlighted] *) {
+    background-color: var(--switch-track-on-hover);
+  }
+  .switch-mark[data-state="unchecked"]:where(:active *) {
+    background-color: var(--switch-track-off-active);
+  }
+  .switch-mark[data-state="checked"]:where(:active *) {
+    background-color: var(--switch-track-on-active);
+  }
   .switch-track:disabled {
     opacity: var(--switch-disabled-opacity);
   }

@@ -64,6 +64,7 @@ import {
   blurComposerEditor,
   insertComposerTrigger
 } from '@/components/chat/composer/insert-composer-trigger'
+import { insertComposerTool } from '@/components/chat/composer/insert-pill'
 import { textWithAttachmentBlocks } from '@/components/chat/composer-send-blocks'
 import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
@@ -98,6 +99,7 @@ import {
 } from '@/lib/agents/supported-acp-agents'
 import { dialogApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import type { TermulToolId } from '@/lib/composer/termul-tools'
 import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -515,7 +517,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       canPickImages,
       pickFiles,
       insertTrigger: (trigger: '@' | '/') => insertComposerTrigger(editorRef.current, trigger),
-      blurEditor: () => blurComposerEditor(editorRef.current)
+      blurEditor: () => blurComposerEditor(editorRef.current),
+      focusEditor: () => editorRef.current?.commands.focus(undefined, { scrollIntoView: false }),
+      insertTool: (id: TermulToolId) => insertComposerTool(editorRef.current, id)
     }),
     [canPick, canPickImages, pickFiles]
   )

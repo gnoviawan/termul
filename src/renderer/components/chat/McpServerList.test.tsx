@@ -1,56 +1,22 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { McpBadge, McpServerList, McpServerRow } from './McpBadge'
+import { McpServerList, McpServerRow } from './McpServerList'
 
-function openPopover(): void {
-  fireEvent.click(screen.getByRole('button', { name: /mcp servers/i }))
-}
-
-describe('McpBadge (count-only fallback)', () => {
-  it('is hidden when no MCP servers are attached (count <= 0) and no server list', () => {
-    const { container } = render(<McpBadge count={0} />)
-    expect(container).toBeEmptyDOMElement()
-  })
-
-  it('renders the count-only button when MCP servers are attached (no server list)', () => {
-    render(<McpBadge count={3} />)
-    const btn = screen.getByRole('button', { name: /MCP servers — 3 attached/i })
-    expect(btn).toBeInTheDocument()
-  })
-})
-
-describe('McpBadge popover (per-server enable/disable + status dot)', () => {
+describe('McpServerList rows (per-server enable/disable + status dot)', () => {
   const servers = [
     { id: 's1', name: 'Files', enabled: true },
     { id: 's2', name: 'Remote', enabled: false }
   ]
 
-  it('renders at count 0 when servers exist (discoverable entry point)', () => {
-    render(<McpBadge count={0} servers={servers} onToggle={vi.fn()} />)
-    expect(screen.getByRole('button', { name: /mcp servers/i })).toBeInTheDocument()
-  })
-
-  it('renders the full management popover behind the trigger', () => {
-    render(<McpBadge count={2} servers={servers} onToggle={vi.fn()} />)
-
-    const trigger = screen.getByRole('button', { name: /mcp servers/i })
-    expect(trigger.className).toContain('size-8')
-
-    fireEvent.click(trigger)
-    expect(screen.getByText('Files')).toBeInTheDocument()
-    expect(screen.getByText('Remote')).toBeInTheDocument()
-  })
-
-  it('lists each server with a visible status label inside the popover', () => {
+  it('lists each server with a visible status label ', () => {
     render(
-      <McpBadge
+      <McpServerList
         count={2}
         servers={servers}
         onToggle={vi.fn()}
         probeStatus={{ s1: 'connected', s2: 'disconnected' }}
       />
     )
-    openPopover()
     expect(screen.getByText('Files')).toBeInTheDocument()
     expect(screen.getByText('Remote')).toBeInTheDocument()
     expect(screen.getByText('Connected')).toBeInTheDocument()
@@ -59,8 +25,7 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
 
   it('calls onToggle(id, false) when switching an enabled server to Off', () => {
     const onToggle = vi.fn()
-    render(<McpBadge count={1} servers={servers} onToggle={onToggle} />)
-    openPopover()
+    render(<McpServerList count={1} servers={servers} onToggle={onToggle} />)
     const filesSwitch = screen.getByRole('switch', { name: /Disable Files/i }) as HTMLInputElement
     fireEvent.click(filesSwitch)
     expect(onToggle).toHaveBeenCalledWith('s1', false)
@@ -68,8 +33,7 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
 
   it('calls onToggle(id, true) when switching a disabled server to On', () => {
     const onToggle = vi.fn()
-    render(<McpBadge count={1} servers={servers} onToggle={onToggle} />)
-    openPopover()
+    render(<McpServerList count={1} servers={servers} onToggle={onToggle} />)
     const remoteSwitch = screen.getByRole('switch', { name: /Enable Remote/i }) as HTMLInputElement
     fireEvent.click(remoteSwitch)
     expect(onToggle).toHaveBeenCalledWith('s2', true)
@@ -77,16 +41,28 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
 
   it('offers Reload this chat when the host can reload', () => {
     const onReloadChat = vi.fn()
-    render(<McpBadge count={1} servers={servers} onToggle={vi.fn()} onReloadChat={onReloadChat} />)
-    openPopover()
+    render(
+      <McpServerList
+        count={1}
+        servers={servers}
+        onToggle={vi.fn()}
+        onReloadChat={onReloadChat}
+        footnote="reload-chat"
+      />
+    )
     expect(screen.getByText('This chat still uses the previous servers.')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Reload this chat' }))
     expect(onReloadChat).toHaveBeenCalledOnce()
   })
 
+  it('shows no footnote and no reload for a chat whose servers are current', () => {
+    render(<McpServerList count={1} servers={servers} onToggle={vi.fn()} onReloadChat={vi.fn()} />)
+    expect(screen.queryByText(/takes effect on the next chat/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Reload this chat' })).not.toBeInTheDocument()
+  })
+
   it('discloses that server changes take effect on the next chat', () => {
-    render(<McpBadge count={1} servers={servers} onToggle={vi.fn()} />)
-    openPopover()
+    render(<McpServerList count={1} servers={servers} onToggle={vi.fn()} footnote="next-chat" />)
     expect(screen.getByText(/takes effect on the next chat/i)).toBeInTheDocument()
     expect(screen.queryByText(/per-tool toggle coming soon/i)).not.toBeInTheDocument()
   })
@@ -94,7 +70,7 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
   it('shows the tool list (read-only) inside the collapsible on expand', () => {
     const onLoadTools = vi.fn()
     render(
-      <McpBadge
+      <McpServerList
         count={1}
         servers={servers}
         onToggle={vi.fn()}
@@ -102,7 +78,6 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
         tools={{ s1: [{ name: 'read_file', description: 'read a file' }] }}
       />
     )
-    openPopover()
     fireEvent.click(screen.getByText(/1 tool/))
     expect(onLoadTools).toHaveBeenCalledWith('s1')
     expect(screen.getByText('read_file')).toBeInTheDocument()
@@ -111,7 +86,7 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
 
   it('shows "No tools available" for a connected server with an empty tool list', () => {
     render(
-      <McpBadge
+      <McpServerList
         count={1}
         servers={servers}
         onToggle={vi.fn()}
@@ -119,7 +94,6 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
         tools={{ s1: [] }}
       />
     )
-    openPopover()
     fireEvent.click(screen.getAllByText(/show tools/i)[0])
     expect(screen.getByText(/no tools available/i)).toBeInTheDocument()
     expect(screen.queryByText(/probing/i)).not.toBeInTheDocument()
@@ -127,7 +101,7 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
 
   it('surfaces the redacted probe error as the "Probe failed" tooltip', () => {
     render(
-      <McpBadge
+      <McpServerList
         count={1}
         servers={servers}
         onToggle={vi.fn()}
@@ -135,7 +109,6 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
         probeError={{ s1: 'initialize failed: connection refused' }}
       />
     )
-    openPopover()
     fireEvent.click(screen.getAllByText(/show tools/i)[0])
     const failedLine = screen.getByText(/Termul could not reach this server/i)
     expect(failedLine).toHaveAttribute('title', 'initialize failed: connection refused')
@@ -143,21 +116,20 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
 
   it('falls back to a generic tooltip when a disconnected probe has no error', () => {
     render(
-      <McpBadge
+      <McpServerList
         count={1}
         servers={servers}
         onToggle={vi.fn()}
         probeStatus={{ s2: 'disconnected' }}
       />
     )
-    openPopover()
     fireEvent.click(screen.getAllByText(/show tools/i)[1])
     const failedLine = screen.getByText(/Termul could not reach this server/i)
     expect(failedLine).toHaveAttribute('title', 'Termul could not reach this server.')
   })
 })
 
-describe('McpServerList (shared by the popover and the + sheet)', () => {
+describe('McpServerList (the + sheet Connectors view)', () => {
   const servers = [
     { id: 'github', name: 'github', enabled: true },
     { id: 'playwright', name: 'playwright', enabled: false }
@@ -170,6 +142,7 @@ describe('McpServerList (shared by the popover and the + sheet)', () => {
         servers={servers}
         onToggle={vi.fn()}
         probeStatus={{ github: 'connected', playwright: 'disconnected' }}
+        footnote="next-chat"
       />
     )
 
@@ -184,7 +157,7 @@ describe('McpServerList (shared by the popover and the + sheet)', () => {
   })
 
   it('renders only the empty summary when there are no servers (no rows, no footnote)', () => {
-    const { container } = render(<McpServerList count={0} servers={[]} />)
+    const { container } = render(<McpServerList count={0} servers={[]} footnote="next-chat" />)
 
     expect(screen.getByText('No servers attached yet.')).toBeInTheDocument()
     expect(container.querySelector('ul')).toBeNull()
@@ -192,7 +165,7 @@ describe('McpServerList (shared by the popover and the + sheet)', () => {
   })
 
   it('keeps the rows and footnote at count 0 when servers exist', () => {
-    render(<McpServerList count={0} servers={servers} onToggle={vi.fn()} />)
+    render(<McpServerList count={0} servers={servers} onToggle={vi.fn()} footnote="next-chat" />)
 
     expect(screen.getByText('No servers attached yet.')).toBeInTheDocument()
     expect(screen.getAllByRole('listitem')).toHaveLength(2)

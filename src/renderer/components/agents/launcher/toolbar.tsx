@@ -1,6 +1,5 @@
 import { toast } from 'sonner'
 import { ModeChip } from '@/components/chat/AgentHeader'
-import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
 import {
   AgentModelSelector,
   type PhoneSelectorControls
@@ -8,11 +7,12 @@ import {
 import type { SelectorSource } from '@/components/chat/agent-model-selector/selector-source'
 import type { ComposerToolbarMode } from '@/components/chat/chat-layout'
 import { ProjectClaudeAccountChip } from '@/components/chat/claude-account/ClaudeAccountChip'
+import { ComposerAddMenu } from '@/components/chat/composer/ComposerAddMenu'
 import {
   type ComposerAddHandle,
   ComposerAddSheet
 } from '@/components/chat/composer/ComposerAddSheet'
-import { McpBadge } from '@/components/chat/McpBadge'
+import { useTermulTools } from '@/components/chat/composer/use-termul-tools'
 import { ArrowUp } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
@@ -27,11 +27,11 @@ import { CLAUDE_AGENT_CONFIG_ID } from '@/stores/claude-account-switch'
 import { AgentUpdateCta } from './AgentUpdateCta'
 
 /**
- * The composer card's bottom row: attachments + MCP badge (+ the Claude
- * account chip) on the left; the update CTA, the agent/model selector (agent,
+ * The composer card's bottom row: the + menu (attachments, mentions,
+ * commands, connectors) and the Claude account chip on the left; the update CTA, the agent/model selector (agent,
  * model, effort, Fast, agent options), the mode chip, and the launch button on
  * the right. On the phone shell it is the chat composer's row: the + sheet
- * (attachments, mentions, commands, MCP servers), the model pill, and launch.
+ * (attachments, mentions, commands, connectors), the model pill, and launch.
  * The Select model sheet holds the mode and the Claude account.
  */
 export function LauncherToolbar({
@@ -75,7 +75,7 @@ export function LauncherToolbar({
   onSelectorCloseAutoFocus,
   toolbarMode
 }: {
-  /** The + sheet's handle; its `pickFiles` and `canPick` also drive the desktop attach button. */
+  /** The + sheet's and + menu's handle into the launcher's attachments and editor. */
   addHandle: ComposerAddHandle
   isMobileShell: boolean
   toolbarMode: ComposerToolbarMode
@@ -121,6 +121,7 @@ export function LauncherToolbar({
    */
   onSelectorCloseAutoFocus?: (event: Event) => void
 }): React.JSX.Element {
+  const termulTools = useTermulTools(activeProjectId || null)
   const claudeProjectId =
     selectedEntry?.configId === CLAUDE_AGENT_CONFIG_ID && activeProjectId ? activeProjectId : null
   const mcpListProps = {
@@ -205,7 +206,13 @@ export function LauncherToolbar({
         data-composer-toolbar={toolbarMode}
       >
         <div className="flex min-w-0 flex-1 items-center gap-2" data-composer-toolbar-row="mobile">
-          <ComposerAddSheet handle={addHandle} disabled={!addHandle.canPick} {...mcpListProps} />
+          <ComposerAddSheet
+            handle={addHandle}
+            disabled={!addHandle.canPick}
+            termulTools={termulTools}
+            connectorsHost="launcher"
+            {...mcpListProps}
+          />
           {selector({
             modes: optionsInteractive ? (modePreviewSession?.modes ?? null) : null,
             onSetMode: handleSetMode,
@@ -226,11 +233,13 @@ export function LauncherToolbar({
       data-composer-toolbar={toolbarMode}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <AttachFilesButton
-          onClick={() => void addHandle.pickFiles()}
+        <ComposerAddMenu
+          handle={addHandle}
           disabled={!addHandle.canPick}
+          connectors={mcpListProps}
+          connectorsHost="launcher"
+          termulTools={termulTools}
         />
-        <McpBadge {...mcpListProps} />
         {claudeProjectId ? <ProjectClaudeAccountChip projectId={claudeProjectId} /> : null}
       </div>
       <div

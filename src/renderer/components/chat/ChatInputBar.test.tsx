@@ -701,46 +701,40 @@ describe('ChatInputBar config controls', () => {
   })
 })
 
-describe('ChatInputBar MCP badge (Story 1.8)', () => {
+describe('ChatInputBar + menu', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockMcpCount.current = 0
   })
 
-  it('hides the compact MCP icon when no MCP servers are configured', () => {
-    mockMcpCount.current = 0
-    renderInputBar()
-    expect(screen.queryByRole('img', { name: /MCP servers/i })).not.toBeInTheDocument()
-    expect(screen.queryByText(/MCP servers attached/i)).not.toBeInTheDocument()
-  })
-
-  it('renders the MCP badge with the count when MCP servers are configured', () => {
+  it('replaces the attach and MCP buttons with one + menu', async () => {
     mockMcpCount.current = 2
     renderInputBar()
-    // The badge is now an icon-only popover trigger (#643): the count lives
-    // only in the trigger's aria-label — no bare text node.
-    expect(
-      screen.getByRole('button', {
-        name: 'MCP servers — 2 attached. Click to manage per-server enable/disable.'
-      })
-    ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Attach files' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /MCP servers/ })).not.toBeInTheDocument()
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Add to chat' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    await screen.findByRole('menu')
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Add files',
+      '@Mention@',
+      '/Slash commands/',
+      'Termul tools',
+      'Connectors2 on'
+    ])
   })
 
-  it('prefers the switched session MCP count over the global registry', () => {
-    mockMcpCount.current = 5
-    renderInputBar({ session: { ...session(), mcpServerCount: 2 } })
-    // The session-scoped count (2) wins over the global registry (5); the
-    // trigger's aria-label carries the session count.
-    expect(
-      screen.getByRole('button', {
-        name: 'MCP servers — 2 attached. Click to manage per-server enable/disable.'
-      })
-    ).toBeInTheDocument()
-    expect(
-      screen.queryByRole('button', {
-        name: 'MCP servers — 5 attached. Click to manage per-server enable/disable.'
-      })
-    ).not.toBeInTheDocument()
+  it('counts no connectors as 0 on when the project has none', async () => {
+    mockMcpCount.current = 0
+    renderInputBar()
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Add to chat' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    await screen.findByRole('menu')
+    expect(screen.getByRole('menuitem', { name: /Connectors/ })).toHaveTextContent('Connectors0 on')
   })
 })
 
@@ -2493,17 +2487,25 @@ describe('ChatInputBar conversation mentions', () => {
     setComposerValue(`see ${token} `)
     const editor = document.querySelector('[data-composer-editor="true"]') as HTMLElement
     expect(editor).toHaveAttribute('contenteditable', 'true')
-    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'false'))
-    expect(screen.getByRole('button', { name: 'Attach files' })).toBeDisabled()
     expect(onSendBlocks).not.toHaveBeenCalled()
+    // The + menu's editor rows are disabled while the read is pending.
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Add to chat' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    const menu = await screen.findByRole('menu')
+    for (const name of [/Mention/, /Slash commands/, 'Termul tools']) {
+      expect(within(menu).getByRole('menuitem', { name })).toHaveAttribute('data-disabled')
+    }
+    fireEvent.keyDown(menu, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument())
 
     await finishRead()
     await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
     expect(editor).toHaveAttribute('contenteditable', 'true')
-    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
     expect(getComposerValue()).toBe('')
   })
 

@@ -10,7 +10,6 @@ import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
-import { useReloadChat } from '@/hooks/use-reload-chat'
 import { useVisibleSnapshot } from '@/hooks/use-visible-snapshot'
 import type {
   AvailableCommand,
@@ -19,6 +18,7 @@ import type {
   SessionModeState
 } from '@/lib/acp-api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import type { TermulToolId } from '@/lib/composer/termul-tools'
 import { cn } from '@/lib/utils'
 import type { AcpSession, PendingPermission, QueuedPrompt } from '@/stores/acp-store'
 import {
@@ -30,7 +30,6 @@ import {
 } from '@/stores/acp-store'
 import type { OptionValues } from '@/stores/acp-store/composer-options'
 import { ModeChip } from './AgentHeader'
-import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
 import { AgentModelSelector } from './agent-model-selector/AgentModelSelector'
 import { useCurrentAgentConfigId } from './agent-model-selector/use-agent-switch'
@@ -46,16 +45,19 @@ import {
 } from './chat-input-bar-config'
 import { CHAT_GUTTER_X, COMPOSER_CARD_CLASS, useComposerToolbarMode } from './chat-layout'
 import { ChatComposerEditor, focusComposerFromRowPress } from './composer/ChatComposerEditor'
+import { ComposerAddMenu } from './composer/ComposerAddMenu'
 import { ComposerAddSheet } from './composer/ComposerAddSheet'
 import { ComposerSendButton } from './composer/ComposerSendButton'
 import { blurComposerEditor, insertComposerTrigger } from './composer/insert-composer-trigger'
+import { insertComposerTool } from './composer/insert-pill'
 import {
   type SelectionContextInsertRequest,
   useSelectionContextInsertRequest
 } from './composer/insert-selection-context'
+import { useChatConnectors } from './composer/use-chat-connectors'
+import { useTermulTools } from './composer/use-termul-tools'
 import { buildComposerSend } from './composer-send-blocks'
 import { FileMentionMenu } from './FileMentionMenu'
-import { McpBadge } from './McpBadge'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PromptQueuePanel } from './PromptQueuePanel'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
@@ -221,21 +223,8 @@ export function ChatInputBar({
   const glyphConfigId = armedConfigId ?? currentAgentConfigId ?? undefined
   const agentTemplateId = useAgentTemplateId(session.agentId, glyphConfigId)
   const agentIcon = useAgentIcon(session.agentId, glyphConfigId)
-  // Prefer project/session-scoped MCP context. Older/local sessions without a
-  // recorded count retain the existing global-registry fallback.
-  const globalMcpCount = useAcpStore((s) => s.mcpServers.length)
-  const mcpCount = session.mcpServerCount ?? globalMcpCount
-  // Chatbox popover (per-server enable/disable + status dot + collapsible tool
-  // list). The badge degrades to the read-only count pill when the registry is
-  // empty. Reuses `setMcpServerEnabled` (optimistic + rollback) — no new
-  // persistence path. The probe reflects Termul's own client connection.
-  const chatReload = useReloadChat(session.id)
-  const mcpServers = useAcpStore((s) => s.mcpServers)
-  const setMcpServerEnabled = useAcpStore((s) => s.setMcpServerEnabled)
-  const mcpProbeStatus = useAcpStore((s) => s.mcpProbeStatus)
-  const mcpProbeError = useAcpStore((s) => s.mcpProbeError)
-  const mcpTools = useAcpStore((s) => s.mcpTools)
-  const loadMcpTools = useAcpStore((s) => s.loadMcpTools)
+  const { connectors, host: connectorsHost } = useChatConnectors(session)
+  const termulTools = useTermulTools(session.projectId)
   const [value, setValue] = useComposerDraft({
     projectId: session.projectId,
     sessionId: session.id,
@@ -523,34 +512,15 @@ export function ChatInputBar({
       agentName={modeAgentName}
     />
   )
-  // One set of MCP props for the desktop badge popover and the mobile + sheet.
-  const mcpListProps = {
-    count: mcpCount,
-    servers: mcpServers,
-    onToggle: (id: string, enabled: boolean) => {
-      void setMcpServerEnabled(id, enabled).catch(() => {
-        toast.error('Could not update the MCP server. Your previous setting was restored.')
-      })
-    },
-    probeStatus: mcpProbeStatus,
-    probeError: mcpProbeError,
-    tools: mcpTools,
-    onLoadTools: (id: string) => {
-      void loadMcpTools(id)
-    },
-    onReloadChat: chatReload.reload,
-    reloadDisabled: chatReload.disabled,
-    reloadDisabledReason: chatReload.reason,
-    reloading: chatReload.reloading
-  }
-  const mcpBadge = <McpBadge {...mcpListProps} />
   const composerAddHandle = useMemo(
     () => ({
       canPick,
       canPickImages,
       pickFiles,
       insertTrigger: (trigger: '@' | '/') => insertComposerTrigger(editorRef.current, trigger),
-      blurEditor: () => blurComposerEditor(editorRef.current)
+      blurEditor: () => blurComposerEditor(editorRef.current),
+      focusEditor: () => editorRef.current?.commands.focus(undefined, { scrollIntoView: false }),
+      insertTool: (id: TermulToolId) => insertComposerTool(editorRef.current, id)
     }),
     [canPick, canPickImages, pickFiles]
   )
@@ -701,7 +671,9 @@ export function ChatInputBar({
                   <ComposerAddSheet
                     handle={composerAddHandle}
                     disabled={disabled || sending}
-                    {...mcpListProps}
+                    termulTools={termulTools}
+                    connectorsHost={connectorsHost}
+                    {...connectors}
                   />
                   {modelSelector}
                   <div className="flex-1" />
@@ -716,11 +688,15 @@ export function ChatInputBar({
               ) : (
                 <>
                   <div className="flex min-w-0 items-center gap-3">
-                    {/* Disabled (not hidden) while the composer is inert — the
-                    toolbar row stays put and the status banner explains why.
-                    Same treatment as the launcher toolbar. */}
-                    <AttachFilesButton onClick={() => void pickFiles()} disabled={!canPick} />
-                    {mcpBadge}
+                    {/* While the composer is inert its rows are disabled, not
+                    hidden; connectors stay usable. Same as the launcher. */}
+                    <ComposerAddMenu
+                      handle={composerAddHandle}
+                      disabled={disabled || sending}
+                      connectors={connectors}
+                      connectorsHost={connectorsHost}
+                      termulTools={termulTools}
+                    />
                     <ClaudeAccountChip sessionId={session.id} />
                   </div>
                   <div

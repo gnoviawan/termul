@@ -329,7 +329,7 @@ describe('Story 5.1 responsive chat layout', () => {
       'true'
     )
     expect(
-      within(toolbar as HTMLElement).getByRole('button', { name: /MCP servers/i })
+      within(toolbar as HTMLElement).getByRole('button', { name: 'Add to chat' })
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Send message/i })).toBeInTheDocument()
   })

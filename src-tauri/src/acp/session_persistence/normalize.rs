@@ -594,7 +594,11 @@ pub(crate) fn normalize_title(text: &str) -> String {
 }
 
 pub(super) fn derive_title(payload: &Value) -> String {
-    let text = user_prompt_text(payload).unwrap_or_else(|| "Untitled Chat".to_string());
+    // Tool pills become their labels in the title only: automation
+    // suggestions read `user_prompt_text` and must keep the instruction.
+    let text = user_prompt_text(payload)
+        .map(|text| tool_pill_labels(&text).unwrap_or(text))
+        .unwrap_or_else(|| "Untitled Chat".to_string());
     normalize_title(&text)
 }
 
@@ -623,6 +627,56 @@ pub fn user_prompt_text(payload: &Value) -> Option<String> {
             },
         )
         .map(|text| skills_framing_title(&text).unwrap_or(text))
+}
+
+/// The tool hints a composer tool pill sends, keyed to the pill's label. Must
+/// match `wireText()` in `src/renderer/lib/composer/termul-tools.ts`.
+const TOOL_PILL_LABELS: &[(&str, &str)] = &[
+    ("the browser tool", "Browser"),
+    ("the canvas tools", "Canvas"),
+    ("the automation tools", "Automations"),
+];
+
+/// `text` with each `(Use <hint> from the termul MCP server)` frame replaced
+/// by its pill label, an unknown hint dropped. `None` when there is no frame.
+fn tool_pill_labels(text: &str) -> Option<String> {
+    const OPEN: &str = "(Use ";
+    const CLOSE: &str = " from the termul MCP server)";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut found = false;
+    while let Some(start) = rest.find(OPEN) {
+        let after = &rest[start + OPEN.len()..];
+        let Some(end) = after
+            .find(CLOSE)
+            .filter(|end| !after[..*end].contains(['(', ')', '\n']))
+        else {
+            out.push_str(&rest[..start + OPEN.len()]);
+            rest = after;
+            continue;
+        };
+        found = true;
+        out.push_str(&rest[..start]);
+        if let Some((_, label)) = TOOL_PILL_LABELS
+            .iter()
+            .find(|(hint, _)| *hint == &after[..end])
+        {
+            out.push_str(&format!(" {label} "));
+        }
+        rest = &after[end + CLOSE.len()..];
+    }
+    if !found {
+        return None;
+    }
+    out.push_str(rest);
+    Some(
+        out.lines()
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string(),
+    )
 }
 
 fn skills_framing_title(text: &str) -> Option<String> {
