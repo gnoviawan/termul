@@ -23,36 +23,36 @@ A new tab opens and shows the connection steps. For a host `example.com` with th
 3. **Sign in as deploy**
 4. **Open shell**
 
-When the steps finish, the tab shows the server's terminal. To stop while Termul connects, click **Cancel**.
+When the steps finish, the tab shows the server's terminal. To stop while Troupe connects, click **Cancel**.
 
 ## Verify the server the first time
 
-The first time you connect to a server, Termul shows **Verify this server** and the server's key fingerprint. The fingerprint is a short code that identifies the server. It lets you check that you reached the right machine.
+The first time you connect to a server, Troupe shows **Verify this server** and the server's key fingerprint. The fingerprint is a short code that identifies the server. It lets you check that you reached the right machine.
 
 1. Compare the fingerprint with the one your server's administrator gave you. Click the copy button to copy the fingerprint.
 2. If they match, click **Trust and connect**.
 3. If they don't match, click **Cancel**.
 
-Termul remembers the key, so it does not ask again for that server. Termul stores trusted keys in `~/.ssh/known_hosts_termul`. It also accepts servers that are already in your `~/.ssh/known_hosts` file. Termul never changes that file.
+Troupe remembers the key, so it does not ask again for that server. Troupe stores trusted keys in `~/.ssh/known_hosts_termul`. It also accepts servers that are already in your `~/.ssh/known_hosts` file. Troupe never changes that file.
 
 ## If the server's identity changed
 
-If a server shows a different key than the one you trusted, Termul stops and shows **Server identity changed**. This happens when someone reinstalls the server. It can also mean that someone is intercepting your connection.
+If a server shows a different key than the one you trusted, Troupe stops and shows **Server identity changed**. This happens when someone reinstalls the server. It can also mean that someone is intercepting your connection.
 
 1. Ask the server's administrator whether the key changed, and get the new fingerprint.
 2. Compare it with the **New** fingerprint on screen.
-3. If they match, click **Replace key and connect**. Termul trusts the new key from now on.
-4. If you are not sure, click **Cancel**. Termul sends no password or key to the server.
+3. If they match, click **Replace key and connect**. Troupe trusts the new key from now on.
+4. If you are not sure, click **Cancel**. Troupe sends no password or key to the server.
 
 ## Sign in with a password
 
-If the host has no saved password, Termul asks for it in the tab.
+If the host has no saved password, Troupe asks for it in the tab.
 
 1. Type the password.
 2. To save it in your system keychain, turn on **Save in system keychain**.
 3. Click **Connect**.
 
-If you don't save the password, Termul keeps it in memory while a session to that host is open. It uses it to reconnect and to browse files. If the server rejects the password, the tab says so and asks again.
+If you don't save the password, Troupe keeps it in memory while a session to that host is open. It uses it to reconnect and to browse files. If the server rejects the password, the tab says so and asks again.
 
 A private key with a passphrase works the same way. The tab shows **Unlock private key** and asks for the passphrase.
 
@@ -60,7 +60,7 @@ A private key with a passphrase works the same way. The tab shows **Unlock priva
 
 Each session tab shows the host label and a status dot. A host with several sessions gets numbered tabs, for example `web (1)` and `web (2)`. The host list also shows each host's state:
 
-- **Connecting** while Termul connects.
+- **Connecting** while Troupe connects.
 - **Needs input** when the tab waits for you, for example to trust a key or type a password.
 - **Connected** while the session runs.
 - **Disconnected** after the session ends.
@@ -79,7 +79,7 @@ When a tab has focus, the arrow keys move between tabs, and `Delete` closes the 
 
 ## Close a session
 
-Click the **×** on the session tab, or middle-click the tab. If the session is still connected, Termul asks first, because any command still running on the server stops. Click **Close session** to confirm.
+Click the **×** on the session tab, or middle-click the tab. If the session is still connected, Troupe asks first, because any command still running on the server stops. Click **Close session** to confirm.
 
 ## Reconnect after a drop
 
@@ -92,7 +92,7 @@ When you type `exit` or the remote shell ends, the tab shows **Session ended** w
 
 ## If the connection fails
 
-If Termul can't connect, the tab says what went wrong and what to do next. It shows these buttons:
+If Troupe can't connect, the tab says what went wrong and what to do next. It shows these buttons:
 
 - **Try again** connects again in the same tab.
 - **Edit host** opens the host's settings, when the fix is there.

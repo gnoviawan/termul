@@ -3,16 +3,16 @@
 **Date:** 2026-07-17  
 **Spec:** [Agent Plan](https://agentclientprotocol.com/protocol/v1/agent-plan)
 
-## Termul client behavior
+## Troupe client behavior
 
-Termul renders execution plans **only** from the standard ACP wire path:
+Troupe renders execution plans **only** from the standard ACP wire path:
 
 - Agent sends `session/update` with `sessionUpdate: "plan"`
 - Payload includes `entries[]` with `content`, `priority` (`high`|`medium`|`low`), `status` (`pending`|`in_progress`|`completed`)
 - Each update is a **full replace** — the client replaces the session plan entirely
 - Empty `entries: []` hides `PlanPanel`
 
-Termul does **not** normalize vendor extensions (e.g. Cursor `cursor/update_todos`). Agents must comply with the spec for plans to appear.
+Troupe does **not** normalize vendor extensions (e.g. Cursor `cursor/update_todos`). Agents must comply with the spec for plans to appear.
 
 Implementation:
 
@@ -46,7 +46,7 @@ Status key:
 
 | Registry id | Status | Notes |
 |-------------|--------|-------|
-| `opencode` | `unknown` | ACP transport present; plan emission not verified in Termul. Multi-step prompts should be re-tested after agent-side compliance. |
+| `opencode` | `unknown` | ACP transport present; plan emission not verified in Troupe. Multi-step prompts should be re-tested after agent-side compliance. |
 
 ### All other bundled agents (`unknown`)
 
@@ -63,7 +63,7 @@ Update `KNOWN_COMPLIANCE` in `acp-plan-compliance.ts` when an agent is verified.
 
 ## Agent vendor guidance
 
-To support execution plans in Termul (and any spec-compliant ACP client):
+To support execution plans in Troupe (and any spec-compliant ACP client):
 
 1. Emit `session/update` notifications with `sessionUpdate: "plan"`.
 2. Include the **complete** entry list on every update.

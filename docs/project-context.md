@@ -1,5 +1,5 @@
 ---
-project_name: 'termul'
+project_name: 'troupe'
 user_name: 'Althio'
 date: '2026-07-19'
 sections_completed:

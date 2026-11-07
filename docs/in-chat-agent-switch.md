@@ -1,6 +1,6 @@
 # In-Chat Agent Switch
 
-Termul lets you move a running Agent chat to a different agent mid-conversation,
+Troupe lets you move a running Agent chat to a different agent mid-conversation,
 with a summarized context handoff, without leaving the chat tab.
 
 You pick the agent once at launch today. When you outgrow that choice — the
