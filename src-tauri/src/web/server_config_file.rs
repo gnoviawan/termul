@@ -312,7 +312,7 @@ pub fn save(state_dir: &Path, config: &ServerConfigFile) -> std::io::Result<()> 
 
 /// Resolved self-update settings. When the config file exists it is
 /// authoritative for `channel`/`interval` (file-wins precedence); otherwise
-/// the legacy env vars apply (`TROUPE_SERVER_UPDATE_ENABLED`,
+/// the env vars apply (`TROUPE_SERVER_UPDATE_ENABLED`,
 /// `TROUPE_SERVER_UPDATE_CHANNEL`, `TROUPE_SERVER_UPDATE_INTERVAL_SECS`, each
 /// also read under its old `TERMUL_` name).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
