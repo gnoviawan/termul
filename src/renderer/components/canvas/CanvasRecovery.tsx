@@ -2,7 +2,7 @@
  * The canvas panel's two recovery strips, between its header and the editor:
  *
  * - the conflict choice (spine AD-27): the document changed on disk while
- *   the editor held unsaved work, autosave is stopped, and Termul asks which
+ *   the editor held unsaved work, autosave is stopped, and Troupe asks which
  *   version wins. A deleted document can only be kept (recreated).
  * - the crash notice (AD-31): the editor stopped working and was reloaded
  *   from the last save; it says how many unsaved changes that lost.
@@ -37,8 +37,8 @@ export function CanvasConflictBar({
 }): React.JSX.Element {
   const deleted = conflict.diskHash === null
   const message = deleted
-    ? 'This document was deleted outside Termul. Keep your version to recreate it.'
-    : 'This document changed outside Termul while you had unsaved changes. Autosave is paused.'
+    ? 'This document was deleted outside Troupe. Keep your version to recreate it.'
+    : 'This document changed outside Troupe while you had unsaved changes. Autosave is paused.'
   return (
     <div
       role="alertdialog"

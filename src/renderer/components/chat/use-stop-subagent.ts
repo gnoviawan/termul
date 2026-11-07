@@ -9,7 +9,7 @@ import { useSubagentSurface } from './subagent-surface-context'
 const STOP_CONFIRM_TIMEOUT_MS = 15_000
 
 export interface SubagentStop {
-  /** The agent lets Termul stop this subagent now. */
+  /** The agent lets Troupe stop this subagent now. */
   canStop: boolean
   /** A stop was sent and the agent has not confirmed it yet. */
   stopping: boolean

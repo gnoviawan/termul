@@ -152,7 +152,7 @@ export interface ChatPromptParts {
    */
   fileBlocks: ContentBlock[]
   hasConversations: boolean
-  /** True when the value carries Termul tool pills (display keeps the tokens). */
+  /** True when the value carries Troupe tool pills (display keeps the tokens). */
   hasTools: boolean
   contextBlocks: ContentBlock[]
 }

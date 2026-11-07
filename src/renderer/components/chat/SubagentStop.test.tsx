@@ -126,14 +126,14 @@ describe('Stop one subagent', () => {
 
   it('surfaces a refused stop as a toast and frees the button', async () => {
     vi.mocked(acpStopSubagent).mockRejectedValue(
-      new Error('The agent does not let Termul stop this subagent')
+      new Error('The agent does not let Troupe stop this subagent')
     )
     render(<Chat toolCalls={[child('1')]} />)
     const panel = openPanel('Agent 1')
     fireEvent.click(within(panel).getByRole('button', { name: 'Stop' }))
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith("Couldn't stop the subagent", {
-        description: 'The agent does not let Termul stop this subagent'
+        description: 'The agent does not let Troupe stop this subagent'
       })
     )
     expect(within(panel).getByRole('button', { name: 'Stop' })).toBeEnabled()

@@ -19,7 +19,7 @@ describe('buildConversationContext', () => {
       ]
     })
     expect(text).toBe(
-      'Transcript of the Termul chat "Fix web reconnect" with Claude, attached by the user as context.\n\n' +
+      'Transcript of the Troupe chat "Fix web reconnect" with Claude, attached by the user as context.\n\n' +
         'User: why does (conversation: Other) drop?\n' +
         '- Read ws.ts\n' +
         'Agent: Backoff resets too early.'
@@ -43,7 +43,7 @@ describe('buildConversationContext', () => {
     })
     const lines = text.split('\n')
     expect(lines[0]).toBe(
-      'Transcript of the Termul chat "Long" with an agent, attached by the user as context.'
+      'Transcript of the Troupe chat "Long" with an agent, attached by the user as context.'
     )
     expect(lines[3]).toBe(`Agent: ${'x'.repeat(1500)}…`)
     expect(lines[6]).toBe(`Agent: ${long}`)
@@ -53,7 +53,7 @@ describe('buildConversationContext', () => {
     expect(
       buildConversationContext({ title: 'Empty', agentName: 'Codex', toolCalls: [], messages: [] })
     ).toBe(
-      'Transcript of the Termul chat "Empty" with Codex, attached by the user as context.\n\n(This chat has no messages yet.)'
+      'Transcript of the Troupe chat "Empty" with Codex, attached by the user as context.\n\n(This chat has no messages yet.)'
     )
   })
 })
@@ -67,7 +67,7 @@ describe('buildConversationContext budget edges', () => {
       messages: []
     })
     expect(text).toBe(
-      `Transcript of the Termul chat "Named" with ${'n'.repeat(1500)}…, attached by the user as context.\n\n(This chat has no messages yet.)`
+      `Transcript of the Troupe chat "Named" with ${'n'.repeat(1500)}…, attached by the user as context.\n\n(This chat has no messages yet.)`
     )
   })
 
