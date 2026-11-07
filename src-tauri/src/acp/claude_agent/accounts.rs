@@ -282,7 +282,7 @@ impl ClaudeAgentService {
     }
 
     /// Run Anthropic's browser login for one Account without a terminal. The
-    /// CLI opens the browser and stores the login itself; Termul never sees
+    /// CLI opens the browser and stores the login itself; Troupe never sees
     /// the token. Resolves when the login finishes, fails, or times out.
     pub async fn login_account(&self, id: &str) -> Result<(), String> {
         let dir = self.sign_in_dir(id)?;

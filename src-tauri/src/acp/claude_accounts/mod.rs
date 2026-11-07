@@ -3,7 +3,7 @@
 //!
 //! The built-in Account uses the shared Claude config directory itself
 //! (`~/.claude`, or the host's `CLAUDE_CONFIG_DIR`). Every other Account has a
-//! Termul-owned directory under `<state dir>/claude-accounts/<id>` whose shared
+//! Troupe-owned directory under `<state dir>/claude-accounts/<id>` whose shared
 //! entries link back to the shared directory. Each Project uses one Account;
 //! a Project without a choice uses the Default Account.
 //!
@@ -427,7 +427,7 @@ impl ClaudeAccountStore {
         self.account_dir(id)
     }
 
-    /// The directory of a non-built-in Account. The id is a Termul-generated
+    /// The directory of a non-built-in Account. The id is a Troupe-generated
     /// hex string; anything else never maps to a path.
     fn account_dir(&self, id: &str) -> Option<PathBuf> {
         if id == BUILTIN_ACCOUNT_ID || id.is_empty() || !id.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -462,7 +462,7 @@ impl ClaudeAccountStore {
                 "[claude-accounts] store version {} is newer than {SCHEMA_VERSION}",
                 file.version
             );
-            return Err("The Claude account list is from a newer Termul version".to_string());
+            return Err("The Claude account list is from a newer Troupe version".to_string());
         }
         file.normalize();
         Ok(file)

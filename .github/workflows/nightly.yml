@@ -773,7 +773,7 @@ jobs:
           COMMIT_SHA: ${{ needs.prepare.outputs.commit_sha }}
         run: |
           SHA="$COMMIT_SHA"
-          TITLE="Termul Nightly ($VERSION)"
+          TITLE="Troupe Nightly ($VERSION)"
           if gh release view nightly --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             # `gh release edit --target` only updates the release's
             # target_commitish — it does NOT move the git tag that asset URLs

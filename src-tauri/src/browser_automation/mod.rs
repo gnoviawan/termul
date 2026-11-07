@@ -1,4 +1,4 @@
-//! Agent browser automation for the embedded Termul browser pane.
+//! Agent browser automation for the embedded Troupe browser pane.
 //!
 //! The host-injected `troupe` MCP tool `browser` (see `acp::host_mcp`) forwards
 //! `FrameKind::Browser` calls here. A `BrowserHost` trait keeps the parent

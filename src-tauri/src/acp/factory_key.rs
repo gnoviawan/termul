@@ -11,7 +11,7 @@ pub(crate) fn is_factory_droid(config: &AgentConfig) -> bool {
 }
 
 /// Upgrade the catalog's old ACP daemon format. Droid can initialize in that
-/// mode, but its child exits during session/new when Termul attaches MCP.
+/// mode, but its child exits during session/new when Troupe attaches MCP.
 /// Apply at the host boundary so saved configs and remote catalog updates work.
 pub(crate) fn normalize_launch_args(config: &mut AgentConfig) {
     if !is_factory_droid(config) || !config.args.iter().any(|arg| arg == "exec") {

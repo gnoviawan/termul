@@ -3,9 +3,9 @@
 <!-- bmad:context -->
 <!-- Verified 2026-10-03 against 1882471d. Managed by bmad-project-context; edits inside this block are replaced on refresh. Keep anything you want preserved outside the markers. -->
 
-## Termul main app
+## Troupe main app
 
-Termul is a Tauri 2 desktop application with a React/TypeScript renderer and Rust runtime. The same Rust crate supports desktop shared-live remote access, the standalone `termul-server`, and a responsive browser client. These instructions cover the main application and exclude `landing/`. Deeper documentation is indexed at `docs/index.md`; `docs/project-context.md` is retained as legacy reference material, not as an instruction source.
+Troupe is a Tauri 2 desktop application with a React/TypeScript renderer and Rust runtime. The same Rust crate supports desktop shared-live remote access, the standalone `termul-server`, and a responsive browser client. These instructions cover the main application and exclude `landing/`. Deeper documentation is indexed at `docs/index.md`; `docs/project-context.md` is retained as legacy reference material, not as an instruction source.
 
 ## Policy
 

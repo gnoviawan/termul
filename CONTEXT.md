@@ -1,6 +1,6 @@
-# Termul
+# Troupe
 
-Termul is a Tauri 2 desktop app with a React/TypeScript renderer and Rust runtime: a terminal-based agent chat client that spawns external AI coding agents over the Agent Client Protocol (ACP) and shares them across desktop and browser surfaces.
+Troupe is a Tauri 2 desktop app with a React/TypeScript renderer and Rust runtime: a terminal-based agent chat client that spawns external AI coding agents over the Agent Client Protocol (ACP) and shares them across desktop and browser surfaces.
 
 ## Language
 
@@ -15,11 +15,11 @@ The frozen registry snapshot shipped inside the app; the default trusted source 
 _Avoid_: local registry, built-in catalog
 
 **Remote Snapshot**:
-A freshly fetched registry snapshot from the CDN. Advisory only: it never changes what Termul spawns until the user applies it.
+A freshly fetched registry snapshot from the CDN. Advisory only: it never changes what Troupe spawns until the user applies it.
 _Avoid_: latest registry, live catalog
 
 **Applied Registry**:
-A Remote Snapshot the user explicitly opted into. It governs which agent versions and distribution metadata Termul derives launch configs from.
+A Remote Snapshot the user explicitly opted into. It governs which agent versions and distribution metadata Troupe derives launch configs from.
 _Avoid_: active CDN, promoted snapshot
 
 **Agent Catalog**:
@@ -31,7 +31,7 @@ A saved agent launch configuration that takes precedence over registry-derived d
 _Avoid_: stored agent, saved config
 
 **Pinned Version**:
-The exact agent version embedded in a launch spec (e.g. a package reference). Termul pins exact versions rather than floating ranges.
+The exact agent version embedded in a launch spec (e.g. a package reference). Troupe pins exact versions rather than floating ranges.
 _Avoid_: locked version, semver range
 
 **Updatable Agent**:
@@ -51,7 +51,7 @@ The user-initiated act of overwriting the registry-derived fields of a Persisted
 _Avoid_: Agent Install, sync, upgrade
 
 **Agent Install**:
-The user-initiated installation of a registry-pinned ACP agent distribution into a Termul-managed cache on the host that runs the agent. For Claude ACP, this installs only the npm adapter package; the separate Claude Code CLI remains an operator-installed prerequisite.
+The user-initiated installation of a registry-pinned ACP agent distribution into a Troupe-managed cache on the host that runs the agent. For Claude ACP, this installs only the npm adapter package; the separate Claude Code CLI remains an operator-installed prerequisite.
 _Avoid_: global install, install on the browser client, Update Application
 
 ### Agent chats
@@ -99,7 +99,7 @@ The vendor of an agent that the user signs in to, for example Claude Code. A Pro
 _Avoid_: agent (the agent is the ACP program, not the vendor), account
 
 **Account**:
-One subscription login under a Provider, with its own usage limits. The user gives each Account a short name, and Termul shows that name instead of the email address.
+One subscription login under a Provider, with its own usage limits. The user gives each Account a short name, and Troupe shows that name instead of the email address.
 _Avoid_: provider, profile, API key
 
 **Project Account**:
@@ -129,7 +129,7 @@ _Avoid_: logout, re-login, reconnect
 ### Iconography
 
 **Functional UI icon**:
-A symbol that represents an action, state, or navigation item in Termul’s interface.
+A symbol that represents an action, state, or navigation item in Troupe’s interface.
 _Avoid_: brand mark, file-type icon
 
 **File-type icon**:
@@ -137,7 +137,7 @@ A symbol used to identify a file or folder category in a file tree.
 _Avoid_: functional UI icon
 
 **Brand mark**:
-A logo or identity symbol belonging to Termul, an operating system, or a third-party agent/provider.
+A logo or identity symbol belonging to Troupe, an operating system, or a third-party agent/provider.
 _Avoid_: functional UI icon
 
 ### Workspace chrome

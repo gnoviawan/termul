@@ -500,7 +500,7 @@ export function Canvas({
         ref={viewportRef}
         role="application"
         aria-roledescription="canvas"
-        aria-label="Termul design system canvas. Arrow keys pan, plus and minus zoom, F fits all, 0 resets."
+        aria-label="Troupe design system canvas. Arrow keys pan, plus and minus zoom, F fits all, 0 resets."
         // biome-ignore lint/a11y/noNoninteractiveTabindex: the canvas itself takes keyboard camera input.
         tabIndex={0}
         className={cn(
@@ -639,7 +639,7 @@ export function Canvas({
         </DropdownMenu>
         <div className="flex min-w-0 shrink-0 items-baseline gap-2">
           <h1 className="whitespace-nowrap text-sm font-semibold">
-            Termul<span className="hidden md:inline"> design system</span>
+            Troupe<span className="hidden md:inline"> design system</span>
           </h1>
           <span className="hidden text-xs text-muted-foreground tabular-nums md:inline">
             v{import.meta.env.PACKAGE_VERSION}

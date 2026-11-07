@@ -405,7 +405,7 @@ async fn desktop_and_web_report_visibility_alike() {
     assert_eq!(desktop[2]["code"], "CANVAS_CLOSED");
 }
 
-/// AD-27 and AD-31 through either transport: Termul's own write is no change,
+/// AD-27 and AD-31 through either transport: Troupe's own write is no change,
 /// an outside change reloads a clean editor and conflicts with a dirty one,
 /// "take disk" hands back the disk, and a crash remounts once.
 async fn run_disk_and_crash<F, Fut>(

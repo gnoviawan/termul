@@ -92,7 +92,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const tagName = context.ref.replace('refs/tags/', '')
-            const releaseName = `Termul Manager ${tagName}`
+            const releaseName = `Troupe ${tagName}`
             const releaseBody = process.env.RELEASE_BODY || ''
             const prerelease = process.env.IS_PRERELEASE === 'true'
 
@@ -871,7 +871,7 @@ jobs:
               gh release edit insider --target "$SHA" --prerelease
             else
               gh release create insider --target "$SHA" \
-                --title "Termul Insider" \
+                --title "Troupe Insider" \
                 --notes "Latest Insider (release candidate) channel. See the versioned RC release for asset details." \
                 --prerelease
             fi
@@ -893,7 +893,7 @@ jobs:
               repo: context.repo.repo,
               release_id: Number(process.env.RELEASE_ID),
               tag_name: tagName,
-              name: `Termul Manager ${tagName}`,
+              name: `Troupe ${tagName}`,
               body: process.env.RELEASE_BODY || '',
               draft: false,
               prerelease: process.env.IS_PRERELEASE === 'true',

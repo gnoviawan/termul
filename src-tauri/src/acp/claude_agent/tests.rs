@@ -281,7 +281,7 @@ fn claude_status_is_the_single_policy_source() {
     assert_eq!(status, SupportedAcpAgentStatus::NeedsRuntime);
     assert_eq!(
             reason,
-            Some("Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Termul.")
+            Some("Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Troupe.")
         );
 
     let (status, reason) = claude_status(
@@ -291,7 +291,7 @@ fn claude_status_is_the_single_policy_source() {
     assert_eq!(status, SupportedAcpAgentStatus::NeedsRuntime);
     assert_eq!(
             reason,
-            Some("Claude Agent ACP requires npm. Install npm alongside Node.js 22 or newer, then restart Termul.")
+            Some("Claude Agent ACP requires npm. Install npm alongside Node.js 22 or newer, then restart Troupe.")
         );
 
     let (status, reason) = claude_status(

@@ -1,5 +1,5 @@
 //! GitHub issues & PRs through the host's `gh` CLI (spec-github-integration,
-//! CAP-1 to CAP-4 and CAP-9). Termul holds no GitHub token: every read and
+//! CAP-1 to CAP-4 and CAP-9). Troupe holds no GitHub token: every read and
 //! write runs `gh`, so the UI, the web/phone client and the user's agents
 //! share one login.
 //!

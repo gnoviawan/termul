@@ -38,8 +38,8 @@ describe('public/manifest.webmanifest', () => {
   it('declares the required PWA fields', () => {
     expect(manifest.id).toBe('/')
     expect(manifest.lang).toBe('en')
-    expect(manifest.name).toBe('Termul')
-    expect(manifest.short_name).toBe('Termul')
+    expect(manifest.name).toBe('Troupe')
+    expect(manifest.short_name).toBe('Troupe')
     expect(manifest.start_url).toBe('/')
     expect(manifest.scope).toBe('/')
     expect(manifest.display).toBe('standalone')

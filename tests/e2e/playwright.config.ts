@@ -30,10 +30,22 @@ const baseURL = E2E_BASE_URL
  * starts with the suite's fixed `deviceId`, so the device-scoped store keys a
  * spec seeds through the WS helpers are the ones the page reads. A spec that
  * needs a second device overrides `termul.deviceId` with an init script.
+ *
+ * That seeded id makes every context look like a device updated from 0.4.x,
+ * so contexts also start with the rename notice dismissed. Otherwise its
+ * toast stays up for the whole spec and covers the controls under it.
  */
 const storageState = {
   cookies: [],
-  origins: [{ origin: baseURL, localStorage: [{ name: 'termul.deviceId', value: E2E_DEVICE_ID }] }]
+  origins: [
+    {
+      origin: baseURL,
+      localStorage: [
+        { name: 'termul.deviceId', value: E2E_DEVICE_ID },
+        { name: 'termul.renameNotice', value: 'dismissed' }
+      ]
+    }
+  ]
 }
 
 export default defineConfig({

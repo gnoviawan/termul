@@ -392,7 +392,7 @@ pub(crate) struct McpConnection {
     _tree: Option<crate::process_util::KillOnCloseJob>,
 }
 
-/// What every Termul MCP client advertises: no elicitation, sampling, roots
+/// What every Troupe MCP client advertises: no elicitation, sampling, roots
 /// or tasks, so a server cannot ask it for user input.
 pub(crate) fn client_config() -> ClientConfig {
     ClientConfig::default()

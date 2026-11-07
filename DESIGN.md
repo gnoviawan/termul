@@ -1,6 +1,6 @@
-# Termul design system
+# Troupe design system
 
-Termul is a dark-first desktop workspace. Colour is semantic OKLCH tokens written by `applyColorTheme` (`src/renderer/lib/themes/apply-color-theme.ts`). Shared primitives live in `src/renderer/components/ui`. `landing/` is out of scope.
+Troupe is a dark-first desktop workspace. Colour is semantic OKLCH tokens written by `applyColorTheme` (`src/renderer/lib/themes/apply-color-theme.ts`). Shared primitives live in `src/renderer/components/ui`. `landing/` is out of scope.
 
 This file is the entry for agents. Topic rules live in `docs/design/`. `docs/component-inventory.md` is a catalog of product surfaces, not a licence to invent variants.
 

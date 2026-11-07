@@ -314,7 +314,7 @@ pub(super) async fn handle_install_acp_agent(
 /// `pi_terminal_login`) on the host where the agent process runs. Distinct
 /// from the WS connection `authenticate` token gate — this is the agent
 /// method, not the relay handshake. Calls `AcpManager::authenticate`. The provider owns
-/// the login UX (often opens its own browser); Termul never invents a
+/// the login UX (often opens its own browser); Troupe never invents a
 /// redirect URL or stores credentials. `gateway` and `apiKey` are the two
 /// things a sign-in can carry; at most one may be sent.
 #[derive(Deserialize)]

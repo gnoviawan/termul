@@ -160,7 +160,7 @@ pub fn run(args: &[String]) -> ExitCode {
         [action] if action == "install" => {
             // `install` opens the live state dir's catalog + install stores.
             // AD-14: refuse (instead of racing a running host) when another
-            // Termul host holds the data-dir lock; hold it until we exit.
+            // Troupe host holds the data-dir lock; hold it until we exit.
             let Some(_data_lock) = lock_state_dir(&state_dir) else {
                 return ExitCode::from(1);
             };
@@ -298,7 +298,7 @@ fn lock_state_dir(state_dir: &std::path::Path) -> Option<DataLocks> {
         Ok(()) => Some(locks),
         Err(error) if error.is_busy() => {
             eprintln!(
-                "troupe-server claude: install refused — a Termul host (the standalone server or the desktop app) is running on this state directory: {error}"
+                "troupe-server claude: install refused — a Troupe host (the standalone server or the desktop app) is running on this state directory: {error}"
             );
             None
         }

@@ -1,7 +1,7 @@
 //! Host-side prompt spacing byte transformer.
 //!
 //! # Purpose
-//! Injects blank rows around the private Termul prompt mark (`\x1b]133;A;termul\x07` or
+//! Injects blank rows around the private Troupe prompt mark (`\x1b]133;A;termul\x07` or
 //! `\x1b]133;A;termul\x1b\\`) when a completed visible line has been forwarded since the
 //! previous mark.
 //!
@@ -32,7 +32,7 @@
 //!
 //! # Empty Enter Guarantee Scope
 //! An empty Enter keypress produces no blank rows when the shell prompt is suppressed
-//! (Termul native-editor mode). In raw/fallback mode where the shell draws a visible prompt,
+//! (Troupe native-editor mode). In raw/fallback mode where the shell draws a visible prompt,
 //! the prompt text followed by the Enter echo constitutes a completed visible line, so
 //! the subsequent prompt will be spaced.
 //!

@@ -153,7 +153,7 @@ pub async fn read(
 }
 
 /// `GET /skills-index?projectRoot=` — index every skill `SKILL.md` an agent
-/// can load (Termul's `.agents` roots plus the harness roots). Reuses
+/// can load (Troupe's `.agents` roots plus the harness roots). Reuses
 /// `crate::skills::files::list_skill_files` (same function the
 /// `#[tauri::command] list_skill_files_cmd` calls). Not nested under
 /// `/skills/` so it cannot shadow a skill named by `/skills/{name}`; the

@@ -164,7 +164,7 @@ pub async fn comment(
     .await
 }
 
-/// The service accepts only Termul chat worktrees of the resolved project.
+/// The service accepts only Troupe chat worktrees of the resolved project.
 pub async fn checkout_pr(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
