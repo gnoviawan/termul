@@ -95,10 +95,14 @@ export function useKnownCatalogs(
   )
 }
 
+/** How long a tab stays open before its agent is started to read its models. */
+export const AUTO_LOAD_SETTLE_MS = 300
+
 /**
  * The model list for one other agent's tab. Uses memory, then the saved list.
  * When neither has a list and `autoLoad` is set, starts that agent silently
- * (`prepareChat`, the same warm prepare that arming a switch runs) once.
+ * (`prepareChat`, the same warm prepare that arming a switch runs) once, after
+ * the tab has stayed open for `AUTO_LOAD_SETTLE_MS`.
  */
 export function useOtherAgentCatalog(
   workspace: { cwd: string; projectId: string },
@@ -133,11 +137,16 @@ export function useOtherAgentCatalog(
     if (configId) loadPersistedCatalog(configId)
   }, [configId])
 
+  // Start the agent only once its tab stays open: arrowing across the tabs
+  // shows each one but must not spawn every agent passed over.
   useEffect(() => {
     if (!autoLoad || !configId || known || !savedRead || loading || error) return
     if (requested.current.has(configId)) return
-    requested.current.add(configId)
-    prepare()
+    const timer = setTimeout(() => {
+      requested.current.add(configId)
+      prepare()
+    }, AUTO_LOAD_SETTLE_MS)
+    return () => clearTimeout(timer)
   }, [autoLoad, configId, known, savedRead, loading, error, prepare])
 
   useEffect(() => {

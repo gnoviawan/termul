@@ -36,6 +36,10 @@ export interface CanvasOpenInfo {
   mountSeq: number
   /** Canvases this open unloaded to make room; the renderer marks them. */
   evicted: CanvasEviction[]
+  /** System font URLs, relative to the bundle page, the renderer hands
+   * `host.fallbackFonts` for characters the editor's own font lacks. Only
+   * the desktop lists any; `[]` on the web client. */
+  fallbackFonts: string[]
 }
 
 /** The host's persistence projection of one mount. */
@@ -124,6 +128,8 @@ export const CanvasErrorCodes = {
   BUNDLE_LISTENER_DOWN: 'BUNDLE_LISTENER_DOWN',
   BUNDLE_PIN_MISMATCH: 'BUNDLE_PIN_MISMATCH',
   EDITOR_CRASHED: 'EDITOR_CRASHED',
+  /** The editor frame never reported ready (renderer-side, #1490). */
+  EDITOR_LOAD_TIMEOUT: 'EDITOR_LOAD_TIMEOUT',
   DOCUMENT_LOAD_FAILED: 'DOCUMENT_LOAD_FAILED',
   CANVAS_CLOSED: 'CANVAS_CLOSED',
   CANVAS_CLOSING: 'CANVAS_CLOSING',
@@ -155,7 +161,9 @@ export const CANVAS_BRIDGE_ERROR_CODES = [
   'CANVAS_TIMEOUT',
   'UNSUPPORTED_IN_KIOSK',
   'UNKNOWN_METHOD',
-  'ENGINE_ERROR'
+  'ENGINE_ERROR',
+  'NO_ACTIVE_TURN',
+  'AMBIGUOUS_SESSION'
 ] as const
 
 export type CanvasBridgeErrorCode = (typeof CANVAS_BRIDGE_ERROR_CODES)[number]
@@ -177,6 +185,9 @@ export type CanvasLeaseLoss = 'elsewhere' | 'evicted' | 'expired'
 export interface CanvasOpenOptions {
   /** `canvas.autosave_ms`. */
   autosaveMs?: number
+  /** `canvas.autosave_max_ms`: a dirty document is saved at least this
+   * often while edits keep superseding the debounce. */
+  autosaveMaxMs?: number
   /** `canvas.lease_grace_ms`: how long this window keeps the canvas after
    * its connection drops, so a reload or reconnect keeps it. */
   leaseGraceMs?: number
@@ -233,8 +244,15 @@ export interface CanvasApi {
     mountSeq: number,
     snapshot: string
   ) => Promise<IpcResult<CanvasWriteOutcome>>
-  /** Termul's file watcher saw the document change (AD-27). */
-  diskChanged: (projectId: string, mountSeq: number) => Promise<IpcResult<CanvasDiskOutcome>>
+  /** Termul's file watcher saw the document change (AD-27). `reloadFailed`:
+   * the editor did not load the bytes a `reload` outcome handed it (it
+   * refused them, or moved past the version the host judged clean), which
+   * the host turns into a conflict. */
+  diskChanged: (
+    projectId: string,
+    mountSeq: number,
+    reloadFailed?: boolean
+  ) => Promise<IpcResult<CanvasDiskOutcome>>
   /** `snapshot` is the `host.snapshot` result text, needed for `saveCopy`. */
   resolveConflict: (
     projectId: string,

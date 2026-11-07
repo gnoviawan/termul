@@ -61,8 +61,10 @@ vi.mock('@/stores/workspace-store', () => ({
   agentChatTabId: (sessionId: string) => `chat-${sessionId}`,
   getAllLeafPanes: () => [],
   findPaneContainingTab: () => null,
+  getAgentChatSessionIdsInAllTrees: () => new Set<string>(),
   useWorkspaceStore: {
-    getState: () => ({ addAgentChatTab: vi.fn(), root: null })
+    getState: () => ({ addAgentChatTab: vi.fn(), root: null }),
+    subscribe: () => () => {}
   }
 }))
 vi.mock('@/lib/web-tab-session', () => ({
@@ -83,8 +85,10 @@ vi.mock('@/lib/api', async (importActual) => {
 })
 
 import { buildTimeline } from '@/components/chat/chat-timeline'
+import type { ElicitationRequestEvent } from '@/lib/acp-api'
 import type { AcpTransport } from '@/lib/acp-transport'
 import { _resetAcpTransportForTests, _setAcpTransportForTests } from '@/lib/acp-transport'
+import type { PendingPromptsHandler } from '@/lib/acp-transport/pending-permissions'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import {
   _flushCoalescedForTesting,
@@ -95,6 +99,7 @@ import {
   _resetInFlightPreparedForTesting,
   _resetLiveSwitchSourcesForTesting,
   _resetSessionIndexLoadGenerationForTesting,
+  initAcpEventListeners,
   useAcpStore
 } from '@/stores/acp-store'
 import { FRESH, flushTurnEnd } from './testkit'
@@ -350,5 +355,74 @@ describe('acp-store: live-turn attach replays the open turn (reopen tool cards)'
 
     expect(transport.subscribeSession).toHaveBeenCalledWith(id, 12, true)
     expect(timelineKeys(id)).toEqual(['user:turn:t0', 'agent:snapshot:agent:2'])
+  })
+
+  it('restores the elicitation the host still holds when the reopen drops its replay as history', async () => {
+    const id = 's-reopen-elicitation'
+    const elicitation: ElicitationRequestEvent = {
+      agentId: AGENT,
+      sessionId: id,
+      requestId: 'el-1',
+      mode: 'form',
+      message: 'Which plan should I use?',
+      fields: [
+        { name: 'plan', kind: 'enum', required: true, options: [{ value: 'a', label: 'A' }] }
+      ]
+    }
+    const listeners = new Map<string, (payload: unknown, eventSeq?: number) => void>()
+    let installPendingPrompts: PendingPromptsHandler | undefined
+    const respondElicitation = vi.fn(async () => {})
+    const transport = Object.assign(
+      fakeWebTransport(
+        id,
+        livePayload(id, [
+          msg('turn:t0', 'user', 'earlier question', 1),
+          msg('snapshot:agent:2', 'agent', 'earlier answer', 2),
+          msg('turn:t1', 'user', 'edit auth', 5),
+          msg('snapshot:agent:8', 'agent', 'Working on it', 8)
+        ])
+      ),
+      {
+        onEvent: vi.fn((name: string, cb: (payload: unknown, eventSeq?: number) => void) => {
+          listeners.set(name, cb)
+          return () => {}
+        }),
+        setPendingPromptsHandler: vi.fn((handler: PendingPromptsHandler) => {
+          installPendingPrompts = handler
+        }),
+        respondElicitation
+      }
+    )
+    // The relay replays the elicitation persisted while no client was
+    // connected (seq 11, under the payload watermark 12), then the subscribe
+    // reply lists it as still pending.
+    transport.subscribeSession.mockImplementation(async () => {
+      listeners.get('acp:elicitation_request')?.(elicitation, 11)
+      installPendingPrompts?.(id, { permissions: [], questions: [], elicitations: [elicitation] })
+    })
+    _setAcpTransportForTests(transport)
+    const teardown = initAcpEventListeners()
+    try {
+      await useAcpStore.getState().openHistorySession(id)
+
+      expect(useAcpStore.getState().pendingElicitations['el-1']).toMatchObject({
+        requestId: 'el-1',
+        sessionId: id,
+        agentId: AGENT,
+        message: 'Which plan should I use?'
+      })
+
+      await useAcpStore.getState().respondElicitation('el-1', 'accept', { plan: 'a' })
+      expect(respondElicitation).toHaveBeenCalledWith(
+        AGENT,
+        'el-1',
+        'accept',
+        { plan: 'a' },
+        expect.anything()
+      )
+      expect(useAcpStore.getState().pendingElicitations['el-1']).toBeUndefined()
+    } finally {
+      teardown()
+    }
   })
 })

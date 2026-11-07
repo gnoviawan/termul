@@ -1,0 +1,467 @@
+//! Native subagent traffic through the production connection: a scripted mock
+//! Claude adapter (python3, stdio JSON-RPC) is spawned through
+//! `AcpManager::spawn`, so the capability advertisement and the raw handler
+//! that runs before the typed `session/update` handler are both exercised.
+//! `TERMUL_SKIP_REAL_LOOP_TESTS=1` skips, as in `real_loop_tests.rs`.
+
+use std::time::Duration;
+
+use serde_json::Value;
+
+use super::*;
+use crate::web::prompt_turn::{
+    accept_prompt_turn, complete_prompt_turn, PromptAdmission, PromptTurnRequest,
+};
+use crate::web::WsRelaySink;
+
+const MOCK_CLAUDE: &str = r#"
+import json, os, sys
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+def update(session_id, body):
+    send({"jsonrpc": "2.0", "method": "session/update",
+          "params": {"sessionId": session_id, "update": body}})
+
+def text(session_id, value):
+    update(session_id, {"sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": value}})
+
+def message(view, message_id, sender, recipient, value):
+    update(view, {"sessionUpdate": "session_message", "messageId": message_id,
+                  "senderSessionId": sender, "recipientSessionId": recipient,
+                  "content": [{"type": "text", "text": value}]})
+
+manifest = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "package.json")
+with open(manifest) as handle:
+    version = tuple(int(part) for part in json.load(handle)["version"].split("."))
+rfd = version >= (0, 90, 0)
+
+native = False
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, rid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        native = "subagents" in msg["params"].get("clientCapabilities", {})
+        send({"jsonrpc": "2.0", "id": rid, "result": {
+            "protocolVersion": 1, "agentCapabilities": {}, "authMethods": []}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": "mock-1"}})
+    elif method == "session/prompt":
+        if native and rfd:
+            update("mock-1", {"sessionUpdate": "subagent_update", "sessionId": "child-1",
+                              "title": "Explore", "capabilities": {"cancel": {}},
+                              "state": {"state": "running"}})
+            message("mock-1", "toolu_launch", "mock-1", "child-1", "Read the repo")
+            message("child-1", "toolu_launch", "mock-1", "child-1", "Read the repo")
+            update("child-1", {"sessionUpdate": "tool_call", "toolCallId": "toolu_read",
+                               "title": "Read src/main.rs", "status": "completed"})
+            text("child-1", "child text")
+            update("child-1", {"sessionUpdate": "usage_update", "used": 5, "size": 10})
+            text("mock-1", "parent text")
+            message("mock-1", "toolu_launch:reply", "child-1", "mock-1", "child report")
+            update("mock-1", {"sessionUpdate": "subagent_update", "sessionId": "child-1",
+                              "state": {"state": "idle", "stopReason": "end_turn"}})
+        elif native:
+            update("mock-1", {"sessionUpdate": "subagent_spawned",
+                              "subagentSessionId": "child-1", "name": "Explore",
+                              "task": "Read the repo", "capabilities": {}})
+            update("child-1", {"sessionUpdate": "tool_call", "toolCallId": "toolu_read",
+                               "title": "Read src/main.rs", "status": "completed"})
+            text("child-1", "child text")
+            update("child-1", {"sessionUpdate": "usage_update", "used": 5, "size": 10})
+            text("mock-1", "parent text")
+            update("mock-1", {"sessionUpdate": "subagent_state_update",
+                              "subagentSessionId": "child-1", "state": "completed"})
+        else:
+            text("mock-1", "legacy")
+            update("mock-1", {"sessionUpdate": "subagent_update", "sessionId": "child-9",
+                              "title": "Unasked", "state": {"state": "running"}})
+            update("mock-1", {"sessionUpdate": "subagent_update", "sessionId": "child-9",
+                              "state": {"state": "idle", "stopReason": "end_turn"}})
+        send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": "end_turn"}})
+"#;
+
+#[derive(Default)]
+struct EventLog(Mutex<Vec<(String, Option<String>, Value)>>);
+
+impl EventSink for EventLog {
+    fn emit(&self, event: &crate::web::sink::AcpEvent) {
+        self.0.lock().push((
+            event.type_.to_string(),
+            event.sid.clone(),
+            event.payload.clone(),
+        ));
+    }
+}
+
+fn find_python() -> Option<&'static str> {
+    ["python3", "python"].into_iter().find(|candidate| {
+        std::process::Command::new(candidate)
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+    })
+}
+
+/// A mock Claude adapter `version` running `script`, with one chat session.
+struct MockAgent {
+    acp: Arc<AcpManager>,
+    relay: Arc<WsRelaySink>,
+    log: Arc<EventLog>,
+    agent_id: AgentId,
+    session_id: SessionId,
+    _root: tempfile::TempDir,
+}
+
+/// Spawn `script` installed as Claude adapter `version`. `None` when the
+/// host opted out.
+async fn spawn_mock_claude(script: &str, version: &str) -> Option<MockAgent> {
+    let Some(python) = find_python() else {
+        if std::env::var("TERMUL_SKIP_REAL_LOOP_TESTS").as_deref() == Ok("1") {
+            return None;
+        }
+        panic!("native subagent loop tests need python3 on PATH");
+    };
+    let root = tempfile::tempdir().expect("tempdir");
+    let package = root
+        .path()
+        .join("node_modules/@agentclientprotocol/claude-agent-acp");
+    std::fs::create_dir_all(package.join("dist")).expect("package dir");
+    std::fs::write(
+        package.join("package.json"),
+        serde_json::json!({ "name": "@agentclientprotocol/claude-agent-acp", "version": version })
+            .to_string(),
+    )
+    .expect("manifest");
+    let entry = package.join("dist/index.py");
+    std::fs::write(&entry, script).expect("script");
+
+    let log = Arc::new(EventLog::default());
+    let relay = Arc::new(WsRelaySink::new());
+    let acp = Arc::new(AcpManager::new(vec![relay.clone(), log.clone()]));
+    let spawned = acp
+        .spawn(AgentConfig {
+            config_id: None,
+            name: "mock-claude".to_string(),
+            command: python.to_string(),
+            args: vec!["-u".to_string(), entry.to_string_lossy().into_owned()],
+            env: HashMap::new(),
+            allow_terminal: false,
+        })
+        .await
+        .expect("mock agent initializes");
+    let session = acp
+        .new_session(
+            &spawned.agent_id,
+            root.path().to_string_lossy().into_owned(),
+            vec![],
+        )
+        .await
+        .expect("mock session");
+    relay.seed_session_for_test(&session.session_id.0);
+    Some(MockAgent {
+        acp,
+        relay,
+        log,
+        agent_id: spawned.agent_id,
+        session_id: session.session_id,
+        _root: root,
+    })
+}
+
+impl MockAgent {
+    /// Run one prompt turn to its stop reason.
+    async fn prompt(&self) -> Result<StopReason, String> {
+        let blocks = vec![ContentBlock::Text(
+            agent_client_protocol::schema::v1::TextContent::new("go"),
+        )];
+        let request = PromptTurnRequest {
+            agent_id: self.agent_id.clone(),
+            session_id: self.session_id.clone(),
+            content: blocks.clone(),
+            record_content: blocks,
+            turn_id: Some("t1".to_string()),
+        };
+        match accept_prompt_turn(&self.acp, &self.relay, request).await {
+            Ok(PromptAdmission::Running(running)) => complete_prompt_turn(&self.acp, running).await,
+            Ok(PromptAdmission::Receipt(_)) => Err("unexpected receipt".to_string()),
+            Err(error) => Err(error.into_message()),
+        }
+    }
+
+    /// The chat's tool call events and message chunks so far.
+    fn session_events(&self) -> Vec<(String, Option<String>, Value)> {
+        self.log
+            .0
+            .lock()
+            .iter()
+            .filter(|(kind, _, _)| {
+                matches!(
+                    kind.as_str(),
+                    "acp:tool_call"
+                        | "acp:tool_call_update"
+                        | "acp:message_chunk"
+                        | "acp:usage_update"
+                )
+            })
+            .cloned()
+            .collect()
+    }
+}
+
+/// Runs one prompt against the mock installed as Claude adapter `version`
+/// and returns every session event. `None` when the host opted out.
+async fn run_mock_claude(version: &str) -> Option<(String, Vec<(String, Option<String>, Value)>)> {
+    let _serial = super::real_loop_tests::TIMEOUT_TEST_LOCK.lock().await;
+    let mock = spawn_mock_claude(MOCK_CLAUDE, version).await?;
+    let stop = tokio::time::timeout(Duration::from_secs(60), mock.prompt())
+        .await
+        .expect("turn finishes")
+        .expect("turn succeeds");
+    assert_eq!(stop, StopReason::EndTurn);
+    let _ = mock.acp.kill(&mock.agent_id).await;
+    Some((mock.session_id.0.clone(), mock.session_events()))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_air_adapter_reports_each_subagent_on_its_chat() {
+    let Some((chat, events)) = run_mock_claude("0.78.0").await else {
+        return;
+    };
+    let kinds: Vec<_> = events.iter().map(|(kind, _, _)| kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "acp:tool_call",
+            "acp:tool_call",
+            "acp:message_chunk",
+            "acp:message_chunk",
+            "acp:tool_call_update",
+        ],
+        "child usage is dropped; everything else lands in order"
+    );
+    assert!(events
+        .iter()
+        .all(|(_, sid, _)| sid.as_deref() == Some(chat.as_str())));
+
+    let dispatch = &events[0].2["toolCall"];
+    assert_eq!(dispatch["toolCallId"], "termul-subagent:child-1");
+    assert_eq!(dispatch["status"], "in_progress");
+    assert_eq!(dispatch["_meta"]["termul/subagent"]["activity"], "running");
+
+    let child_call = &events[1].2["toolCall"];
+    assert_eq!(child_call["toolCallId"], "toolu_read");
+    assert_eq!(
+        child_call["_meta"]["claudeCode"]["parentToolUseId"],
+        "termul-subagent:child-1"
+    );
+    assert_eq!(events[2].2["parentToolCallId"], "termul-subagent:child-1");
+    assert!(
+        events[3].2.get("parentToolCallId").is_none(),
+        "the chat's own text passes through unchanged"
+    );
+
+    let end = &events[4].2["update"];
+    assert_eq!(end["toolCallId"], "termul-subagent:child-1");
+    assert_eq!(end["status"], "completed");
+    assert_eq!(
+        end["_meta"]["termul/subagent"]["end"]["reason"],
+        "completed"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_rfd_adapter_reports_each_subagent_on_its_chat() {
+    let Some((chat, events)) = run_mock_claude("0.99.1").await else {
+        return;
+    };
+    let kinds: Vec<_> = events.iter().map(|(kind, _, _)| kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "acp:tool_call",
+            "acp:tool_call",
+            "acp:message_chunk",
+            "acp:message_chunk",
+            "acp:tool_call_update",
+            "acp:tool_call_update",
+        ],
+        "the launch prompt and child usage are dropped; everything else lands in order"
+    );
+    assert!(events
+        .iter()
+        .all(|(_, sid, _)| sid.as_deref() == Some(chat.as_str())));
+
+    let dispatch = &events[0].2["toolCall"];
+    assert_eq!(dispatch["toolCallId"], "termul-subagent:child-1");
+    assert_eq!(dispatch["title"], "Explore");
+    assert_eq!(dispatch["status"], "in_progress");
+    assert_eq!(dispatch["_meta"]["termul/subagent"]["activity"], "running");
+    assert_eq!(
+        events[1].2["toolCall"]["_meta"]["claudeCode"]["parentToolUseId"],
+        "termul-subagent:child-1"
+    );
+    assert_eq!(events[2].2["parentToolCallId"], "termul-subagent:child-1");
+    assert_eq!(events[3].2["content"]["text"], "parent text");
+
+    let reply = &events[4].2["update"];
+    assert_eq!(reply["toolCallId"], "termul-subagent:child-1");
+    assert_eq!(reply["content"][0]["content"]["text"], "child report");
+
+    let end = &events[5].2["update"];
+    assert_eq!(end["toolCallId"], "termul-subagent:child-1");
+    assert_eq!(end["status"], "completed");
+    assert_eq!(
+        end["_meta"]["termul/subagent"]["end"]["reason"],
+        "completed"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_older_adapter_is_not_offered_native_subagents_but_its_updates_still_route() {
+    let Some((chat, events)) = run_mock_claude("0.77.0").await else {
+        return;
+    };
+    let kinds: Vec<_> = events.iter().map(|(kind, _, _)| kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        ["acp:message_chunk", "acp:tool_call", "acp:tool_call_update"]
+    );
+    assert_eq!(events[0].2["content"]["text"], "legacy");
+    assert!(events
+        .iter()
+        .all(|(_, sid, _)| sid.as_deref() == Some(chat.as_str())));
+    let dispatch = &events[1].2["toolCall"];
+    assert_eq!(dispatch["toolCallId"], "termul-subagent:child-9");
+    assert_eq!(dispatch["_meta"]["termul/subagent"]["source"], "acp-rfd");
+    let end = &events[2].2["update"];
+    assert_eq!(end["_meta"]["termul/subagent"]["activity"], "idle");
+}
+
+/// An RFD adapter whose turn runs three subagents and waits. `child-1` and
+/// `child-2` offer a stop, `child-3` does not. A `session/cancel` for a child
+/// ends that child as cancelled; the turn then ends normally. A cancel for the
+/// chat itself cancels the turn.
+const MOCK_STOPPABLE: &str = r#"
+import json, sys
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+def update(session_id, body):
+    send({"jsonrpc": "2.0", "method": "session/update",
+          "params": {"sessionId": session_id, "update": body}})
+
+prompt = None
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, rid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": rid, "result": {
+            "protocolVersion": 1, "agentCapabilities": {}, "authMethods": []}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": "mock-1"}})
+    elif method == "session/prompt":
+        prompt = rid
+        for child, caps in [("child-1", {"cancel": {}}), ("child-2", {"cancel": {}}),
+                            ("child-3", {})]:
+            update("mock-1", {"sessionUpdate": "subagent_update", "sessionId": child,
+                              "title": child, "capabilities": caps,
+                              "state": {"state": "running"}})
+        update("mock-1", {"sessionUpdate": "agent_message_chunk",
+                          "content": {"type": "text", "text": "subagents up"}})
+    elif method == "session/cancel":
+        target = msg["params"]["sessionId"]
+        if target == "mock-1":
+            send({"jsonrpc": "2.0", "id": prompt, "result": {"stopReason": "cancelled"}})
+            continue
+        update("mock-1", {"sessionUpdate": "subagent_update", "sessionId": target,
+                          "capabilities": {"cancel": None},
+                          "state": {"state": "idle", "stopReason": "cancelled"}})
+        update("mock-1", {"sessionUpdate": "agent_message_chunk",
+                          "content": {"type": "text", "text": "cancelled " + target}})
+        send({"jsonrpc": "2.0", "id": prompt, "result": {"stopReason": "end_turn"}})
+"#;
+
+fn record_of(events: &[(String, Option<String>, Value)], child: &str) -> Option<Value> {
+    let dispatch = format!("termul-subagent:{child}");
+    events.iter().rev().find_map(|(_, _, payload)| {
+        let call = payload.get("toolCall").or_else(|| payload.get("update"))?;
+        (call["toolCallId"] == dispatch.as_str())
+            .then(|| call["_meta"]["termul/subagent"].clone())
+            .filter(|record| !record.is_null())
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stop_cancels_only_the_child_session_and_converges() {
+    use crate::acp::subagents::{StopSubagentError, StopSubagentOutcome};
+    let _serial = super::real_loop_tests::TIMEOUT_TEST_LOCK.lock().await;
+    let Some(mock) = spawn_mock_claude(MOCK_STOPPABLE, "0.99.1").await else {
+        return;
+    };
+    let chat = mock.session_id.0.clone();
+    let stop = |id: &str| {
+        mock.acp
+            .stop_subagent(&mock.agent_id, chat.clone(), id.to_string())
+    };
+
+    let turn = mock.prompt();
+    tokio::pin!(turn);
+    let announced = async {
+        while !mock.session_events().iter().any(|(kind, _, payload)| {
+            kind == "acp:message_chunk" && payload["content"]["text"] == "subagents up"
+        }) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    tokio::select! {
+        _ = &mut turn => panic!("the turn ended before any stop"),
+        () = announced => {}
+    }
+
+    assert_eq!(stop("child-3").await, Err(StopSubagentError::NotStoppable));
+    assert_eq!(
+        stop("child-9").await,
+        Err(StopSubagentError::UnknownSubagent)
+    );
+    assert_eq!(stop("child-1").await, Ok(StopSubagentOutcome::Sent));
+
+    let reason = tokio::time::timeout(Duration::from_secs(30), &mut turn)
+        .await
+        .expect("turn finishes")
+        .expect("turn succeeds");
+    assert_eq!(
+        reason,
+        StopReason::EndTurn,
+        "the chat's own turn was not cancelled"
+    );
+
+    let events = mock.session_events();
+    let stopped = record_of(&events, "child-1").expect("child-1 record");
+    assert_eq!(stopped["activity"], "idle");
+    assert_eq!(stopped["end"]["reason"], "cancelled");
+    assert!(stopped["caps"]["stop"].is_null());
+    assert_eq!(
+        record_of(&events, "child-2").expect("child-2 record")["activity"],
+        "running",
+        "the other subagent keeps running"
+    );
+    assert!(events.iter().any(|(kind, _, payload)| {
+        kind == "acp:message_chunk" && payload["content"]["text"] == "cancelled child-1"
+    }));
+
+    assert_eq!(stop("child-1").await, Ok(StopSubagentOutcome::AlreadyEnded));
+    let _ = mock.acp.kill(&mock.agent_id).await;
+    assert_eq!(stop("child-2").await, Err(StopSubagentError::UnknownAgent));
+}

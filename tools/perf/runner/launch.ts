@@ -7,6 +7,12 @@
  *  2. Pick a free TCP port for `--remote-debugging-port`.
  *  3. Spawn the exe with a per-run scratch `WEBVIEW2_USER_DATA_FOLDER`
  *     (isolates the single-instance plugin AND keeps user data out of runs).
+ *     The debug port only opens in a build with debug assertions and
+ *     `TERMUL_DEV_ALLOW_ENGINE_DEBUG=1`: the host scrubs engine debug
+ *     switches at startup and release builds never honor the opt-in, so
+ *     point --exe at a debug build. The host drops any
+ *     `--remote-debugging-address` switch, and the port listens on
+ *     127.0.0.1 only.
  *  4. Playwright `chromium.connectOverCDP` — retry once if WebView2 ignores
  *     the flag (spec CDP-attach edge), then fail with the actionable error.
  *  5. Expose helpers to invoke Tauri commands through the app's global
@@ -19,7 +25,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -39,7 +45,9 @@ export function resolveAppExe(override?: string): string {
     return override
   }
   const candidates = [
-    // Worktree dev-identifier build first: com.termul-manager.app.dev escapes
+    // The debug-assertions perf build: only it keeps the WebView2 debug port.
+    path.join(REPO_ROOT, 'src-tauri', 'target-perf', 'release', 'termul-manager.exe'),
+    // Worktree dev-identifier build: com.termul-manager.app.dev escapes
     // the single-instance mutex held by any running user install
     // (com.termul-manager.app) — otherwise the spawned exe silently exits via
     // the single-instance plugin before CDP ever answers.
@@ -101,6 +109,13 @@ export interface LaunchOptions {
   keepState?: boolean
   /** Max wait for the CDP endpoint after spawn (ms). */
   attachTimeoutMs?: number
+  /**
+   * Logical store keys (value = the unwrapped `data`) written to the dev
+   * identifier's `termul-data.json` before each spawn. The host imports that
+   * file once, at startup, into its own store and then retires it, so state
+   * written through `plugin:store` after launch never reaches the renderer.
+   */
+  preseedStore?: Record<string, unknown>
 }
 
 export interface AppHandle {
@@ -199,6 +214,42 @@ export async function killPidTree(rootPid: number): Promise<void> {
   await runPowerShell(script)
 }
 
+/**
+ * The plugin-store file (`termul-data.json`) and the app's other persisted
+ * state live under the identifier's *shared* app-data dir, not under the
+ * scratch WEBVIEW2_USER_DATA_FOLDER — the scratch dir only isolates browser
+ * state. Without wiping it, persisted projects/chats/agent registrations
+ * leak from one run into the next (the launcher never appears on a profile
+ * that boots into restored chats, so stream-storm's start-button wait
+ * times out). This wipes the dev-identifier's app-data dirs; the identity
+ * `com.termul-manager.app.dev` is perf-toolkit-only, so nothing user-owned
+ * lives there.
+ */
+function wipeDevAppData(): void {
+  const appData = process.env.APPDATA
+  const localAppData = process.env.LOCALAPPDATA
+  for (const root of [appData, localAppData]) {
+    if (root)
+      rmSync(path.join(root, 'com.termul-manager.app.dev'), { recursive: true, force: true })
+  }
+}
+
+/**
+ * Write the dev identifier's retired plugin-store file from a clean app-data
+ * dir, in the renderer's versioned wrapper. The host's one-shot desktop
+ * import moves each key into its own store on the renderer's first connect.
+ */
+function writePreseedStore(entries: Record<string, unknown>): void {
+  const appData = process.env.APPDATA
+  if (!appData) throw new Error('APPDATA is not set; cannot preseed the dev-identifier store')
+  wipeDevAppData()
+  const dir = path.join(appData, 'com.termul-manager.app.dev')
+  mkdirSync(dir, { recursive: true })
+  const file: Record<string, unknown> = {}
+  for (const [key, data] of Object.entries(entries)) file[key] = { _version: 1, data }
+  writeFileSync(path.join(dir, 'termul-data.json'), JSON.stringify(file))
+}
+
 /** Spawn the exe with WebView2 flags; returns the root PID. */
 function spawnApp(
   exe: string,
@@ -210,6 +261,7 @@ function spawnApp(
     env: {
       ...env,
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${debugPort}`,
+      TERMUL_DEV_ALLOW_ENGINE_DEBUG: '1',
       WEBVIEW2_USER_DATA_FOLDER: scratchDir
     },
     windowsHide: false,
@@ -265,6 +317,7 @@ export async function launchApp(opts: LaunchOptions): Promise<AppHandle> {
   }
   const baseEnv: Record<string, string> = { ...cleanProcessEnv, ...(opts.env ?? {}) }
 
+  if (opts.preseedStore) writePreseedStore(opts.preseedStore)
   const rootPid = spawnApp(exe, debugPort, scratchDir, baseEnv)
   let browser: Browser
   try {
@@ -277,6 +330,8 @@ export async function launchApp(opts: LaunchOptions): Promise<AppHandle> {
     if (!opts.keepState) rmSync(scratchDir, { recursive: true, force: true })
     const retryPort = await pickFreePort()
     const retryScratch = `${scratchDir}-retry`
+    // The first host may already have imported (and renamed) the file.
+    if (opts.preseedStore) writePreseedStore(opts.preseedStore)
     const retryPid = spawnApp(exe, retryPort, retryScratch, baseEnv)
     try {
       await waitForCdp(retryPort, 15_000)
@@ -286,7 +341,7 @@ export async function launchApp(opts: LaunchOptions): Promise<AppHandle> {
       throw new Error(
         `CDP attach failed twice. Original: ${String(err)}; retry: ${String(retryErr)}. ` +
           `Scratch dirs: ${scratchDir}, ${retryScratch}. Ports: ${debugPort}, ${retryPort}. ` +
-          `Check that WebView2 accepts WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS and no other instance holds the folder.`
+          `Check that the exe is a debug build (release builds scrub the debug port), WebView2 accepts WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS and no other instance holds the folder.`
       )
     } finally {
       if (!opts.keepState) rmSync(retryScratch, { recursive: true, force: true })
@@ -374,26 +429,6 @@ function buildHandle(args: HandleArgs): AppHandle {
     if (!keepState) {
       rmSync(scratchDir, { recursive: true, force: true })
       wipeDevAppData()
-    }
-  }
-
-  /**
-   * The plugin-store file (`termul-data.json`) and the app's other persisted
-   * state live under the identifier's *shared* app-data dir, not under the
-   * scratch WEBVIEW2_USER_DATA_FOLDER — the scratch dir only isolates browser
-   * state. Without wiping it, persisted projects/chats/agent registrations
-   * leak from one run into the next (the launcher never appears on a profile
-   * that boots into restored chats, so stream-storm's start-button wait
-   * times out). This wipes the dev-identifier's app-data dirs; the identity
-   * `com.termul-manager.app.dev` is perf-toolkit-only, so nothing user-owned
-   * lives there.
-   */
-  function wipeDevAppData(): void {
-    const appData = process.env.APPDATA
-    const localAppData = process.env.LOCALAPPDATA
-    for (const root of [appData, localAppData]) {
-      if (root)
-        rmSync(path.join(root, 'com.termul-manager.app.dev'), { recursive: true, force: true })
     }
   }
 

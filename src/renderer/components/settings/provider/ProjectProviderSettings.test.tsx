@@ -3,13 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useProjectClaudeAccountDraft } from '@/hooks/use-project-claude-account-draft'
 import { ProjectProviderSettings } from './ProjectProviderSettings'
 
-const { api } = vi.hoisted(() => ({
+const { api, admits } = vi.hoisted(() => ({
+  admits: { value: true },
   api: {
     list: vi.fn(),
     usage: vi.fn(),
     setProjectAccount: vi.fn(),
     login: vi.fn(),
-    canManageAccounts: vi.fn()
+    signInFlow: vi.fn(),
+    startLinkLogin: vi.fn(),
+    cancelLogin: vi.fn()
   }
 }))
 
@@ -20,6 +23,9 @@ vi.mock('@/lib/claude-accounts-api', async () => {
   return { ...actual, claudeAccountsApi: api }
 })
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
+vi.mock('@/hooks/use-server-admits-remote-writes', () => ({
+  useServerAdmitsRemoteWrites: () => admits.value
+}))
 
 const snapshot = (projectAccounts: Record<string, string>, workSignedIn = true) => ({
   accounts: [
@@ -41,11 +47,14 @@ const read = (accountId: string, percent: number) => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  admits.value = true
   api.list.mockResolvedValue(snapshot({ office: 'ab12' }))
   api.usage.mockResolvedValue([read('default', 6), read('ab12', 0)])
   api.setProjectAccount.mockResolvedValue(undefined)
   api.login.mockResolvedValue(undefined)
-  api.canManageAccounts.mockReturnValue(true)
+  api.signInFlow.mockReturnValue('browser')
+  api.startLinkLogin.mockReturnValue(new Promise(() => {}))
+  api.cancelLogin.mockResolvedValue(true)
 })
 
 describe('useProjectClaudeAccountDraft', () => {
@@ -132,6 +141,30 @@ describe('ProjectProviderSettings', () => {
     expect(await screen.findByText('Work is signed out')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
     await waitFor(() => expect(api.login).toHaveBeenCalledWith('ab12'))
+  })
+
+  it('on web signs a signed-out chosen account in with a link', async () => {
+    api.signInFlow.mockReturnValue('link')
+    api.list.mockResolvedValue(snapshot({ office: 'ab12' }, false))
+    render(<Harness projectId="office" />)
+    expect(await screen.findByText('Work is signed out')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(await screen.findByRole('dialog', { name: 'Sign in to Work' })).toBeInTheDocument()
+    expect(api.startLinkLogin).toHaveBeenCalledWith('ab12')
+    expect(api.login).not.toHaveBeenCalled()
+  })
+
+  it('on a view-only connection sends a signed-out chosen account to the account settings', async () => {
+    admits.value = false
+    api.signInFlow.mockReturnValue('link')
+    api.list.mockResolvedValue(snapshot({ office: 'ab12' }, false))
+    const onManage = vi.fn()
+    render(<Harness projectId="office" onManage={onManage} />)
+    expect(await screen.findByText('Work is signed out')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open settings' }))
+    expect(onManage).toHaveBeenCalledOnce()
+    expect(api.startLinkLogin).not.toHaveBeenCalled()
   })
 
   it('offers the account with the most room when the chosen one hit its limit', async () => {

@@ -276,3 +276,68 @@ async fn a_deleted_document_is_a_conflict_only_keep_mine_resolves() {
     assert_eq!(doc.save(1, b"recreated").await.as_deref(), Some("1"));
     assert_eq!(doc.on_disk(), b"recreated");
 }
+
+#[tokio::test]
+async fn a_save_while_a_reload_is_pending_is_refused_until_the_editor_loaded_it() {
+    let doc = Doc::opened(b"saved").await;
+    std::fs::write(&doc.path, b"theirs").unwrap();
+    assert!(matches!(
+        doc.disk_changed().await,
+        DiskOutcome::Reload { .. }
+    ));
+    let refused = doc
+        .mounts
+        .write_snapshot(PROJECT, doc.seq, 1, b"old editor content".to_vec())
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, super::CODE_CANVAS_NOT_READY);
+    assert_eq!(doc.on_disk(), b"theirs", "the outside version stands");
+
+    doc.mounts
+        .document_loaded(PROJECT, doc.seq, Some(5))
+        .unwrap();
+    doc.edit(6).await;
+    assert_eq!(doc.save(6, b"edited theirs").await.as_deref(), Some("6"));
+    assert_eq!(doc.on_disk(), b"edited theirs");
+}
+
+#[tokio::test]
+async fn a_reload_the_editor_did_not_take_becomes_a_conflict() {
+    let doc = Doc::opened(b"saved").await;
+    std::fs::write(&doc.path, b"theirs").unwrap();
+    assert!(matches!(
+        doc.disk_changed().await,
+        DiskOutcome::Reload { .. }
+    ));
+    let DiskOutcome::Conflict { view } = doc.mounts.reload_failed(PROJECT, doc.seq).unwrap() else {
+        panic!("the editor still holds the old version, so the change is a conflict");
+    };
+    assert_eq!(
+        view.conflict.and_then(|conflict| conflict.disk_hash),
+        Some(sha256_hex(b"theirs"))
+    );
+    doc.edit(2).await;
+    assert_eq!(doc.save(2, b"mine").await, None, "nothing is written");
+    assert_eq!(doc.on_disk(), b"theirs");
+}
+
+#[tokio::test]
+async fn take_disk_refuses_saves_until_the_editor_loaded_the_disk_version() {
+    let doc = Doc::conflicted(b"theirs").await;
+    resolve_conflict(
+        &doc.mounts,
+        PROJECT,
+        doc.seq,
+        ConflictChoice::TakeDisk,
+        None,
+    )
+    .await
+    .unwrap();
+    let refused = doc
+        .mounts
+        .write_snapshot(PROJECT, doc.seq, 2, b"mine".to_vec())
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, super::CODE_CANVAS_NOT_READY);
+    assert_eq!(doc.on_disk(), b"theirs");
+}

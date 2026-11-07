@@ -14,7 +14,7 @@ describe('docs/api-contracts.md ACP reference', () => {
     expect(reference['tauri-commands']).toContain('acp_history_get_tail')
     expect(reference['ws-requests']).toContain('send_prompt')
     expect(reference['acp-events']).toContain('acp:prompt_complete')
-    expect(reference['acp-events']).toContain('acp:browser_consent_request')
+    expect(reference['acp-events']).toContain('acp:browser_ticket_closed')
     expect(reference['relay-frames']).toEqual(['auth_required', 'gap', 'heartbeat'])
     expect(reference['http-routes']).toContain('/acp/install')
   })

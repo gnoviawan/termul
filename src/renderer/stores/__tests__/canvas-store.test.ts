@@ -81,7 +81,9 @@ import type { IpcResult } from '@shared/types/ipc.types'
 import { asJsonText, createCanvasBridge } from '@/lib/canvas-bridge'
 import type { LeafNode } from '@/types/workspace.types'
 import { useAppSettingsStore } from '../app-settings-store'
+import { CANVAS_LOAD_TIMEOUT_MS } from '../canvas-load-watchdog'
 import { type CanvasMount, pinVerdict, useCanvasStore } from '../canvas-store'
+import { useProjectStore } from '../project-store'
 import { useWorkspaceStore } from '../workspace-store'
 
 const PROJECT = 'proj-1'
@@ -98,7 +100,8 @@ const INFO: CanvasOpenInfo = {
   pinTag: PIN,
   docKey: DOC_A,
   mountSeq: 41,
-  evicted: []
+  evicted: [],
+  fallbackFonts: []
 }
 
 function openInfo(overrides: Partial<CanvasOpenInfo> = {}): IpcResult<CanvasOpenInfo> {
@@ -245,6 +248,7 @@ describe('open and close', () => {
 
     expect(open).toHaveBeenCalledWith(DOC_A, PROJECT, {
       autosaveMs: 1500,
+      autosaveMaxMs: 10000,
       leaseGraceMs: 5000,
       maxMounted: 2,
       crashTimeouts: 3
@@ -254,6 +258,20 @@ describe('open and close', () => {
     expect(canvasTabs()).toEqual([
       expect.objectContaining({ id: `canvas-${PROJECT}`, projectId: PROJECT, docPath: DOC_A })
     ])
+  })
+
+  it('the same document under another spelling of its path keeps the mount', async () => {
+    open.mockResolvedValueOnce(openInfo())
+    await useCanvasStore.getState().openCanvas(PROJECT, DOC_A)
+    await expect(
+      useCanvasStore.getState().openCanvas(PROJECT, 'C:\\proj/design.figcraft')
+    ).resolves.toBe(true)
+    await expect(
+      useCanvasStore.getState().openCanvas(PROJECT, 'c:\\proj\\design.figcraft')
+    ).resolves.toBe(true)
+    expect(close).not.toHaveBeenCalled()
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(currentMount().mountSeq).toBe(41)
   })
 
   it('a repeat open of the mounted doc keeps the mount; another doc remounts', async () => {
@@ -468,11 +486,27 @@ describe('mount and load', () => {
     ])
   })
 
+  it('names the loaded file for the editor by its project path and project', async () => {
+    useProjectStore.setState({
+      projects: [{ id: PROJECT, name: 'Proj', color: 'blue', path: 'c:\\proj' }]
+    })
+    const editor = await mountReady()
+    expect(editor.sent('host.file').map((r) => JSON.parse(r.params))).toEqual([
+      { name: 'design', path: 'design.figcraft', location: 'Proj' }
+    ])
+    const methods = editor.posted.map((r) => r.method)
+    expect(methods.indexOf('host.file')).toBeGreaterThan(methods.indexOf('host.openDocument'))
+    useProjectStore.setState({ projects: [] })
+  })
+
   it('a document that does not exist yet starts empty: no host.openDocument, null ack', async () => {
     const editor = await mountReady(null)
     expect(editor.sent('host.openDocument')).toHaveLength(0)
     expect(documentLoaded).toHaveBeenCalledWith(PROJECT, 41, null)
     expect(session()?.phase.kind).toBe('ready')
+    expect(editor.sent('host.file').map((r) => JSON.parse(r.params))).toEqual([
+      { name: 'design', path: 'design.figcraft', location: null }
+    ])
   })
 
   it('a document the editor cannot open fails the mount and never reports it loaded', async () => {
@@ -500,6 +534,33 @@ describe('mount and load', () => {
     ])
     expect(editor.sent('host.locale')).toHaveLength(2)
     expect(currentMount().mountSeq).toBe(41)
+  })
+
+  it('a second event.ready on a ready mount reloads the last save before anything else', async () => {
+    const editor = await mountReady()
+    readDocument.mockResolvedValueOnce(ok({ bytes: 'c2F2ZWQ=' }))
+    documentLoaded.mockResolvedValueOnce(ok(view({ contentVersion: '1', savedVersion: '1' })))
+    editor.ready()
+    expect(session()?.phase.kind).toBe('loading')
+
+    editor.dirty(true, '2')
+    expect(dirtyChanged).not.toHaveBeenCalled()
+    editor.reply('host.describe', JSON.stringify({ tag: PIN, engineVersion: '0.6.0' }))
+    await flush()
+    expect(readDocument).toHaveBeenCalledTimes(2)
+    expect(editor.sent('host.openDocument').at(-1)?.params).toBe('{"bytes":"c2F2ZWQ="}')
+    editor.reply('host.openDocument', '{"contentVersion":1}')
+    await flush()
+
+    expect(documentLoaded).toHaveBeenLastCalledWith(PROJECT, 41, '{"contentVersion":1}')
+    expect(session()).toMatchObject({
+      phase: { kind: 'ready' },
+      contentVersion: '1',
+      savedVersion: '1'
+    })
+    expect(editor.sent('host.theme')).toHaveLength(2)
+    expect(editor.sent('host.locale')).toHaveLength(2)
+    expect(writeSnapshot).not.toHaveBeenCalled()
   })
 
   it('a pin mismatch is only logged in dev builds', async () => {
@@ -617,6 +678,142 @@ describe('mount and load', () => {
   })
 })
 
+describe('load watchdog (#1490)', () => {
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    open.mockResolvedValueOnce(openInfo())
+    await useCanvasStore.getState().openCanvas(PROJECT, DOC_A)
+  })
+
+  afterEach(async () => {
+    await useCanvasStore.getState().unmountCanvas(PROJECT)
+    vi.useRealTimers()
+  })
+
+  it('a frame that never reports ready fails the mount with a visible message', () => {
+    const editor = mountEditor()
+    vi.advanceTimersByTime(CANVAS_LOAD_TIMEOUT_MS - 1)
+    expect(session()?.phase.kind).toBe('loading')
+
+    vi.advanceTimersByTime(1)
+    expect(session()?.phase).toEqual({
+      kind: 'failed',
+      code: 'EDITOR_LOAD_TIMEOUT',
+      message: 'The canvas editor did not finish loading. Open the canvas again to retry.',
+      mountSeq: 41
+    })
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'warn', source: 'canvas-store.loadTimeout' })
+    )
+    // The failed mount's bridge is gone: a late ready does nothing.
+    editor.ready()
+    expect(editor.posted).toHaveLength(0)
+  })
+
+  it('event.ready disarms it, even while the document is still loading', async () => {
+    const editor = mountEditor()
+    editor.ready()
+    vi.advanceTimersByTime(CANVAS_LOAD_TIMEOUT_MS)
+    expect(session()?.phase.kind).toBe('loading')
+
+    readDocument.mockResolvedValueOnce(ok({ bytes: null }))
+    documentLoaded.mockResolvedValueOnce(ok(view()))
+    editor.reply('host.describe', JSON.stringify({ tag: PIN, engineVersion: '0.6.0' }))
+    await flush()
+    expect(session()?.phase.kind).toBe('ready')
+  })
+
+  it('a crash remount is watched under its new mountSeq', async () => {
+    const editor = mountEditor()
+    editor.ready()
+    crashed.mockResolvedValueOnce(
+      ok({ previousMountSeq: 41, mountSeq: 43, reason: 'the editor crashed: panic', lost: null })
+    )
+    editor.send({ method: 'event.crashed', params: '{"reason":"panic"}', mountSeq: 41 })
+    await flush()
+    expect(currentMount().mountSeq).toBe(43)
+
+    vi.advanceTimersByTime(CANVAS_LOAD_TIMEOUT_MS)
+    expect(session()?.phase).toMatchObject({
+      kind: 'failed',
+      code: 'EDITOR_LOAD_TIMEOUT',
+      mountSeq: 43
+    })
+  })
+
+  it('a canvas closed before the timeout is not failed afterwards', async () => {
+    await useCanvasStore.getState().unmountCanvas(PROJECT)
+    vi.advanceTimersByTime(CANVAS_LOAD_TIMEOUT_MS)
+    expect(session()).toBeUndefined()
+    expect(logFrontendError).not.toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'canvas-store.loadTimeout' })
+    )
+  })
+})
+
+describe('fallback fonts (#1421)', () => {
+  const FONTS = ['host-fonts/seguisym.ttf', 'host-fonts/msyh.ttc']
+
+  beforeEach(async () => {
+    open.mockResolvedValueOnce(openInfo({ fallbackFonts: FONTS }))
+    await useCanvasStore.getState().openCanvas(PROJECT, DOC_A)
+    readDocument.mockResolvedValueOnce(ok({ bytes: 'AAEC' }))
+    documentLoaded.mockResolvedValueOnce(ok(view()))
+  })
+
+  it('the lent fonts load before the document, so its first render has them', async () => {
+    const editor = mountEditor()
+    editor.ready()
+    editor.reply('host.describe', JSON.stringify({ tag: PIN, engineVersion: '0.6.0' }))
+    await flush()
+    expect(editor.sent('host.fallbackFonts').map((r) => JSON.parse(r.params))).toEqual([
+      { urls: FONTS }
+    ])
+    expect(editor.sent('host.openDocument')).toHaveLength(0)
+
+    editor.reply('host.fallbackFonts', '{"families":["Segoe UI Symbol"],"failed":[]}')
+    await flush()
+    editor.reply('host.openDocument', '{"contentVersion":3}')
+    await flush()
+    expect(session()?.phase.kind).toBe('ready')
+  })
+
+  it('a bundle without host.fallbackFonts still mounts', async () => {
+    const editor = mountEditor()
+    editor.ready()
+    editor.reply('host.describe', JSON.stringify({ tag: PIN, engineVersion: '0.6.0' }))
+    await flush()
+    editor.fail('host.fallbackFonts', 'UNKNOWN_METHOD')
+    await flush()
+    editor.reply('host.openDocument', '{"contentVersion":3}')
+    await flush()
+
+    expect(session()?.phase.kind).toBe('ready')
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'info', message: expect.stringContaining('UNKNOWN_METHOD') })
+    )
+  })
+
+  it('a font the editor could not load is logged and the mount goes on', async () => {
+    const editor = mountEditor()
+    editor.ready()
+    editor.reply('host.describe', JSON.stringify({ tag: PIN, engineVersion: '0.6.0' }))
+    await flush()
+    editor.reply(
+      'host.fallbackFonts',
+      '{"families":[],"failed":[{"url":"host-fonts/msyh.ttc","error":"HTTP 404"}]}'
+    )
+    await flush()
+    editor.reply('host.openDocument', '{"contentVersion":3}')
+    await flush()
+
+    expect(session()?.phase.kind).toBe('ready')
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('HTTP 404') })
+    )
+  })
+})
+
 describe('persistence', () => {
   beforeEach(async () => {
     open.mockResolvedValueOnce(openInfo())
@@ -680,6 +877,50 @@ describe('persistence', () => {
       savedVersion: BIG,
       saving: false,
       saveError: null
+    })
+  })
+
+  it('a failed dirty notification shows a save error and is retried on the next tick', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    try {
+      const editor = await mountReady()
+      dirtyChanged
+        .mockResolvedValueOnce({ success: false, error: 'offline', code: 'NETWORK_ERROR' })
+        .mockResolvedValueOnce(
+          ok({ kind: 'idle', view: view({ dirty: true, contentVersion: '4' }) })
+        )
+      editor.dirty(true, '4')
+      await flush()
+      expect(session()?.saveError).toContain('offline')
+      expect(dirtyChanged).toHaveBeenCalledTimes(1)
+
+      vi.advanceTimersByTime(1500)
+      await flush()
+      expect(dirtyChanged).toHaveBeenCalledTimes(2)
+      expect(dirtyChanged).toHaveBeenLastCalledWith(PROJECT, 41, true, '4')
+      expect(session()?.saveError).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('CANVAS_CLOSED from the host on a mount this window holds shows the canvas closed', async () => {
+    const editor = await mountReady()
+    dirtyChanged.mockResolvedValueOnce({
+      success: false,
+      error: 'the canvas is not mounted',
+      code: 'CANVAS_CLOSED'
+    })
+    editor.dirty(true, '4')
+    await flush()
+    expect(session()?.phase).toMatchObject({
+      kind: 'failed',
+      code: 'CANVAS_CLOSED',
+      mountSeq: null
+    })
+    await expect(editor.bridge.call('document.inspect')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'CANVAS_CLOSED' }
     })
   })
 
@@ -787,6 +1028,39 @@ describe('disk changes (AD-27)', () => {
     expect(documentLoaded).toHaveBeenLastCalledWith(PROJECT, 41, '{"contentVersion":9}')
     expect(session()?.savedVersion).toBe('9')
     expect(toastWarning).not.toHaveBeenCalled()
+    expect(editor.sent('host.file'), 'the reloaded document is named again').toHaveLength(2)
+  })
+
+  it('a reload is not applied once the editor moved past the version the host judged clean', async () => {
+    const editor = await mountReady()
+    dirtyChanged.mockReturnValueOnce(new Promise(() => {}))
+    editor.dirty(true, '4')
+    diskChanged
+      .mockResolvedValueOnce(ok({ kind: 'reload', view: view(), bytes: 'bmV3' }))
+      .mockResolvedValueOnce(
+        ok({ kind: 'conflict', view: view({ dirty: true, conflict: CONFLICT }) })
+      )
+    await useCanvasStore.getState().checkDisk(PROJECT)
+
+    expect(editor.sent('host.openDocument')).toHaveLength(1)
+    expect(diskChanged).toHaveBeenLastCalledWith(PROJECT, 41, true)
+    expect(session()?.conflict).toEqual(CONFLICT)
+    expect(toastWarning).toHaveBeenCalledTimes(1)
+  })
+
+  it('a reload the editor refuses is reported, and the host raises a conflict', async () => {
+    const editor = await mountReady()
+    diskChanged
+      .mockResolvedValueOnce(ok({ kind: 'reload', view: view(), bytes: 'bmV3' }))
+      .mockResolvedValueOnce(ok({ kind: 'conflict', view: view({ conflict: CONFLICT }) }))
+    const checking = useCanvasStore.getState().checkDisk(PROJECT)
+    await flush()
+    editor.fail('host.openDocument', 'ENGINE_ERROR')
+    await checking
+
+    expect(diskChanged).toHaveBeenLastCalledWith(PROJECT, 41, true)
+    expect(documentLoaded).toHaveBeenCalledTimes(1)
+    expect(session()?.conflict).toEqual(CONFLICT)
   })
 
   it('a change under unsaved edits raises the conflict once', async () => {

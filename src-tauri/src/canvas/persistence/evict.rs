@@ -5,7 +5,13 @@
 //! or an agent calling it, so a hidden project an agent is working in is not
 //! the victim. An eviction is an ordinary [`CanvasPersistence::close`]: the
 //! AD-31 sequence saves first, and a victim that cannot be saved stays
-//! mounted and blocks the new mount.
+//! mounted while the next least active one is tried; only when none can be
+//! saved is the new mount blocked.
+//!
+//! The cap is the host's: each mount remembers the `canvas.max_mounted` it
+//! was opened under, and the highest of those and the opener's applies, so a
+//! renderer with a lower setting cannot unload canvases another renderer
+//! opened under a higher one.
 
 use serde::Serialize;
 
@@ -32,7 +38,7 @@ pub fn mount_cap(requested: Option<u64>) -> usize {
 }
 
 /// A canvas the cap unmounted after saving it.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Eviction {
     pub project_id: String,
@@ -54,20 +60,38 @@ fn blocked(message: String) -> CanvasError {
 }
 
 impl CanvasPersistence {
+    /// The cap an open asking for `requested` works under: the highest of it
+    /// and the caps every live mount was opened under.
+    pub(super) fn host_cap(&self, requested: usize) -> usize {
+        self.mounts
+            .lock()
+            .values()
+            .map(|mount| mount.max_mounted)
+            .fold(requested, usize::max)
+    }
+
     /// Unmount the least recently active other canvases until fewer than
     /// `cap` remain. The project's own mount is replaced by the open, not
     /// counted. Call with the admission lock held, so two opens cannot both
     /// see room.
     ///
-    /// A victim that cannot be saved (or is already closing) stops the loop:
-    /// it stays mounted and the open is `EVICTION_BLOCKED`.
+    /// A victim that cannot be saved stays mounted and the next least active
+    /// one is tried. When no candidate is left (each could not be saved or
+    /// is already closing), the open is `EVICTION_BLOCKED`.
     pub(super) async fn make_room(
         &self,
         project_id: &str,
         cap: usize,
         evicted: &mut Vec<Eviction>,
     ) -> Result<(), CanvasError> {
-        while let Some((victim, mount)) = self.victim(project_id, cap)? {
+        let mut unsaveable: Vec<(String, String)> = Vec::new();
+        while let Some(candidates) = self.victims(project_id, cap) {
+            let Some((victim, mount)) = candidates
+                .into_iter()
+                .find(|(project, _)| unsaveable.iter().all(|(skipped, _)| skipped != project))
+            else {
+                return Err(blocked_by(&unsaveable));
+            };
             match self
                 .save_and_unmount(&victim, &mount, LeaseLostReason::Evicted)
                 .await
@@ -77,26 +101,15 @@ impl CanvasPersistence {
                     reason: REASON_CAP_REACHED,
                 }),
                 Ok(_) => {}
-                Err(error) => {
-                    return Err(blocked(format!(
-                        "could not unload the least recently active canvas (project {victim}) \
-                         to make room: {}",
-                        error.message
-                    )))
-                }
+                Err(error) => unsaveable.push((victim, error.message)),
             }
         }
         Ok(())
     }
 
-    /// The project to unload so one more canvas fits under `cap`: `None` when
-    /// there is room. Only open mounts are candidates; if every other mount
-    /// is already closing, nothing can be freed right now.
-    fn victim(
-        &self,
-        project_id: &str,
-        cap: usize,
-    ) -> Result<Option<(String, Arc<Mount>)>, CanvasError> {
+    /// The open mounts that could be unloaded so one more canvas fits under
+    /// `cap`, least recently active first; `None` when there is room.
+    fn victims(&self, project_id: &str, cap: usize) -> Option<Vec<(String, Arc<Mount>)>> {
         let others: Vec<_> = self
             .mounts
             .lock()
@@ -105,17 +118,39 @@ impl CanvasPersistence {
             .map(|(project, mount)| (project.clone(), mount.clone()))
             .collect();
         if others.len() < cap {
-            return Ok(None);
+            return None;
         }
-        others
-            .iter()
+        let mut open: Vec<_> = others
+            .into_iter()
             .filter_map(|(project, mount)| {
-                let state = mount.state.lock();
-                (state.lifecycle == Lifecycle::Open)
-                    .then(|| (state.activity.rank(), project, mount))
+                let rank = {
+                    let state = mount.state.lock();
+                    (state.lifecycle == Lifecycle::Open).then(|| state.activity.rank())
+                };
+                rank.map(|rank| (rank, project, mount))
             })
-            .min_by_key(|(rank, _, _)| *rank)
-            .map(|(_, project, mount)| Some((project.clone(), Arc::clone(mount))))
-            .ok_or_else(|| blocked("every other canvas is closing; try again".to_string()))
+            .collect();
+        open.sort_by_key(|(rank, _, _)| *rank);
+        Some(
+            open.into_iter()
+                .map(|(_, project, mount)| (project, mount))
+                .collect(),
+        )
     }
+}
+
+/// No canvas could make room: each candidate failed to save (`unsaveable`,
+/// with why) or every other one is already closing.
+fn blocked_by(unsaveable: &[(String, String)]) -> CanvasError {
+    if unsaveable.is_empty() {
+        return blocked("every other canvas is closing; try again".to_string());
+    }
+    let reasons: Vec<String> = unsaveable
+        .iter()
+        .map(|(project, why)| format!("project {project}: {why}"))
+        .collect();
+    blocked(format!(
+        "could not unload a canvas to make room ({})",
+        reasons.join("; ")
+    ))
 }

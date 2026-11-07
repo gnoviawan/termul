@@ -435,16 +435,17 @@ pub(super) async fn handle_recover_session_snapshot(
         relay.unsubscribe(&parsed.session_id, prior);
     }
     spawn_event_forwarder(stream, out_tx.clone());
-    WsReply::ok(
-        id,
-        Some(json!({
-            "sessionId": parsed.session_id,
-            "watermark": head.head_seq,
-            "headSeq": head.head_seq,
-            "logEpoch": head.log_epoch,
-            "events": events,
-        })),
-    )
+    let mut reply = json!({
+        "sessionId": parsed.session_id,
+        "watermark": head.head_seq,
+        "headSeq": head.head_seq,
+        "logEpoch": head.log_epoch,
+        "events": events,
+    });
+    // Pending prompts ride beside the snapshot: an approval is not durable, and
+    // the client drops a question or elicitation the snapshot already covers.
+    attach_pending_prompts(&mut reply, relay, &parsed.session_id);
+    WsReply::ok(id, Some(reply))
 }
 
 /// `get_session_cursor` (R2) — returns the server-authoritative replay

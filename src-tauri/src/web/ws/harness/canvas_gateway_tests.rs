@@ -52,6 +52,7 @@ async fn open(host: &Host, doc: &tempfile::TempDir, tab: &str) -> u64 {
                 renderer: RendererId::new(tab),
                 doc_path: doc.path().join("design.figcraft"),
                 autosave: Duration::from_secs(60),
+                autosave_max: crate::canvas::persistence::autosave_max_wait(None),
                 lease_grace: GRACE,
                 crash_timeouts: DEFAULT_CRASH_TIMEOUTS,
             },
@@ -125,9 +126,14 @@ async fn a_gateway_call_reaches_the_holder_and_its_reply_answers_the_agent<W: Wi
             "mountSeq": seq,
             "method": "node.get",
             "params": U64_ID,
+            "timeoutMs": frame["timeoutMs"],
         })
     );
     assert!(frame["callId"].as_u64().is_some(), "{frame}");
+    assert!(
+        frame["timeoutMs"].as_u64().is_some_and(|left| left > 0),
+        "the renderer is told how long the host still waits: {frame}"
+    );
     answer(&mut tab, "r1", &frame, U64_ID).await;
     assert_eq!(call.await.unwrap(), Ok(U64_ID.to_string()));
 }
@@ -362,12 +368,15 @@ async fn a_desktop_window_takes_the_canvas_from_a_browser() {
     takeover_across_carriers::<Peer, ChannelPeer>().await;
 }
 
-/// The params of a host presence notice, after checking it is a plain
-/// `canvas_call` envelope for the holder's mount.
+/// The params of a host presence notice or lookup, after checking it is a
+/// plain `canvas_call` envelope for the holder's mount (a lookup also says
+/// how long the host waits for it).
 fn presence_params(frame: &Value, mount_seq: u64, method: &str) -> Value {
+    let mut envelope = frame.clone();
+    envelope.as_object_mut().unwrap().remove("timeoutMs");
     assert_eq!(
-        frame,
-        &json!({
+        envelope,
+        json!({
             "type": "canvas_call",
             "callId": frame["callId"],
             "projectId": PROJECT,

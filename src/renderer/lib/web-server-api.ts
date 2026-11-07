@@ -58,7 +58,7 @@ import {
   worktreeCreateKey
 } from './ipc/http'
 import { logFrontendError } from './log-api'
-import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
+import type { AgentSkillContent, AgentSkillSummary, SkillFileEntry } from './skills-api'
 import { authHeader } from './web-auth-token'
 
 /**
@@ -140,10 +140,10 @@ async function postNdjsonStream<T>(
  */
 const WEB_FS_REQUEST_TIMEOUT_MS = 30_000
 
-async function boundedFsRequest<T>(
+export async function boundedFsRequest<R extends IpcResult<unknown>>(
   operation: string,
-  send: (signal: AbortSignal) => Promise<IpcResult<T>>
-): Promise<IpcResult<T>> {
+  send: (signal: AbortSignal) => Promise<R>
+): Promise<R> {
   const controller = new AbortController()
   const timer = setTimeout(() => {
     void logFrontendError({
@@ -482,6 +482,13 @@ export const webServerSkills = {
   async read(name: string, projectRoot?: string): Promise<AgentSkillContent> {
     const params = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : ''
     const res = await getJson<AgentSkillContent>(`/skills/${encodeURIComponent(name)}${params}`)
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  },
+
+  async files(projectRoot?: string): Promise<SkillFileEntry[]> {
+    const params = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : ''
+    const res = await getJson<SkillFileEntry[]>(`/skills-index${params}`)
     if (!res.success) throw new Error(res.error)
     return res.data
   }

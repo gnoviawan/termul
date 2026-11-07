@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Network fixture</title>
+</head>
+<body>
+<h1>Network fixture</h1>
+<img alt="pixel" src="/pixel.svg?cache=secret-image">
+<p id="state">Network fixture loading</p>
+<script>
+Promise.all([
+  fetch('/api/ping?token=secret-fetch').then(function (r) { return r.json(); }),
+  fetch('/redirect-api?token=secret-redirect').then(function (r) { return r.json(); })
+]).then(function () {
+  document.getElementById('state').textContent = 'Network fixture ready';
+});
+</script>
+</body>
+</html>

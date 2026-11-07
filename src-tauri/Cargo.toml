@@ -1,13 +1,14 @@
 [package]
 name = "termul-manager"
-version = "0.4.52"
+version = "0.4.60"
 description = "Project-aware terminal that treats workspaces as first-class citizens"
 authors = ["gnoviawan", "mannnrachman (Tauri port)"]
 edition = "2021"
 # ACP 1.3.0 is edition 2024 and requires Rust ≥ 1.88; `std::fs::File::try_lock`
-# (data-dir locks, AD-14) stabilised in 1.89. The floor is 1.95 to match the
-# toolchain the pinned figcraft fork builds with (spine AD-24).
-rust-version = "1.95"
+# (data-dir locks, AD-14) stabilised in 1.89. The floor follows the pinned
+# figcraft fork (spine AD-24): its v0.15 code uses `usize::isolate_lowest_one`
+# (crates/pathops), which 1.95 lacks; 1.97.1 is the oldest toolchain checked.
+rust-version = "1.97"
 # Two binaries live in this crate: the desktop app (`termul-manager`, the
 # implicit src/main.rs) and the standalone headless server (`termul-server`).
 # Pin `cargo run` / `tauri dev` to the desktop app so Cargo doesn't error on
@@ -50,13 +51,25 @@ standalone-server = []
 # `--features custom-protocol`. `build.rs` fails a release desktop build that
 # lacks it.
 custom-protocol = ["tauri/custom-protocol"]
+# Exposes the library's `conformance_support` seam to the browser conformance
+# runner below. Only that test target enables it; shipping builds never do.
+conformance = []
+
+# Runs the real automation host on a real webview, so it needs its own `main`
+# (tao requires the main thread on macOS). Skips unless
+# TERMUL_BROWSER_CONFORMANCE is set.
+[[test]]
+name = "browser_conformance"
+path = "tests/browser_conformance/main.rs"
+harness = false
+required-features = ["conformance"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
 # unstable is required for child/multi-webview support used by BrowserTabManager
-tauri = { version = "2.0", features = ["unstable", "devtools", "tray-icon"] }
+tauri = { version = "2.12.3", features = ["unstable", "devtools", "tray-icon"] }
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
 notify = "8"
@@ -71,8 +84,18 @@ tauri-plugin-notification = "2"
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-chrono = "0.4"
+serde_json = { version = "1", features = ["raw_value"] }
+# Derives JSON Schemas from the serde types for the OpenAPI spec (web::openapi);
+# already in the tree via rmcp.
+schemars = "1"
+# YAML for `termul-server openapi` (web::openapi::cli). The maintained fork of
+# the archived serde_yaml, with the same API.
+serde_norway = "0.9"
+chrono = { version = "0.4", features = ["serde"] }
+# Automation schedules: 5-field cron (seconds prefixed) evaluated in an IANA zone.
+cron = "0.17"
+chrono-tz = "0.10"
+url = "2"
 
 # ADR-004.6: opt-in, read-only fetch of the ACP Registry (identity/discovery
 # only). rustls-tls matches the backend already pulled in by the updater plugin.
@@ -132,7 +155,11 @@ rmcp = { version = "3.5.0", features = [
 # `Headless` or `Attached` backends or a figcraft `Session` (AD-17). Pinned by
 # the fork's `termul-*` release tag, which `scripts/canvas/check-figcraft-pin.mjs`
 # compares with canvas/figcraft.pin.
-figcraft-mcp = { git = "https://github.com/gnoviawan/figcraft", tag = "termul-v0.2.0" }
+figcraft-mcp = { git = "https://github.com/gnoviawan/figcraft", tag = "termul-v0.6.0" }
+# figcraft-mcp's engine, for its default key bindings: the canvas policy routes
+# a `ui.key` call as the command its key runs (`acp/host_mcp/canvas_policy.rs`).
+# Same tag as figcraft-mcp; a test checks the lock holds one figcraft-engine.
+figcraft-engine = { git = "https://github.com/gnoviawan/figcraft", tag = "termul-v0.6.0" }
 # OAuth2 — needed for the `TokenResponse` trait used by the MCP OAuth flow
 # (rmcp's `auth` feature pulls this transitively, but we use it directly).
 oauth2 = "5.0"
@@ -213,6 +240,8 @@ minisign-verify = "0.2"
 # the minisign `.pub` file text, base64-encoded) so `PublicKey::decode` can
 # parse the raw key the updater verifies against.
 base64 = "0.22"
+# Typed version comparison for the signed nightly channel check (updater_api).
+semver = "1"
 # SQLite for the agentation annotation service (issue #451, Epic 1).
 # `bundled` compiles SQLite from source so the binary has no system-SQLite
 # dependency — matches the single-binary invariant.
@@ -222,7 +251,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["compat", "rt"] }
 
 [dev-dependencies]
-tauri = { version = "2.0", features = ["test"] }
+tauri = { version = "2.12.3", features = ["test"] }
 tower = { version = "0.5", features = ["util"] }
 # Swap/rollback file tests in `server_update` use a temp dir so they never
 # touch the real binary path.
@@ -238,6 +267,16 @@ notify-rust = "4.18"
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6", features = ["apple-native"] }
 notify-rust = "4.18"
+# WKWebView isolated-world eval, history stepping and AppKit input for agent
+# browser automation (browser_automation::engine::wkwebview). Already in the tree via wry; keep
+# them on the versions wry resolves so the WKWebView behind tauri's
+# PlatformWebview is the type these crates name.
+objc2 = "0.6.4"
+block2 = "0.6"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSDictionary", "NSError", "NSData", "NSArray", "NSURL"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKFrameInfo", "WKContentWorld", "WKNavigation", "WKUIDelegate", "WKOpenPanelParameters", "WKSnapshotConfiguration", "WKWebViewConfiguration", "WKPreferences"] }
+# Agent-tab screenshots: NSImage to PNG (browser_automation::engine::wkwebview).
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSBitmapImageRep", "NSImageRep"] }
 
 # Linux Secret Service (persistent across reboots) with pure-Rust crypto so we
 # don't require a system OpenSSL/Perl build toolchain.
@@ -245,19 +284,32 @@ notify-rust = "4.18"
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
 gtk = "0.18"
 notify-rust = "4.18"
+# WebKitGTK isolated-world eval for agent browser automation
+# (browser_automation::engine::webkitgtk): `v2_40` adds
+# call_async_javascript_function with a script world. Pinned to the
+# versions wry resolves so the WebView behind tauri's PlatformWebview is
+# the type these crates name.
+webkit2gtk = { version = "=2.0.2", features = ["v2_40"] }
+javascriptcore-rs = { version = "=1.1.2", features = ["v2_28"] }
+# Agent-tab screenshots: the snapshot surface written as PNG
+# (browser_automation::engine::webkitgtk). The version webkit2gtk resolves.
+cairo-rs = { version = "0.18", features = ["png"] }
 
 # Symlink-safe (O_NOFOLLOW) open of the persisted web auth token file
 # (web::auth::open_token_file). Already in the tree transitively.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# Directory-relative (openat/renameat) canvas export writes
+# (acp::host_mcp::canvas_policy). Already in the tree transitively.
+rustix = { version = "1", features = ["fs"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
 # WebView2 CDP for agent browser automation (browser_automation::cdp).
-# Already in the tree transitively via wry — same major keeps the
-# ICoreWebView2 type identity shared with `with_webview`'s PlatformWebview.
-webview2-com = "0.38"
-windows-core = "0.61"
+# Already in the tree transitively via wry. Keep it on the wry-resolved 0.39 line so the
+# ICoreWebView2 type identity is shared with `with_webview`'s PlatformWebview.
+webview2-com = "0.39"
+windows-core = "0.62"
 windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",

@@ -61,6 +61,7 @@ function seedOpenFile(content: string, unsavedEdit?: string): void {
   const fileState: EditorFileState = {
     filePath: path,
     content: unsavedEdit ?? content,
+    kind: 'text',
     originalContent: content,
     isDirty: unsavedEdit !== undefined,
     language: 'markdown',

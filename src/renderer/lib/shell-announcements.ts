@@ -12,7 +12,8 @@
  *   memory, an unknown session and an unknown channel all announce nothing.
  */
 
-import { agentChatNeedsAttention } from '@/lib/agent-chat-attention'
+import type { ChatActivityRecord } from '@shared/types/web-protocol.types'
+import { chatNeedsYou, chatProjectId } from '@/lib/agent-chat-attention'
 import type { SessionStatus } from '@/stores/acp-store'
 import type { ConnectionChannelState } from '@/stores/connection-status-store'
 
@@ -59,13 +60,15 @@ export interface AnnouncementSession {
   lastError: string | null
 }
 
-/** The slice of the ACP store the derivation reads. `AcpState` satisfies it. */
+/** What the derivation reads: slices of the ACP store and the host's chat activity. */
 export interface AcpAnnouncementState {
   sessions: Readonly<Record<string, AnnouncementSession>>
   agentStatus: Readonly<Record<string, string | undefined>>
   pendingPermissions: Readonly<Record<string, { sessionId: string }>>
   pendingQuestions: Readonly<Record<string, { sessionId: string }>>
   pendingElicitations: Readonly<Record<string, { sessionId: string }>>
+  /** The host's `chat_activity` records, ephemeral warm-ups left out. */
+  activity: Readonly<Record<string, ChatActivityRecord>>
 }
 
 /** Facts from outside the ACP store that decide who an announcement is for. */
@@ -73,7 +76,10 @@ export interface AnnouncementContext {
   /** Session id of the active pane's active `agent-chat` tab, if any. */
   activeChatId: string | null
   activeProjectId: string
-  /** Open `agent-chat` tabs plus retained chats, minus ephemeral sessions. */
+  /**
+   * Open `agent-chat` tabs plus retained chats, minus ephemeral sessions: the
+   * chats whose local Needs you reasons count, as in the project counts.
+   */
   candidateChatIds: ReadonlySet<string>
   /** `{chat}`: the `agentChatLabel` chain. */
   chatLabel: (sessionId: string) => string
@@ -85,10 +91,10 @@ export interface AcpAnnouncementMemory {
   sessionIds: ReadonlySet<string>
   activeTurn: Readonly<Record<string, boolean>>
   /**
-   * `agentChatNeedsAttention` per known session, not only per candidate chat. A
-   * chat that becomes a candidate between two ACP writes (a tab opened) then
-   * still has a previous value to diff against; only a session seen for the
-   * first time is a baseline.
+   * `chatNeedsYou` per known session (a local session or a host record), not
+   * only per candidate chat. A chat that becomes a candidate between two
+   * writes (a tab opened) then still has a previous value to diff against;
+   * only a session seen for the first time is a baseline.
    */
   needsYou: Readonly<Record<string, boolean>>
   /** `permission:`, `question:` and `elicitation:` keys currently pending. */
@@ -117,35 +123,27 @@ function pendingApprovals(state: AcpAnnouncementState): Map<string, string> {
 }
 
 /**
- * Needs-you per session, through the same predicate the desktop tab strip and
- * the project signals use, so another chat's permission, question or
- * elicitation reads the same everywhere. Every session is observed, not only
- * the current candidates: the candidate set (open tabs, retained chats) can
- * change without an ACP write, and the diff needs a previous value for a chat
- * that just became a candidate. Who is announced is decided later.
+ * Needs-you per session, through the predicate the chat rows and the project
+ * counts use, so a chat reads the same everywhere: the host's pending prompt
+ * for any chat, a local reason only for a candidate. Every known session is
+ * observed, not only the current candidates, so a chat that just became one
+ * has a previous value. Who is announced is decided later.
  */
-function observeNeedsYou(state: AcpAnnouncementState): Record<string, boolean> {
-  const permissionSessions = new Set(
-    Object.values(state.pendingPermissions).map((item) => item.sessionId)
-  )
-  const questionSessions = new Set(
-    Object.values(state.pendingQuestions).map((item) => item.sessionId)
-  )
-  const elicitationSessions = new Set(
-    Object.values(state.pendingElicitations).map((item) => item.sessionId)
-  )
+function observeNeedsYou(
+  state: AcpAnnouncementState,
+  candidateChatIds: ReadonlySet<string>
+): Record<string, boolean> {
   const needsYou: Record<string, boolean> = {}
-  for (const [sessionId, session] of Object.entries(state.sessions)) {
-    needsYou[sessionId] = agentChatNeedsAttention({
-      projectId: session.projectId,
-      sessionStatus: session.status,
-      agentStatus: state.agentStatus[session.agentId],
-      pendingPermission: permissionSessions.has(sessionId),
-      pendingQuestion: questionSessions.has(sessionId),
-      pendingElicitation: elicitationSessions.has(sessionId),
-      lastError: session.lastError ?? null,
-      ephemeral: false
-    })
+  for (const sessionId of new Set([
+    ...Object.keys(state.sessions),
+    ...Object.keys(state.activity)
+  ])) {
+    const session = state.sessions[sessionId]
+    needsYou[sessionId] = chatNeedsYou(
+      state.activity[sessionId],
+      candidateChatIds.has(sessionId) ? session : undefined,
+      session ? state.agentStatus[session.agentId] : undefined
+    )
   }
   return needsYou
 }
@@ -163,7 +161,7 @@ export function deriveAcpAnnouncements(
   ctx: AnnouncementContext
 ): AnnouncementResult<AcpAnnouncementMemory> {
   const approvals = pendingApprovals(state)
-  const needsYou = observeNeedsYou(state)
+  const needsYou = observeNeedsYou(state, ctx.candidateChatIds)
   const activeTurn: Record<string, boolean> = {}
   for (const [sessionId, session] of Object.entries(state.sessions)) {
     activeTurn[sessionId] = session.activeTurn
@@ -193,14 +191,14 @@ export function deriveAcpAnnouncements(
     announcements.push(TURN_FINISHED)
   }
 
-  // 2. Needs-you: another chat in the active project goes false → true. An
-  // unknown previous value is a baseline, and a chat that already needed you
-  // (a second permission, or it just stopped being active) stays silent.
-  for (const sessionId of ctx.candidateChatIds) {
-    if (sessionId === activeChatId) continue
-    const session = state.sessions[sessionId]
-    if (!session || session.projectId !== ctx.activeProjectId) continue
-    if (prev.needsYou[sessionId] === false && needsYou[sessionId] === true) {
+  // 2. Needs-you: another chat in the active project goes false → true, one
+  // this surface never opened included. An unknown previous value is a
+  // baseline, and a chat that already needed you (a second permission, or it
+  // just stopped being active) stays silent.
+  for (const [sessionId, waiting] of Object.entries(needsYou)) {
+    if (!waiting || prev.needsYou[sessionId] !== false || sessionId === activeChatId) continue
+    const projectId = chatProjectId(state.activity[sessionId], state.sessions[sessionId])
+    if (projectId === ctx.activeProjectId) {
       announcements.push(needsYouAnnouncement(ctx.chatLabel(sessionId)))
     }
   }

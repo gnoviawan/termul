@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { logFrontendError } from '@/lib/log-api'
 import {
   type AcpAnnouncementMemory,
+  type AcpAnnouncementState,
   type AnnouncementContext,
   type ConnectionAnnouncementMemory,
   type ConnectionAnnouncementState,
@@ -11,6 +12,7 @@ import {
 } from '@/lib/shell-announcements'
 import { type AcpState, isEphemeralAcpSession, useAcpStore } from '@/stores/acp-store'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
+import { useChatActivityStore } from '@/stores/chat-activity-store'
 import { useShownConnectionStore } from '@/stores/connection-status-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useShellAnnouncerStore } from '@/stores/shell-announcer-store'
@@ -36,7 +38,7 @@ function logEvaluationFailure(scope: 'acp' | 'connection', error: unknown): void
 
 /**
  * Read everything outside the ACP store that decides who an announcement is
- * for. Mirrors the candidate set in `use-agent-chat-attention` (open
+ * for. Mirrors the open chats in `use-agent-chat-attention` (open
  * `agent-chat` tabs plus retained chats, minus ephemeral sessions) and the
  * active-tab rule in `MobileChatShell`.
  */
@@ -72,6 +74,23 @@ function readContext(state: AcpState): AnnouncementContext {
   }
 }
 
+/** The ACP slices the announcer reads, and the host's activity of every chat but a warm-up. */
+function readAnnouncementState(state: AcpState): AcpAnnouncementState {
+  const activity = Object.fromEntries(
+    Object.entries(useChatActivityStore.getState().sessions).filter(
+      ([sessionId]) => !isEphemeralAcpSession(sessionId)
+    )
+  )
+  return {
+    sessions: state.sessions,
+    agentStatus: state.agentStatus,
+    pendingPermissions: state.pendingPermissions,
+    pendingQuestions: state.pendingQuestions,
+    pendingElicitations: state.pendingElicitations,
+    activity
+  }
+}
+
 /** True when none of the slices the announcer reads changed. */
 function acpSlicesUnchanged(next: AcpState, prev: AcpState): boolean {
   return (
@@ -98,7 +117,11 @@ export function useShellAnnouncements(): void {
 
     const evaluateAcp = (state: AcpState): void => {
       try {
-        const result = deriveAcpAnnouncements(acpMemory, state, readContext(state))
+        const result = deriveAcpAnnouncements(
+          acpMemory,
+          readAnnouncementState(state),
+          readContext(state)
+        )
         acpMemory = result.memory
         const { announce } = useShellAnnouncerStore.getState()
         for (const text of result.announcements) announce(text)
@@ -126,6 +149,9 @@ export function useShellAnnouncements(): void {
       if (acpSlicesUnchanged(state, prev)) return
       evaluateAcp(state)
     })
+    const unsubscribeActivity = useChatActivityStore.subscribe((state, prev) => {
+      if (state.sessions !== prev.sessions) evaluateAcp(useAcpStore.getState())
+    })
     const unsubscribeConnection = useShownConnectionStore.subscribe((state, prev) => {
       if (
         state.controlChannel === prev.controlChannel &&
@@ -138,6 +164,7 @@ export function useShellAnnouncements(): void {
 
     return () => {
       unsubscribeAcp()
+      unsubscribeActivity()
       unsubscribeConnection()
       unregisterRegion()
     }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::pty::session_protocol::gate::SessionGate;
 
 /// A terminal whose I/O comes from the caller instead of a local PTY (an SSH
 /// shell channel). Adopted terminals get the same reader/flusher threads,
@@ -43,13 +44,15 @@ impl PtyManager {
             rows,
         } = terminal;
 
+        let writer = Arc::new(AsyncMutex::new(Some(writer)));
         let instance = Arc::new(TerminalInstance {
             id: id.clone(),
             project_id: None,
             command_id: None,
             child: Arc::new(AsyncMutex::new(Some(child))),
             master: Arc::new(AsyncMutex::new(None)),
-            writer: Arc::new(AsyncMutex::new(Some(writer))),
+            writer: writer.clone(),
+            session_gate: Arc::new(SessionGate::new(writer)),
             reader_handle: Arc::new(AsyncMutex::new(None)),
             flusher_handle: Arc::new(AsyncMutex::new(None)),
             shell: shell.clone(),

@@ -164,7 +164,10 @@ describe('shared overlay primitives occlude native webviews while open', () => {
   it('ImageLightbox', async () => {
     render(
       <>
-        <ImageLightbox src="/shot.png" alt="Screenshot">
+        <ImageLightbox
+          image={{ src: '/shot.png', alt: 'Screenshot', fileName: 'shot.png' }}
+          onDownload={() => {}}
+        >
           <img src="/thumb.png" alt="" />
         </ImageLightbox>
         <Occluded />

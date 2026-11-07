@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  contextUsageBreakdown,
   contextUsagePercent,
   conversationUsageMetrics,
+  displayedUsagePercent,
   formatTokenCount,
   isDisplayableSessionUsage,
+  nextContextWarning,
   shouldShowSessionUsage
 } from './context-usage-utils'
 
@@ -67,5 +70,81 @@ describe('context-usage-utils', () => {
         source: 'reported'
       })
     ).toBe(false)
+  })
+})
+
+describe('nextContextWarning', () => {
+  it('turns on at 80, holds between 78 and 80, and clears below 78, on the rounded percent', () => {
+    expect(nextContextWarning(false, 79.4)).toBe(false)
+    expect(nextContextWarning(false, 79.5)).toBe(true)
+    expect(nextContextWarning(true, 77.5)).toBe(true)
+    expect(nextContextWarning(true, 77.4)).toBe(false)
+  })
+})
+
+describe('contextUsageBreakdown', () => {
+  it('splits used tokens into setup and conversation and reports tokens left', () => {
+    const result = contextUsageBreakdown({
+      used: 50_000,
+      size: 200_000,
+      baselineUsed: 10_000,
+      updatedAt: 1,
+      source: 'reported'
+    })
+    expect(result).toEqual({
+      setupTokens: 10_000,
+      conversationTokens: 40_000,
+      setupFraction: 0.05,
+      conversationFraction: 0.2,
+      left: 150_000
+    })
+  })
+
+  it('clamps a baseline above used and used above size', () => {
+    const result = contextUsageBreakdown({
+      used: 250_000,
+      size: 200_000,
+      baselineUsed: 300_000,
+      updatedAt: 1,
+      source: 'reported'
+    })
+    expect(result.setupTokens).toBe(200_000)
+    expect(result.conversationTokens).toBe(0)
+    expect(result.left).toBe(0)
+  })
+})
+
+describe('displayedUsagePercent', () => {
+  it('counts setup tokens, so it matches the bar', () => {
+    expect(
+      displayedUsagePercent({
+        used: 50_000,
+        size: 200_000,
+        baselineUsed: 10_000,
+        updatedAt: 1,
+        source: 'reported'
+      })
+    ).toBe(25)
+  })
+
+  it('is 0 for an empty window and caps at 100', () => {
+    expect(
+      displayedUsagePercent({
+        used: 10,
+        size: 0,
+        baselineUsed: 0,
+        updatedAt: 1,
+        source: 'reported'
+      })
+    ).toBe(0)
+    expect(
+      displayedUsagePercent({
+        used: 250_000,
+        size: 200_000,
+        baselineUsed: 0,
+        updatedAt: 1,
+        source: 'reported'
+      })
+    ).toBe(100)
   })
 })

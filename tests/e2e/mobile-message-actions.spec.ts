@@ -507,15 +507,19 @@ test('a streaming reply is untouched; once it settles into the turn tail it is f
   await expect(chat.agent).not.toHaveAttribute('tabindex', /.*/)
   await expect(chat.agent).not.toHaveAttribute('data-state', /.*/)
 
-  // A right-click is the app-level menu's, never the message menu.
-  await chat.agent
-    .getByText(/chunk-\d/)
-    .first()
-    .click({ button: 'right' })
-  await expect(page.getByRole('menuitem', { name: /^Paste/ })).toBeVisible()
-  await expect(page.getByRole('menuitem', { name: 'Retry', exact: true })).toHaveCount(0)
-  await expect(page.getByRole('menuitem', { name: 'Edit', exact: true })).toHaveCount(0)
-  await page.keyboard.press('Escape')
+  // On a touch device the prose's context menu is the browser's own (it
+  // carries the native Copy / Paste): no app-level menu, no message menu.
+  const prose = chat.agent.getByText(/chunk-\d/).first()
+  await page.evaluate(() => {
+    window.addEventListener(
+      'contextmenu',
+      (event) =>
+        document.body.setAttribute('data-e2e-native-menu', String(!event.defaultPrevented)),
+      { once: true }
+    )
+  })
+  await prose.click({ button: 'right' })
+  await expect(page.locator('body')).toHaveAttribute('data-e2e-native-menu', 'true')
   await expect(page.getByRole('menu')).toHaveCount(0)
 
   // The turn ends and the reply becomes the settled turn tail: focusable, with

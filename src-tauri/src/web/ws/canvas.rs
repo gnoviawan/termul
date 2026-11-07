@@ -6,9 +6,9 @@
 //!   host holds no such mount for this renderer; `heldElsewhere` says another
 //!   renderer holds the project's lease (AD-30);
 //!   gateway calls for it arrive here as top-level
-//!   `{"type":"canvas_call", callId, projectId, mountSeq, method, params}`
-//!   frames, including the host's own `host.snapshot` / `host.markSaved`
-//!   when it closes the mount (AD-31).
+//!   `{"type":"canvas_call", callId, projectId, mountSeq, method, params,
+//!   timeoutMs?}` frames, including the host's own `host.snapshot` /
+//!   `host.markSaved` when it closes the mount (AD-31).
 //! - `canvas_unmount{projectId, mountSeq}`: it no longer does; the mount
 //!   itself closes only through the host's AD-31 sequence.
 //! - `{"type":"canvas_lease_lost", projectId, mountSeq}` (host → renderer):
@@ -23,8 +23,7 @@
 //!   default (16 MiB frame, 64 MiB message) from any peer, and a connection
 //!   cannot raise that limit once it has authenticated. A slice is answered
 //!   `{accepted}`; `false` tells the sender the call is gone or the reply
-//!   passed the limit.| error: {code, message}}`:
-//!   the answer to one `canvas_call`; `params` and `result` are JSON text.
+//!   passed the limit.
 //!
 //! The connection closing releases its mounts (`ConnectionCleanup`). Logs name
 //! the project and method, never params or results.

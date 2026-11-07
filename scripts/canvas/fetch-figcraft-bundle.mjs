@@ -97,8 +97,27 @@ export function extractBundle(zip, outDir) {
   return written
 }
 
+const RELEASE_ASSET_PREFIX = 'https://github.com/gnoviawan/figcraft/releases/download/termul-'
+const RELEASE_ASSET =
+  /^https:\/\/github\.com\/gnoviawan\/figcraft\/releases\/download\/termul-[A-Za-z0-9._-]+\/figcraft-web-termul-[A-Za-z0-9._-]+\.zip$/
+
+/**
+ * The pin's url when it names a figcraft-web release asset of the Termul
+ * fork, the only place the bundle is downloaded from; anything else throws.
+ * The bytes are checked against the pin's sha256 after the download, so a
+ * redirect elsewhere cannot change what gets embedded.
+ */
+export function pinnedBundleUrl(url) {
+  const parsed = URL.canParse(url) ? new URL(url) : null
+  const plain = parsed !== null && parsed.href === url && !url.includes('/../')
+  if (!plain || !url.startsWith(RELEASE_ASSET_PREFIX) || !RELEASE_ASSET.test(url)) {
+    throw new Error(`the pin url is not a figcraft-web release asset of gnoviawan/figcraft: ${url}`)
+  }
+  return parsed.href
+}
+
 async function download(url) {
-  const response = await fetch(url, { redirect: 'follow' })
+  const response = await fetch(pinnedBundleUrl(url), { redirect: 'follow' })
   if (!response.ok) throw new Error(`download failed: ${response.status} ${url}`)
   return Buffer.from(await response.arrayBuffer())
 }

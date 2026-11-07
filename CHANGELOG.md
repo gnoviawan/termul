@@ -52,6 +52,7 @@ All notable changes to this project will be documented in this file.
 - **Client** — Panes of projects you visited stay mounted and hidden, so switching back keeps terminals and chats running without a remount; hidden projects do not re-render while another project is on screen. A hidden project's editor tabs and agent launcher are not drawn until you return to it
 
 ### Bug Fixes
+- **Client** — A terminal sign-in started from the model selector or the phone's provider setup now finishes after that popover or sheet closes: when the login terminal exits with code 0 the agent is signed in and its models are read again, on the desktop and in the browser. Reopening the selector shows the sign-in as running until the login terminal exits, and a second press no longer opens a second login terminal (#1648)
 - **ACP** — An agent chat opened in a project now runs with that project's environment variables (Project Settings → Environment Variables), the same env a terminal tab in the project gets, with the agent config's own env layered on top (`$VAR` values resolve against the project env). The env, the Claude Account and the warm-agent reuse key come from one project resolution (an explicit project, else the project whose worktree or root is the cwd, else the one whose root holds it). A `CLAUDE_CONFIG_DIR` in that env wins over the project's linked Claude Account, and the host auth preflight (`claude auth status`) checks the same config dir the agent runs with. A warm agent spawned under an older project env is not reused: the next chat gets a fresh agent and the old one keeps serving any running work (a commit message generation, for example) until the host's idle reaper stops it (#1118)
 - **Editor** — An open editor tab no longer shows a busy spinner and a wait cursor that never stop. Reading a file opens it, and on Linux the file watcher reported that open as a change, so the tab reloaded the file, read it again and looped. The host watcher (browser and shared-live) and the desktop watcher now ignore open, read and close events; a write still reports a change
 - **Desktop** — Closing the window on Linux and macOS hides Termul to the tray again instead of quitting, so running agent turns and terminals keep going and reopening the window shows the live session (#1146). A window-geometry close listener let Tauri destroy the window, which quit the app and stopped every agent; on Windows it also skipped the unsaved-files prompt. With no app-close handler mounted (error screen, unknown route) the window still closes
@@ -81,6 +82,38 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 - **Web** — A timed-out `send_prompt` (socket dropped mid-turn) no longer toasts a send failure: the outcome is unknown until replay delivers `prompt_complete`, so the generic error is downgraded to a transient host log (#844)
 - **ACP** — A rejected durability probe releases its slot so the next over-limit flush retries; probe bookkeeping and clamp-log dedup are cleared on session drop (no phantom pins, no pin resurrection)
+
+## [0.4.52] - 2026-10-19
+
+### Highlights
+
+- **Canvas Editor (experimental).** There's a new canvas for drawing and diagrams, built on figcraft. Agents can work on it through MCP tools — from the desktop app or a browser — with an agent cursor and inline guidance while they work. Canvases autosave, keep their state when closed (up to a limit), and cope with files changing underneath them and editor crashes. It's early days, so treat it as experimental. (#1369, #1396–#1405 via #1414)
+- **Settings, one page each.** Every Preferences and Project settings category now gets its own page instead of one long scroll. (#1380, thanks @julianromli)
+- **Smaller chat touches.** You can see which Claude account an agent is using right in the launcher, a pill shows the subagents running in the current turn, and what an agent supports moved into the model tooltip. (#1394, #1368, #1387, thanks @yolkmonday)
+- **Syntax colors match Cursor.** The editor highlighting now matches the Cursor theme. (#963, thanks @julianromli)
+
+### Fixes
+
+**Agent chats**
+- An idle agent no longer burns a thread — it now parks properly between turns. (#1398)
+- You can't switch a chat to a Claude account that isn't signed in. (#1395)
+
+**Editor and explorer**
+- Browsing files on Windows works again on verbatim paths. (#1383)
+
+**Web**
+- Saving a file over a dead connection fails fast instead of hanging forever. (#1366)
+
+### Under the hood
+
+- There's a new docs site covering setup, terminals, files, git, the browser, AI agents, SSH, phones, settings and troubleshooting. (#1373–#1379)
+- The macOS release build retries the stapling step and logs what the stapler says. (#1389)
+
+### Contributors
+
+Thanks to @julianromli (#963, #1380), @yolkmonday (#1368), and @gnoviawan for their work in this release.
+
+**Full changelog:** https://github.com/gnoviawan/termul/compare/v0.4.50...v0.4.52
 
 ## [0.4.0] - 2026-05-31
 

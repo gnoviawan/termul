@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { cn } from '@/lib/utils'
 import {
   FOCUS_RING_CLASS,
+  FOCUS_RING_OVERLAY_CLASS,
   PANEL_FIELD_CLASS,
   PANEL_HEADER_CLASS,
   PANEL_ICON_BUTTON_CLASS,
@@ -40,7 +41,7 @@ describe('panel-styles', () => {
 
   it('panel field uses the card fill, the 3:1 field edge and a neutral focus border', () => {
     expect(classes(PANEL_FIELD_CLASS)).toEqual(
-      expect.arrayContaining(['bg-card', 'border-field-border', 'focus-visible:border-ring'])
+      expect.arrayContaining(['bg-card', 'border-field-border', 'focus-visible:border-focus-ring'])
     )
   })
 
@@ -80,6 +81,17 @@ describe('panel-styles', () => {
         'border-border',
         'text-muted-foreground',
         'hover:bg-foreground/[0.03]'
+      ])
+    )
+  })
+
+  it('the focus overlay paints the --focus-ring token inset', () => {
+    expect(classes(FOCUS_RING_OVERLAY_CLASS)).toEqual(
+      expect.arrayContaining([
+        'focus-visible:outline-hidden',
+        'focus-visible:after:ring-2',
+        'focus-visible:after:ring-inset',
+        'focus-visible:after:ring-focus-ring'
       ])
     )
   })

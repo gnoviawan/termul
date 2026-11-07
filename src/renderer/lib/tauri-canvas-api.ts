@@ -113,8 +113,16 @@ export function createTauriCanvasApi(): CanvasApi {
       return invokeCanvas(IPC_COMMANDS.WRITE_SNAPSHOT, { projectId, mountSeq, snapshot })
     },
 
-    diskChanged(projectId: string, mountSeq: number): Promise<IpcResult<CanvasDiskOutcome>> {
-      return invokeCanvas(IPC_COMMANDS.DISK_CHANGED, { projectId, mountSeq })
+    diskChanged(
+      projectId: string,
+      mountSeq: number,
+      reloadFailed?: boolean
+    ): Promise<IpcResult<CanvasDiskOutcome>> {
+      return invokeCanvas(IPC_COMMANDS.DISK_CHANGED, {
+        projectId,
+        mountSeq,
+        ...(reloadFailed ? { reloadFailed: true } : {})
+      })
     },
 
     resolveConflict(

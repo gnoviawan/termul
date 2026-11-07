@@ -137,9 +137,25 @@ During a turn, the Claude ACP adapter also attaches the live rate-limit state
 
 `remove` signs the Claude CLI out of that Account, deletes its folder (never
 the shared folder), and moves its Projects back to the Default Account. The
-built-in Account cannot be removed. On Windows, a link that cannot be created
-(file links can need Developer Mode) is logged and left out; that entry is then
-separate for the Account.
+built-in Account cannot be removed. On Windows, directory entries (such as
+`projects`) are shared with an NTFS junction, which needs no privilege; file
+entries use a symlink and fall back to a copy, logged, when the symlink
+privilege (Developer Mode or elevation) is missing. A private `projects`
+directory left by an earlier version is migrated — its sessions are merged into
+the shared directory before it becomes a junction. A file that is already in the
+shared directory is never overwritten; if the private copy differs, it is kept
+next to it as `<name>.private-backup` (then `-2`, `-3`, ...), and an identical
+one is skipped. The private directory is only touched when it is a plain
+directory directly inside the Account folder, never a link. It is not deleted
+until the merge succeeded: it is renamed to `<name>.migrating`, the junction is
+created, and then the renamed copy is deleted; if the junction cannot be created
+the rename is undone. The migration is skipped, to be retried next time, when
+any file in the directory changed in the last 30 seconds. That recent-write
+check is the only protection against a running Claude Code and it does not fully
+close the window: an idle process, or a write right after the check, is not
+detected, and Windows does not reliably refuse to move or delete files that
+another process has open. The merge runs while the Account store is locked, so a
+very large private directory briefly blocks other Account calls.
 
 ## Remote browser clients
 
@@ -149,8 +165,15 @@ the server host's CLI. There are no HTTP or WS routes for reading or changing
 Claude credentials. A remote client can list the Accounts (names, ids, and
 signed-in state) and their usage, and choose the Default or a Project Account
 (`list_claude_accounts`, `list_claude_usage`, `set_default_claude_account`,
-`set_project_claude_account`); view-only connections can only list. Adding,
-signing in, renaming and removing an Account stay on the host.
+`set_project_claude_account`). A write-capable connection can also add,
+rename and remove an Account (`add_claude_account`, `rename_claude_account`,
+`remove_claude_account`) and sign it in with a link
+(`start_claude_link_login`, `finish_claude_link_login`,
+`cancel_claude_login`): the host runs `claude auth login` without a browser,
+returns the sign-in link, and writes the code the user pastes from the Claude
+page to the CLI, which stores the login. Termul never sees the token.
+View-only connections can only list; Settings hides the add, sign-in, rename
+and remove controls on them.
 
 ## Per-project Claude profiles
 

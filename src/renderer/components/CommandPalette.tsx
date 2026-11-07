@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bot,
+  Bug,
   Edit2,
   FolderPlus,
   Globe,
@@ -60,6 +61,8 @@ interface CommandPaletteProps {
   onOpenCommandHistory?: () => void
   onOpenShortcutMenu?: () => void
   onOpenThemePicker?: () => void
+  /** Opens the Report a Bug dialog (spec-bug-report-dialog). */
+  onReportBug?: () => void
   onSSHConnect?: (profileId: string) => void
   sshProfiles?: Array<{ id: string; name: string; host: string; username: string }>
   getShortcutLabel?: (id: CommandShortcutId) => string | undefined
@@ -120,6 +123,7 @@ export function CommandPalette({
   onOpenCommandHistory,
   onOpenShortcutMenu,
   onOpenThemePicker,
+  onReportBug,
   onSSHConnect,
   sshProfiles,
   getShortcutLabel,
@@ -327,6 +331,19 @@ export function CommandPalette({
             }
           ]
         : []),
+      ...(onReportBug
+        ? [
+            {
+              id: 'report-bug',
+              category: 'tools' as const,
+              icon: <Bug aria-hidden="true" size={16} />,
+              label: 'Report a Bug',
+              description: 'File a GitHub issue with diagnostics and screenshots',
+              keywords: ['bug', 'report', 'issue', 'github', 'feedback', 'diagnostics'],
+              execute: onReportBug
+            }
+          ]
+        : []),
       ...(isTauriContext() && onSSHConnect && sshProfiles
         ? sshProfiles.map((profile) => ({
             id: `ssh-${profile.id}`,
@@ -357,6 +374,7 @@ export function CommandPalette({
       onOpenCommandHistory,
       onOpenShortcutMenu,
       onOpenThemePicker,
+      onReportBug,
       onSSHConnect,
       sshProfiles,
       getShortcutLabel,

@@ -3,7 +3,8 @@
  * canvas this renderer has mounted (loading or ready) is reported to the host
  * as held by this connection, and the agent calls the host forwards run
  * through that mount's bridge. Calls made while the editor is still loading
- * wait in the bridge's queue; the host times them out, never this side.
+ * wait in the bridge's queue; the host times them out, and one still queued
+ * once the host stopped waiting is dropped unrun.
  *
  * `host.save` is the one call answered here instead of in the editor: the
  * agent's `save_file` is Termul's save of the project's document (AD-18,
@@ -24,6 +25,7 @@ import {
   bridgeFailure,
   type CanvasBridgeReply
 } from '@/lib/canvas-bridge'
+import { projectRelativePath } from '@/lib/canvas-doc'
 import { type CanvasSession, useCanvasStore } from '@/stores/canvas-store'
 import { useProjectStore } from '@/stores/project-store'
 
@@ -33,26 +35,6 @@ const HOST_REMOUNTED = 'host.remounted'
 function mountedSeqOf(session: CanvasSession | undefined): number | null {
   const phase = session?.phase
   return phase?.kind === 'loading' || phase?.kind === 'ready' ? phase.mount.mountSeq : null
-}
-
-/** `path` with forward slashes and without a Windows verbatim prefix:
- * `\\?\D:\p` is `D:/p` and `\\?\UNC\srv\share` is `//srv/share`. */
-function plainPath(path: string): string {
-  return path
-    .replace(/\\/g, '/')
-    .replace(/^\/\/\?\/UNC\//i, '//')
-    .replace(/^\/\/\?\//, '')
-}
-
-/** `docPath` relative to `root` with forward slashes; the absolute path when
- * the document is not under the root. Drive-letter roots compare
- * case-insensitively, as Windows paths do. */
-export function projectRelativePath(docPath: string, root: string | undefined): string {
-  const doc = plainPath(docPath)
-  if (!root) return doc
-  const prefix = `${plainPath(root).replace(/\/+$/, '')}/`
-  const fold = (path: string): string => (/^[A-Za-z]:/.test(path) ? path.toLowerCase() : path)
-  return fold(doc).startsWith(fold(prefix)) ? doc.slice(prefix.length) : doc
 }
 
 function hostRemounted(projectId: string, params: string): CanvasBridgeReply {
@@ -92,13 +74,16 @@ export function startCanvasGateway(transport: AcpTransport = getAcpTransport()):
   if (!gateway) return () => {}
   const store = useCanvasStore.getState
 
-  gateway.setCallHandler((call) =>
-    answerGatewayCall(call, mountedSeqOf(store().sessions[call.projectId]), (method, params) =>
-      method === HOST_SAVE
-        ? hostSave(call.projectId)
-        : method === HOST_REMOUNTED
-          ? Promise.resolve(hostRemounted(call.projectId, params))
-          : store().callCanvas(call.projectId, method, params)
+  gateway.setCallHandler((call, deadline) =>
+    answerGatewayCall(
+      { ...call, deadline },
+      mountedSeqOf(store().sessions[call.projectId]),
+      (method, params) =>
+        method === HOST_SAVE
+          ? hostSave(call.projectId)
+          : method === HOST_REMOUNTED
+            ? Promise.resolve(hostRemounted(call.projectId, params))
+            : store().callCanvas(call.projectId, method, params, deadline)
     )
   )
 

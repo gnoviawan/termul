@@ -140,6 +140,7 @@ vi.mock('@/lib/api', async (importActual) => {
   }
 })
 
+import type { BugReportContext } from '@shared/types/bug-report.types'
 import { invoke } from '@tauri-apps/api/core'
 import { _resetAcpTransportForTests } from '@/lib/acp-transport'
 import {
@@ -231,5 +232,287 @@ describe('assistTerminal (#259)', () => {
     await expect(
       useAcpStore.getState().assistTerminal('fix', '/work', 'x'.repeat(20_001), 1)
     ).rejects.toThrow('too large')
+  })
+})
+
+const DIAGNOSTICS: BugReportContext = {
+  appVersion: '0.1.0',
+  os: 'linux',
+  arch: 'x86_64',
+  channel: 'debug',
+  runId: 'run-1',
+  collectedAt: '2026-10-19T00:00:00Z',
+  logAvailable: true,
+  logTruncated: false,
+  logTail: 'INFO startup ok\nWARN [redacted] token'
+}
+
+describe('draftBugReport (spec-bug-report-dialog)', () => {
+  beforeEach(() => {
+    _resetAcpTransportForTests(null)
+    _resetInFlightHistoryOpensForTesting()
+    _resetAcpAuthForTesting()
+    _resetInFlightPreparedForTesting()
+    _resetCoalesceForTesting()
+    _resetEphemeralSessionIdsForTesting()
+    _resetSessionIndexLoadGenerationForTesting()
+    useAcpStore.setState(FRESH)
+  })
+
+  it('drafts title+body through a hidden one-shot session and disposes it', async () => {
+    useAcpStore.setState({
+      selectedAgentConfigId: 'cfg-1',
+      agentConfigs: [{ id: 'cfg-1', name: 'Agent', command: 'agent', args: [], env: {} }]
+    })
+    let promptBody = ''
+    vi.mocked(invoke).mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-1', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 'draft-session' }
+      if (command === 'acp_send_prompt') {
+        promptBody = String((args as { text?: string }).text ?? '')
+        useAcpStore.getState()._onMessageChunk({
+          agentId: 'agent-1',
+          sessionId: 'draft-session',
+          role: 'agent',
+          content: { type: 'text', text: '{"title":"Crash on launch","body":"' }
+        })
+        useAcpStore.getState()._onMessageChunk({
+          agentId: 'agent-1',
+          sessionId: 'draft-session',
+          role: 'agent',
+          // Wire text carries JSON escapes (`\\n`), like a real agent reply.
+          content: { type: 'text', text: '## What happened\\nIt crashed."}' }
+        })
+        useAcpStore.getState()._onPromptComplete({
+          agentId: 'agent-1',
+          sessionId: 'draft-session',
+          stopReason: 'end_turn'
+        })
+        return 'end_turn'
+      }
+      if (command === 'acp_cancel_prompt') return undefined
+      if (command === 'acp_dispose_ephemeral_session') return undefined
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+
+    await expect(
+      useAcpStore.getState().draftBugReport({
+        cwd: '/work',
+        userDescription: 'The app crashes on launch',
+        diagnostics: DIAGNOSTICS
+      })
+    ).resolves.toEqual({ title: 'Crash on launch', body: '## What happened\nIt crashed.' })
+
+    // The untrusted description and diagnostics travel JSON-encoded, and the
+    // prompt forbids tools + invented secrets.
+    expect(promptBody).toContain('"The app crashes on launch"')
+    expect(promptBody).toContain('diagnostics={"appVersion":"0.1.0"')
+    expect(promptBody).toContain('Do not use tools')
+    expect(promptBody).toContain('already redacted')
+    // Text-only prompt: `text` on the wire, never block `content`.
+    const sendArgs = vi
+      .mocked(invoke)
+      .mock.calls.find(([command]) => command === 'acp_send_prompt')?.[1] as Record<string, unknown>
+    expect(sendArgs.text).toEqual(expect.any(String))
+    expect(sendArgs.content).toBeUndefined()
+    // No visible session/transcript state survives.
+    expect(useAcpStore.getState().sessions['draft-session']).toBeUndefined()
+    expect(useAcpStore.getState().messages['draft-session']).toBeUndefined()
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_dispose_ephemeral_session')
+    ).toBe(true)
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_close_session')).toBe(
+      false
+    )
+  })
+
+  it('returns null without a configured agent', async () => {
+    await expect(
+      useAcpStore.getState().draftBugReport({
+        cwd: '/work',
+        userDescription: 'boom',
+        diagnostics: DIAGNOSTICS
+      })
+    ).resolves.toBeNull()
+  })
+
+  it('returns null for oversized inputs', async () => {
+    vi.mocked(invoke).mockClear()
+    useAcpStore.setState({
+      selectedAgentConfigId: 'cfg-1',
+      agentConfigs: [{ id: 'cfg-1', name: 'Agent', command: 'agent', args: [], env: {} }]
+    })
+    await expect(
+      useAcpStore.getState().draftBugReport({
+        cwd: '/work',
+        userDescription: 'x'.repeat(10_001),
+        diagnostics: DIAGNOSTICS
+      })
+    ).resolves.toBeNull()
+    await expect(
+      useAcpStore.getState().draftBugReport({
+        cwd: '/work',
+        userDescription: 'ok',
+        // Over MAX_BUG_REPORT_DIAGNOSTICS_CHARS as JSON-encoded.
+        diagnostics: { ...DIAGNOSTICS, logTail: 'x'.repeat(200_001) }
+      })
+    ).resolves.toBeNull()
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_spawn_agent')).toBe(
+      false
+    )
+  })
+
+  it('returns null and tears down when the turn fails or the reply is malformed', async () => {
+    useAcpStore.setState({
+      selectedAgentConfigId: 'cfg-1',
+      agentConfigs: [{ id: 'cfg-1', name: 'Agent', command: 'agent', args: [], env: {} }]
+    })
+    for (const scenario of ['malformed', 'tool', 'disconnect'] as const) {
+      _resetEphemeralSessionIdsForTesting()
+      vi.mocked(invoke).mockReset()
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_spawn_agent')
+          return { agentId: 'agent-1', capabilities: {}, authMethods: [] }
+        if (command === 'acp_new_session') return { sessionId: 'draft-session' }
+        if (command === 'acp_cancel_prompt') return undefined
+        if (command === 'acp_dispose_ephemeral_session') return undefined
+        if (command === 'acp_send_prompt') {
+          const store = useAcpStore.getState()
+          if (scenario === 'malformed') {
+            store._onMessageChunk({
+              agentId: 'agent-1',
+              sessionId: 'draft-session',
+              role: 'agent',
+              content: { type: 'text', text: 'not json' }
+            })
+            store._onPromptComplete({
+              agentId: 'agent-1',
+              sessionId: 'draft-session',
+              stopReason: 'end_turn'
+            })
+            return 'end_turn'
+          }
+          if (scenario === 'tool') {
+            store._onToolCall({
+              agentId: 'agent-1',
+              sessionId: 'draft-session',
+              toolCall: { toolCallId: 't1', title: 'tool', status: 'pending' }
+            })
+          } else {
+            // A partial reply before the crash gives the ephemeral session
+            // transcript content — it must still be dropped, not promoted to
+            // a persisted chat entry (CodeRabbit #1433).
+            store._onMessageChunk({
+              agentId: 'agent-1',
+              sessionId: 'draft-session',
+              role: 'agent',
+              content: { type: 'text', text: '{"title":"partial' }
+            })
+            store._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
+          }
+          return new Promise<string>(() => {})
+        }
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+      await expect(
+        useAcpStore.getState().draftBugReport({
+          cwd: '/work',
+          userDescription: 'boom',
+          diagnostics: DIAGNOSTICS
+        })
+      ).resolves.toBeNull()
+      expect(useAcpStore.getState().sessions['draft-session']).toBeUndefined()
+      expect(
+        useAcpStore.getState().sessionIndex.some((entry) => entry.id === 'draft-session')
+      ).toBe(false)
+    }
+  })
+
+  it('rejects interactive/error/close/oversized turns without stashing UI state', async () => {
+    useAcpStore.setState({
+      selectedAgentConfigId: 'cfg-1',
+      agentConfigs: [{ id: 'cfg-1', name: 'Agent', command: 'agent', args: [], env: {} }]
+    })
+    for (const scenario of [
+      'permission',
+      'question',
+      'agentError',
+      'sessionClosed',
+      'oversized'
+    ] as const) {
+      _resetEphemeralSessionIdsForTesting()
+      vi.mocked(invoke).mockReset()
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_spawn_agent')
+          return { agentId: 'agent-1', capabilities: {}, authMethods: [] }
+        if (command === 'acp_new_session') return { sessionId: 'draft-session' }
+        if (command === 'acp_cancel_prompt') return undefined
+        if (command === 'acp_dispose_ephemeral_session') return undefined
+        if (command === 'acp_send_prompt') {
+          const store = useAcpStore.getState()
+          if (scenario === 'permission') {
+            store._onPermissionRequest({
+              agentId: 'agent-1',
+              sessionId: 'draft-session',
+              requestId: 'perm-1',
+              options: [],
+              toolCall: {}
+            })
+          } else if (scenario === 'question') {
+            store._onQuestionRequest({
+              agentId: 'agent-1',
+              sessionId: 'draft-session',
+              questionId: 'q-1',
+              question: 'pick one',
+              options: []
+            })
+          } else if (scenario === 'agentError') {
+            store._onAgentError({
+              agentId: 'agent-1',
+              sessionId: 'draft-session',
+              message: 'wedged'
+            })
+          } else if (scenario === 'sessionClosed') {
+            store._onSessionClosed({
+              agentId: 'agent-1',
+              sessionId: 'draft-session',
+              reason: 'closed'
+            })
+          } else {
+            // oversized: one agent chunk over MAX_BUG_REPORT_RESPONSE_CHARS
+            // trips the transcript.ts collector bound.
+            store._onMessageChunk({
+              agentId: 'agent-1',
+              sessionId: 'draft-session',
+              role: 'agent',
+              content: { type: 'text', text: 'x'.repeat(40_001) }
+            })
+          }
+          return new Promise<string>(() => {})
+        }
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+
+      await expect(
+        useAcpStore.getState().draftBugReport({
+          cwd: '/work',
+          userDescription: 'boom',
+          diagnostics: DIAGNOSTICS
+        })
+      ).resolves.toBeNull()
+
+      const state = useAcpStore.getState()
+      // The hidden collector session is torn down, and no UI-visible
+      // permission/question entry was stashed for it.
+      expect(state.sessions['draft-session']).toBeUndefined()
+      expect(state.pendingPermissions).toEqual({})
+      expect(state.pendingQuestions).toEqual({})
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(([command]) => command === 'acp_dispose_ephemeral_session')
+      ).toBe(true)
+    }
   })
 })

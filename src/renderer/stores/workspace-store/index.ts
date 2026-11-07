@@ -32,6 +32,7 @@ export const useWorkspaceStore = create<WorkspaceState>((...a) => {
 export * from './selectors'
 export {
   agentChatTabId,
+  automationsTabId,
   buildProjectWorkspace,
   canvasTabId,
   commitDiffTabId,
@@ -43,11 +44,13 @@ export {
   flattenSameDirection,
   getAllLeafPanes,
   gitHistoryTabId,
+  githubItemTabId,
   gitTabId,
   normalizePaneTree
 } from './tree'
 export type {
   AddTabOptions,
+  GithubItemTabTarget,
   ProjectWorkspace,
   SplitPaneOptions,
   WorkspaceState,

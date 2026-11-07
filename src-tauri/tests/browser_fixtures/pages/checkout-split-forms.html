@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Checkout split forms fixture</title>
+</head>
+<body>
+<main>
+<h1>Checkout split forms fixture</h1>
+<form id="card" autocomplete="off" onsubmit="return false">
+<input id="number" autocomplete="cc-number" aria-label="Card number">
+<input id="cvc" name="cvc" aria-label="Security code">
+</form>
+<form id="order" action="/form-done.html" method="get">
+<input name="coupon" type="text" aria-label="Coupon">
+<button type="submit">Place order</button>
+</form>
+</main>
+</body>
+</html>

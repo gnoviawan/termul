@@ -51,7 +51,7 @@ impl Conflict {
 }
 
 /// `canvas-store.conflict`: `diskHash` is `null` when the file was deleted.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConflictView {
     pub disk_hash: Option<String>,
@@ -59,12 +59,17 @@ pub struct ConflictView {
 }
 
 /// What a reported file change meant.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum DiskOutcome {
     /// The file is as Termul last read or wrote it.
     Unchanged { view: PersistenceView },
-    /// The editor was clean: load `bytes` (base64) with `host.openDocument`.
+    /// The editor was clean at `view.contentVersion`: load `bytes` (base64)
+    /// with `host.openDocument`. An editor that has moved past that version
+    /// since holds edits the reload would drop: the renderer then reports
+    /// [`CanvasPersistence::reload_failed`] instead. Nothing is written until
+    /// the editor loaded it (`document_loaded`).
+    #[schemars(description = r#"The editor was clean at `view.contentVersion`: load `bytes` (base64) with `host.openDocument`. An editor that has moved past that version since holds edits the reload would drop: send `POST /canvas/disk-changed` with `reloadFailed: true` instead. Nothing is written until the editor has loaded it (`POST /canvas/document-loaded`)."#)]
     Reload {
         view: PersistenceView,
         bytes: String,
@@ -73,7 +78,7 @@ pub enum DiskOutcome {
     Conflict { view: PersistenceView },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum ConflictChoice {
     /// Overwrite the disk with a fresh snapshot of the editor.
@@ -92,7 +97,7 @@ pub(super) enum Resolution {
 
 /// After a resolution: `reload` is the disk's bytes (base64) for
 /// `host.openDocument`; `copyPath` is the conflict copy written.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolveOutcome {
     pub view: PersistenceView,
@@ -171,7 +176,7 @@ fn write_copy(doc_path: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
 
 impl CanvasPersistence {
     /// The renderer read the document to open it: that is the file the
-    /// editor holds.
+    /// editor holds, whatever an earlier reload handed it.
     pub(super) fn set_disk_baseline(
         &self,
         project_id: &str,
@@ -179,7 +184,11 @@ impl CanvasPersistence {
         bytes: Option<&[u8]>,
     ) -> Result<(), CanvasError> {
         let mount = self.mount_for(project_id, mount_seq)?;
-        mount.state.lock().disk = Some(fingerprint_of(bytes));
+        let mut state = mount.state.lock();
+        state.disk = Some(fingerprint_of(bytes));
+        if let Phase::Ready(persisted) = &mut state.phase {
+            persisted.reloading = None;
+        }
         Ok(())
     }
 
@@ -197,17 +206,23 @@ impl CanvasPersistence {
         let on_disk = fingerprint_of(current.as_deref());
         let mut state = mount.state.lock();
         let MountState { phase, disk, .. } = &mut *state;
-        let unchanged = disk.as_ref().is_none_or(|known| *known == on_disk);
         let outcome = match phase {
-            Phase::Ready(persisted) if !unchanged => {
+            Phase::Ready(persisted)
+                if persisted
+                    .reloading
+                    .as_ref()
+                    .or(disk.as_ref())
+                    .is_some_and(|known| *known != on_disk) =>
+            {
                 if let Some(conflict) = &mut persisted.conflict {
                     conflict.on_disk = on_disk;
                     None
                 } else if persisted.unsaved() || current.is_none() {
+                    persisted.reloading = None;
                     persisted.conflict = Some(Conflict::new(on_disk, persisted.content_version));
                     None
                 } else {
-                    *disk = Some(on_disk);
+                    persisted.reloading = Some(on_disk);
                     current
                 }
             }
@@ -270,11 +285,44 @@ impl CanvasPersistence {
             return Err(closed());
         };
         persisted.conflict = None;
-        *disk = Some(fingerprint_of(current.as_deref()));
+        if reload {
+            persisted.reloading = Some(fingerprint_of(current.as_deref()));
+        } else {
+            *disk = Some(fingerprint_of(current.as_deref()));
+        }
         Ok(ResolveOutcome {
             view: PersistenceView::of(mount.mount_seq, &state.phase),
             reload: current.filter(|_| reload).map(|bytes| BASE64.encode(bytes)),
             copy_path,
+        })
+    }
+
+    /// The renderer could not load the file `disk_changed` handed it (the
+    /// editor refused the bytes, or moved past the version judged clean). The
+    /// editor still holds its old content, so the change on disk is a
+    /// conflict for the user to resolve.
+    pub fn reload_failed(
+        &self,
+        project_id: &str,
+        mount_seq: u64,
+    ) -> Result<DiskOutcome, CanvasError> {
+        let mount = self.mount_for(project_id, mount_seq)?;
+        let mut state = mount.state.lock();
+        let conflicted = match &mut state.phase {
+            Phase::Ready(persisted) => match persisted.reloading.take() {
+                Some(handed) => {
+                    persisted.conflict = Some(Conflict::new(handed, persisted.content_version));
+                    true
+                }
+                None => false,
+            },
+            Phase::Loading => false,
+        };
+        let view = PersistenceView::of(mount.mount_seq, &state.phase);
+        Ok(if conflicted {
+            DiskOutcome::Conflict { view }
+        } else {
+            DiskOutcome::Unchanged { view }
         })
     }
 }

@@ -1,9 +1,14 @@
 import { Sparkles } from '@/components/icons'
 import { cn } from '@/lib/utils'
+import { OpenableChip } from './OpenableChip'
 
 interface SkillChipProps {
   name: string
   className?: string
+  /** Opens the skill's `SKILL.md`. When set the chip renders as a button. */
+  onOpen?: (chip: HTMLElement) => void
+  /** Tab order for the button form (the composer passes `-1`). */
+  tabIndex?: number
 }
 
 /**
@@ -17,16 +22,23 @@ interface SkillChipProps {
  * from the surrounding text (`text-inherit`) so the chip tracks composer
  * `text-base` and timeline `text-sm` without a hardcoded size.
  *
- * Always non-interactive by construction: there is no `onRemove` or any other
- * interactive/removal prop. In the composer, Backspace removes a chip via the
- * token model (`removeSkillTokenBeforeCaret` and the editor's pill keymap),
- * not an X button. In the timeline the chip is a static pill. Callers
- * (`SkillPillNode`, `ChatMessage`) pass only `name` (plus an optional
- * `className`).
+ * There is no `onRemove` prop. In the composer, Backspace removes a chip via
+ * the token model (`removeSkillTokenBeforeCaret` and the editor's pill keymap),
+ * not an X button. The only interaction is `onOpen` (see `skill-file-links`):
+ * with it the chip is a button that opens the skill's `SKILL.md`; without it
+ * the chip is a static pill.
  */
-export function SkillChip({ name, className }: SkillChipProps): React.JSX.Element {
+export function SkillChip({
+  name,
+  className,
+  onOpen,
+  tabIndex
+}: SkillChipProps): React.JSX.Element {
   return (
-    <span
+    <OpenableChip
+      skillName={name}
+      onOpen={onOpen}
+      tabIndex={tabIndex}
       className={cn(
         'inline-flex h-[1.1em] max-w-full items-center gap-1 align-baseline leading-none',
         'text-inherit font-medium text-primary',
@@ -34,9 +46,9 @@ export function SkillChip({ name, className }: SkillChipProps): React.JSX.Elemen
       )}
     >
       <Sparkles size={12} className="shrink-0" aria-hidden="true" />
-      <span className="max-w-[40ch] truncate" title={name}>
+      <span className="max-w-[40ch] truncate" title={onOpen ? undefined : name}>
         {name}
       </span>
-    </span>
+    </OpenableChip>
   )
 }

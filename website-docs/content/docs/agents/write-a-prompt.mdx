@@ -1,6 +1,6 @@
 ---
 title: Write a prompt
-description: Choose a model and a mode, use slash commands and file mentions, attach files, and watch how much context is left.
+description: Choose a model and a mode, use slash commands and mentions of files and other chats, attach files, and watch how much context is left.
 ---
 
 The message box at the bottom of a chat is where you talk to the agent. Besides text, it holds the controls for the model, how much the agent may do on its own, and what you send along with your words. The launcher uses the same box, so everything on this page works there too.
@@ -14,13 +14,23 @@ If the agent is still working when you send, Termul queues your message and send
 
 ## Change the model, effort, and fast mode
 
-Click the model button. It sits to the left of the mode button and shows the current model, followed by the effort level when the agent has one.
+Click the model button. It sits to the left of the mode button and shows the current model, followed by the effort level when the agent has one. The model panel opens with the cursor in its search field.
 
-- Click a model in the list to switch to it.
-- Click a level in the effort row, such as **Low**, **Medium**, or **High**, to set how hard the model thinks before it answers. Higher effort is slower and gives more careful answers.
-- Click the lightning button at the end of the effort row to turn fast mode on or off. It turns yellow when it is on.
+- Click a model in the list to switch to it. A check mark shows the current model.
+- Type in the search field to filter models and agents by name. The number of matches shows at the end of the field. Press Enter to pick the first match. When nothing matches, Enter does nothing.
+- Use the up and down arrow keys to move through the list, and Enter to pick a model.
 
-The effort row and fast mode appear only when the agent offers them. When a model has no fast mode, the button is off and its tooltip says "Fast mode is not available for this model". To hand the chat to a different agent instead, see [Switch agents mid-chat](/docs/agents/switch-agents).
+The current model's row has a button on its right. It shows the effort level, or **Edit** when the agent has no effort levels. Click it, or press the right arrow key on the row, to open the model's options beside the list:
+
+- **Thinking** sets how hard the model thinks before it answers. Higher levels are slower and give more careful answers.
+- **Context** sets the size of the context window, when the agent offers more than one.
+- **Fast mode** turns fast mode on or off.
+
+Each option appears only when the agent offers it. Press the left arrow key or Escape to close the options and go back to the row. The agent's other settings appear at the bottom of the panel. To hand the chat to a different agent instead, see [Switch agents mid-chat](/docs/agents/switch-agents).
+
+### Keep favorite models at the top
+
+Hover over a model and click its star to add it to **Favorites**. Favorites appear at the top of the list and can come from different agents. Click the star again to remove a model.
 
 ## Choose how much the agent may do
 
@@ -52,13 +62,25 @@ Use the arrow keys to move and `Enter` or `Tab` to pick. A skill or a command be
   Pressing `Esc` while the slash menu is open closes the menu and also clears everything in the box.
 </Callout>
 
-## Mention a file
+## Mention a file or another chat
 
-Type `@` and part of a file or folder name. A menu lists matching **Files** and **Folders** in the chat's folder. A bare `@` lists the files you mentioned **Recent**ly in this project.
+Type `@` to open the mention menu. A bare `@` shows two entries:
+
+- **Conversations** lists the other chats in this project, newest first. A chat that is still working shows a spinner.
+- **Explorer** lists the files and folders in the chat's folder, with the files you mentioned **Recent**ly at the top.
+
+Pick an entry to open its panel. In **Explorer**, pick a folder to look inside it, or pick **Use this folder** to mention the folder itself. To go back, press the left arrow key, press `Backspace` while the search is empty, or click the panel's title at the top of the menu (it has a back arrow).
+
+To search instead, type part of a name after `@`. The menu lists matching **Files** and **Folders**, plus any **Conversations** whose title matches.
 
 ![The file menu after typing "@cart" shows src/cart.ts under Files.](/screenshots/agents-file-mention.png)
 
-Pick an entry to add it as a pill. When you send, the agent gets the file's path, so it can open the file itself. Press `Esc` to close the menu and keep what you typed.
+Pick a file, a folder, or a chat to add it as a pill. When you send:
+
+- For a file or a folder, the agent gets its path, so it can open it itself.
+- For a chat, the agent gets the latest turns of that chat as context. Very long chats are cut to their most recent part. If the chats you mention add up to more than 30,000 characters, the ones that do not fit are sent without their text, and the agent gets a note that each was left out. Your own chat history keeps only the pill, not the copied text.
+
+Press `Esc` to close the menu and keep what you typed.
 
 ## Attach files and images
 

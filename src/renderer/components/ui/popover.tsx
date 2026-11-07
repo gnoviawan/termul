@@ -3,10 +3,13 @@ import * as React from 'react'
 import { NativeWebviewOccluder } from '@/hooks/use-native-webview-occlusion'
 
 import { cn } from '@/lib/utils'
+import { usePortalContainer } from './portal-container'
 
 const Popover = PopoverPrimitive.Root
 
 const PopoverTrigger = PopoverPrimitive.Trigger
+
+const PopoverAnchor = PopoverPrimitive.Anchor
 
 const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
@@ -14,7 +17,7 @@ const PopoverContent = React.forwardRef<
 >(({ className, align = 'center', sideOffset = 4, children, ...props }, ref) => (
   // A force-mounted content runs its own close animation (JS, not CSS), so
   // the portal must stay mounted too; Radix only waits for CSS animations.
-  <PopoverPrimitive.Portal forceMount={props.forceMount}>
+  <PopoverPrimitive.Portal forceMount={props.forceMount} container={usePortalContainer()}>
     <PopoverPrimitive.Content
       ref={ref}
       align={align}
@@ -32,4 +35,4 @@ const PopoverContent = React.forwardRef<
 ))
 PopoverContent.displayName = PopoverPrimitive.Content.displayName
 
-export { Popover, PopoverContent, PopoverTrigger }
+export { Popover, PopoverAnchor, PopoverContent, PopoverTrigger }

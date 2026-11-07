@@ -21,6 +21,9 @@ pub fn is_durable_event(type_: &str) -> bool {
     !matches!(
         type_,
         "permission_request"
+            | "browser_ticket_closed"
+            | "browser_stop_changed"
+            | "agent_working"
             | "auth_required"
             | "agent_spawned"
             | "agent_disconnected"
@@ -30,6 +33,14 @@ pub fn is_durable_event(type_: &str) -> bool {
 
 pub(super) fn is_tool_event(type_: &str) -> bool {
     matches!(type_, "tool_call" | "tool_call_update")
+}
+
+/// True for a record that lives in `tool-calls.jsonl`: tool events and the
+/// text a subagent writes under its dispatch. Subagent work then sits in the
+/// log a tail payload reads whole, so a reopened chat restores each
+/// subagent's text however far back it ran.
+pub(super) fn is_tool_log_record(type_: &str, payload: &Value) -> bool {
+    is_tool_event(type_) || (type_ == "message_chunk" && is_subagent_chunk(payload))
 }
 
 /// True when the record participates in the transcript fold
@@ -44,12 +55,26 @@ pub(super) fn is_tool_event(type_: &str) -> bool {
 pub(super) fn is_fold_relevant(record: &PersistedEventRecord) -> bool {
     match record.type_.as_str() {
         "user_prompt" | "tool_call" | "prompt_complete" | "agent_switch" => true,
-        "message_chunk" => record
-            .payload
-            .get("content")
-            .is_some_and(|content| !content.is_null()),
+        "message_chunk" => {
+            !is_subagent_chunk(&record.payload)
+                && record
+                    .payload
+                    .get("content")
+                    .is_some_and(|content| !content.is_null())
+        }
         _ => false,
     }
+}
+
+/// True for a `message_chunk` written by a subagent (`parentToolCallId`).
+/// Its text belongs to the subagent, not the main reply, so every fold
+/// treats it as transparent: it neither opens nor closes a bubble.
+#[must_use]
+pub fn is_subagent_chunk(payload: &Value) -> bool {
+    payload
+        .get("parentToolCallId")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty())
 }
 
 /// The fold bucket a `message_chunk` joins — mirrors `fold_session_records`.
@@ -89,6 +114,7 @@ pub(crate) struct FoldState {
 pub(crate) fn fold_step(state: FoldState, type_: &str, payload: &Value) -> (FoldState, bool) {
     match type_ {
         "user_prompt" => (FoldState { open_role: None }, true),
+        "message_chunk" if is_subagent_chunk(payload) => (state, false),
         "message_chunk" => {
             let role = if payload.get("role").and_then(Value::as_str) == Some("thought") {
                 "thought"
@@ -155,6 +181,10 @@ pub(super) fn fold_counts(records: &mut [PersistedEventRecord]) -> FoldCounts {
 /// summary — the field is omitted instead.
 pub(crate) const MAX_SUMMARY_PATH_CHARS: usize = 4096;
 
+/// Most paths one file-change summary persists; a call that claims more
+/// keeps its first ones.
+pub(crate) const MAX_SUMMARY_PATHS: usize = 256;
+
 /// Tool kinds whose calls change files (the Changed files panel's domain).
 pub(crate) fn is_file_change_kind(kind: Option<&str>) -> bool {
     matches!(kind, Some("edit" | "delete" | "move"))
@@ -212,13 +242,51 @@ fn tool_event_path(tool: &serde_json::Map<String, Value>) -> Option<&str> {
         })
 }
 
-/// Add the bounded, path-only file-change summary (`locations: [{path}]`,
-/// `diffStat: {added, removed}`) to a reduced tool DTO when the gate admits
-/// the event: a `tool_call` whose `kind` is edit/delete/move, or a
-/// `tool_call_update` whose own `kind` is one of those OR that carries diff
-/// content. Fields are added only when derivable; a path that is longer than
-/// [`MAX_SUMMARY_PATH_CHARS`] is omitted. Diff text, titles, `rawInput`, and
-/// line numbers are never persisted — only the derived path and counts.
+/// Every path a file-changing tool event claims, mirroring the renderer's
+/// `toolCallChangedPaths`: [`tool_event_path`] first, then each `locations`
+/// entry (both ends of a move), then each diff item's `path` (a multi-file
+/// edit that lists its files only as diffs). Trimmed, deduped in order;
+/// a blank path or one longer than [`MAX_SUMMARY_PATH_CHARS`] is skipped, and
+/// at most [`MAX_SUMMARY_PATHS`] are kept.
+fn file_change_paths(tool: &serde_json::Map<String, Value>) -> Vec<&str> {
+    let items = |field: &str| {
+        tool.get(field)
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice)
+    };
+    let locations = items("locations").iter();
+    let diffs = items("content")
+        .iter()
+        .filter(|item| diff_stat::is_diff_item(item));
+    let mut paths: Vec<&str> = Vec::new();
+    let candidates = tool_event_path(tool)
+        .into_iter()
+        .chain(
+            locations
+                .chain(diffs)
+                .filter_map(|item| item.get("path").and_then(Value::as_str)),
+        )
+        .map(str::trim)
+        .filter(|path| !path.is_empty() && path.chars().count() <= MAX_SUMMARY_PATH_CHARS);
+    for path in candidates {
+        if paths.len() == MAX_SUMMARY_PATHS {
+            break;
+        }
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+/// Add the bounded, path-only file-change summary (`locations: [{path}, …]`
+/// from [`file_change_paths`], `diffStat: {added, removed}`) to a reduced
+/// tool DTO when the gate admits the event: a `tool_call` whose `kind` is
+/// edit/delete/move, or a `tool_call_update` whose own `kind` is one of those
+/// OR that carries diff content. Fields are added only when derivable; a path
+/// that is longer than [`MAX_SUMMARY_PATH_CHARS`] is omitted. Diff text,
+/// titles, `rawInput`, and line numbers are never persisted — only the derived
+/// paths and counts.
 fn add_file_change_summary(
     type_: &str,
     tool: &serde_json::Map<String, Value>,
@@ -241,13 +309,13 @@ fn add_file_change_summary(
         return;
     }
     let stat = diff_stat::content_diff_stat(tool.get("content"));
-    if let Some(path) =
-        tool_event_path(tool).filter(|path| path.chars().count() <= MAX_SUMMARY_PATH_CHARS)
-    {
-        reduced.insert(
-            "locations".to_string(),
-            serde_json::json!([{ "path": path }]),
-        );
+    let paths = file_change_paths(tool);
+    if !paths.is_empty() {
+        let locations = paths
+            .into_iter()
+            .map(|path| serde_json::json!({ "path": path }))
+            .collect();
+        reduced.insert("locations".to_string(), Value::Array(locations));
     }
     if let Some(counts) = stat {
         reduced.insert(
@@ -255,6 +323,132 @@ fn add_file_change_summary(
             serde_json::json!({ "added": counts.added, "removed": counts.removed }),
         );
     }
+}
+
+/// Longest durable subagent record (serialized bytes).
+const MAX_DURABLE_SUBAGENT_BYTES: usize = 16 * 1024;
+/// Longest durable subagent control marker (serialized bytes).
+const MAX_DURABLE_SUBAGENT_CONTROL_BYTES: usize = 4 * 1024;
+const MAX_DURABLE_PARENT_TOOL_USE_ID_CHARS: usize = 512;
+
+fn serialized_len(value: &Value) -> usize {
+    serde_json::to_string(value).map_or(usize::MAX, |text| text.len())
+}
+
+/// The durable part of a tool event's `_meta`: the host's subagent record
+/// (`termul/subagent`) and control marker (`termul/subagentControl`), each
+/// bounded, and `claudeCode.parentToolUseId`. Nothing else from `_meta`.
+/// These values are host-written (the router strips agent-sent copies) and
+/// skip `sanitize_value`, whose secret-key rule would erase the record's
+/// token counts. A record over the bound loses its prompt first, then is
+/// dropped.
+fn durable_subagent_meta(tool: &serde_json::Map<String, Value>) -> Option<Value> {
+    use crate::acp::subagents::{SUBAGENT_CONTROL_META_KEY, SUBAGENT_META_KEY};
+    let meta = tool.get("_meta")?.as_object()?;
+    let mut kept = serde_json::Map::new();
+    if let Some(record) = meta.get(SUBAGENT_META_KEY) {
+        let mut record = record.clone();
+        if record.is_object() && serialized_len(&record) > MAX_DURABLE_SUBAGENT_BYTES {
+            if let Some(fields) = record.as_object_mut() {
+                fields.remove("prompt");
+            }
+            log::warn!("[acp] persistence: dropped an oversized subagent prompt");
+        }
+        if record.is_object() && serialized_len(&record) <= MAX_DURABLE_SUBAGENT_BYTES {
+            kept.insert(SUBAGENT_META_KEY.to_string(), record);
+        } else {
+            log::warn!("[acp] persistence: dropped a malformed or oversized subagent record");
+        }
+    }
+    if let Some(control) = meta.get(SUBAGENT_CONTROL_META_KEY) {
+        if control.is_object() && serialized_len(control) <= MAX_DURABLE_SUBAGENT_CONTROL_BYTES {
+            kept.insert(SUBAGENT_CONTROL_META_KEY.to_string(), control.clone());
+        } else {
+            log::warn!(
+                "[acp] persistence: dropped a malformed or oversized subagent control marker"
+            );
+        }
+    }
+    let parent = meta
+        .get("claudeCode")
+        .and_then(|claude| claude.get("parentToolUseId"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty() && id.chars().count() <= MAX_DURABLE_PARENT_TOOL_USE_ID_CHARS);
+    if let Some(parent) = parent {
+        kept.insert(
+            "claudeCode".to_string(),
+            serde_json::json!({ "parentToolUseId": parent }),
+        );
+    }
+    (!kept.is_empty()).then_some(Value::Object(kept))
+}
+
+/// Longest durable title of a subagent's own tool call (characters).
+const MAX_DURABLE_CHILD_TITLE_CHARS: usize = 512;
+/// Longest durable subagent result or text (characters). Same bound as the
+/// renderer's `MAX_SUBAGENT_TEXT_CHARS`.
+pub(crate) const MAX_DURABLE_SUBAGENT_TEXT_CHARS: usize = 8_000;
+
+/// A subagent's own tool call (it names a parent dispatch): keep what its
+/// Activity row shows, the title and path with credentials masked.
+fn add_child_call_summary(
+    tool: &serde_json::Map<String, Value>,
+    reduced: &mut serde_json::Map<String, Value>,
+) {
+    if let Some(title) =
+        crate::acp::subagents::bounded_text(tool.get("title"), MAX_DURABLE_CHILD_TITLE_CHARS)
+    {
+        let masked = crate::acp::manager::stderr_ring::redact_line(title);
+        reduced.insert("title".to_string(), Value::String(masked));
+    }
+    // A file-change summary already claimed the call's paths: mask each one.
+    if let Some(Value::Array(locations)) = reduced.get_mut("locations") {
+        for location in locations {
+            if let Some(Value::String(path)) = location.get_mut("path") {
+                *path = crate::acp::manager::stderr_ring::redact_line(path);
+            }
+        }
+        return;
+    }
+    if let Some(path) =
+        tool_event_path(tool).filter(|path| path.chars().count() <= MAX_SUMMARY_PATH_CHARS)
+    {
+        let masked = crate::acp::manager::stderr_ring::redact_line(path);
+        reduced.insert(
+            "locations".to_string(),
+            serde_json::json!([{ "path": masked }]),
+        );
+    }
+}
+
+/// The text a subagent dispatch returned (its content's text blocks),
+/// bounded. That text is the subagent's result.
+fn add_subagent_result(
+    tool: &serde_json::Map<String, Value>,
+    reduced: &mut serde_json::Map<String, Value>,
+) {
+    let text = tool
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("content"))
+        .filter_map(|item| item.get("content"))
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let text = Value::String(text);
+    let Some(text) =
+        crate::acp::subagents::bounded_text(Some(&text), MAX_DURABLE_SUBAGENT_TEXT_CHARS)
+    else {
+        return;
+    };
+    reduced.insert(
+        "content".to_string(),
+        serde_json::json!([{ "type": "content", "content": { "type": "text", "text": text } }]),
+    );
 }
 
 pub(super) fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
@@ -265,7 +459,12 @@ pub(super) fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
         // host-derived file-change summary for file-changing calls
         // (`add_file_change_summary`: path-only `locations` + `diffStat`
         // counts) so restored sessions can repopulate the Changed files
-        // panel without persisting any diff text.
+        // panel without persisting any diff text, plus the subagent `_meta`
+        // (`durable_subagent_meta`: the host's subagent record or control
+        // marker, and the parent dispatch id) so a reopened chat shows its
+        // subagents and groups their calls under them. A dispatch also keeps
+        // its bounded text result, and a subagent's own call its masked
+        // title and path, so the subagent panel restores Activity and Result.
         let mut event = serde_json::Map::new();
         for field in ["agentId", "sessionId"] {
             if let Some(value) = payload.get(field) {
@@ -285,6 +484,14 @@ pub(super) fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
                 }
             }
             add_file_change_summary(type_, tool, &mut reduced);
+            if let Some(meta) = durable_subagent_meta(tool) {
+                if meta.get(crate::acp::subagents::SUBAGENT_META_KEY).is_some() {
+                    add_subagent_result(tool, &mut reduced);
+                } else if meta.get("claudeCode").is_some() {
+                    add_child_call_summary(tool, &mut reduced);
+                }
+                reduced.insert("_meta".to_string(), meta);
+            }
             event.insert(key.to_string(), Value::Object(reduced));
         }
         Value::Object(event)
@@ -387,7 +594,18 @@ pub(crate) fn normalize_title(text: &str) -> String {
 }
 
 pub(super) fn derive_title(payload: &Value) -> String {
-    let text = payload
+    // Tool pills become their labels in the title only: automation
+    // suggestions read `user_prompt_text` and must keep the instruction.
+    let text = user_prompt_text(payload)
+        .map(|text| tool_pill_labels(&text).unwrap_or(text))
+        .unwrap_or_else(|| "Untitled Chat".to_string());
+    normalize_title(&text)
+}
+
+/// What the user typed in a `user_prompt` payload: its first text block with
+/// handoff and skills framing removed. `None` when it carries no user text.
+pub fn user_prompt_text(payload: &Value) -> Option<String> {
+    payload
         .get("content")
         .and_then(Value::as_array)
         .into_iter()
@@ -398,9 +616,9 @@ pub(super) fn derive_title(payload: &Value) -> String {
                 .flatten()
         })
         // spec-agent-switch-separator-redesign: a legacy framed handoff
-        // `user_prompt` (`summary + --- + draft`) must title the session with
-        // the draft, not the wire header — same strip the materialize fold
-        // applies. `Dropped` (summary-only) → fall through to Untitled.
+        // `user_prompt` (`summary + --- + draft`) yields the draft, not the
+        // wire header — same strip the materialize fold applies. `Dropped`
+        // (summary-only) carries no user text.
         .and_then(
             |text| match crate::acp::session_payload::strip_handoff_display_text(text) {
                 Some(crate::acp::session_payload::HandoffText::Draft(draft)) => Some(draft),
@@ -409,8 +627,56 @@ pub(super) fn derive_title(payload: &Value) -> String {
             },
         )
         .map(|text| skills_framing_title(&text).unwrap_or(text))
-        .unwrap_or_else(|| "Untitled Chat".to_string());
-    normalize_title(&text)
+}
+
+/// The tool hints a composer tool pill sends, keyed to the pill's label. Must
+/// match `wireText()` in `src/renderer/lib/composer/termul-tools.ts`.
+const TOOL_PILL_LABELS: &[(&str, &str)] = &[
+    ("the browser tool", "Browser"),
+    ("the canvas tools", "Canvas"),
+    ("the automation tools", "Automations"),
+];
+
+/// `text` with each `(Use <hint> from the termul MCP server)` frame replaced
+/// by its pill label, an unknown hint dropped. `None` when there is no frame.
+fn tool_pill_labels(text: &str) -> Option<String> {
+    const OPEN: &str = "(Use ";
+    const CLOSE: &str = " from the termul MCP server)";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut found = false;
+    while let Some(start) = rest.find(OPEN) {
+        let after = &rest[start + OPEN.len()..];
+        let Some(end) = after
+            .find(CLOSE)
+            .filter(|end| !after[..*end].contains(['(', ')', '\n']))
+        else {
+            out.push_str(&rest[..start + OPEN.len()]);
+            rest = after;
+            continue;
+        };
+        found = true;
+        out.push_str(&rest[..start]);
+        if let Some((_, label)) = TOOL_PILL_LABELS
+            .iter()
+            .find(|(hint, _)| *hint == &after[..end])
+        {
+            out.push_str(&format!(" {label} "));
+        }
+        rest = &after[end + CLOSE.len()..];
+    }
+    if !found {
+        return None;
+    }
+    out.push_str(rest);
+    Some(
+        out.lines()
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string(),
+    )
 }
 
 fn skills_framing_title(text: &str) -> Option<String> {

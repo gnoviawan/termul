@@ -27,7 +27,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 pub use crate::canvas::persistence::RendererId;
-use crate::canvas::persistence::{CanvasPersistence, ReplyMatch, SliceMatch};
+use crate::canvas::persistence::{CallFailed, CanvasPersistence, ReplyMatch, SliceMatch};
 
 /// `canvas.call_timeout_ms` default (AD-29).
 pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_millis(10_000);
@@ -47,6 +47,12 @@ pub enum CanvasErrorCode {
     UnsupportedInKiosk,
     UnknownMethod,
     EngineError,
+    /// The host refused the call because no prompt turn is active for the
+    /// agent (for example a background-task wake-up). The canvas may be open.
+    NoActiveTurn,
+    /// The agent has several active turns and the call's stale binding
+    /// cannot be routed to exactly one of them.
+    AmbiguousSession,
 }
 
 impl CanvasErrorCode {
@@ -61,6 +67,8 @@ impl CanvasErrorCode {
             Self::UnsupportedInKiosk => "UNSUPPORTED_IN_KIOSK",
             Self::UnknownMethod => "UNKNOWN_METHOD",
             Self::EngineError => "ENGINE_ERROR",
+            Self::NoActiveTurn => "NO_ACTIVE_TURN",
+            Self::AmbiguousSession => "AMBIGUOUS_SESSION",
         }
     }
 
@@ -88,14 +96,58 @@ impl CanvasErrorCode {
                  user to close it there and reopen it with the Canvas button here, then retry.",
             ),
             Self::CanvasTimeout => Some(
-                "The canvas did not answer in time: retry once, and if it times out again ask \
-                 the user to check that the Canvas tab is open and responsive.",
+                "The canvas may still be running this call and apply it after this error, so \
+                 do not retry it blindly: read the current state with get_node or \
+                 inspect_document first and redo only what did not happen. If reads time out \
+                 too, ask the user to check that the Canvas tab is open and responsive.",
             ),
             Self::UnsupportedInKiosk => Some(
                 "Termul owns the canvas file: save with save_file, export only to a relative \
                  path inside the project, and never open or write design files on disk.",
             ),
+            Self::NoActiveTurn => Some(
+                "Termul's host tools run only during a prompt turn, and this call came outside \
+                 one (for example after a background task woke you). The canvas may still be \
+                 open, so do not ask the user to open it: continue after the user's next message.",
+            ),
+            Self::AmbiguousSession => Some(
+                "This agent has more than one chat with an active turn, so Termul cannot tell \
+                 which one this call belongs to. Retry once every other chat's turn has ended.",
+            ),
             Self::UnknownMethod | Self::EngineError => None,
+        }
+    }
+
+    /// [`Self::next_step`] for an error the agent's `tool` got. The editor
+    /// cannot be interrupted, so a call that timed out may still finish: a
+    /// change still applies (a blind retry applies it twice), and a render
+    /// that was too large only queues the same work again. Only a read is
+    /// safe to retry as is.
+    #[must_use]
+    pub fn next_step_for(self, tool: Option<&str>) -> Option<&'static str> {
+        match (self, tool) {
+            (
+                Self::CanvasTimeout,
+                Some(
+                    "get_node" | "inspect_document" | "list_commands" | "list_issues"
+                    | "inspect_ui" | "wait_for_changes",
+                ),
+            ) => Some(
+                "The canvas did not answer in time: retry once, and if it times out again ask \
+                 the user to check that the Canvas tab is open and responsive.",
+            ),
+            (Self::CanvasTimeout, Some("export")) => Some(
+                "The export is larger than the canvas can render in time. Do not retry it as \
+                 is: export at a smaller `scale` or `size`, or fewer layers. If a small export \
+                 times out too, ask the user to check that the Canvas tab is open and responsive.",
+            ),
+            (Self::CanvasTimeout, Some("screenshot")) => Some(
+                "The render is larger than the canvas can draw in time. Do not retry it as is: \
+                 take the screenshot with a smaller `maxSize` or `scale`, or fewer layers. If a \
+                 small one times out too, ask the user to check that the Canvas tab is open and \
+                 responsive.",
+            ),
+            _ => self.next_step(),
         }
     }
 
@@ -128,8 +180,15 @@ impl CanvasError {
     /// [`CanvasErrorCode::next_step`]. This string is what the agent reads.
     #[must_use]
     pub fn to_backend_string(&self) -> String {
+        self.to_backend_string_for(None)
+    }
+
+    /// [`Self::to_backend_string`] for an error the agent's `tool` got
+    /// ([`CanvasErrorCode::next_step_for`]).
+    #[must_use]
+    pub fn to_backend_string_for(&self, tool: Option<&str>) -> String {
         let mut error = self.clone();
-        if let Some(step) = self.code.next_step() {
+        if let Some(step) = self.code.next_step_for(tool) {
             let stop = if error.message.ends_with('.') {
                 ""
             } else {
@@ -150,7 +209,11 @@ impl CanvasError {
 pub type CanvasOutcome = Result<String, CanvasError>;
 
 /// Parent → renderer: `{"type":"canvas_call", callId, projectId, mountSeq,
-/// method, params}`. `params` is JSON text the renderer forwards unparsed.
+/// method, params, timeoutMs?}`. `params` is JSON text the renderer forwards
+/// unparsed. `timeoutMs` is how long the host still waits for the reply: a
+/// call still queued for a loading editor once it passed is answered
+/// `CANVAS_TIMEOUT` without running, so a retry after the host's timeout
+/// cannot apply twice. A notice nobody waits for has none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CanvasCallFrame {
@@ -161,6 +224,8 @@ pub struct CanvasCallFrame {
     pub mount_seq: u64,
     pub method: String,
     pub params: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 /// Renderer → parent `canvas_reply` payload: `{callId, mountSeq, ok, result}`
@@ -323,7 +388,15 @@ impl CanvasCallFrame {
             mount_seq,
             method: method.to_string(),
             params,
+            timeout_ms: None,
         }
+    }
+
+    /// The frame of a call the host waits `left` more for.
+    #[must_use]
+    pub fn expiring_in(mut self, left: Duration) -> Self {
+        self.timeout_ms = Some(duration_ms(left).max(1));
+        self
     }
 }
 
@@ -377,6 +450,12 @@ impl CanvasRouter {
     }
 
     /// `canvas.call_timeout_ms`: how long a forwarded call waits for its reply.
+    #[must_use]
+    pub fn call_timeout(&self) -> Duration {
+        Duration::from_millis(self.call_timeout_ms.load(Ordering::Relaxed))
+    }
+
+    /// Set `canvas.call_timeout_ms`.
     pub fn set_call_timeout(&self, timeout: Duration) {
         self.call_timeout_ms
             .store(duration_ms(timeout), Ordering::Relaxed);
@@ -488,31 +567,57 @@ impl CanvasRouter {
     /// Forward `method` with `params` (JSON text) to the renderer holding
     /// `project_id`'s mount and wait for its reply, up to the call timeout.
     pub async fn call(&self, project_id: &str, method: &str, params: String) -> CanvasOutcome {
-        let timeout_ms = self.call_timeout_ms.load(Ordering::Relaxed);
-        let outcome = self
-            .mounts
-            .call(
-                project_id,
-                method,
-                params,
-                Duration::from_millis(timeout_ms),
-            )
-            .await;
+        self.call_within(project_id, method, params, self.call_timeout())
+            .await
+    }
+
+    /// [`Self::call`] waiting up to `timeout` instead.
+    pub async fn call_within(
+        &self,
+        project_id: &str,
+        method: &str,
+        params: String,
+        timeout: Duration,
+    ) -> CanvasOutcome {
+        let outcome = self.mounts.call(project_id, method, params, timeout).await;
         if let Err(error) = &outcome {
-            if matches!(
-                error.code,
-                CanvasErrorCode::CanvasClosed
-                    | CanvasErrorCode::CanvasClosing
-                    | CanvasErrorCode::CanvasTimeout
-            ) {
-                log::warn!(
-                    "[canvas-gateway] {method} for project {project_id} refused: {} ({})",
-                    error.code.as_str(),
-                    error.message
-                );
-            }
+            log_refusal(project_id, method, error);
         }
         outcome
+    }
+
+    /// [`Self::call_within`], except that a call the editor received but
+    /// did not answer in time hands back its late answer.
+    pub async fn call_keeping_late(
+        &self,
+        project_id: &str,
+        method: &str,
+        params: String,
+        timeout: Duration,
+    ) -> Result<String, CallFailed> {
+        let outcome = self
+            .mounts
+            .call_keeping_late(project_id, method, params, timeout)
+            .await;
+        if let Err(failed) = &outcome {
+            log_refusal(project_id, method, &failed.error);
+        }
+        outcome
+    }
+}
+
+fn log_refusal(project_id: &str, method: &str, error: &CanvasError) {
+    if matches!(
+        error.code,
+        CanvasErrorCode::CanvasClosed
+            | CanvasErrorCode::CanvasClosing
+            | CanvasErrorCode::CanvasTimeout
+    ) {
+        log::warn!(
+            "[canvas-gateway] {method} for project {project_id} refused: {} ({})",
+            error.code.as_str(),
+            error.message
+        );
     }
 }
 

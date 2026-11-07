@@ -11,11 +11,20 @@ const tabs = [
   { type: 'browser', id: 'browser-1', browserTabId: 'b1' },
   { type: 'git-history', id: 'gh-1', cwd: '/p' },
   { type: 'diff', id: 'diff:1', cwd: '/p', path: 'a.ts', staged: false },
-  { type: 'commit-diff', id: 'diff:2', cwd: '/p', commit: 'a'.repeat(40), path: 'a.ts' }
+  { type: 'commit-diff', id: 'diff:2', cwd: '/p', commit: 'a'.repeat(40), path: 'a.ts' },
+  {
+    type: 'github-item',
+    id: 'github-item-/p-origin-3',
+    cwd: '/p',
+    repo: 'origin',
+    kind: 'issue',
+    number: 3,
+    title: 'Bug'
+  }
 ] as WorkspaceTab[]
 
 describe('sectionForTab', () => {
-  it('maps every tab kind; Git History belongs to no section, Diff to Editors', () => {
+  it('maps every tab kind; Git History belongs to no section, Diff to Editors, a GitHub item to GitHub', () => {
     expect(tabs.map(sectionForTab)).toEqual([
       'chats',
       'terminals',
@@ -25,7 +34,8 @@ describe('sectionForTab', () => {
       'editors',
       null,
       'editors',
-      'editors'
+      'editors',
+      'github'
     ])
     expect(sectionForTab(null)).toBeNull()
   })

@@ -717,3 +717,102 @@ async fn a_session_without_durable_history_skips_the_restore() {
     assert!(env.relay.ensure_turns_restored("not-in-the-catalog").await.is_ok());
     assert!(!env.relay.turn_watermark().is_restored("not-in-the-catalog"));
 }
+
+/// The `chat_history` deltas queued on a watching connection.
+fn history_deltas(rx: &mut crate::web::ws::OutboundReceiver) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    while let Ok(item) = rx.try_recv() {
+        if let crate::web::ws::Outbound::Watch(frame) = item {
+            out.push(frame.delta_value().cloned().expect("delta frame"));
+        }
+    }
+    out
+}
+
+/// Issue #1727: the first prompt derives the chat title in the host index, so
+/// every `chat_history` watcher (another device's chat list) is told the
+/// session changed once that prompt is durable, and a refetch then reads the
+/// title. Later prompts leave the title alone and publish nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_prompt_title_publishes_one_chat_history_delta() {
+    let env = env(Vec::new(), false).await;
+    let (out, mut watch_rx) = crate::web::ws::outbound_channel(64, 15);
+    env.relay
+        .watches()
+        .subscribe(crate::web::watch::WatchKind::ChatHistory, "", &out, || {
+            serde_json::json!([])
+        })
+        .expect("subscribe");
+    let _state = watch_rx.try_recv().expect("full-state frame");
+    assert_eq!(env.persistence.metadata(SESSION).unwrap().title, None);
+
+    let PromptAdmission::Running(running) =
+        accept_prompt_turn(&env.acp, &env.relay, request(Some("t1")))
+            .await
+            .unwrap_or_else(|_| panic!("first prompt accepted"))
+    else {
+        panic!("first prompt must run");
+    };
+    // The delta is out by the time the accept returns, and the index it
+    // points a refetch at already carries the derived title.
+    assert_eq!(
+        history_deltas(&mut watch_rx),
+        vec![serde_json::json!({"changed": [SESSION]})],
+        "the titling prompt publishes one chat_history delta"
+    );
+    assert_eq!(
+        env.persistence.metadata(SESSION).unwrap().title.as_deref(),
+        Some("hello")
+    );
+    complete_prompt_turn(&env.acp, running).await.unwrap();
+
+    run_prompt_turn(&env.acp, &env.relay, request(Some("t2")))
+        .await
+        .expect("second turn runs");
+    assert!(
+        history_deltas(&mut watch_rx).is_empty(),
+        "a prompt that does not change the title publishes nothing"
+    );
+}
+
+/// Issue #1727 review: a title an agent's `session_info_update` set before the
+/// first prompt's record was applied already published its own delta, so the
+/// prompt's check (title not derived from the prompt) publishes no second one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_concurrent_agent_title_is_not_published_twice() {
+    use crate::web::sink::{AcpEvent, EventSink};
+
+    let env = env(Vec::new(), false).await;
+    let (out, mut watch_rx) = crate::web::ws::outbound_channel(64, 15);
+    env.relay
+        .watches()
+        .subscribe(crate::web::watch::WatchKind::ChatHistory, "", &out, || {
+            serde_json::json!([])
+        })
+        .expect("subscribe");
+    let _state = watch_rx.try_recv().expect("full-state frame");
+    let was_untitled = env.relay.index_title_unset(SESSION);
+    assert!(was_untitled);
+
+    env.relay.emit(&AcpEvent {
+        sid: Some(SESSION.to_string()),
+        type_: "acp:session_info_update",
+        payload: serde_json::json!({"agentId": AGENT, "sessionId": SESSION, "title": "Agent"}),
+    });
+    env.persistence.flush_session(SESSION).await.unwrap();
+    assert_eq!(
+        history_deltas(&mut watch_rx).len(),
+        1,
+        "the agent title's own delta"
+    );
+    assert_eq!(
+        env.persistence.metadata(SESSION).unwrap().title_source,
+        Some(crate::acp::session_persistence::TitleSource::AgentSupplied)
+    );
+
+    env.relay.notify_prompt_title(SESSION, was_untitled);
+    assert!(
+        history_deltas(&mut watch_rx).is_empty(),
+        "a title the prompt did not derive is not published again"
+    );
+}

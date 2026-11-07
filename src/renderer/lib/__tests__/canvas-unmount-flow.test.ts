@@ -6,16 +6,18 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { close } = vi.hoisted(() => ({ close: vi.fn() }))
+const { close, open } = vi.hoisted(() => ({ close: vi.fn(), open: vi.fn() }))
 
-vi.mock('@/lib/canvas-api', () => ({ canvasApi: { close } }))
+vi.mock('@/lib/canvas-api', () => ({ canvasApi: { close, open } }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 
 import type { CanvasOpenInfo } from '@shared/types/canvas.types'
 import { type CanvasSession, useCanvasStore } from '@/stores/canvas-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import {
   type CanvasUnmountChoice,
   unmountCanvases,
+  unmountCanvasesFor,
   useCanvasUnmountPrompt
 } from '../canvas-unmount-flow'
 
@@ -60,6 +62,7 @@ const original = useCanvasStore.getState()
 
 beforeEach(() => {
   close.mockReset()
+  open.mockReset()
   useCanvasStore.setState({ ...original, sessions: { a: session('a'), b: session('b') } }, true)
 })
 
@@ -138,5 +141,43 @@ describe('unmountCanvases', () => {
     expect(close).toHaveBeenCalledTimes(1)
     expect(useCanvasStore.getState().sessions.a?.phase.kind).toBe('ready')
     expect(useCanvasStore.getState().sessions.b).toBeDefined()
+  })
+})
+
+describe('unmountCanvasesFor', () => {
+  it('mounts the canvases again, without opening their tabs, when the host refuses afterwards', async () => {
+    close.mockResolvedValue(UNMOUNTED)
+    open.mockResolvedValue({ success: true, data: { ...INFO, mountSeq: 9, evicted: [] } })
+    const addCanvasTab = vi.spyOn(useWorkspaceStore.getState(), 'addCanvasTab')
+
+    const remount = await unmountCanvasesFor(['a'])
+    expect(useCanvasStore.getState().sessions.a).toBeUndefined()
+    expect(remount).not.toBeNull()
+
+    remount?.()
+    await vi.waitFor(() => expect(useCanvasStore.getState().sessions.a?.phase.kind).toBe('loading'))
+    expect(open).toHaveBeenCalledWith('C:/a/design.figcraft', 'a', expect.any(Object))
+    expect(addCanvasTab).not.toHaveBeenCalled()
+    addCanvasTab.mockRestore()
+  })
+
+  it('leaves a canvas the user opened meanwhile in place', async () => {
+    close.mockResolvedValue(UNMOUNTED)
+    const remount = await unmountCanvasesFor(['a'])
+    const newer = { ...session('a'), docPath: 'C:/a/poster.figcraft' }
+    useCanvasStore.setState({ sessions: { ...useCanvasStore.getState().sessions, a: newer } })
+
+    remount?.()
+    await Promise.resolve()
+    expect(useCanvasStore.getState().sessions.a).toEqual(newer)
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('is null when the user keeps editing', async () => {
+    close.mockResolvedValue(SAVE_FAILED)
+    const done = unmountCanvasesFor(['a'])
+    await answerNext('keep')
+    await expect(done).resolves.toBeNull()
   })
 })

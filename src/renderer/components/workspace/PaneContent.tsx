@@ -50,8 +50,16 @@ const DiffTab = lazy(() => import('@/components/git/DiffTab').then((m) => ({ def
 const CommitDiffTab = lazy(() =>
   import('@/components/git/CommitDiffTab').then((m) => ({ default: m.CommitDiffTab }))
 )
+const AutomationsPanel = lazy(() =>
+  import('@/components/automations/AutomationsPanel').then((m) => ({
+    default: m.AutomationsPanel
+  }))
+)
 const GitHistoryPanel = lazy(() =>
   import('@/components/git/GitHistoryPanel').then((m) => ({ default: m.GitHistoryPanel }))
+)
+const GithubItemPanel = lazy(() =>
+  import('@/components/github/GithubItemPanel').then((m) => ({ default: m.GithubItemPanel }))
 )
 const GitPanel = lazy(() =>
   import('@/components/git/GitPanel').then((m) => ({ default: m.GitPanel }))
@@ -393,6 +401,7 @@ export function PaneContent({
                         initialModes={terminal.pendingModes}
                         className="w-full h-full"
                         isVisible={isVisible}
+                        isActivePane={isActivePane}
                       />
                     </Suspense>
                     {/* Agent loading overlay: shown until ConnectedTerminal attaches
@@ -499,6 +508,44 @@ export function PaneContent({
                   >
                     <Suspense fallback={<PaneSkeleton />}>
                       <GitHistoryPanel cwd={tab.cwd} isVisible={isVisible} />
+                    </Suspense>
+                  </div>
+                )
+              })}
+
+            {pane.tabs
+              .filter((t): t is WorkspaceTab & { type: 'automations' } => t.type === 'automations')
+              .map((tab) => {
+                const isVisible = visibleTabId === tab.id
+                return (
+                  <div
+                    key={tab.id}
+                    className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
+                  >
+                    <Suspense fallback={<PaneSkeleton />}>
+                      <AutomationsPanel projectId={tab.projectId} isVisible={isVisible} />
+                    </Suspense>
+                  </div>
+                )
+              })}
+
+            {pane.tabs
+              .filter((t): t is WorkspaceTab & { type: 'github-item' } => t.type === 'github-item')
+              .map((tab) => {
+                const isVisible = visibleTabId === tab.id
+                return (
+                  <div
+                    key={tab.id}
+                    className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
+                  >
+                    <Suspense fallback={<PaneSkeleton />}>
+                      <GithubItemPanel
+                        cwd={tab.cwd}
+                        repo={tab.repo}
+                        kind={tab.kind}
+                        number={tab.number}
+                        isVisible={isVisible}
+                      />
                     </Suspense>
                   </div>
                 )

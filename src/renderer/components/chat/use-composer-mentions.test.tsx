@@ -1,7 +1,11 @@
 import { act, renderHook } from '@testing-library/react'
-import { fileToken } from '@/lib/skill-tokens'
-import type { MentionMatch } from './mention-menu-model'
-import { useComposerMentions } from './use-composer-mentions'
+import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
+import { conversationToken, fileToken } from '@/lib/skill-tokens'
+import { useAcpStore } from '@/stores/acp-store'
+import { tryHandleMentionMenuKeyDown } from './mention-menu-keyboard'
+import type { MentionMatch, MentionRow } from './mention-menu-model'
+import type { ComposerKeyboardEvent } from './slash-menu-keyboard'
+import { type ComposerMentions, useComposerMentions } from './use-composer-mentions'
 
 const { mockApi, batchCbs, doneCbs, mockIsTauri, mockLog, mockUuid } = vi.hoisted(() => {
   const batch: Array<(e: never) => void> = []
@@ -11,6 +15,7 @@ const { mockApi, batchCbs, doneCbs, mockIsTauri, mockLog, mockUuid } = vi.hoiste
     doneCbs: done,
     mockApi: {
       searchFileNamesStreamStart: vi.fn(),
+      readDirectory: vi.fn(),
       searchFileNamesStreamCancel: vi.fn(async () => ({ success: true as const })),
       onSearchFileNamesBatch: vi.fn((cb: (e: never) => void) => {
         batch.push(cb)
@@ -76,6 +81,8 @@ function renderMentions(overrides: Partial<Parameters<typeof useComposerMentions
   const result = renderHook(() =>
     useComposerMentions({
       rootPath: '/work',
+      projectId: 'proj',
+      currentSessionId: 'self',
       disabled: false,
       recents: [],
       onStageFileRef,
@@ -102,6 +109,8 @@ describe('useComposerMentions', () => {
     mockLog.mockResolvedValue(undefined)
     mockUuid.mockReset()
     mockUuid.mockReturnValue('inst')
+    mockApi.readDirectory.mockReset()
+    mockApi.readDirectory.mockResolvedValue({ success: true, data: [] })
   })
 
   afterEach(() => {
@@ -132,7 +141,7 @@ describe('useComposerMentions', () => {
       '/work',
       '/work',
       'rea',
-      false
+      true
     )
     expect(result.current.loading).toBe(true)
 
@@ -148,7 +157,7 @@ describe('useComposerMentions', () => {
     expect(items).toHaveLength(2)
     expect(items[0].label).toBe('auth.ts')
     expect(items[0].description).toBe('src/auth.ts')
-    expect(items[0].payload.absPath).toBe('/work/src/auth.ts')
+    expect(items[0].row).toEqual({ kind: 'file', match: match('src/auth.ts') })
     expect(items[0].ignored).toBe(false)
     expect(items[1].label).toBe('x.ts')
     expect(items[1].ignored).toBe(true)
@@ -186,16 +195,22 @@ describe('useComposerMentions', () => {
     expect(folders).toHaveLength(2)
     expect(folders[0].label).toBe('components')
     expect(folders[0].description).toBe('src/renderer/components')
-    expect(folders[0].payload).toEqual({
-      relPath: 'src/renderer/components',
-      absPath: '/work/src/renderer/components/',
-      name: 'components',
-      ignored: false,
-      kind: 'dir'
+    expect(folders[0].row).toEqual({
+      kind: 'dir',
+      match: {
+        relPath: 'src/renderer/components',
+        absPath: '/work/src/renderer/components/',
+        name: 'components',
+        ignored: false,
+        kind: 'dir'
+      }
     })
     expect(folders[1].ignored).toBe(true)
     // File rows stay byte-identical (no `kind` key).
-    expect(result.current.sections[0].items[0].payload).toEqual(match('src/components.ts'))
+    expect(result.current.sections[0].items[0].row).toEqual({
+      kind: 'file',
+      match: match('src/components.ts')
+    })
   })
 
   it('caps folders independently so a full page of files never crowds them out', async () => {
@@ -232,7 +247,7 @@ describe('useComposerMentions', () => {
     expect(foldersSection.items).toHaveLength(1)
   })
 
-  it('select on a folder splices a folder token (relative-path display, trailing-slash absPath)', async () => {
+  it('"Use this folder" splices a folder token (relative-path display, trailing-slash absPath)', async () => {
     const { result, onStageFileRef } = renderMentions()
     act(() => result.current.update('@comp', 5))
     await advance(90)
@@ -245,7 +260,7 @@ describe('useComposerMentions', () => {
     }
     let outcome: { value: string; caret: number } | null = null
     act(() => {
-      outcome = result.current.select('@comp', 5, picked)
+      outcome = result.current.select('@comp', 5, { kind: 'use-folder', match: picked })
     })
     const expectedToken = fileToken('src/renderer/components/', '/work/src/renderer/components/')
     expect(outcome).toEqual({ value: `${expectedToken} `, caret: expectedToken.length + 1 })
@@ -253,7 +268,7 @@ describe('useComposerMentions', () => {
     expect(result.current.menuOpen).toBe(false)
   })
 
-  it('fires no search on a bare @ (empty filter) and renders Recents', () => {
+  it('fires no search on a bare @ (empty filter) and opens on the categories', () => {
     const { result } = renderMentions({
       recents: [match('src/recent.ts'), match('README.md')]
     })
@@ -262,9 +277,8 @@ describe('useComposerMentions', () => {
     expect(result.current.filter).toBe('')
     expect(mockApi.searchFileNamesStreamStart).not.toHaveBeenCalled()
     expect(result.current.loading).toBe(false)
-    expect(result.current.sections).toHaveLength(1)
-    expect(result.current.sections[0].id).toBe('recents')
-    expect(result.current.sections[0].items).toHaveLength(2)
+    expect(result.current.sections.map((s) => s.id)).toEqual(['categories'])
+    expect(result.current.canGoBack).toBe(false)
   })
 
   it('does not search when disabled', async () => {
@@ -286,7 +300,7 @@ describe('useComposerMentions', () => {
       '/work',
       '/work',
       'r',
-      false
+      true
     )
 
     act(() => result.current.update('@re', 3))
@@ -299,7 +313,7 @@ describe('useComposerMentions', () => {
       '/work',
       '/work',
       're',
-      false
+      true
     )
 
     act(() => result.current.update('@rea', 4))
@@ -311,7 +325,7 @@ describe('useComposerMentions', () => {
       '/work',
       '/work',
       'rea',
-      false
+      true
     )
 
     // Stale batch from the cancelled second search must be ignored.
@@ -369,7 +383,7 @@ describe('useComposerMentions', () => {
       '/work',
       '/work',
       'rea',
-      false
+      true
     )
     expect(result.current.loading).toBe(true)
     emitBatch({
@@ -380,10 +394,8 @@ describe('useComposerMentions', () => {
     expect(result.current.sections[0].items[0].label).toBe('reader.ts')
     emitDone({ searchId: 'search-inst-1', truncated: false, totalFiles: 1 })
     expect(result.current.loading).toBe(false)
-    // Bare @ still shows recents on web.
     act(() => result.current.update('@', 1))
-    expect(result.current.sections).toHaveLength(1)
-    expect(result.current.sections[0].id).toBe('recents')
+    expect(result.current.sections.map((s) => s.id)).toEqual(['categories'])
   })
 
   it('drops loading synchronously and logs when the stream start fails', async () => {
@@ -443,7 +455,7 @@ describe('useComposerMentions', () => {
     const picked = match('src/auth.ts')
     let outcome: { value: string; caret: number } | null = null
     act(() => {
-      outcome = result.current.select('@rea', 4, picked)
+      outcome = result.current.select('@rea', 4, { kind: 'file', match: picked })
     })
     // The @rea filter text is removed and a file token is spliced IN at the
     // caret (the token carries display + absPath split by the unit separator).
@@ -492,5 +504,386 @@ describe('useComposerMentions', () => {
     expect(second.result.current.sections).toHaveLength(0)
     first.unmount()
     second.unmount()
+  })
+
+  describe('drill-down panels (web: no recents, no query)', () => {
+    const entry = (name: string, type: 'file' | 'directory', ignored?: boolean) => ({
+      name,
+      path: `/canonical/${name}`,
+      type,
+      extension: null,
+      size: 0,
+      modifiedAt: 0,
+      ignored
+    })
+
+    beforeEach(() => {
+      mockIsTauri.mockReturnValue(false)
+      mockApi.readDirectory.mockImplementation(async (dir: string) => {
+        if (dir === '/work') {
+          return {
+            success: true,
+            data: [
+              entry('src', 'directory'),
+              entry('node_modules', 'directory', true),
+              entry('README.md', 'file')
+            ]
+          }
+        }
+        if (dir === '/work/src') return { success: true, data: [entry('main.ts', 'file')] }
+        return { success: false, error: 'EACCES: permission denied', code: 'FS_ERROR' }
+      })
+    })
+
+    function pick(
+      result: { current: ComposerMentions },
+      state: { value: string; caret: number },
+      row: MentionRow
+    ) {
+      act(() => {
+        const out = result.current.select(state.value, state.caret, row)
+        if (!out) throw new Error('select returned null')
+        state.value = out.value
+        state.caret = out.caret
+        result.current.update(out.value, out.caret)
+      })
+    }
+
+    const rows = (result: { current: ComposerMentions }) =>
+      result.current.sections.flatMap((s) => s.items.map((i) => `${i.row.kind}:${i.label}`))
+
+    function key(result: { current: ComposerMentions }, k: string): boolean {
+      const event: ComposerKeyboardEvent = {
+        key: k,
+        shiftKey: false,
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        defaultPrevented: false,
+        nativeEvent: { isComposing: false },
+        target: null,
+        currentTarget: null,
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn()
+      }
+      let handled = false
+      act(() => {
+        const m = result.current
+        handled = tryHandleMentionMenuKeyDown(event, {
+          menuOpen: m.menuOpen,
+          sectionsLength: m.sections.length,
+          menuRef: m.menuRef,
+          filter: m.filter,
+          canGoBack: m.canGoBack,
+          onBack: m.back,
+          onReset: m.reset
+        })
+      })
+      return handled
+    }
+
+    it('lists the root folder with no query, drills into a folder, and goes back', async () => {
+      const { result } = renderMentions()
+      const state = { value: 'see @', caret: 5 }
+      act(() => result.current.update(state.value, state.caret))
+      expect(rows(result)).toEqual(['category:Conversations', 'category:Explorer'])
+      expect(result.current.view.header).toBeNull()
+
+      pick(result, state, { kind: 'category', target: 'explorer' })
+      await advance(0)
+      expect(mockApi.readDirectory).toHaveBeenCalledWith('/work')
+      expect(mockApi.searchFileNamesStreamStart).not.toHaveBeenCalled()
+      expect(result.current.view.header).toEqual({ title: 'Explorer', crumb: '' })
+      expect(result.current.view.enter).toBe('forward')
+      expect(rows(result)).toEqual(['dir:src', 'dir:node_modules', 'file:README.md'])
+      expect(result.current.sections[0].items[1].ignored).toBe(true)
+
+      const src = result.current.sections[0].items[0].row
+      expect(src).toEqual({
+        kind: 'dir',
+        match: { relPath: 'src', absPath: '/work/src/', name: 'src', ignored: false, kind: 'dir' }
+      })
+      pick(result, state, src)
+      await advance(0)
+      expect(result.current.view.header).toEqual({ title: 'Explorer', crumb: 'src/' })
+      expect(rows(result)).toEqual(['use-folder:Use this folder', 'file:main.ts'])
+      expect(result.current.sections[1].items[0].row).toEqual({
+        kind: 'file',
+        match: {
+          relPath: 'src/main.ts',
+          absPath: '/work/src/main.ts',
+          name: 'main.ts',
+          ignored: false
+        }
+      })
+
+      expect(key(result, 'ArrowLeft')).toBe(true)
+      expect(result.current.view.enter).toBe('back')
+      expect(rows(result)).toEqual(['dir:src', 'dir:node_modules', 'file:README.md'])
+      expect(state.value).toBe('see @')
+    })
+
+    it('lists a project rooted at the filesystem root', async () => {
+      mockApi.readDirectory.mockResolvedValue({ success: true, data: [entry('etc', 'directory')] })
+      const { result } = renderMentions({ rootPath: '/' })
+      const state = { value: '@', caret: 1 }
+      act(() => result.current.update(state.value, state.caret))
+      pick(result, state, { kind: 'category', target: 'explorer' })
+      await advance(0)
+      expect(mockApi.readDirectory).toHaveBeenCalledWith('/')
+      expect(result.current.sections[0].items[0].row).toEqual({
+        kind: 'dir',
+        match: { relPath: 'etc', absPath: '/etc/', name: 'etc', ignored: false, kind: 'dir' }
+      })
+    })
+
+    it('moves the caret with ArrowLeft while a query is typed instead of going back', async () => {
+      const { result } = renderMentions()
+      const state = { value: '@', caret: 1 }
+      act(() => result.current.update(state.value, state.caret))
+      pick(result, state, { kind: 'category', target: 'conversations' })
+      act(() => result.current.update('@fix', 4))
+      expect(key(result, 'ArrowLeft')).toBe(false)
+      expect(result.current.view.header).toEqual({ title: 'Conversations', crumb: '' })
+      act(() => result.current.update('@', 1))
+      expect(key(result, 'ArrowLeft')).toBe(true)
+      expect(result.current.view.header).toBeNull()
+    })
+
+    it('re-reads a folder on every visit, keeping the last listing on screen meanwhile', async () => {
+      const { result } = renderMentions()
+      const state = { value: '@', caret: 1 }
+      act(() => result.current.update(state.value, state.caret))
+      pick(result, state, { kind: 'category', target: 'explorer' })
+      await advance(0)
+      expect(rows(result)).toEqual(['dir:src', 'dir:node_modules', 'file:README.md'])
+
+      mockApi.readDirectory.mockImplementation(async (dir: string) =>
+        dir === '/work'
+          ? { success: true, data: [entry('src', 'directory'), entry('NEW.md', 'file')] }
+          : { success: true, data: [] }
+      )
+      pick(result, state, result.current.sections[0].items[0].row)
+      await advance(0)
+      act(() => result.current.back())
+      expect(rows(result)).toEqual(['dir:src', 'dir:node_modules', 'file:README.md'])
+      await advance(0)
+      expect(rows(result)).toEqual(['dir:src', 'file:NEW.md'])
+      expect(mockApi.readDirectory.mock.calls.map(([dir]) => dir)).toEqual([
+        '/work',
+        '/work/src',
+        '/work'
+      ])
+    })
+
+    it('keeps the newer listing when an earlier read of the same folder finishes last', async () => {
+      let finishFirst!: (res: unknown) => void
+      mockApi.readDirectory.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishFirst = resolve
+          })
+      )
+      const { result } = renderMentions()
+      const state = { value: '@', caret: 1 }
+      act(() => result.current.update(state.value, state.caret))
+      pick(result, state, { kind: 'category', target: 'explorer' })
+      pick(result, state, {
+        kind: 'dir',
+        match: { relPath: 'src', absPath: '/work/src/', name: 'src', ignored: false, kind: 'dir' }
+      })
+      await advance(0)
+      act(() => result.current.back())
+      await advance(0)
+      expect(rows(result)).toEqual(['dir:src', 'dir:node_modules', 'file:README.md'])
+
+      await act(async () => finishFirst({ success: true, data: [entry('OLD.md', 'file')] }))
+      expect(rows(result)).toEqual(['dir:src', 'dir:node_modules', 'file:README.md'])
+    })
+
+    it('retries a folder that failed instead of showing the cached failure', async () => {
+      const { result } = renderMentions()
+      const state = { value: '@', caret: 1 }
+      const secret: MentionRow = {
+        kind: 'dir',
+        match: {
+          relPath: 'secret',
+          absPath: '/work/secret/',
+          name: 'secret',
+          ignored: false,
+          kind: 'dir'
+        }
+      }
+      act(() => result.current.update(state.value, state.caret))
+      pick(result, state, { kind: 'category', target: 'explorer' })
+      pick(result, state, secret)
+      await advance(0)
+      expect(result.current.sections.find((s) => s.id === 'listing')?.notice).toBe(
+        "Couldn't list this folder"
+      )
+
+      act(() => result.current.back())
+      mockApi.readDirectory.mockResolvedValue({ success: true, data: [entry('key.pem', 'file')] })
+      pick(result, state, secret)
+      expect(result.current.sections.find((s) => s.id === 'listing')?.notice).toBe('Loading…')
+      await advance(0)
+      expect(rows(result)).toEqual(['use-folder:Use this folder', 'file:key.pem'])
+    })
+
+    it('clears the typed query when drilling in, and Backspace on the empty query goes back', async () => {
+      const { result } = renderMentions()
+      const state = { value: '@sr', caret: 3 }
+      act(() => result.current.update(state.value, state.caret))
+      pick(result, state, {
+        kind: 'dir',
+        match: { relPath: 'src', absPath: '/work/src/', name: 'src', ignored: false, kind: 'dir' }
+      })
+      await advance(0)
+      expect(state).toEqual({ value: '@', caret: 1 })
+      expect(result.current.filter).toBe('')
+      expect(rows(result)).toEqual(['use-folder:Use this folder', 'file:main.ts'])
+
+      expect(key(result, 'Backspace')).toBe(true)
+      expect(rows(result)).toEqual(['category:Conversations', 'category:Explorer'])
+      expect(result.current.canGoBack).toBe(false)
+      expect(key(result, 'Backspace')).toBe(false)
+    })
+
+    it('shows an inline failure state and logs when a folder cannot be listed', async () => {
+      const { result } = renderMentions()
+      const state = { value: '@', caret: 1 }
+      act(() => result.current.update(state.value, state.caret))
+      pick(result, state, { kind: 'category', target: 'explorer' })
+      await advance(0)
+      pick(result, state, {
+        kind: 'dir',
+        match: {
+          relPath: 'secret',
+          absPath: '/work/secret/',
+          name: 'secret',
+          ignored: false,
+          kind: 'dir'
+        }
+      })
+      await advance(0)
+      expect(result.current.sections.find((s) => s.id === 'listing')?.notice).toBe(
+        "Couldn't list this folder"
+      )
+      expect(mockLog).toHaveBeenCalledWith({
+        level: 'warn',
+        message:
+          'composer mention folder listing failed: dir=/work/secret code=FS_ERROR error=EACCES: permission denied',
+        source: 'useComposerMentions'
+      })
+      expect(key(result, 'Escape')).toBe(true)
+      expect(result.current.menuOpen).toBe(false)
+    })
+
+    it('starts back at the root when a new @ token opens', async () => {
+      const { result } = renderMentions()
+      const state = { value: '@', caret: 1 }
+      act(() => result.current.update(state.value, state.caret))
+      pick(result, state, { kind: 'category', target: 'explorer' })
+      act(() => result.current.update('@ ', 2))
+      expect(result.current.menuOpen).toBe(false)
+      act(() => result.current.update('@ @', 3))
+      expect(rows(result)).toEqual(['category:Conversations', 'category:Explorer'])
+    })
+  })
+
+  describe('Conversations panel', () => {
+    const entry = (
+      id: string,
+      title: string,
+      lastActivityAt: number,
+      extra: Partial<SessionIndexEntry> = {}
+    ): SessionIndexEntry => ({
+      id,
+      agentId: 'agent',
+      agentConfigId: 'claude-config',
+      title,
+      cwd: '/work',
+      projectId: 'proj',
+      createdAt: 0,
+      lastActivityAt,
+      messageCount: 1,
+      status: 'idle',
+      ...extra
+    })
+
+    beforeEach(() => {
+      useAcpStore.setState({
+        sessionIndex: [
+          entry('old', 'Older chat', 10),
+          entry('self', 'This chat', 50),
+          entry('new', 'Fix web reconnect', 40),
+          entry('other-project', 'Elsewhere', 60, { projectId: 'other' }),
+          entry('found', 'Discovered', 70, { discovered: true })
+        ],
+        agentConfigs: [
+          {
+            id: 'claude-config',
+            templateId: 'claude',
+            name: 'Claude',
+            command: 'claude',
+            args: [],
+            env: {}
+          }
+        ]
+      })
+    })
+
+    const rows = (result: { current: ComposerMentions }) =>
+      result.current.sections.flatMap((s) => s.items.map((i) => `${i.row.kind}:${i.label}`))
+
+    it('counts project chats on the root, lists them newest first, and pills the pick', () => {
+      const { result } = renderMentions()
+      act(() => result.current.update('ask @', 5))
+      expect(result.current.sections[0].items[0].description).toBe('2 in this project')
+
+      let out: { value: string; caret: number } | null = null
+      act(() => {
+        out = result.current.select('ask @', 5, { kind: 'category', target: 'conversations' })
+        if (out) result.current.update(out.value, out.caret)
+      })
+      expect(result.current.view.header).toEqual({ title: 'Conversations', crumb: '' })
+      expect(rows(result)).toEqual(['conversation:Fix web reconnect', 'conversation:Older chat'])
+      expect(result.current.sections[0].items[0].row).toEqual({
+        kind: 'conversation',
+        conversation: {
+          sessionId: 'new',
+          title: 'Fix web reconnect',
+          agentName: 'Claude',
+          lastActivityAt: 40,
+          running: false
+        }
+      })
+
+      act(() => result.current.update('ask @fix', 8))
+      expect(rows(result)).toEqual(['conversation:Fix web reconnect'])
+      expect(mockApi.searchFileNamesStreamStart).not.toHaveBeenCalled()
+
+      const pick = result.current.sections[0].items[0].row
+      act(() => {
+        out = result.current.select('ask @fix', 8, pick)
+      })
+      const token = conversationToken('Fix web reconnect', 'new')
+      expect(out).toEqual({ value: `ask ${token} `, caret: 4 + token.length + 1 })
+      expect(result.current.menuOpen).toBe(false)
+      expect(mockLog).toHaveBeenCalledWith({
+        level: 'info',
+        message: 'composer mention picked conversation new…',
+        source: 'useComposerMentions'
+      })
+    })
+
+    it('shows matching chats above file results when typing at the root', async () => {
+      const { result } = renderMentions()
+      act(() => result.current.update('@older', 6))
+      expect(rows(result)).toEqual(['conversation:Older chat'])
+      await advance(90)
+      emitBatch({ searchId: 'search-inst-1', files: [{ path: 'older.ts', ignored: false }] })
+      expect(result.current.sections.map((s) => s.heading)).toEqual(['Conversations', 'Files'])
+    })
   })
 })

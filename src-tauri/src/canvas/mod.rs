@@ -15,9 +15,12 @@
 //! - [`pin`] — the figcraft bundle tag this build expects.
 //! - [`bundle_path`] — the `/canvas/<id>/<token>/...` path shape, and the
 //!   redaction every log line naming a request path goes through.
+//! - [`fallback_fonts`] — the system fonts the desktop lends the editor for
+//!   characters its embedded font lacks.
 
 pub mod bundle_path;
 pub mod doc_path;
+pub mod fallback_fonts;
 pub mod persistence;
 pub mod pin;
 pub mod static_server;

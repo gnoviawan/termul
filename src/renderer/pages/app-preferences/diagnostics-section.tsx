@@ -1,4 +1,5 @@
-import { Clipboard, Download, FileText, FolderOpen } from '@/components/icons'
+import { Bug, Clipboard, Download, FileText, FolderOpen } from '@/components/icons'
+import { rowId } from '@/components/settings/row-id'
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { SettingsNotice } from '@/components/settings/SettingsNotice'
@@ -6,7 +7,7 @@ import { SettingsRow } from '@/components/settings/SettingsRow'
 import { Button } from '@/components/ui/button'
 import { logApi } from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { rowId } from './categories'
+import { useReportBugStore } from '@/stores/report-bug-store'
 import { APP_VERSION } from './updates-section'
 
 function ActionRow({
@@ -80,6 +81,16 @@ export function DiagnosticsSection(): React.JSX.Element {
               />
             </>
           )}
+          {/* Report a Bug (spec-bug-report-dialog): the same dialog every
+              other entry point opens — works on desktop and web. */}
+          <ActionRow
+            label="Report a bug"
+            description="File an issue with a redacted diagnostics bundle."
+            action="Report"
+            actionLabel="Report a bug"
+            icon={<Bug size={13} />}
+            onClick={() => useReportBugStore.getState().openReport()}
+          />
         </SettingsCard>
         {!isDesktop && (
           <SettingsNotice>

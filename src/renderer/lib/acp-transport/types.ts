@@ -7,9 +7,26 @@
 
 import type { AcpCatalog } from '@shared/types/acp-catalog.types'
 import type {
+  ClaudeAccount,
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
+import type {
+  McpCatalogIconPayload,
+  McpCatalogPage,
+  McpCatalogSearchRequest,
+  McpCatalogStatus
+} from '@shared/types/mcp-catalog.types'
+import type {
+  McpInstallCancelRequest,
+  McpInstallCommitRequest,
+  McpInstallCommitResult,
+  McpInstallFormReply,
+  McpInstallFormRequest,
+  McpInstallPlanReply,
+  McpInstallPlanRequest
+} from '@shared/types/mcp-install.types'
+import type { SubagentId, SubagentStopOutcome } from '@shared/types/subagent'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AddProjectPayload,
@@ -25,6 +42,7 @@ import type {
   AcpRegistrySnapshot,
   AgentConfig,
   AgentId,
+  AuthenticateInput,
   ContentBlock,
   InstallAcpRegistryBinaryOutcome,
   InstallAcpRegistryBinaryRequest,
@@ -43,6 +61,7 @@ import type {
 import type { SessionPayload } from '@/lib/acp-history-persistence'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import type { CanvasGatewayClient } from './canvas-gateway-client'
+import type { PendingPromptsHandler } from './pending-permissions'
 import type { WatchClient } from './watch-client'
 
 /**
@@ -95,13 +114,15 @@ export interface CommandCallOptions {
 
 /**
  * Options for `session/load` and `session/resume`.
- * `mcpServers` is set only by Reload this chat. It stays on this bag so a
+ * `mcpServers` carries the reopen's MCP list. It stays on this bag so a
  * normal reopen still passes command options as the fifth argument.
  */
 export type ReopenCallOptions = CommandCallOptions & {
   /**
-   * Present only for a reload. An empty array still asks the host to attach
-   * the plan server. Omitted keeps a normal history reopen.
+   * The MCP servers to attach on this reopen. The store defaults it to the
+   * user's configured servers for every reopen (#1420); Reload this chat sends
+   * an explicit list. An empty array still asks the host to attach the plan
+   * server. Omitted means no client MCP list and no host plan server.
    */
   mcpServers?: McpServer[]
 }
@@ -196,6 +217,26 @@ export interface AcpTransport {
    * CDN registry augmentation. Failures throw {@link AcpTransportError}.
    */
   setCatalogOptIn(enabled: boolean): Promise<void>
+  /**
+   * One page of the host-owned MCP catalog (`search_mcp_catalog`). Failures
+   * throw {@link AcpTransportError} carrying the host's code (`VALIDATION_ERROR`).
+   */
+  searchMcpCatalog(request: McpCatalogSearchRequest): Promise<McpCatalogPage>
+  getMcpCatalogStatus(): Promise<McpCatalogStatus>
+  setMcpCatalogSync(enabled: boolean): Promise<McpCatalogStatus>
+  /**
+   * The MCP install flow (spine AD-5) over the `/ws` requests
+   * `describe_mcp_install`, `plan_mcp_install`, `commit_mcp_install` and
+   * `cancel_mcp_install`. The host binds a plan to this connection. Failures
+   * throw {@link AcpTransportError} carrying the host's code
+   * (`VALIDATION_ERROR`, `MCP_PLAN_*`, `MCP_CATALOG_NOT_FOUND`,
+   * `MCP_IMPORT_INVALID`).
+   */
+  describeMcpInstall(request: McpInstallFormRequest): Promise<McpInstallFormReply>
+  planMcpInstall(request: McpInstallPlanRequest): Promise<McpInstallPlanReply>
+  commitMcpInstall(request: McpInstallCommitRequest): Promise<McpInstallCommitResult>
+  cancelMcpInstall(request: McpInstallCancelRequest): Promise<Record<string, never>>
+  getMcpCatalogIcon(name: string): Promise<McpCatalogIconPayload>
   probeRuntime(): Promise<AcpRuntimeAvailability>
   setTurnTimeout(secs: number | null): Promise<void>
   setTurnIdleTimeout(secs: number | null): Promise<void>
@@ -229,8 +270,43 @@ export interface AcpTransport {
   /** Usage of every Account; host-cached 5 min, `force` reuses reads under 60 s. */
   listClaudeUsage(force?: boolean): Promise<ClaudeAccountUsage[]>
   setDefaultClaudeAccount(accountId: string): Promise<void>
-  /** `null` returns the Project to the Default Account. */
-  setProjectClaudeAccount(projectId: string, accountId: string | null): Promise<void>
+  /**
+   * `null` returns the Project to the Default Account. With
+   * `expectedAccountId` the host applies the choice only while the Project
+   * still uses that Account. Resolves whether the choice applied.
+   */
+  setProjectClaudeAccount(
+    projectId: string,
+    accountId: string | null,
+    expectedAccountId?: string
+  ): Promise<boolean>
+  setClaudeAutoSwitch(enabled: boolean): Promise<void>
+  /** Add a signed-out Account; a same-id resend answers with the first one. */
+  addClaudeAccount(name: string, options?: CommandCallOptions): Promise<ClaudeAccount>
+  renameClaudeAccount(accountId: string, name: string): Promise<void>
+  /**
+   * Remove an Account and resolve the ids of the Projects that moved to the
+   * Default Account; `[]` when it was already gone.
+   */
+  removeClaudeAccount(accountId: string): Promise<string[]>
+  /**
+   * Start a link sign-in for one Account and resolve the Claude sign-in link.
+   * A sign-in already running for the Account stops.
+   */
+  startClaudeLinkLogin(accountId: string): Promise<string>
+  /**
+   * Hand the code the Claude page showed to the link sign-in. Rejects with
+   * `claude_login_code_incomplete` while the sign-in still waits for the
+   * whole code, and `claude_login_busy` while it still checks an earlier
+   * code; any other rejection ended the sign-in.
+   */
+  finishClaudeLinkLogin(
+    accountId: string,
+    code: string,
+    options?: CommandCallOptions
+  ): Promise<void>
+  /** Stop a browser or link sign-in; `false` when none was running. */
+  cancelClaudeLogin(accountId: string): Promise<boolean>
   /** `projectId` selects the Claude Account of a managed Claude agent. */
   spawnAgent(
     config: AgentConfig,
@@ -373,6 +449,15 @@ export interface AcpTransport {
     displayContent?: ContentBlock[]
   ): Promise<PromptDispatchResult>
   cancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void>
+  /**
+   * Stop one subagent of chat `rootSessionId`. Rejects with `not_found` (no
+   * such agent or subagent) or `unsupported` (the agent offers no stop for it).
+   */
+  stopSubagent(
+    agentId: AgentId,
+    rootSessionId: SessionId,
+    subagentId: SubagentId
+  ): Promise<SubagentStopOutcome>
   setConfigOption(
     agentId: AgentId,
     sessionId: SessionId,
@@ -393,11 +478,13 @@ export interface AcpTransport {
     values?: string[],
     options?: CommandCallOptions
   ): Promise<void>
+  /** Stop agent browsing for a session until the user's next message. */
+  stopBrowserAgent(sessionId: string): Promise<void>
   /** Agent ACP auth (methodId) — NOT the WS relay token gate. */
   authenticate(
     agentId: AgentId,
     methodId: string,
-    gateway?: { baseUrl: string; apiKey?: string },
+    input?: AuthenticateInput,
     options?: CommandCallOptions
   ): Promise<void>
   /**
@@ -444,8 +531,8 @@ export interface AcpTransport {
   /**
    * Tell the host this surface read `sessionId` up to `seq` (the newest turn
    * end it showed) of the log incarnation `logEpoch`. Resolves to the shared
-   * marker as it stands; every `chat_reads` watcher hears when it moves. WS:
-   * `mark_chat_read`.
+   * marker as it stands; the chat's `chat_activity` record turns read on every
+   * surface when it moves. WS: `mark_chat_read`.
    */
   markChatRead?(sessionId: SessionId, seq: number, logEpoch: string | null): Promise<ChatReadMark>
   historyMode?(): HistoryMode | 'tauri_store'
@@ -523,5 +610,12 @@ export interface AcpTransport {
    * re-subscribe uses the server cursor, not a dead per-instance 0. */
   seedSessionCursor?(sessionId: SessionId, cursor: SessionCursor): void
   setReconnectPriorityProvider?(provider: () => SessionId[]): void
+  /**
+   * Issue #1595: register the installer for the host's still-pending
+   * approvals, questions and elicitations a `subscribe` / snapshot reply
+   * carries (each list authoritative for the session: a request not listed
+   * was answered or released).
+   */
+  setPendingPromptsHandler?(handler: PendingPromptsHandler): void
   dispose(): void
 }

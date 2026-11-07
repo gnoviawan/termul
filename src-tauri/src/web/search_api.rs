@@ -485,7 +485,7 @@ pub async fn file_names(
 }
 
 /// `GET /search/file-names` query params.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchFileNamesQuery {
     /// Search root (scope + walk root — the mention picker passes the same
@@ -500,7 +500,7 @@ pub struct SearchFileNamesQuery {
 /// `GET /search/file-names` response body. `files[].path` is root-relative
 /// with forward slashes (same shape as the desktop
 /// `SearchFileNamesBatchEvent.files`).
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FileNameSearchResponse {
     pub files: Vec<SearchFileHit>,

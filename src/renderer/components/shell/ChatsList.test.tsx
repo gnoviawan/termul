@@ -1,15 +1,16 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mockAcpSession, mockSessionIndexEntry } from '@/lib/test-utils/acp'
+import { resetChatActivity, seedChatActivity } from '@/lib/test-utils/chat-activity'
 import {
   _addEphemeralSessionIdForTesting,
   _resetEphemeralSessionIdsForTesting,
   useAcpStore
 } from '@/stores/acp-store'
-import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
+import { agentChatTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
+import { AgentChatTabInline } from '../workspace/tabs/agent-chat-tab'
 import { ChatsList } from './ChatsList'
 
 const mocks = vi.hoisted(() => ({
@@ -23,7 +24,8 @@ const mocks = vi.hoisted(() => ({
   toastError: vi.fn(),
   logFrontendError: vi.fn(),
   startChatDrag: vi.fn(),
-  openAgentChatPlaced: vi.fn()
+  openAgentChatPlaced: vi.fn(),
+  reloadAgentChat: vi.fn()
 }))
 
 vi.mock('@/lib/terminal-spawn', () => ({ openTerminalAtCwd: mocks.openTerminalAtCwd }))
@@ -37,6 +39,10 @@ vi.mock('@/hooks/use-pane-dnd', () => ({
 }))
 vi.mock('@/lib/open-agent-chat', () => ({ openAgentChatPlaced: mocks.openAgentChatPlaced }))
 vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess, error: mocks.toastError } }))
+vi.mock('@/stores/reload-chat', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/stores/reload-chat')>()),
+  reloadAgentChat: mocks.reloadAgentChat
+}))
 
 const project = {
   id: 'p1',
@@ -80,13 +86,14 @@ beforeEach(() => {
   mocks.logFrontendError.mockReset()
   mocks.startChatDrag.mockReset()
   mocks.openAgentChatPlaced.mockReset()
+  mocks.reloadAgentChat.mockReset().mockResolvedValue(undefined)
   mocks.openHistorySession.mockReset().mockResolvedValue(undefined)
   mocks.deleteHistorySession.mockReset().mockResolvedValue(undefined)
   mocks.writeText.mockReset().mockResolvedValue({ success: true })
   mocks.revealInFileManager.mockReset().mockResolvedValue({ success: true })
   resetShellLayoutStoreForTests()
   useShellLayoutStore.setState({ status: 'ready' })
-  useAgentChatUnreadStore.setState({ unread: {} })
+  resetChatActivity()
   _resetEphemeralSessionIdsForTesting()
   useAcpStore.setState({
     sessionIndex: [],
@@ -286,17 +293,8 @@ describe('ChatsList card content', () => {
       entry('fail', { lastActivityAt: 20, status: 'error' }),
       entry('idle', { lastActivityAt: 10 })
     ])
-    useAcpStore.setState({
-      sessions: {
-        need: mockAcpSession({ id: 'need' }),
-        busy: mockAcpSession({ id: 'busy', activeTurn: true }),
-        done: mockAcpSession({ id: 'done' })
-      },
-      pendingPermissions: {
-        perm: { sessionId: 'need' }
-      } as never
-    })
-    useAgentChatUnreadStore.setState({ unread: { done: true } })
+    // Status comes from the host's chat activity: none of these chats is open here.
+    seedChatActivity({ need: { needsYou: true }, busy: { busy: true }, done: { unread: true } })
     render(<ChatsList project={project} />)
 
     expect(screen.getByRole('button', { name: 'Chat need, Needs you' })).toBeInTheDocument()
@@ -305,6 +303,23 @@ describe('ChatsList card content', () => {
     expect(screen.getByRole('button', { name: 'Chat fail' })).toBeInTheDocument()
     expect(within(screen.getByTitle('Chat fail')).getByText('Failed')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Chat idle' })).toBeInTheDocument()
+  })
+
+  it('shows the host status of a chat this renderer never opened, and no dot on a chat it shows', () => {
+    setIndex([entry('remote', { lastActivityAt: 20 }), entry('shown', { lastActivityAt: 10 })])
+    seedChatActivity({ remote: { busy: true, needsYou: true }, shown: { unread: true } }, ['shown'])
+    render(<ChatsList project={project} />)
+    expect(screen.getByRole('button', { name: 'Chat remote, Needs you' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Chat shown' })).toBeInTheDocument()
+  })
+
+  it('ignores a busy flag left on a session record that is not live', () => {
+    setIndex([entry('a')])
+    useAcpStore.setState({
+      sessions: { a: mockAcpSession({ id: 'a', status: 'closed', activeTurn: true }) }
+    })
+    render(<ChatsList project={project} />)
+    expect(screen.getByRole('button', { name: 'Chat a' })).toBeInTheDocument()
   })
 
   it('marks the chat open in the active pane', () => {
@@ -336,7 +351,7 @@ describe('ChatsList card content', () => {
   it('shows New activity on an unread closed chat', () => {
     setIndex([entry('a', { status: 'closed' })])
     useAcpStore.setState({ sessions: { a: mockAcpSession({ id: 'a', status: 'closed' }) } })
-    useAgentChatUnreadStore.setState({ unread: { a: true } })
+    seedChatActivity({ a: { unread: true, turnEnd: { seq: 9, logEpoch: 'e1' } } })
     render(<ChatsList project={project} />)
     expect(screen.getByRole('button', { name: 'Chat a, New activity' })).toBeInTheDocument()
     expect(within(screen.getByTitle('Chat a')).getByTitle('New activity')).toBeInTheDocument()
@@ -346,7 +361,7 @@ describe('ChatsList card content', () => {
     setIndex([entry('eph')])
     useAcpStore.setState({ sessions: { eph: mockAcpSession({ id: 'eph' }) } })
     _addEphemeralSessionIdForTesting('eph')
-    useAgentChatUnreadStore.setState({ unread: { eph: true } })
+    seedChatActivity({ eph: { unread: true, busy: true } })
     render(<ChatsList project={project} />)
     expect(screen.getByRole('button', { name: 'Chat eph' })).toBeInTheDocument()
     expect(within(screen.getByTitle('Chat eph')).queryByTitle('New activity')).toBeNull()
@@ -465,5 +480,66 @@ describe('ChatsList interactions', () => {
     expect(second).toHaveFocus()
     fireEvent.keyDown(second, { key: 'ArrowUp' })
     expect(first).toHaveFocus()
+  })
+})
+
+describe('ChatsList Reload this chat', () => {
+  beforeEach(() => {
+    setIndex([entry('a')])
+    useAcpStore.setState({ sessions: { a: mockAcpSession({ id: 'a' }) } })
+  })
+
+  const menuItemNames = () =>
+    screen.getAllByRole('menuitem').map((item) => item.textContent?.trim() ?? '')
+
+  it('offers Reload this chat first and reloads the chat of the card', async () => {
+    render(<ChatsList project={project} />)
+    fireEvent.contextMenu(screen.getByTitle('Chat a'))
+    const item = await screen.findByRole('menuitem', { name: 'Reload this chat' })
+    expect(menuItemNames()[0]).toBe('Reload this chat')
+    expect(item).not.toHaveAttribute('aria-disabled')
+
+    fireEvent.click(item)
+    expect(mocks.reloadAgentChat).toHaveBeenCalledWith('a')
+    expect(mocks.openHistorySession).not.toHaveBeenCalled()
+  })
+
+  it('reloads the same session as the Reload item of the chat tab', async () => {
+    const tab = render(
+      <AgentChatTabInline
+        tab={{ type: 'agent-chat', id: agentChatTabId('a'), sessionId: 'a' }}
+        isActive={false}
+        isDragging={false}
+        isDropTarget={false}
+        dropPosition={null}
+        bulkMenu={{}}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onDragStart={() => {}}
+        onDragOver={() => {}}
+        onDragLeave={() => {}}
+        onDrop={() => {}}
+      />
+    )
+    fireEvent.contextMenu(screen.getByRole('tab'))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Reload this chat' }))
+    tab.unmount()
+
+    render(<ChatsList project={project} />)
+    fireEvent.contextMenu(screen.getByTitle('Chat a'))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Reload this chat' }))
+
+    expect(mocks.reloadAgentChat.mock.calls).toEqual([['a'], ['a']])
+  })
+
+  it('disables Reload this chat with the reason when the chat is not open', async () => {
+    useAcpStore.setState({ sessions: {} })
+    render(<ChatsList project={project} />)
+    fireEvent.contextMenu(screen.getByTitle('Chat a'))
+    const item = await screen.findByRole('menuitem', { name: 'Reload this chat' })
+    expect(item).toHaveAttribute('aria-disabled', 'true')
+    expect(within(item).getByTitle('This chat is not open.')).toBeInTheDocument()
+    fireEvent.click(item)
+    expect(mocks.reloadAgentChat).not.toHaveBeenCalled()
   })
 })

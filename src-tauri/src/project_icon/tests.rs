@@ -4,7 +4,7 @@
 //! `git_available` like `worktree/tests.rs`) — no live network is hit.
 
 use super::local::{decode_image, href_candidates, resolve_local, Decode};
-use super::remote::{fetch_targets, is_refused_host, parse_remote_url, RemoteParse};
+use super::remote::{fetch_targets, is_refused_host};
 use super::{resolve, ProjectIconSource};
 use std::path::{Path, PathBuf};
 
@@ -348,91 +348,6 @@ fn href_candidates_relative_uses_source_dir() {
         ],
         "relative href tries source dir, public/, then root"
     );
-}
-
-// -------------------------------------------------------------------------
-// Remote URL parsing
-// -------------------------------------------------------------------------
-
-fn parsed(url: &str) -> super::remote::ParsedRemote {
-    match parse_remote_url(url) {
-        RemoteParse::Remote(p) => p,
-        _ => panic!("expected remote for {url}"),
-    }
-}
-
-#[test]
-fn parse_https_remote() {
-    let p = parsed("https://github.com/acme/widgets.git");
-    assert_eq!(p.host, "github.com");
-    assert_eq!(p.port, None);
-    assert_eq!(p.owner.as_deref(), Some("acme"));
-}
-
-#[test]
-fn parse_scp_like_remote() {
-    let p = parsed("git@github.com:acme/w.git");
-    assert_eq!(p.host, "github.com");
-    assert_eq!(p.owner.as_deref(), Some("acme"));
-
-    let p = parsed("git@gitlab.corp.example:team/sub/w.git");
-    assert_eq!(p.host, "gitlab.corp.example");
-    assert_eq!(p.owner.as_deref(), Some("team"));
-}
-
-#[test]
-fn parse_ssh_url_drops_port_keeps_owner() {
-    let p = parsed("ssh://git@gitlab.corp.example:2222/team/w.git");
-    assert_eq!(p.host, "gitlab.corp.example");
-    assert_eq!(p.port, None, "ssh port is not the https icon port");
-    assert_eq!(p.owner.as_deref(), Some("team"));
-}
-
-#[test]
-fn parse_https_url_keeps_port() {
-    let p = parsed("https://gitea.example.com:8443/owner/repo.git");
-    assert_eq!(p.host, "gitea.example.com");
-    assert_eq!(p.port, Some(8443));
-    assert_eq!(p.owner.as_deref(), Some("owner"));
-}
-
-#[test]
-fn parse_git_plus_ssh_and_git_schemes() {
-    let p = parsed("git+ssh://git@github.com/o/r.git");
-    assert_eq!(p.host, "github.com");
-    let p = parsed("git://github.com/o/r.git");
-    assert_eq!(p.host, "github.com");
-    assert_eq!(p.owner.as_deref(), Some("o"));
-}
-
-#[test]
-fn parse_ssh_github_com_normalizes() {
-    let p = parsed("git@ssh.github.com:o/r.git");
-    assert_eq!(p.host, "github.com");
-}
-
-#[test]
-fn parse_http_remote_is_refused() {
-    assert!(matches!(
-        parse_remote_url("http://internal.corp/w.git"),
-        RemoteParse::HttpScheme
-    ));
-}
-
-#[test]
-fn parse_local_paths_are_not_remotes() {
-    for raw in [
-        "/home/user/repo",
-        "C:\\Users\\repo",
-        "../relative/repo",
-        "file:///home/user/repo",
-        "",
-    ] {
-        assert!(
-            matches!(parse_remote_url(raw), RemoteParse::NotRemote),
-            "{raw} must not parse as a remote"
-        );
-    }
 }
 
 // -------------------------------------------------------------------------

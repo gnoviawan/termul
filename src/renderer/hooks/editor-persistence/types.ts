@@ -1,3 +1,4 @@
+import type { GithubItemKind, GithubRepoSlot } from '@shared/types/github.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { PersistedWorkspaceTabKind } from '@/lib/workspace-tab-kinds'
 import type { PaneDirection } from '@/types/workspace.types'
@@ -6,7 +7,7 @@ export interface PersistedEditorFile {
   filePath: string
   cursorPosition: { line: number; col: number }
   scrollTop: number
-  viewMode: 'code' | 'markdown'
+  viewMode: 'code' | 'preview' | 'markdown'
   isDirty: boolean
   draftContent?: string
   lastModified: number
@@ -47,6 +48,16 @@ interface PersistedGitHistoryTabRef {
   cwd: string
 }
 
+interface PersistedGithubItemTabRef {
+  type: 'github-item'
+  id: string
+  cwd: string
+  repo: GithubRepoSlot
+  kind: GithubItemKind
+  number: number
+  title: string
+}
+
 interface PersistedDiffTabRef {
   type: 'diff'
   id: string
@@ -64,6 +75,12 @@ interface PersistedCommitDiffTabRef {
   oldPath?: string
 }
 
+interface PersistedAutomationsTabRef {
+  type: 'automations'
+  id: string
+  projectId: string
+}
+
 export type PersistedTabRef =
   | PersistedEditorTabRef
   | PersistedTerminalTabRef
@@ -71,8 +88,10 @@ export type PersistedTabRef =
   | PersistedGitTabRef
   | PersistedAgentChatTabRef
   | PersistedGitHistoryTabRef
+  | PersistedGithubItemTabRef
   | PersistedDiffTabRef
   | PersistedCommitDiffTabRef
+  | PersistedAutomationsTabRef
 
 // Compile-time check: the persisted ref union must cover exactly the kinds the
 // traits table declares as persisted (a mismatch makes this assignment error).

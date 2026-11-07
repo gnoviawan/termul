@@ -8,6 +8,7 @@ use figcraft_mcp::Backend;
 use serde_json::{json, Value};
 
 use super::*;
+use crate::acp::host_mcp::canvas::CanvasCallFrame;
 use crate::acp::host_mcp::gateway_harness::{mount_renderer, Harness};
 
 fn error_of(result: Result<Value, String>) -> Value {
@@ -96,6 +97,21 @@ fn a_session_without_a_project_is_canvas_closed() {
 }
 
 #[test]
+fn a_call_outside_a_turn_is_no_active_turn_not_a_closed_canvas() {
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let _seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, |_| {
+        Some(Ok("{}".into()))
+    });
+    harness.server().end_turn(&configs[0].agent_id, "sess-1");
+    let mut bridge = Bridge::new(configs[0].clone());
+    let error = error_of(bridge.call("document.inspect", json!({})));
+    assert_eq!(error["code"], "NO_ACTIVE_TURN");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.starts_with("no active turn. "), "{message}");
+    assert!(!message.contains("Canvas button"), "{message}");
+}
+
+#[test]
 fn a_silent_renderer_times_out_in_the_gateway() {
     let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
     let router = harness.router();
@@ -149,7 +165,9 @@ fn render_png_asks_host_render_png_and_decodes_its_base64() {
     });
     let mut bridge = Bridge::new(configs[0].clone());
     assert_eq!(bridge.render_png(&[7], 2.0).unwrap(), png.to_vec());
-    let frame = seen.recv_timeout(Duration::from_secs(5)).unwrap();
+    let frame = std::iter::from_fn(|| seen.recv_timeout(Duration::from_secs(5)).ok())
+        .find(|frame| frame.method != "node.get")
+        .expect("the render reached the editor");
     assert_eq!(frame.method, "host.renderPng");
     let params: Value = serde_json::from_str(&frame.params).unwrap();
     assert_eq!(params, json!({"scale": 2.0, "ids": [7]}));
@@ -208,13 +226,65 @@ fn export_with_a_project_path_writes_the_inline_bytes_there() {
         std::fs::read(harness.cwd.join("out/hero.png")).unwrap(),
         png
     );
-    let frame = seen.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(frame.method, "engine.execute");
+    let frame = std::iter::from_fn(|| seen.recv_timeout(Duration::from_secs(5)).ok())
+        .find(|frame| frame.method == "engine.execute")
+        .expect("the export reached the editor");
     let sent: Value = serde_json::from_str(&frame.params).unwrap();
     assert_eq!(
         sent,
-        json!({"command": "file.export", "params": {"ids": [18_446_744_073_709_551_615u64], "scale": 2.0}})
+        json!({"command": "file.export", "params": {"ids": [18_446_744_073_709_551_615u64], "scale": 2.0, "format": "png"}})
     );
+}
+
+#[test]
+fn a_link_planted_while_the_editor_exports_does_not_redirect_the_write() {
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let outside_dir = tempfile::tempdir().unwrap();
+    let outside = outside_dir.path().to_path_buf();
+    let planted = harness.cwd.join("out");
+    let (link_target, link) = (outside.clone(), planted.clone());
+    let _seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, move |frame| {
+        if frame.method != "engine.execute" {
+            return Some(Ok("{}".to_string()));
+        }
+        link_dir(&link_target, &link).ok()?;
+        Some(Ok(json!({"format": "svg", "data": "PHN2Zy8+"}).to_string()))
+    });
+    let mut bridge = Bridge::new(configs[0].clone()).with_tool("export");
+    let result = figcraft_mcp::call_tool(&mut bridge, "export", &json!({"path": "out/x.svg"}));
+    if !planted.exists() {
+        eprintln!("skipped: this machine cannot create a directory link");
+        return;
+    }
+    assert_eq!(tool_error(&result)["code"], "UNSUPPORTED_IN_KIOSK");
+    assert!(
+        !outside.join("x.svg").exists(),
+        "nothing was written outside the project"
+    );
+}
+
+/// A directory link: a symlink, or on Windows without the symlink privilege a
+/// junction, which needs none.
+fn link_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    {
+        if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+            return Ok(());
+        }
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other("mklink /J failed"))
+        }
+    }
 }
 
 #[test]
@@ -355,4 +425,273 @@ fn an_oversize_request_is_an_engine_error_naming_the_limit_not_a_closed_canvas()
             json!({ "params": { "text": "a".repeat(limit / 2) } }),
         )
         .expect("a request under the limit reaches the editor");
+}
+
+/// An editor whose layer 1 is 100x100: an export at `scale: 3` is answered
+/// only by the test (it outlasts its wait), any other export at once with
+/// `quick`.
+fn slow_large_exports(
+    harness: &Harness,
+    quick: &'static [u8],
+) -> std::sync::mpsc::Receiver<CanvasCallFrame> {
+    let router = harness.router();
+    router.set_call_timeout(Duration::from_millis(150));
+    mount_renderer(&router, "conn-a", "proj-1", 1, move |frame| {
+        let params: Value = serde_json::from_str(&frame.params).unwrap();
+        match frame.method.as_str() {
+            "node.get" => Some(Ok(json!({
+                "id": 1,
+                "absoluteBounds": {"x": 0, "y": 0, "width": 100, "height": 100}
+            })
+            .to_string())),
+            "engine.execute" if params["params"]["scale"] == 3.0 => None,
+            "engine.execute" => Some(Ok(export_reply(quick))),
+            _ => None,
+        }
+    })
+}
+
+fn export_reply(bytes: &[u8]) -> String {
+    let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+    json!({"format": "png", "data": data}).to_string()
+}
+
+fn slow_export(seen: &std::sync::mpsc::Receiver<CanvasCallFrame>) -> CanvasCallFrame {
+    std::iter::from_fn(|| seen.recv_timeout(Duration::from_secs(5)).ok())
+        .find(|frame| frame.method == "engine.execute")
+        .expect("the export reached the editor")
+}
+
+/// The file once it exists, waiting up to five seconds for it.
+fn written(path: &std::path::Path) -> Option<Vec<u8>> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if let Ok(bytes) = std::fs::read(path) {
+            return Some(bytes);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    None
+}
+
+#[test]
+fn an_export_that_outlasts_its_wait_is_still_written_when_it_finishes() {
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let seen = slow_large_exports(&harness, b"quick");
+    let mut bridge = Bridge::new(configs[0].clone()).with_tool("export");
+
+    let result = figcraft_mcp::call_tool(
+        &mut bridge,
+        "export",
+        &json!({"ids": [1], "scale": 3, "path": "out/big.png"}),
+    );
+
+    let error = tool_error(&result);
+    assert_eq!(error["code"], "CANVAS_TIMEOUT");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("writes it to `out/big.png`"), "{message}");
+    assert!(message.contains("smaller `scale`"), "{message}");
+    assert!(!message.contains("retry once"), "{message}");
+    let target = harness.cwd.join("out/big.png");
+    assert!(
+        !target.exists(),
+        "nothing is written before the editor finishes"
+    );
+
+    let frame = slow_export(&seen);
+    assert!(harness.router().reply(
+        "conn-a",
+        frame.call_id,
+        frame.mount_seq,
+        Ok(export_reply(b"finished late"))
+    ));
+
+    assert_eq!(written(&target).as_deref(), Some(&b"finished late"[..]));
+}
+
+#[test]
+fn a_late_export_never_replaces_a_newer_export_to_the_same_path() {
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let seen = slow_large_exports(&harness, b"newer and smaller");
+    let mut bridge = Bridge::new(configs[0].clone()).with_tool("export");
+    let large = json!({"ids": [1], "scale": 3, "path": "out/hero.png"});
+    let result = figcraft_mcp::call_tool(&mut bridge, "export", &large);
+    assert_eq!(tool_error(&result)["code"], "CANVAS_TIMEOUT");
+    let late = slow_export(&seen);
+
+    let smaller = json!({"ids": [1], "scale": 1, "path": "out/hero.png"});
+    let result = figcraft_mcp::call_tool(&mut bridge, "export", &smaller);
+    assert_eq!(tool_json(&result)["path"], "out/hero.png");
+    harness.router().reply(
+        "conn-a",
+        late.call_id,
+        late.mount_seq,
+        Ok(export_reply(b"older and larger")),
+    );
+    std::thread::sleep(Duration::from_millis(500));
+
+    assert_eq!(
+        std::fs::read(harness.cwd.join("out/hero.png")).unwrap(),
+        b"newer and smaller"
+    );
+}
+
+#[test]
+fn a_timed_out_export_without_a_path_advises_a_smaller_size_not_a_retry() {
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let _seen = slow_large_exports(&harness, b"quick");
+    let mut bridge = Bridge::new(configs[0].clone()).with_tool("export");
+
+    let result = figcraft_mcp::call_tool(&mut bridge, "export", &json!({"ids": [1], "scale": 3}));
+
+    let error = tool_error(&result);
+    assert_eq!(error["code"], "CANVAS_TIMEOUT");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("smaller `scale` or `size`"), "{message}");
+    assert!(!message.contains("retry once"), "{message}");
+}
+
+const NO_EVENTS: &str = r#"{"events":[],"cursor":7,"reset":false,"dropped":0}"#;
+
+fn polls(seen: &std::sync::mpsc::Receiver<CanvasCallFrame>) -> Vec<(String, Value)> {
+    seen.try_iter()
+        .map(|frame| (frame.method, serde_json::from_str(&frame.params).unwrap()))
+        .collect()
+}
+
+#[test]
+fn wait_for_changes_polls_the_editor_until_an_event_arrives() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let commented = r#"{"events":[{"seq":8,"time":1762300000000,"kind":"comment.created","document":null,"path":null,"data":{"thread":3}}],"cursor":8,"reset":false,"dropped":0}"#;
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let answered = AtomicUsize::new(0);
+    let seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, move |_| {
+        let reply = if answered.fetch_add(1, Ordering::SeqCst) < 2 {
+            NO_EVENTS
+        } else {
+            commented
+        };
+        Some(Ok(reply.to_string()))
+    });
+    let mut bridge = Bridge::new(configs[0].clone()).with_tool("wait_for_changes");
+    let asked = json!({"after": 7, "timeoutMs": 10_000});
+    let started = Instant::now();
+    let result = figcraft_mcp::call_tool(&mut bridge, "wait_for_changes", &asked);
+    let waited = started.elapsed();
+    assert_eq!(
+        tool_json(&result),
+        serde_json::from_str::<Value>(commented).unwrap()
+    );
+    assert_eq!(
+        polls(&seen),
+        vec![
+            ("events.poll".to_string(), asked.clone()),
+            ("events.poll".to_string(), asked.clone()),
+            ("events.poll".to_string(), asked),
+        ]
+    );
+    assert!(
+        waited >= Duration::from_millis(500) && waited < Duration::from_secs(5),
+        "{waited:?}"
+    );
+}
+
+#[test]
+fn wait_for_changes_returns_the_last_empty_reply_once_its_wait_passes() {
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, |_| {
+        Some(Ok(NO_EVENTS.to_string()))
+    });
+    let mut bridge = Bridge::new(configs[0].clone()).with_tool("wait_for_changes");
+    let started = Instant::now();
+    let result = figcraft_mcp::call_tool(
+        &mut bridge,
+        "wait_for_changes",
+        &json!({"after": 7, "timeoutMs": 700}),
+    );
+    let waited = started.elapsed();
+    assert_eq!(
+        tool_json(&result),
+        json!({"events": [], "cursor": 7, "reset": false, "dropped": 0})
+    );
+    assert!(
+        waited >= Duration::from_millis(700) && waited < Duration::from_secs(5),
+        "{waited:?}"
+    );
+    assert!(polls(&seen).len() >= 3);
+}
+
+#[test]
+fn a_reset_event_log_ends_the_wait_at_once() {
+    let reset = r#"{"events":[],"cursor":0,"reset":true,"dropped":0}"#;
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, move |_| {
+        Some(Ok(reset.to_string()))
+    });
+    let mut bridge = Bridge::new(configs[0].clone());
+    let reply = bridge
+        .call("events.poll", json!({"after": 7, "timeoutMs": 10_000}))
+        .unwrap();
+    assert_eq!(reply, serde_json::from_str::<Value>(reset).unwrap());
+    assert_eq!(polls(&seen).len(), 1);
+}
+
+#[test]
+fn a_canvas_error_while_waiting_ends_the_wait_with_that_error() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let answered = AtomicUsize::new(0);
+    let _seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, move |_| {
+        if answered.fetch_add(1, Ordering::SeqCst) == 0 {
+            Some(Ok(NO_EVENTS.to_string()))
+        } else {
+            Some(Err(CanvasError::new(
+                CanvasErrorCode::CanvasClosed,
+                "the canvas was closed",
+            )))
+        }
+    });
+    let mut bridge = Bridge::new(configs[0].clone());
+    let started = Instant::now();
+    let error = error_of(bridge.call("events.poll", json!({"timeoutMs": 10_000})));
+    assert_eq!(error["code"], "CANVAS_CLOSED");
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+/// The wait `wait_for_changes` documents: 20 s unless the agent names one,
+/// and never past 25 s.
+#[test]
+fn the_wait_is_20_s_by_default_and_at_most_25_s() {
+    assert_eq!(poll_wait(&json!({})), Duration::from_secs(20));
+    assert_eq!(
+        poll_wait(&json!({"timeoutMs": 1500})),
+        Duration::from_millis(1500)
+    );
+    assert_eq!(poll_wait(&json!({"timeoutMs": 0})), Duration::ZERO);
+    assert_eq!(
+        poll_wait(&json!({"timeoutMs": 600_000})),
+        Duration::from_secs(25)
+    );
+}
+
+#[test]
+fn a_timeout_after_an_answer_returns_the_last_reply() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let answered = AtomicUsize::new(0);
+    let _seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, move |_| {
+        if answered.fetch_add(1, Ordering::SeqCst) == 0 {
+            Some(Ok(NO_EVENTS.to_string()))
+        } else {
+            Some(Err(CanvasError::new(
+                CanvasErrorCode::CanvasTimeout,
+                "the canvas did not answer in time",
+            )))
+        }
+    });
+    let mut bridge = Bridge::new(configs[0].clone());
+    let reply = bridge
+        .call("events.poll", json!({"after": 7, "timeoutMs": 10_000}))
+        .unwrap();
+    assert_eq!(reply, serde_json::from_str::<Value>(NO_EVENTS).unwrap());
 }

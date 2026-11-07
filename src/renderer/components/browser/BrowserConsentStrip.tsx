@@ -14,20 +14,32 @@
  * activeTab — on non-workspace routes or SSH mode a browser-type activeTab
  * persists with no BrowserPanel mounted.
  *
- * Security: the strip lives in the main webview's DOM — page-injected UI is
- * never allowed to carry the consent decision (page JS could self-click),
- * and `browser_consent_respond` rejects non-`main` callers.
+ * Security: the strip lives in the main webview's DOM, so page-injected UI
+ * never carries the decision (page JS could self-click), and the host's
+ * `browser_ticket_respond` command rejects non-`main` callers. The answer
+ * buttons arm a moment after the prompt appears (the host refuses faster
+ * answers too).
  */
 
 import { type ReactNode, useEffect, useRef, useState } from 'react'
-import { BROWSER_CONSENT_TITLE, browserConsentSummary } from '@/components/browser/consent-intent'
+import {
+  browserConsentFileLine,
+  browserConsentOptionLabel,
+  browserConsentProfileLabel,
+  browserConsentSummary,
+  browserConsentTargetLine,
+  browserConsentTitle,
+  useConsentArmed
+} from '@/components/browser/consent-intent'
 import { ShieldAlert } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import { useAgentDisplayName } from '@/hooks/use-agent-display-name'
 import { useInterfaceOverlayOpen } from '@/hooks/use-native-webview-occlusion'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { useConsentStripHost } from '@/stores/browser-consent-strip-store'
+import { useAgentTabSession } from '@/stores/browser-control-store'
 import { useActiveTab } from '@/stores/workspace-store'
 
 interface BrowserConsentStripProps {
@@ -52,8 +64,15 @@ export function BrowserConsentStrip({
     return () => unregister(browserTabId)
   }, [browserTabId, register, unregister])
 
-  const first = Object.values(pending ?? {})[0]
-  const agentName = useAgentDisplayName(first?.agentId)
+  // Prefer the ticket of the session that drives this tab.
+  const owner = useAgentTabSession(browserTabId)
+  const tickets = Object.values(pending ?? {})
+  const first = tickets.find((t) => t.sessionId === owner) ?? tickets[0]
+  const firstAgentId = useAcpStore((s) =>
+    first ? s.sessions[first.sessionId]?.agentId : undefined
+  )
+  const agentName = useAgentDisplayName(firstAgentId)
+  const armed = useConsentArmed(first?.requestId ?? '')
   const hosting =
     isTauriContext() &&
     !overlayOpen &&
@@ -76,47 +95,63 @@ export function BrowserConsentStrip({
   // active tab is this agent browser tab (the `hosting` condition above).
   // The agent tab open deliberately keeps the chat pane focused
   // (openAgentBrowserTab), so until the user focuses the browser pane the
-  // prompt is not hosted here — consent presentation for non-browser focus
-  // is handled by the in-chat card (and the root fallback host when no chat
-  // panel can show it). Other visible browser panes in a split never
-  // duplicate it. Phase-1 consent is granted by the desktop host only —
-  // remote clients never see a prompt; the host auto-denies on timeout.
-  // Double-click guard lives in the store: responding drops the pending entry
-  // (unmounting these buttons) and a failed send restores it for a retry.
+  // in-chat card (and the root fallback host when no chat panel can show it)
+  // presents the ticket. Other visible browser panes in a split never
+  // duplicate it. Double-click guard lives in the store: answering drops the
+  // pending entry (unmounting these buttons) and a refused answer restores it.
   if (!hosting || !first) return null
 
   return (
-    <AlertOnceStripFrame key={first.requestId} requestId={first.requestId}>
+    <AlertOnceStripFrame
+      key={first.requestId}
+      requestId={first.requestId}
+      title={browserConsentTitle(first.action)}
+    >
       <ShieldAlert size={14} className="shrink-0 text-warning" />
       <div className="min-w-0 flex-1 text-2xs">
-        <span className="font-medium text-foreground">{BROWSER_CONSENT_TITLE}</span>{' '}
-        <span className="line-clamp-2 break-words text-muted-foreground">
-          {browserConsentSummary(agentName, first.action, first.element)}
+        <span className="font-medium text-foreground">{browserConsentTitle(first.action)}</span>{' '}
+        <span className="break-words text-muted-foreground">
+          {browserConsentSummary(agentName, first)}
+        </span>
+        <span className="block truncate font-mono text-muted-foreground" title={first.targetUrl}>
+          {browserConsentTargetLine(first)}
+        </span>
+        {first.file ? (
+          <span className="block truncate text-foreground">
+            File: {browserConsentFileLine(first.file)}
+          </span>
+        ) : null}
+        <span className="block truncate text-muted-foreground">
+          {first.element ? `Agent says: "${first.element}" · ` : ''}
+          {browserConsentProfileLabel(first.profile)}
         </span>
       </div>
-      <button
-        type="button"
-        onClick={() => respond(first.requestId, false)}
-        className="shrink-0 rounded px-2.5 py-1 text-2xs font-medium text-muted-foreground ring-offset-background transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-      >
-        Deny
-      </button>
-      <button
-        type="button"
-        onClick={() => respond(first.requestId, true)}
-        className="shrink-0 rounded bg-destructive-fill px-2.5 py-1 text-2xs font-medium text-destructive-foreground ring-offset-background transition-colors hover:bg-destructive-fill/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-      >
-        Allow for this session
-      </button>
+      {first.options.map((optionId) => (
+        <Button
+          key={optionId}
+          type="button"
+          size="xs"
+          variant={
+            optionId === 'deny' ? 'ghost' : optionId === 'allow_session' ? 'default' : 'outline'
+          }
+          disabled={!armed}
+          onClick={() => respond(first.requestId, optionId)}
+          className="shrink-0 text-2xs"
+        >
+          {browserConsentOptionLabel(optionId, first.action)}
+        </Button>
+      ))}
     </AlertOnceStripFrame>
   )
 }
 
 function AlertOnceStripFrame({
   requestId,
+  title,
   children
 }: {
   requestId: string
+  title: string
   children: ReactNode
 }): React.JSX.Element {
   const [isFirstMountForRequest] = useState(
@@ -128,9 +163,7 @@ function AlertOnceStripFrame({
   return (
     <div
       className="flex shrink-0 items-center gap-2 border-l-2 border-warning border-b border-border bg-card px-3 py-1.5"
-      {...(isFirstMountForRequest
-        ? { role: 'alert' }
-        : { role: 'region', 'aria-label': BROWSER_CONSENT_TITLE })}
+      {...(isFirstMountForRequest ? { role: 'alert' } : { role: 'region', 'aria-label': title })}
     >
       {children}
     </div>

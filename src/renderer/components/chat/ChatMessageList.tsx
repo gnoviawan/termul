@@ -1,5 +1,5 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -10,7 +10,8 @@ import {
   useMessageScroller
 } from '@/components/ui/message-scroller'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
-import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
+import type { SessionId } from '@/lib/acp-api'
+import type { SelectionContext } from '@/lib/composer/selection-context'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
@@ -19,6 +20,7 @@ import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
 import { CHAT_GUTTER_X } from './chat-layout'
 import {
+  activityParentTurn,
   groupTurnActivity,
   stabilizedTimeline,
   type TimelineItem,
@@ -26,10 +28,12 @@ import {
 } from './chat-timeline'
 import { opencodeStatusLine } from './opencode-status'
 import { RowReveal } from './RowReveal'
-import { SubagentDetailsDialog } from './SubagentDetailsDialog'
+import { SelectionContextLayer } from './SelectionContextLayer'
+import { SubagentGroup } from './SubagentGroup'
 import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
 import { TurnActivity } from './TurnActivity'
+import { isSubagentCall } from './tool-call-summary'
 import { type EnterTracker, useEnterTracker } from './use-enter-tracker'
 import { WorktreeCreationCard } from './WorktreeCreationCard'
 
@@ -50,6 +54,8 @@ interface ChatMessageListProps {
   showRunningIndicator: boolean
   /** Seed the composer with a user message's text (edit affordance). */
   onEditMessage?: (text: string) => void
+  /** Add selected message text to the composer as a selection context. */
+  onAddSelectionContext?: (context: SelectionContext) => void
   /** Re-run the latest user turn (regenerate affordance on agent replies). */
   onRetry?: () => void
   /** Filesystem roots used for safe file-path links in agent prose. */
@@ -80,7 +86,6 @@ interface TimelineRenderProps {
   onEditMessage?: (text: string) => void
   onRetry?: () => void
   filePathContext?: FilePathResolutionContext
-  onOpenSubagent: (toolCall: ToolCall) => void
   parentTurnActive: boolean
   statusLine: string | null
   /** Whether the scroller log announces additions (off on the mobile shell). */
@@ -100,7 +105,6 @@ function VirtualizedTimeline({
   onEditMessage,
   onRetry,
   filePathContext,
-  onOpenSubagent,
   parentTurnActive,
   statusLine,
   live
@@ -180,13 +184,13 @@ function VirtualizedTimeline({
         <TurnActivity
           items={item.items}
           active={item.active}
+          parentTurn={activityParentTurn(groupedItems, item)}
           durationMs={item.durationMs}
           attentionRequired={item.attentionRequired}
           hasFinalResponse={item.hasFinalResponse}
           enter={enter}
           statusLine={item.active ? statusLine : null}
           filePathContext={filePathContext}
-          onOpenSubagent={onOpenSubagent}
         />
       )
     }
@@ -194,12 +198,14 @@ function VirtualizedTimeline({
       const id = item.tool.toolCallId
       return (
         <RowReveal animate={enter.animate(id)} staggerIndex={enter.staggerIndex(id)}>
-          <ToolCallCard
-            toolCall={item.tool}
-            filePathContext={filePathContext}
-            parentTurnActive={parentTurnActive}
-            onOpenSubagent={onOpenSubagent}
-          />
+          {isSubagentCall(item.tool) ? (
+            <SubagentGroup
+              calls={[item.tool]}
+              parentTurn={parentTurnActive ? 'active' : 'superseded'}
+            />
+          ) : (
+            <ToolCallCard toolCall={item.tool} filePathContext={filePathContext} />
+          )}
         </RowReveal>
       )
     }
@@ -310,6 +316,7 @@ export function ChatMessageList({
   sessionId,
   showRunningIndicator,
   onEditMessage,
+  onAddSelectionContext,
   onRetry,
   filePathContext
 }: ChatMessageListProps): React.JSX.Element {
@@ -334,32 +341,17 @@ export function ChatMessageList({
   const lastMsgIndex = useMemo(() => lastMessageIndex(stableItems), [stableItems])
   const itemIds = useMemo(() => items.map(timelineItemId), [items])
   const enter = useEnterTracker(sessionId, itemIds)
-  const [selection, setSelection] = useState<{ sessionId: SessionId; toolCall: ToolCall } | null>(
-    null
-  )
-  const openSubagent = useCallback(
-    (toolCall: ToolCall) => setSelection({ sessionId, toolCall }),
-    [sessionId]
-  )
-  const selectedItem = items.find(
-    (item) => item.kind === 'tool' && item.tool.toolCallId === selection?.toolCall.toolCallId
-  )
-  const selectedTool =
-    selection?.sessionId === sessionId
-      ? selectedItem?.kind === 'tool'
-        ? selectedItem.tool
-        : selection.toolCall
-      : null
 
   if (items.length === 0 && !showRunningIndicator) {
     return <ChatEmptyState sessionId={sessionId} />
   }
 
   return (
-    <div className="relative min-h-0 flex-1">
-      {/* Edge fades: content dissolves into the header/composer instead of hard-cutting. */}
+    <SelectionContextLayer className="relative min-h-0 flex-1" onAdd={onAddSelectionContext}>
+      {/* Top edge fade: content dissolves into the header. No bottom fade: a
+          strip above the composer reads as a drop shadow; the viewport clip
+          ends the list cleanly at the dock. */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-6 bg-gradient-to-b from-terminal-bg to-transparent" />
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-6 bg-gradient-to-t from-terminal-bg to-transparent" />
       <MessageScrollerProvider autoScroll>
         <ItemCountReporter count={stableItems.length} />
         <MessageScroller>
@@ -372,7 +364,6 @@ export function ChatMessageList({
               filePathContext={filePathContext}
               onEditMessage={onEditMessage}
               onRetry={onRetry}
-              onOpenSubagent={openSubagent}
               parentTurnActive={showRunningIndicator}
               statusLine={statusLine}
               live={live}
@@ -381,17 +372,6 @@ export function ChatMessageList({
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
-      {selectedTool && (
-        <SubagentDetailsDialog
-          toolCall={selectedTool}
-          parentTurnActive={showRunningIndicator}
-          filePathContext={filePathContext}
-          open
-          onOpenChange={(open) => {
-            if (!open) setSelection(null)
-          }}
-        />
-      )}
-    </div>
+    </SelectionContextLayer>
   )
 }

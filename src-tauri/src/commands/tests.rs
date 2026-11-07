@@ -225,6 +225,48 @@ fn resolve_rg_path_uses_dev_triple_name_when_bundle_name_is_absent() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// gh-1575: Linux packages install the bundled rg at
+/// `/usr/lib/termul-manager/rg` (not `/usr/bin/rg`, which the distro
+/// `ripgrep` package owns). From `/usr/bin` (or `$APPDIR/usr/bin`) the app must
+/// pick that copy, even when a distro `rg` sits beside the executable.
+#[test]
+fn resolve_rg_path_prefers_linux_package_lib_dir_over_distro_rg() {
+    let root = rg_fixture_root("linux_pkg");
+    let exe_dir = root.join("usr").join("bin");
+    let lib_dir = root.join("usr").join("lib").join(LINUX_PACKAGE_RG_DIR);
+    std::fs::create_dir_all(&exe_dir).unwrap();
+    std::fs::create_dir_all(&lib_dir).unwrap();
+    std::fs::write(exe_dir.join(rg_bundled_file_name()), b"distro").unwrap();
+    let packaged = lib_dir.join(rg_bundled_file_name());
+    std::fs::write(&packaged, b"packaged").unwrap();
+
+    let (path, source) = resolve_rg_path_from(None, Some(&exe_dir));
+    assert_eq!(source, "sidecar");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "packaged");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The Linux bundle config must install rg exactly where the runtime looks
+/// (`<exe_dir>/../lib/<LINUX_PACKAGE_RG_DIR>/rg`) and must not ship it via
+/// `externalBin`, which lands in `/usr/bin` and collides with distro ripgrep.
+#[test]
+fn linux_bundle_config_installs_rg_at_the_runtime_lookup_path() {
+    let raw = include_str!("../../tauri.linux.conf.json");
+    let config: serde_json::Value = serde_json::from_str(raw).expect("valid linux config");
+    assert_eq!(config["bundle"]["externalBin"], serde_json::json!([]));
+    let expected_target = format!("/usr/lib/{LINUX_PACKAGE_RG_DIR}/rg");
+    for package in ["deb", "rpm", "appimage"] {
+        let files = config["bundle"]["linux"][package]["files"]
+            .as_object()
+            .unwrap_or_else(|| panic!("bundle.linux.{package}.files missing"));
+        assert!(
+            files.contains_key(&expected_target),
+            "bundle.linux.{package}.files must install {expected_target}"
+        );
+    }
+}
+
 #[test]
 fn resolve_rg_path_falls_back_to_path_when_no_sidecar_exists() {
     let root = rg_fixture_root("missing");

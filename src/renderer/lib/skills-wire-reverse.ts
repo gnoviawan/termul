@@ -17,7 +17,16 @@
  * prose, were this ever misapplied) is never partially rewritten.
  */
 import { fileUrlToPath } from '@/components/chat/chat-attachments'
-import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
+import { selectionContextsToDisplay } from '@/lib/composer/selection-context'
+import { restoreToolTokens } from '@/lib/composer/tool-tokens'
+import { parseConversationEnvelope, restoreConversationLabels } from '@/lib/conversation-envelope'
+import {
+  commandToken,
+  conversationToken,
+  fileToken,
+  parseConversationSegments,
+  skillToken
+} from '@/lib/skill-tokens'
 
 /** Literal header emitted by `formatPromptWithSkills`. */
 const SKILLS_HEADER = '# Agent Skills'
@@ -64,6 +73,12 @@ function parseHeaderLine(line: string): { name: string; path: string } | null {
  * input verbatim.
  */
 export function wireTextToDisplay(wire: string): string {
+  // Selection-context quote blocks sit inside the user text (after any skill
+  // framing), so they reverse last. Exact-parse-else-passthrough as well.
+  return selectionContextsToDisplay(skillsWireTextToDisplay(wire))
+}
+
+function skillsWireTextToDisplay(wire: string): string {
   if (!wire.includes(SKILLS_HEADER)) return wire
   const text = wire.replaceAll('\r\n', '\n')
   const command = framedCommandPrefix(text)
@@ -184,17 +199,26 @@ function restoreFileTokens(text: string, paths: Map<string, string>): string {
   })
 }
 
-/**
- * Apply {@link wireTextToDisplay} to every `text` block and rebuild file
- * pills from the `resource_link` blocks, which stay in place.
- */
 export function wireBlocksToDisplay<T extends WireBlock>(blocks: T[] | null | undefined): T[] {
   if (!Array.isArray(blocks)) return blocks ?? []
   const filePaths = unambiguousFilePaths(blocks)
-  let changed = false
-  const next = blocks.map((block) => {
+  const kept = blocks.filter(
+    (block) =>
+      block?.type !== 'text' ||
+      typeof block.text !== 'string' ||
+      parseConversationEnvelope(block.text) === null
+  )
+  let changed = kept.length !== blocks.length
+  const next = kept.map((block) => {
     if (block?.type !== 'text' || typeof block.text !== 'string') return block
-    const text = restoreFileTokens(wireTextToDisplay(block.text), filePaths)
+    // File markers inside a chat title stay title text.
+    const text = parseConversationSegments(restoreConversationLabels(wireTextToDisplay(block.text)))
+      .map((s) =>
+        s.kind === 'conversation'
+          ? conversationToken(s.title, s.sessionId)
+          : restoreFileTokens(restoreToolTokens(s.text), filePaths)
+      )
+      .join('')
     if (text === block.text) return block
     changed = true
     return { ...block, text }

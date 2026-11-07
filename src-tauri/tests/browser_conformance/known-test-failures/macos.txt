@@ -1,0 +1,16 @@
+# Failing on the macos-14 runner today, in modules the browser work does not touch.
+# Each comment is the failure the runner printed.
+# expected loopback: http://foo.localhost:3000/cb
+acp::browser_shim::tests::loopback_validation_accepts_loopback_forms
+# the daemon was disposed, not leaked
+canvas::tests::pool_release_still_evicts_after_doc_file_deleted
+# assertion failed: cwd.is_some()
+trackers::cwd_tracker::tests::test_detect_cwd_unix
+# gpg: can't connect to the gpg-agent: File name too long
+trackers::git_tracker::commit_detail_tests::it_signed_commit_detail_ignores_show_signature
+# a connection watching ANOTHER project gets nothing
+web::fs_watcher::tests::fs_deltas_reach_only_connections_subscribed_to_that_project
+# reading a file or listing its directory is not a change
+web::fs_watcher::tests::reading_a_file_or_listing_a_dir_publishes_no_delta
+# left: Some("chat/ab12cd34"), right: Some("chat/fix-login")
+web::worktree_rename_api::tests::rename_branch_renames_records_user_source_and_emits_once

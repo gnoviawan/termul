@@ -271,12 +271,29 @@ async fn an_eviction_saves_the_victim_before_it_unmounts() {
 }
 
 #[tokio::test]
-async fn a_victim_that_cannot_be_saved_stays_mounted_and_blocks_the_new_mount() {
+async fn a_victim_that_cannot_be_saved_is_passed_over_for_the_next_least_active() {
     let registry = Registry::new();
     let (seq_a, _a) = registry.mount("a");
     registry.mount("b");
     registry.edit("a", seq_a, 2).await;
     registry.mounts.release_holder("a");
+
+    let admitted = registry.admit("c", 2).await;
+    assert!(admitted.opened.is_ok(), "{:?}", admitted.opened);
+    assert_eq!(evicted(&admitted), ["b"]);
+    assert_eq!(registry.mounted(), ["a", "c"], "the unsaved canvas stays");
+    assert!(registry.mounts.view("a", seq_a).unwrap().dirty);
+}
+
+#[tokio::test]
+async fn when_no_victim_can_be_saved_the_new_mount_is_blocked() {
+    let registry = Registry::new();
+    let (seq_a, _a) = registry.mount("a");
+    let (seq_b, _b) = registry.mount("b");
+    registry.edit("a", seq_a, 2).await;
+    registry.edit("b", seq_b, 2).await;
+    registry.mounts.release_holder("a");
+    registry.mounts.release_holder("b");
 
     let admitted = registry.admit("c", 2).await;
     let error = admitted.opened.unwrap_err();
@@ -288,6 +305,7 @@ async fn a_victim_that_cannot_be_saved_stays_mounted_and_blocks_the_new_mount() 
     );
     assert!(admitted.evicted.is_empty());
     assert_eq!(registry.mounted(), ["a", "b"], "nothing mounted or lost");
+    assert!(registry.mounts.view("b", seq_b).unwrap().dirty);
     assert!(registry.mounts.view("a", seq_a).unwrap().dirty);
 
     let retry = registry
@@ -303,16 +321,19 @@ async fn evictions_finished_before_a_later_victim_fails_are_still_reported() {
     let registry = Registry::new();
     registry.mounts.mount("a", registry.doc("a"), AUTOSAVE);
     let (seq_b, _b) = registry.mount("b");
+    let (seq_d, _d) = registry.mount("d");
     registry.edit("b", seq_b, 2).await;
+    registry.edit("d", seq_d, 2).await;
     registry.mounts.release_holder("b");
+    registry.mounts.release_holder("d");
 
-    let admitted = registry.admit("c", 1).await;
+    let admitted = registry.admit("c", 2).await;
     assert_eq!(evicted(&admitted), ["a"]);
     assert_eq!(
         admitted.opened.unwrap_err().code,
         super::CODE_EVICTION_BLOCKED
     );
-    assert_eq!(registry.mounted(), ["b"]);
+    assert_eq!(registry.mounted(), ["b", "d"]);
 }
 
 #[tokio::test]
@@ -388,4 +409,19 @@ async fn the_renderer_running_an_evicted_canvas_is_told_it_was_unloaded() {
             "reason": "evicted"
         })
     );
+}
+
+#[tokio::test]
+async fn a_lower_cap_from_one_renderer_does_not_unload_canvases_opened_under_a_higher_one() {
+    let registry = Registry::new();
+    registry.admit("a", 2).await.opened.unwrap();
+    registry.admit("b", 2).await.opened.unwrap();
+    let admitted = registry.admit("c", 1).await;
+    assert!(admitted.opened.is_ok());
+    assert_eq!(
+        evicted(&admitted),
+        ["a"],
+        "the host keeps the highest cap its mounts were opened with"
+    );
+    assert_eq!(registry.mounted(), ["b", "c"]);
 }

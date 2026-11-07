@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
 // @ts-expect-error Plain ESM helper shared with the workflow scripts.
-import { extractBundle, verifyChecksum } from './fetch-figcraft-bundle.mjs'
+import { extractBundle, pinnedBundleUrl, verifyChecksum } from './fetch-figcraft-bundle.mjs'
 // @ts-expect-error Plain ESM helper shared with the workflow scripts.
 import { cargoFigcraftMcpRef, parsePin, readPin } from './figcraft-pin.mjs'
 
@@ -131,6 +131,27 @@ describe('bundle fetch', () => {
     const good = createHash('sha256').update(bytes).digest('hex')
     expect(() => verifyChecksum(bytes, good)).not.toThrow()
     expect(() => verifyChecksum(bytes, SHA)).toThrow(/sha256 mismatch/)
+  })
+
+  test('downloads only a figcraft-web release asset of the Termul fork', () => {
+    const pinned =
+      'https://github.com/gnoviawan/figcraft/releases/download/termul-v0.2.0/figcraft-web-termul-v0.2.0.zip'
+    expect(pinnedBundleUrl(pinned)).toBe(pinned)
+    const committed = readPin(join(__dirname, '..', '..', 'canvas', 'figcraft.pin')).url
+    expect(pinnedBundleUrl(committed)).toBe(committed)
+    for (const url of [
+      'http://github.com/gnoviawan/figcraft/releases/download/termul-v1/figcraft-web-termul-v1.zip',
+      'https://github.com.evil.test/gnoviawan/figcraft/releases/download/termul-v1/figcraft-web-termul-v1.zip',
+      'https://github.com/storytold/figcraft/releases/download/termul-v1/figcraft-web-termul-v1.zip',
+      'https://github.com/gnoviawan/figcraft/releases/download/v1/figcraft-web-termul-v1.zip',
+      'https://github.com/gnoviawan/figcraft/releases/download/termul-v1/other.zip',
+      'https://github.com/gnoviawan/figcraft/releases/download/termul-v1/figcraft-web-termul-v1.zip?x=1',
+      'https://github.com/gnoviawan/figcraft/releases/download/termul-v1/../../figcraft-web-termul-v1.zip',
+      'https://user@github.com/gnoviawan/figcraft/releases/download/termul-v1/figcraft-web-termul-v1.zip',
+      'https://x.test/b.zip'
+    ]) {
+      expect(() => pinnedBundleUrl(url), url).toThrow(/figcraft-web release asset/)
+    }
   })
 
   test('extracts the single top-level directory flat into the embed dir', () => {

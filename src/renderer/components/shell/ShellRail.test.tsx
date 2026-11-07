@@ -11,6 +11,7 @@ import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
+import { useSSHStore } from '@/stores/ssh-store'
 import type { Project } from '@/types/project'
 import { ShellRail, type ShellRailProps } from './ShellRail'
 
@@ -47,6 +48,8 @@ vi.mock('@/hooks/use-agent-chat-attention', () => ({
   useAgentChatProjectSignals: () => ({
     attentionCounts: {},
     firstNeedsYouSessionId: {},
+    needsYouChats: new Map<string, string>(),
+    workingProjectIds: new Set<string>(),
     runningProjectIds: new Set<string>()
   })
 }))
@@ -124,6 +127,7 @@ describe('ShellRail', () => {
     // `unavailable` keeps the store usable in memory without writing.
     useShellLayoutStore.setState({ status: 'unavailable' })
     useSettingsModalStore.setState({ view: null })
+    useSSHStore.setState({ workspaceOpen: false })
     useProjectStore.setState({ projects, groups: [] })
     useGitStatusStore.setState({
       diffStats: {},
@@ -284,7 +288,7 @@ describe('ShellRail', () => {
       expect(tooltip.parentElement).toHaveAttribute('data-side', 'bottom')
     })
 
-    it('has an icon-only footer: Settings at the left, Theme and Shortcuts at the right', () => {
+    it('has an icon-only footer: Settings and Report a bug at the left, Theme and Shortcuts at the right', () => {
       renderRail()
       const settings = screen.getByRole('button', { name: 'Settings' })
       expect(settings).toHaveClass('size-7')
@@ -296,7 +300,12 @@ describe('ShellRail', () => {
       const names = within(footer)
         .getAllByRole('button')
         .map((button) => button.getAttribute('aria-label'))
-      expect(names).toEqual(['Settings', 'Color themes', 'Open keyboard shortcuts menu'])
+      expect(names).toEqual([
+        'Settings',
+        'Report a bug',
+        'Color themes',
+        'Open keyboard shortcuts menu'
+      ])
       expect(
         within(footer).queryByRole('button', { name: 'Expand or collapse projects' })
       ).toBeNull()
@@ -410,7 +419,7 @@ describe('ShellRail', () => {
       useShellLayoutStore.setState({ railExpanded: false })
     })
 
-    it('shows only the icons: project stack, Column tabs, Search, Canvas, SSH, Theme, Shortcuts, Settings', () => {
+    it('shows only the icons: project stack, Search, Canvas, Automations, SSH, Theme, Shortcuts, Settings, Report a bug', () => {
       renderRail()
 
       const nav = screen.getByRole('navigation', { name: 'Projects' })
@@ -423,16 +432,17 @@ describe('ShellRail', () => {
         'Switch project (Alpha)',
         // Other open projects (not archived) follow the active one.
         'Open Beta',
-        'Chats',
-        'Explorer',
-        'Changes',
+        // The Side panel is shown, so it carries the Column tabs.
         'Search',
         'Open canvas',
+        'Open automations',
         'SSH hosts',
-        // Pinned at the bottom, Settings last as in the expanded footer.
+        // Pinned at the bottom; Settings then Report a bug, the same
+        // relative pair order as the expanded footer.
         'Color themes',
         'Open keyboard shortcuts menu',
-        'Settings'
+        'Settings',
+        'Report a bug'
       ])
       expect(within(nav).queryByText('Projects')).not.toBeInTheDocument()
       expect(within(nav).queryByTestId('ssh-section')).not.toBeInTheDocument()
@@ -443,14 +453,54 @@ describe('ShellRail', () => {
       expect(band).toHaveClass('h-12', 'pt-2')
       expect(band).toHaveAttribute('data-tauri-drag-region')
       expect(within(band).getByTestId('rail-brand-swap')).toBeInTheDocument()
-      // Theme, Shortcuts and Settings are pinned at the bottom.
+      // Theme, Shortcuts, Settings and Report a bug are pinned at the bottom.
       const bottom = screen.getByRole('button', { name: 'Settings' }).parentElement as HTMLElement
       expect(bottom).toHaveClass('mt-auto')
       expect(
         within(bottom)
           .getAllByRole('button')
           .map((b) => b.getAttribute('aria-label'))
-      ).toEqual(['Color themes', 'Open keyboard shortcuts menu', 'Settings'])
+      ).toEqual(['Color themes', 'Open keyboard shortcuts menu', 'Settings', 'Report a bug'])
+    })
+
+    it('shows the Column tabs only while the Side panel is not on screen', () => {
+      const track = () => screen.queryByTestId('rail-column-tab-track')
+      const tabs = () =>
+        within(track() as HTMLElement)
+          .getAllByRole('button')
+          .map((b) => b.getAttribute('aria-label'))
+
+      const shown = renderRail()
+      expect(track()).not.toBeInTheDocument()
+      shown.unmount()
+
+      // Everything collapsed: the Rail carries the tabs.
+      useShellLayoutStore.setState({ sidePanelVisible: false })
+      const hidden = renderRail()
+      expect(tabs()).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
+      hidden.unmount()
+
+      // The SSH workspace replaces the Side panel, so the Rail keeps the tabs.
+      useShellLayoutStore.setState({ sidePanelVisible: true })
+      useSSHStore.setState({ workspaceOpen: true })
+      const ssh = renderRail()
+      expect(tabs()).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
+      ssh.unmount()
+      useSSHStore.setState({ workspaceOpen: false })
+
+      // No project (or one without a local folder): no Side panel, so the
+      // Rail keeps the tabs.
+      for (const activeProject of [undefined, { ...projects[0], path: '' }]) {
+        const view = renderRail({ activeProject })
+        expect(tabs()).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
+        view.unmount()
+      }
+      renderRail({ activeProject: undefined, activeProjectId: '' })
+      for (const name of ['Chats', 'Explorer', 'Changes', 'GitHub']) {
+        expect(
+          within(track() as HTMLElement).getByRole('button', { name, exact: true })
+        ).toBeDisabled()
+      }
     })
 
     it('puts the mark / toggle swap below the empty top band under the macOS traffic lights', () => {

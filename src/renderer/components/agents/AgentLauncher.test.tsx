@@ -9,6 +9,11 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  createFavoritesStore,
+  FavoritesStoreContext,
+  memoryFavoritesAdapter
+} from '@/components/chat/agent-model-selector/favorite-models'
+import {
   getComposerValue,
   pressComposerKey,
   setComposerValue
@@ -22,11 +27,14 @@ import {
   type SupportedAcpAgentEntry
 } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
-import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
+import type { ConversationContexts } from '@/lib/conversation-transcript'
+import { commandToken, conversationToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { isTauriContext, type ServerCapabilityState } from '@/lib/tauri-runtime'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
+import { agentReuseKey } from '@/stores/acp-reuse-keys'
 import type { AcpSession } from '@/stores/acp-store'
+import { useLoginTerminalSignInStore } from '@/stores/login-terminal-sign-in-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useShellLayoutStore } from '@/stores/shell-layout-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -106,6 +114,7 @@ const {
   mockSetConfigOption,
   mockSetMode,
   mockSetModel,
+  mockPickModel,
   mockAuthenticateAgent,
   mockTerminalSpawn,
   mockTerminalOnExit,
@@ -152,6 +161,7 @@ const {
   mockSetConfigOption: vi.fn(),
   mockSetMode: vi.fn(),
   mockSetModel: vi.fn(),
+  mockPickModel: vi.fn(),
   mockAuthenticateAgent: vi.fn(),
   mockTerminalSpawn: vi.fn(),
   mockTerminalOnExit: vi.fn(),
@@ -202,7 +212,7 @@ const {
       configToLiveAgent: {} as Record<string, string>,
       pendingRestartVersions: {} as Record<string, string>,
       agents: {} as Record<string, { id: string; capabilities: unknown; authMethods?: unknown[] }>,
-      pendingBrowserOpen: {} as Record<string, string>,
+      pendingSignIn: {} as Record<string, string>,
       mcpServers: [] as Array<{ id: string; name: string; enabled?: boolean }>,
       mcpProbeStatus: {} as Record<string, string>,
       mcpTools: {} as Record<string, unknown[]>
@@ -323,8 +333,54 @@ vi.mock('@/lib/api', () => ({
     searchFileNamesStreamStart: vi.fn(async () => ({ success: true as const })),
     searchFileNamesStreamCancel: vi.fn(async () => ({ success: true as const })),
     onSearchFileNamesBatch: vi.fn(() => () => {}),
-    onSearchFileNamesDone: vi.fn(() => () => {})
+    onSearchFileNamesDone: vi.fn(() => () => {}),
+    readDirectory: vi.fn(async (dir: string) => ({
+      success: true as const,
+      data:
+        dir === '/work'
+          ? [
+              {
+                name: 'src',
+                path: '/work/src',
+                type: 'directory',
+                extension: null,
+                size: 0,
+                modifiedAt: 0
+              },
+              {
+                name: 'README.md',
+                path: '/work/README.md',
+                type: 'file',
+                extension: 'md',
+                size: 0,
+                modifiedAt: 0
+              }
+            ]
+          : []
+    }))
   }
+}))
+
+const { conversationContextsOverride } = vi.hoisted(() => ({
+  conversationContextsOverride: { current: null as null | (() => Promise<ConversationContexts>) }
+}))
+
+vi.mock('@/lib/conversation-transcript', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/conversation-transcript')>()
+  return {
+    ...actual,
+    resolveConversationContexts: (refs: Parameters<typeof actual.resolveConversationContexts>[0]) =>
+      conversationContextsOverride.current?.() ?? actual.resolveConversationContexts(refs)
+  }
+})
+
+const { mockLogFrontendError } = vi.hoisted(() => ({
+  mockLogFrontendError: vi.fn(async () => {})
+}))
+
+vi.mock('@/lib/log-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/log-api')>()),
+  logFrontendError: mockLogFrontendError
 }))
 
 vi.mock('@/lib/dialog-api', () => ({
@@ -602,7 +658,9 @@ vi.mock('@/components/chat/AgentChatPanel', () => ({
   AgentChatPanel: () => null
 }))
 
-vi.mock('@/stores/acp-store', () => {
+vi.mock('@/stores/acp-store', async () => {
+  const { agentReuseKey } =
+    await vi.importActual<typeof import('@/stores/acp-reuse-keys')>('@/stores/acp-reuse-keys')
   const getState = () => ({
     startChat: mockStartChat,
     prepareChat: mockPrepareChat,
@@ -622,9 +680,10 @@ vi.mock('@/stores/acp-store', () => {
     setConfigOption: mockSetConfigOption,
     setMode: mockSetMode,
     setModel: mockSetModel,
+    pickModel: mockPickModel,
     authenticateAgent: mockAuthenticateAgent,
     detachAgentForNewCredentials: mockDetachAgentForNewCredentials,
-    clearPendingBrowserOpen: mockClearPendingBrowserOpen,
+    clearPendingSignIn: mockClearPendingBrowserOpen,
     retargetWarmPool: mockRetargetWarmPool,
     setSelectedAgentConfigId: mockSetSelectedAgentConfigId
   })
@@ -660,7 +719,6 @@ vi.mock('@/stores/acp-store', () => {
   const useAcpSession = (sessionId: string | null) =>
     sessionId ? (acpStateRef.current.sessions[sessionId] ?? null) : null
   const prepareChatKey = (configId: string, cwd: string) => `${configId}\0${cwd}\0`
-  const agentReuseKey = (configId: string, cwd: string) => `${configId}\0${cwd.trim()}`
   const hasModelRelevantOptionsCache = (
     entry:
       | {
@@ -775,6 +833,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.restoreAllMocks()
   __resetLauncherSelectionCache()
+  // Login terminals outlive the launcher; a test's unexited one must not
+  // block the next test's sign-in.
+  useLoginTerminalSignInStore.setState({ byAgent: {} })
   // Start each test from a clean skill slate (web/no-skills default). Skill
   // tests override mockSkills.current.
   mockSkills.current = []
@@ -782,6 +843,7 @@ beforeEach(() => {
   // derivation).
   mockResolvedAgentsOverride.current = null
   acpStateRef.current = {
+    sessionIndex: [],
     agentConfigs: [],
     preparedSessions: {},
     preparingChatKeys: {},
@@ -793,7 +855,7 @@ beforeEach(() => {
     configToLiveAgent: {},
     pendingRestartVersions: {},
     agents: {},
-    pendingBrowserOpen: {},
+    pendingSignIn: {},
     mcpServers: [],
     mcpProbeStatus: {},
     mcpTools: {}
@@ -833,6 +895,7 @@ beforeEach(() => {
   mockSetConfigOption.mockResolvedValue(undefined)
   mockSetMode.mockResolvedValue(undefined)
   mockSetModel.mockResolvedValue(undefined)
+  mockPickModel.mockResolvedValue(undefined)
   mockInstallRegistryBinary.mockResolvedValue({ command: 'opencode.exe', args: ['acp'] })
   mockInstallAcpAgent.mockResolvedValue({ command: 'opencode.exe', args: ['acp'] })
   // Worktree-mode defaults: web context, no git repo, no worktree calls.
@@ -883,6 +946,19 @@ describe('AgentLauncher ACP new thread', () => {
 
     expect(mockCreateLaunchPlaceholder).not.toHaveBeenCalled()
     expect(mockFinalizeChatLaunch).not.toHaveBeenCalled()
+  })
+
+  it('focuses the prompt from a tap on the padding around it', async () => {
+    renderLauncher()
+    const prompt = await screen.findByLabelText('Agent prompt')
+    setComposerValue('hello')
+    act(() => prompt.blur())
+    const row = prompt.closest<HTMLElement>('[data-composer-row]')
+    if (!row) throw new Error('composer row not mounted')
+
+    expect(fireEvent.mouseDown(row)).toBe(false)
+
+    await waitFor(() => expect(document.activeElement).toBe(prompt))
   })
 
   it('opens chat instantly via placeholder then finalizes ACP in the background', async () => {
@@ -1098,7 +1174,7 @@ describe('AgentLauncher ACP new thread', () => {
     seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: {
         category: 'auth',
@@ -1135,7 +1211,7 @@ describe('AgentLauncher ACP new thread', () => {
     seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: {
         category: 'multi-auth',
@@ -1166,11 +1242,88 @@ describe('AgentLauncher ACP new thread', () => {
     await waitFor(() => expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'api_key'))
   })
 
+  it('signs in with a typed API key from the banner and never logs the key', async () => {
+    const apiKey = 'sk-termul-test-not-real'
+    seedDefaultAgentConfigured()
+    const defaultAgent = defaultReadyAgent()
+    acpStateRef.current.prepareChatErrors = {
+      [`${defaultAgent.configId}\0/work\0`]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'This agent advertises multiple sign-in methods (API Key, ChatGPT).'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = {
+      [agentReuseKey(defaultAgent.configId, '/work', 'p1')]: 'agent-live'
+    }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'api-key', name: 'API Key', type: 'agent', takesApiKey: true },
+          { id: 'chat-gpt', name: 'ChatGPT', type: 'agent' }
+        ]
+      }
+    }
+    renderLauncher()
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+    )
+
+    const input = screen.getByLabelText('Key for API Key')
+    expect(input).toHaveAttribute('type', 'password')
+    fireEvent.change(input, { target: { value: `  ${apiKey}  ` } })
+    fireEvent.click(screen.getByRole('button', { name: 'API Key' }))
+
+    await waitFor(() =>
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'api-key', { apiKey })
+    )
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+    )
+    expect(screen.getByLabelText('Key for API Key')).toHaveValue('')
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'agentSignIn.authenticate' })
+    )
+    expect(JSON.stringify(mockLogFrontendError.mock.calls)).not.toContain(apiKey)
+  })
+
+  it('runs an API-key method left empty without a key, so the agent reads its own environment', async () => {
+    seedDefaultAgentConfigured()
+    const defaultAgent = defaultReadyAgent()
+    acpStateRef.current.prepareChatErrors = {
+      [`${defaultAgent.configId}\0/work\0`]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'This agent advertises multiple sign-in methods (API Key, ChatGPT).'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = {
+      [agentReuseKey(defaultAgent.configId, '/work', 'p1')]: 'agent-live'
+    }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'api-key', name: 'API Key', type: 'agent', takesApiKey: true },
+          { id: 'chat-gpt', name: 'ChatGPT', type: 'agent' }
+        ]
+      }
+    }
+    renderLauncher()
+
+    expect(screen.getByLabelText('Key for API Key')).toHaveAttribute('type', 'password')
+    fireEvent.click(screen.getByRole('button', { name: 'API Key' }))
+    await waitFor(() => expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'api-key'))
+  })
+
   it('stacks four sign-in actions under the copy and above the prompt', async () => {
     seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: {
         category: 'multi-auth',
@@ -1201,7 +1354,7 @@ describe('AgentLauncher ACP new thread', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
         'data-placeholder',
-        'Ask anything… (/ for commands, @ for files)'
+        'Ask anything… (/ for commands, @ for files and chats)'
       )
     })
     const actions = document.querySelector('[data-auth-actions="wrap"]')
@@ -1234,7 +1387,9 @@ describe('AgentLauncher ACP new thread', () => {
         detail: 'Choose Login or Factory API Key'
       }
     }
-    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.configToLiveAgent = {
+      [agentReuseKey(factory.configId, '/work', 'p1')]: 'factory-live'
+    }
     acpStateRef.current.agents = {
       'factory-live': {
         id: 'factory-live',
@@ -1275,7 +1430,9 @@ describe('AgentLauncher ACP new thread', () => {
         detail: 'Choose Login or Factory API Key'
       }
     }
-    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.configToLiveAgent = {
+      [agentReuseKey(factory.configId, '/work', 'p1')]: 'factory-live'
+    }
     acpStateRef.current.agents = {
       'factory-live': {
         id: 'factory-live',
@@ -1298,7 +1455,9 @@ describe('AgentLauncher ACP new thread', () => {
       (entry) => entry.id === 'factory-droid'
     )!
     mockResolvedAgentsOverride.current = [factory]
-    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.configToLiveAgent = {
+      [agentReuseKey(factory.configId, '/work', 'p1')]: 'factory-live'
+    }
     acpStateRef.current.agents = {
       'factory-live': {
         id: 'factory-live',
@@ -1321,7 +1480,9 @@ describe('AgentLauncher ACP new thread', () => {
       (entry) => entry.id === 'factory-droid'
     )!
     mockResolvedAgentsOverride.current = [factory]
-    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.configToLiveAgent = {
+      [agentReuseKey(factory.configId, '/work', 'p1')]: 'factory-live'
+    }
     acpStateRef.current.agents = {
       'factory-live': {
         id: 'factory-live',
@@ -1352,7 +1513,7 @@ describe('AgentLauncher ACP new thread', () => {
     // `authenticate` + re-prepares.
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: {
         category: 'auth',
@@ -1419,7 +1580,7 @@ describe('AgentLauncher ACP new thread', () => {
     seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: {
         category: 'auth',
@@ -1471,7 +1632,7 @@ describe('AgentLauncher ACP new thread', () => {
     // driven — disabled entry, never sent to authenticate.
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: {
         category: 'auth',
@@ -1515,7 +1676,7 @@ describe('AgentLauncher ACP new thread', () => {
       envVars: [{ key: 'PROJECT_TOKEN', value: 'proj-secret' }]
     }
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: { category: 'auth', label: 'Authentication required', detail: 'Sign in' }
     }
@@ -1561,7 +1722,7 @@ describe('AgentLauncher ACP new thread', () => {
     seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: { category: 'auth', label: 'Authentication required', detail: 'Sign in' }
     }
@@ -1629,10 +1790,15 @@ describe('AgentLauncher ACP new thread', () => {
       expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
     )
 
-    // Open the MCP servers popover and toggle the "Files" server off.
-    fireEvent.click(screen.getByRole('button', { name: /mcp servers/i }))
-    const filesSwitch = await screen.findByRole('switch', { name: /Disable Files/i })
-    fireEvent.click(filesSwitch)
+    // Open + > Connectors and toggle the "Files" server off.
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Add to chat' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    const connectors = await screen.findByRole('menuitem', { name: /Connectors/ })
+    act(() => connectors.focus())
+    fireEvent.keyDown(connectors, { key: 'ArrowRight' })
+    fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'Files' }))
 
     // The toggle persists to the registry, then cancels + re-prepares so the
     // next launch resolves MCP from the updated registry instead of the stale
@@ -1656,6 +1822,176 @@ describe('AgentLauncher ACP new thread', () => {
     )
   })
 
+  it('does not prewarm the default agent while the saved selection is still loading', async () => {
+    vi.mocked(isTauriContext).mockReturnValue(true)
+    acpStateRef.current.agentConfigs = [ACP_CONFIG, OTHER_ACP_CONFIG]
+    const fallback = defaultReadyAgent()
+    let resolveSaved: (value: unknown) => void = () => undefined
+    mockPersistRead.mockImplementation((key: string) =>
+      key === 'agents/last-selected'
+        ? new Promise((resolve) => {
+            resolveSaved = resolve
+          })
+        : Promise.resolve({ success: true, data: undefined })
+    )
+    renderLauncher()
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    expect(mockRetargetWarmPool).not.toHaveBeenCalled()
+    expect(mockSaveAgentConfig).not.toHaveBeenCalled()
+
+    resolveSaved({ success: true, data: { agentId: 'acp-registry:opencode', mode: 'acp' } })
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith('acp-registry:opencode', '/work', 'p1')
+    )
+    expect(mockRetargetWarmPool).not.toHaveBeenCalledWith(
+      fallback.configId,
+      expect.anything(),
+      expect.anything()
+    )
+  })
+
+  it('opens the next launcher on a saved custom agent, not the default', async () => {
+    vi.mocked(isTauriContext).mockReturnValue(true)
+    const custom: StoredAgentConfig = {
+      id: 'custom-next',
+      configId: 'custom-next',
+      name: 'Next Agent',
+      command: 'next-agent',
+      args: [],
+      env: {}
+    }
+    mockPersistRead.mockImplementation((key: string) =>
+      Promise.resolve(
+        key === 'agents/last-selected'
+          ? { success: true, data: { agentId: 'custom-next', mode: 'acp' } }
+          : { success: true, data: undefined }
+      )
+    )
+    const first = render(
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    first.unmount()
+
+    acpStateRef.current.agentConfigs = [custom]
+    mockResolvedAgentsOverride.current = [
+      ...buildSupportedAcpAgents([custom], 'windows-x86_64'),
+      {
+        id: custom.id,
+        configId: 'custom-next',
+        agent: { id: custom.id, name: custom.name, version: '', description: '', distribution: {} },
+        config: custom,
+        status: 'ready',
+        install: null,
+        manualInstall: null,
+        runtimeLauncher: null,
+        unavailableReason: null
+      }
+    ]
+    renderLauncher()
+
+    expect(
+      screen.getByRole('button', { name: /Currently Next Agent/ }),
+      'the second launcher must not open on the default agent'
+    ).toBeTruthy()
+  })
+
+  it('keeps a saved custom agent selected until its config loads', async () => {
+    vi.mocked(isTauriContext).mockReturnValue(true)
+    const custom: StoredAgentConfig = {
+      id: 'custom-mine',
+      configId: 'custom-mine',
+      name: 'My Agent',
+      command: 'my-agent',
+      args: [],
+      env: {}
+    }
+    mockPersistRead.mockImplementation((key: string) =>
+      Promise.resolve(
+        key === 'agents/last-selected'
+          ? { success: true, data: { agentId: 'custom-mine', mode: 'acp' } }
+          : { success: true, data: undefined }
+      )
+    )
+    const ui = (): React.JSX.Element => (
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    const { rerender } = render(ui())
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    expect(mockRetargetWarmPool).not.toHaveBeenCalled()
+    expect(mockPersistWrite).not.toHaveBeenCalledWith('agents/last-selected', expect.anything())
+
+    // The resolver lists a custom agent only once its config has loaded.
+    await act(async () => {
+      acpStateRef.current.agentConfigs = [custom]
+      mockResolvedAgentsOverride.current = [
+        ...buildSupportedAcpAgents([custom], 'windows-x86_64'),
+        {
+          id: custom.id,
+          configId: 'custom-mine',
+          agent: {
+            id: custom.id,
+            name: custom.name,
+            version: '',
+            description: '',
+            distribution: {}
+          },
+          config: custom,
+          status: 'ready',
+          install: null,
+          manualInstall: null,
+          runtimeLauncher: null,
+          unavailableReason: null
+        }
+      ]
+      rerender(ui())
+    })
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith('custom-mine', '/work', 'p1')
+    )
+    expect(mockRetargetWarmPool).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not retry persisting an agent whose save failed', async () => {
+    vi.mocked(isTauriContext).mockReturnValue(true)
+    mockSaveAgentConfig.mockImplementation(async () => {
+      throw new Error('refusing to persist a raw secret')
+    })
+    const ui = (): React.JSX.Element => (
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    const { rerender } = render(ui())
+    await waitFor(() => expect(mockSaveAgentConfig).toHaveBeenCalledTimes(1))
+
+    // The store rolls a failed save back, which hands the launcher a new array.
+    await act(async () => {
+      acpStateRef.current.agentConfigs = [...acpStateRef.current.agentConfigs]
+      rerender(ui())
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    expect(mockSaveAgentConfig).toHaveBeenCalledTimes(1)
+    expect(mockRetargetWarmPool).not.toHaveBeenCalled()
+  })
+
   it('uses model config and native Agent/mode picker actions without duplicate Agent chips', async () => {
     const key = 'acp-registry:claude-acp\0/work\0'
     acpStateRef.current.agentConfigs = [ACP_CONFIG]
@@ -1674,15 +2010,68 @@ describe('AgentLauncher ACP new thread', () => {
     expect(selector).not.toHaveTextContent('ACP:')
     fireEvent.click(selector)
     clickMenuOption('Model Two')
-    expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
+    expect(mockPickModel).toHaveBeenCalledWith('prepared-1', 'm2', undefined)
 
-    mockSetConfigOption.mockClear()
     expect(screen.getAllByRole('button', { name: /^Agent$/ })).toHaveLength(1)
     fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
     clickMenuOption('Plan')
     expect(mockSetMode).toHaveBeenCalledWith('prepared-1', 'plan')
     expect(mockSetConfigOption).not.toHaveBeenCalled()
   }, 10000)
+
+  it('sets the mode from the Select model sheet on the phone shell', async () => {
+    mockMobileShell.current = true
+    const key = 'acp-registry:claude-acp\0/work\0'
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
+    try {
+      renderLauncher()
+
+      fireEvent.click(await screen.findByRole('button', { name: /Currently Claude Agent/ }))
+      expect(screen.queryByRole('button', { name: /^Agent$/ })).toBeNull()
+      const sheet = await screen.findByRole('dialog', { name: 'Select model' })
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Mode Agent' }))
+      fireEvent.click(
+        within(screen.getByRole('dialog', { name: 'Mode' })).getByRole('radio', { name: 'Plan' })
+      )
+      expect(mockSetMode).toHaveBeenCalledWith('prepared-1', 'plan')
+    } finally {
+      mockMobileShell.current = null
+    }
+  }, 10000)
+
+  it('toggles an MCP server from the + sheet on the phone shell and re-prepares', async () => {
+    mockMobileShell.current = true
+    seedDefaultAgentConfigured()
+    const defaultAgent = defaultReadyAgent()
+    acpStateRef.current.mcpServers = [{ id: 's1', name: 'Files', enabled: true }]
+    try {
+      renderLauncher()
+      await waitFor(() =>
+        expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }))
+      const sheet = await screen.findByRole('dialog', { name: 'Add to chat' })
+      fireEvent.click(within(sheet).getByRole('button', { name: /Connectors/ }))
+      fireEvent.click(
+        await within(screen.getByRole('dialog', { name: 'Connectors' })).findByRole('switch', {
+          name: /Disable Files/i
+        })
+      )
+
+      await waitFor(() => expect(mockSetMcpServerEnabled).toHaveBeenCalledWith('s1', false))
+      expect(mockCancelPreparedChat).toHaveBeenCalledWith(`${defaultAgent.configId}\0/work\0`)
+      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+    } finally {
+      mockMobileShell.current = null
+    }
+  })
 
   it('persists an explicit model choice made on the prepared warm session', async () => {
     const key = 'acp-registry:claude-acp\0/work\0'
@@ -1698,7 +2087,7 @@ describe('AgentLauncher ACP new thread', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Model One/ }))
     clickMenuOption('Model Two')
 
-    expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
+    expect(mockPickModel).toHaveBeenCalledWith('prepared-1', 'm2', undefined)
     await waitFor(() =>
       expect(mockPersistComposerOptions).toHaveBeenCalledWith('acp-registry:claude-acp', {
         modelId: 'm2',
@@ -1706,6 +2095,237 @@ describe('AgentLauncher ACP new thread', () => {
       })
     )
   }, 10000)
+
+  it('a cold start keeps the saved model and its effort for the launched chat', async () => {
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockImplementation(async (key: string) => {
+      if (key === 'agents/last-selected') {
+        return { success: true, data: { agentId: ACP_CONFIG.id, mode: 'acp' } }
+      }
+      if (key === `agents/composer-options/${ACP_CONFIG.id}`) {
+        return {
+          success: true,
+          data: {
+            modelId: 'm2',
+            configValues: { model: 'm2', effort: 'high' },
+            modelValues: { m1: { effort: 'low' }, m2: { effort: 'high' } }
+          }
+        }
+      }
+      return { success: true, data: undefined }
+    })
+    renderLauncher()
+    await waitFor(() =>
+      expect(mockPersistRead).toHaveBeenCalledWith(`agents/composer-options/${ACP_CONFIG.id}`)
+    )
+    await act(async () => {})
+
+    setComposerValue('hello cold')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalled())
+    expect(mockFinalizeChatLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ pending: { modelId: 'm2', configValues: { effort: 'high' } } })
+    )
+  })
+
+  it("a model picked before the chat starts brings back that model's effort", async () => {
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    acpStateRef.current.agentOptionsCache[ACP_CONFIG.id] = {
+      models: null,
+      modes: null,
+      configOptions: preparedSession(ACP_CONFIG).configOptions,
+      updatedAt: 1
+    }
+    mockPersistRead.mockImplementation(async (key: string) => {
+      if (key === 'agents/last-selected') {
+        return { success: true, data: { agentId: ACP_CONFIG.id, mode: 'acp' } }
+      }
+      if (key === `agents/composer-options/${ACP_CONFIG.id}`) {
+        return {
+          success: true,
+          data: {
+            modelId: 'm1',
+            modelValues: { m1: { thinking: 'medium' }, m2: { thinking: 'low' } }
+          }
+        }
+      }
+      return { success: true, data: undefined }
+    })
+    renderLauncher()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Model One/ }))
+    clickMenuOption('Model Two')
+    await waitFor(() =>
+      expect(mockPersistComposerOptions).toHaveBeenCalledWith(ACP_CONFIG.id, {
+        modelId: 'm2',
+        configValues: { model: 'm2' }
+      })
+    )
+
+    setComposerValue('hello m2')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalled())
+    const { pending } = mockFinalizeChatLaunch.mock.calls[0][0] as {
+      pending: { modelId: string; configValues: Record<string, string> }
+    }
+    expect(pending.modelId).toBe('m2')
+    expect(pending.configValues).toMatchObject({ model: 'm2', thinking: 'low' })
+  })
+
+  /** The launcher with one favorite: Model Two at low thinking. */
+  function renderLauncherWithFavorite(): void {
+    // Favorites live in the v2 picker.
+    localStorage.setItem('termul.modelPickerV2', '1')
+    const favorites = createFavoritesStore(
+      memoryFavoritesAdapter([
+        {
+          configId: ACP_CONFIG.id,
+          modelId: 'm2',
+          options: { thinking: 'low' },
+          addedAt: '2026-01-01T00:00:00.000Z'
+        }
+      ])
+    )
+    render(
+      <FavoritesStoreContext.Provider value={favorites}>
+        <TooltipProvider>
+          <MemoryRouter>
+            <AgentLauncher paneId="pane1" />
+          </MemoryRouter>
+        </TooltipProvider>
+      </FavoritesStoreContext.Provider>
+    )
+  }
+
+  it("a favorite picked before the chat starts launches with its snapshot over the model's saved values", async () => {
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    acpStateRef.current.agentOptionsCache[ACP_CONFIG.id] = {
+      models: null,
+      modes: null,
+      configOptions: preparedSession(ACP_CONFIG).configOptions,
+      updatedAt: 1
+    }
+    mockPersistRead.mockImplementation(async (key: string) => {
+      if (key === 'agents/last-selected') {
+        return { success: true, data: { agentId: ACP_CONFIG.id, mode: 'acp' } }
+      }
+      if (key === `agents/composer-options/${ACP_CONFIG.id}`) {
+        return {
+          success: true,
+          data: { modelId: 'm1', modelValues: { m2: { thinking: 'medium' } } }
+        }
+      }
+      return { success: true, data: undefined }
+    })
+    renderLauncherWithFavorite()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Model One/ }))
+    const favorites = await screen.findByRole('group', { name: 'Favorites' })
+    fireEvent.click(within(favorites).getByRole('button', { name: /Model Two · Low/ }))
+    await waitFor(() =>
+      expect(mockPersistComposerOptions).toHaveBeenCalledWith(
+        ACP_CONFIG.id,
+        expect.objectContaining({ modelId: 'm2' })
+      )
+    )
+
+    setComposerValue('hello favorite')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalled())
+    const { pending } = mockFinalizeChatLaunch.mock.calls[0][0] as {
+      pending: { modelId: string; configValues: Record<string, string> }
+    }
+    expect(pending.modelId).toBe('m2')
+    expect(pending.configValues).toMatchObject({ model: 'm2', thinking: 'low' })
+  })
+
+  it("a favorite picked on the prepared session sends the favorite's values with the model", async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
+    renderLauncherWithFavorite()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Model One/ }))
+    const favorites = await screen.findByRole('group', { name: 'Favorites' })
+    fireEvent.click(within(favorites).getByRole('button', { name: /Model Two · Low/ }))
+
+    await waitFor(() =>
+      expect(mockPickModel).toHaveBeenCalledWith('prepared-1', 'm2', { thinking: 'low' })
+    )
+  })
+
+  it('an effort set while the saved record loads wins over the restored one', async () => {
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    acpStateRef.current.agentOptionsCache[ACP_CONFIG.id] = {
+      models: null,
+      modes: null,
+      configOptions: preparedSession(ACP_CONFIG).configOptions,
+      updatedAt: 1
+    }
+    const held: Array<() => void> = []
+    mockPersistRead.mockImplementation(async (key: string) => {
+      if (key === 'agents/last-selected') {
+        return { success: true, data: { agentId: ACP_CONFIG.id, mode: 'acp' } }
+      }
+      if (key === `agents/composer-options/${ACP_CONFIG.id}`) {
+        await new Promise<void>((resolve) => held.push(resolve))
+        return {
+          success: true,
+          data: { modelId: 'm1', modelValues: { m1: { thinking: 'medium' } } }
+        }
+      }
+      return { success: true, data: undefined }
+    })
+    renderLauncher()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Medium/ }))
+    clickMenuOption('Low')
+    // Every reader of the record (the restore, the open panel) gets it now.
+    await waitFor(() => expect(held.length).toBeGreaterThan(0))
+    await act(async () => {
+      for (const release of held) release()
+    })
+    await act(async () => {})
+
+    setComposerValue('hello low')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalled())
+    const { pending } = mockFinalizeChatLaunch.mock.calls[0][0] as {
+      pending: { configValues: Record<string, string> }
+    }
+    expect(pending.configValues).toMatchObject({ thinking: 'low' })
+  })
+
+  it('an effort set before the chat starts is saved under the model on screen', async () => {
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    acpStateRef.current.agentOptionsCache[ACP_CONFIG.id] = {
+      models: null,
+      modes: null,
+      configOptions: preparedSession(ACP_CONFIG).configOptions,
+      updatedAt: 1
+    }
+    mockPersistRead.mockImplementation(async (key: string) =>
+      key === 'agents/last-selected'
+        ? { success: true, data: { agentId: ACP_CONFIG.id, mode: 'acp' } }
+        : { success: true, data: undefined }
+    )
+    renderLauncher()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Medium/ }))
+    clickMenuOption('Low')
+
+    await waitFor(() =>
+      expect(mockPersistComposerOptions).toHaveBeenCalledWith(ACP_CONFIG.id, {
+        configValues: { thinking: 'low' },
+        modelValues: { m1: { thinking: 'low' } }
+      })
+    )
+  })
 
   it('restores the persisted model for the next new chat', async () => {
     acpStateRef.current.agentConfigs = [ACP_CONFIG]
@@ -1732,10 +2352,10 @@ describe('AgentLauncher ACP new thread', () => {
     expect(await screen.findByRole('button', { name: /Model Two/ })).toBeInTheDocument()
   })
 
-  it('shows optimistic model label and pending spinner while setConfigOption is in flight', async () => {
+  it('shows optimistic model label and pending spinner while the model pick is in flight', async () => {
     const key = 'acp-registry:claude-acp\0/work\0'
     let resolveConfig!: () => void
-    mockSetConfigOption.mockImplementation(
+    mockPickModel.mockImplementation(
       () =>
         new Promise<void>((resolve) => {
           resolveConfig = resolve
@@ -1756,7 +2376,7 @@ describe('AgentLauncher ACP new thread', () => {
     const pendingChip = screen.getByTestId('agent-model-selector-trigger')
     expect(pendingChip).toHaveAccessibleName(/Model Two/)
     expect(pendingChip).toHaveAttribute('aria-busy', 'true')
-    expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
+    expect(mockPickModel).toHaveBeenCalledWith('prepared-1', 'm2', undefined)
 
     await act(async () => {
       resolveConfig()
@@ -1792,7 +2412,7 @@ describe('AgentLauncher ACP new thread', () => {
     fireEvent.click(await screen.findByRole('button', { name: /kiro\/Claude Opus 4\.8/ }))
     clickMenuOption('OpenRouter/GPT-5.5')
 
-    expect(mockSetModel).toHaveBeenCalledWith('prepared-1', 'openrouter/gpt-5.5')
+    expect(mockPickModel).toHaveBeenCalledWith('prepared-1', 'openrouter/gpt-5.5', undefined)
     await waitFor(() =>
       expect(mockPersistComposerOptions).toHaveBeenCalledWith('acp-registry:claude-acp', {
         modelId: 'openrouter/gpt-5.5'
@@ -1834,7 +2454,7 @@ describe('AgentLauncher ACP new thread', () => {
     expect(screen.getByText('xAI/Grok 4.3')).toBeInTheDocument()
     expect(screen.queryByText('OpenAI/GPT-5.5 Pro')).not.toBeInTheDocument()
     clickMenuOption('xAI/Grok 4.3')
-    expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'grok-43')
+    expect(mockPickModel).toHaveBeenCalledWith('prepared-1', 'grok-43', undefined)
   })
 
   it('shows supported ACP agents when no configs are persisted', async () => {
@@ -2432,6 +3052,97 @@ describe('AgentLauncher file pills (inline tokens)', () => {
   })
 })
 
+describe('AgentLauncher @ menu', () => {
+  it('opens on the categories for a bare @ and lists the project folder in Explorer', async () => {
+    acpStateRef.current.sessionIndex = [
+      {
+        id: 'chat-1',
+        agentId: 'a',
+        title: 'Earlier chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 0,
+        lastActivityAt: 1,
+        messageCount: 2,
+        status: 'idle'
+      }
+    ]
+    renderLauncher()
+    await screen.findByLabelText('Agent prompt')
+
+    setComposerValue('@')
+    const categories = await screen.findAllByRole('option')
+    expect(categories.map((o) => o.textContent)).toEqual([
+      'Conversations1 in this project',
+      'ExplorerFiles and folders in work/'
+    ])
+
+    fireEvent.click(categories[1])
+    await waitFor(() =>
+      expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['src', 'README.md'])
+    )
+    expect(screen.getByRole('button', { name: 'Back from Explorer' })).toBeInTheDocument()
+    expect(getComposerValue()).toBe('@')
+  })
+})
+
+describe('AgentLauncher conversation pill launch', () => {
+  afterEach(() => {
+    conversationContextsOverride.current = null
+  })
+
+  it('keeps the composer read-only while the mentioned chat transcript loads', async () => {
+    let finishRead!: (contexts: ConversationContexts) => void
+    conversationContextsOverride.current = () =>
+      new Promise((resolve) => {
+        finishRead = resolve
+      })
+    renderLauncher()
+    const editor = await screen.findByLabelText('Agent prompt')
+    setComposerValue(`see ${conversationToken('Old chat', 'chat-9')} `)
+
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'false'))
+    expect(mockCreateLaunchPlaceholder).not.toHaveBeenCalled()
+
+    await act(async () => finishRead({ blocks: [], gaps: new Map([['chat-9', 'unavailable']]) }))
+    await waitFor(() =>
+      expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          initialUserBlocks: [
+            { type: 'text', text: `see ${conversationToken('Old chat', 'chat-9')} ` }
+          ]
+        })
+      )
+    )
+    expect(editor).toHaveAttribute('contenteditable', 'true')
+  })
+
+  it('ignores a starter pick while the launch holds the composer', async () => {
+    let finishRead!: (contexts: ConversationContexts) => void
+    conversationContextsOverride.current = () =>
+      new Promise((resolve) => {
+        finishRead = resolve
+      })
+    renderLauncher()
+    const editor = await screen.findByLabelText('Agent prompt')
+    const draft = `see ${conversationToken('Old chat', 'chat-9')} `
+    setComposerValue(draft)
+
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'false'))
+    fireEvent.click(screen.getByRole('button', { name: 'Find a bug' }))
+    expect(getComposerValue()).toBe(draft)
+
+    await act(async () => finishRead({ blocks: [], gaps: new Map([['chat-9', 'unavailable']]) }))
+    await waitFor(() =>
+      expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
+        expect.objectContaining({ initialUserBlocks: [{ type: 'text', text: draft }] })
+      )
+    )
+  })
+})
+
 describe('AgentLauncher composer drag-drop', () => {
   it('stages a dropped image as an attachment on the launcher composer', async () => {
     const defaultAgent = defaultReadyAgent()
@@ -2469,6 +3180,14 @@ describe('AgentLauncher composer drag-drop', () => {
     expect(screen.getByText('Drop files to attach')).toBeInTheDocument()
     fireEvent.dragLeave(composer as Element)
     expect(screen.queryByText('Drop files to attach')).not.toBeInTheDocument()
+  })
+})
+
+describe('AgentLauncher composer card', () => {
+  it('draws no focus edge around the composer card', () => {
+    renderLauncher()
+    const composer = document.querySelector('[data-agent-launcher-composer]')
+    expect(composer?.className).not.toMatch(/focus-within:|has-\[/)
   })
 })
 
@@ -2770,7 +3489,7 @@ describe('AgentLauncher worktree isolation', () => {
     for (const name of ['Workspace', 'Base branch']) {
       expect(screen.getByRole('combobox', { name })).toHaveClass(
         'focus-visible:ring-2',
-        'focus-visible:ring-ring',
+        'focus-visible:ring-focus-ring',
         'focus-visible:ring-offset-2',
         // Slim 28px row with the standard pseudo hit-extension (40px effective).
         'after:-inset-1.5'
@@ -2872,6 +3591,39 @@ describe('AgentLauncher worktree isolation', () => {
     const base = screen.getByRole('combobox', { name: 'Base branch' }) as HTMLSelectElement
     fireEvent.change(base, { target: { value: branch } })
   }
+
+  it('re-enables launch when New chat re-shows the launcher while a worktree is still being created', async () => {
+    function PresenceHarness({ show }: { show: boolean }) {
+      return (
+        <TooltipProvider>
+          <MemoryRouter>
+            <AnimatePresence initial={false}>
+              {show ? (
+                <motion.div exit={{ opacity: 0 }} transition={{ duration: 5 }}>
+                  <AgentLauncher paneId="pane1" />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </MemoryRouter>
+        </TooltipProvider>
+      )
+    }
+    mockWorktreeCreate.mockReturnValueOnce(new Promise(() => {}))
+    const { rerender } = render(<PresenceHarness show />)
+    await chooseWorktreeBaseBranch('feat/x')
+    setComposerValue('first')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
+
+    // The chat opened and the worktree is still being created when New chat
+    // brings back this exiting launcher.
+    rerender(<PresenceHarness show={false} />)
+    rerender(<PresenceHarness show />)
+    setComposerValue('second')
+    expect(screen.getByLabelText('Start agent chat')).toBeEnabled()
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(2))
+  })
 
   // CAP-3: launch in worktree mode calls worktreeApi.create once with chat/{id}
   // then copyIncludeFiles, then threads cwd=worktreePath
@@ -3338,7 +4090,7 @@ describe('AgentLauncher placeholder', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
         'data-placeholder',
-        'Ask anything… (/ for commands, @ for files)'
+        'Ask anything… (/ for commands, @ for files and chats)'
       )
     })
   })
@@ -3958,6 +4710,76 @@ describe('AgentLauncher exit handoff', () => {
     }
   })
 
+  it('launches again when re-shown while the previous launch is still exiting', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-ready-1' }
+    mockClaimPreparedChat
+      .mockReturnValueOnce('prepared-ready-1')
+      .mockReturnValueOnce('prepared-ready-2')
+    // session/prompt resolves at turn end: the first chat's turn keeps running.
+    mockSendPrompt.mockReturnValue(new Promise(() => {}))
+    try {
+      const { rerender } = render(<Harness show />)
+      await screen.findByText(/what should we do/i)
+      setComposerValue('first')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1))
+
+      // New chat inside the exit window: the boundary restores this instance.
+      simulateChatTabTakeover()
+      rerender(<Harness show={false} />)
+      rerender(<Harness show />)
+      setComposerValue('second')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+      expect(mockClaimPreparedChat).toHaveBeenCalledTimes(2)
+      expect(mockAddAgentChatTab).toHaveBeenLastCalledWith('prepared-ready-2', 'pane1')
+    } finally {
+      restorePaneRoot()
+    }
+  })
+
+  it('keeps the newer launch guarded when the earlier launch finishes during it', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-ready-1' }
+    mockClaimPreparedChat
+      .mockReturnValueOnce('prepared-ready-1')
+      .mockReturnValueOnce('prepared-ready-2')
+    let endFirstTurn: () => void = () => {}
+    mockSendPrompt
+      .mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          endFirstTurn = resolve
+        })
+      )
+      .mockReturnValue(new Promise(() => {}))
+    try {
+      const { rerender } = render(<Harness show />)
+      await screen.findByText(/what should we do/i)
+      setComposerValue('first')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1))
+
+      simulateChatTabTakeover()
+      rerender(<Harness show={false} />)
+      rerender(<Harness show />)
+      setComposerValue('second')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2))
+
+      // The first chat's turn ends while the second launch is still in flight.
+      await act(async () => endFirstTurn())
+      setComposerValue('third')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+      expect(mockClaimPreparedChat).toHaveBeenCalledTimes(2)
+    } finally {
+      restorePaneRoot()
+    }
+  })
+
   it('fades in place without diving when dismissed with no chat handoff', async () => {
     const { rerender } = render(<Harness show />)
     await screen.findByText(/what should we do/i)
@@ -4031,16 +4853,14 @@ describe('AgentLauncher Claude account chip', () => {
     mockMobileShell.current = null
   })
 
-  it("shows the project's account next to the attach button and switches it from the menu", async () => {
+  it("shows the project's account next to the + menu and switches it from the menu", async () => {
     renderLauncher()
 
     const chip = await screen.findByRole('button', {
-      name: 'Claude account: Personal, 37% of its limit used. Change account'
+      name: 'Claude account: Personal, 5-hour 37% used. Change account'
     })
-    expect(chip).toHaveTextContent('Personal37%')
-    expect(screen.getByRole('button', { name: 'Attach files' }).parentElement).toContainElement(
-      chip
-    )
+    expect(chip).toHaveTextContent('Personal5h 37%')
+    expect(screen.getByRole('button', { name: 'Add to chat' }).parentElement).toContainElement(chip)
 
     fireEvent.pointerDown(chip, { button: 0, ctrlKey: false })
     expect(await screen.findByText('Account for this project')).toBeInTheDocument()
@@ -4053,19 +4873,27 @@ describe('AgentLauncher Claude account chip', () => {
     await waitFor(() => expect(mockSwitchProjectClaudeAccount).toHaveBeenCalledWith('p1', 'ab12'))
     expect(
       await screen.findByRole('button', {
-        name: 'Claude account: Work, 5% of its limit used. Change account'
+        name: 'Claude account: Work, 5-hour 5% used. Change account'
       })
     ).toBeInTheDocument()
   })
 
-  it('shows only the status dot and usage on the phone shell', async () => {
+  it('keeps the phone row to add, model and launch, with the account usage in the model sheet', async () => {
     mockMobileShell.current = true
     renderLauncher()
 
-    const chip = await screen.findByRole('button', {
-      name: 'Claude account: Personal, 37% of its limit used. Change account'
-    })
-    expect(chip).toHaveTextContent(/^37%$/)
+    const pill = await screen.findByRole('button', { name: /Currently Claude Agent/ })
+    const row = pill.closest('[data-composer-toolbar-row="mobile"]') as HTMLElement
+    expect(
+      within(row)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label'))
+    ).toEqual(['Add to chat', pill.getAttribute('aria-label'), 'Start agent chat'])
+
+    fireEvent.click(pill)
+    const sheet = await screen.findByRole('dialog', { name: 'Select model' })
+    expect(await within(sheet).findByText('5-hour limit · Personal')).toBeInTheDocument()
+    expect(within(sheet).getByText('37%')).toBeInTheDocument()
   })
 
   it('hides the chip when the user picks an agent other than Claude', async () => {

@@ -28,12 +28,23 @@ impl Fixture {
     /// A ready mount whose document is on disk at version `saved`, run by a
     /// renderer connection whose frames the test answers.
     fn ready(saved: u64) -> Self {
+        Self::loaded(Some(saved))
+    }
+
+    /// A ready mount of a new document: no file, never saved.
+    fn new_document() -> Self {
+        Self::loaded(None)
+    }
+
+    fn loaded(saved: Option<u64>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let doc = dir.path().join("design.figcraft");
-        std::fs::write(&doc, b"saved").unwrap();
+        if saved.is_some() {
+            std::fs::write(&doc, b"saved").unwrap();
+        }
         let mounts = Arc::new(CanvasPersistence::default());
         let seq = mounts.mount(PROJECT, doc.clone(), Duration::from_secs(60));
-        mounts.document_loaded(PROJECT, seq, Some(saved)).unwrap();
+        mounts.document_loaded(PROJECT, seq, saved).unwrap();
         let (tx, frames) = mpsc::unbounded_channel();
         let holder = CanvasHolder::new(
             HOLDER,
@@ -290,6 +301,35 @@ async fn an_edit_the_host_has_not_heard_of_yet_is_still_saved() {
     let outcome = close.await.unwrap().unwrap();
     assert_eq!(outcome.saved_version.as_deref(), Some("3"));
     assert_eq!(std::fs::read(&fixture.doc).unwrap(), b"late edit");
+}
+
+#[tokio::test]
+async fn first_edits_to_a_new_document_the_host_has_not_heard_of_are_saved() {
+    let mut fixture = Fixture::new_document();
+    let close = fixture.close(CloseMode::Save);
+    let probe = fixture.next("host.markSaved").await;
+    assert_eq!(probe.params, r#"{"contentVersion":0}"#);
+    fixture.answer(&probe, r#"{"dirty":true,"contentVersion":2}"#);
+    fixture.save_round(2, b"first edits", false).await;
+    let outcome = close.await.unwrap().unwrap();
+    assert!(outcome.unmounted);
+    assert_eq!(outcome.saved_version.as_deref(), Some("2"));
+    assert_eq!(std::fs::read(&fixture.doc).unwrap(), b"first edits");
+}
+
+#[tokio::test]
+async fn an_untouched_new_document_unmounts_without_a_file_once_the_editor_says_clean() {
+    let mut fixture = Fixture::new_document();
+    let close = fixture.close(CloseMode::Save);
+    let probe = fixture.next("host.markSaved").await;
+    fixture.answer(&probe, r#"{"dirty":false,"contentVersion":1}"#);
+    let outcome = close.await.unwrap().unwrap();
+    assert!(outcome.unmounted);
+    assert_eq!(outcome.saved_version, None);
+    assert!(
+        !fixture.doc.exists(),
+        "no file for a document nobody edited"
+    );
 }
 
 #[tokio::test]

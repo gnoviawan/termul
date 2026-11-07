@@ -34,15 +34,6 @@ export const CHAT_HIT_ICON =
   'relative inline-flex shrink-0 items-center justify-center size-11 @[400px]:size-10'
 
 /**
- * Visually hides a composer control's text label while keeping it in the
- * accessible name. Applies at a pane width of 360px or less: Tailwind v4
- * `@max-[N]` means container width < N, so 361px is the first width that keeps
- * the label. On the mobile web shell the pane equals the viewport, so this is
- * the "ModeChip goes icon-only" truncation step of the one-row composer.
- */
-export const CHAT_COMPACT_LABEL = '@max-[361px]:sr-only'
-
-/**
  * Dense agent-activity rows (tool calls, thought and turn headers). The row is
  * a full-width target, so 28px meets WCAG 2.5.8 for mouse; touch input gets
  * 44px. Keyed on pointer type, not pane width: a narrow desktop pane still has
@@ -120,7 +111,22 @@ export function useComposerToolbarMode(
 }
 
 /**
- * Lift for the question panel that replaces the composer, so it reads as
- * raised over the transcript. `data-flat-elevation` themes drop it.
+ * Card surface shared by the composer family: the chat composer, the agent
+ * launcher composer and the prompt panels that replace the composer. No
+ * focus edge: the card holds the editor, so a ring here lit up on every tap
+ * or click into it. The caret and the controls' own rings show focus.
  */
-export const QUESTION_PANEL_SHADOW = 'shadow-[0_12px_32px_oklch(0_0_0/0.45)]'
+export const COMPOSER_SURFACE_CLASS =
+  'rounded-2xl border border-border/60 bg-card transition-[border-color]'
+
+/**
+ * Composer card at rest. Per-theme lift: `--composer-shadow`.
+ */
+export const COMPOSER_CARD_CLASS = `${COMPOSER_SURFACE_CLASS} shadow-composer`
+
+/**
+ * Prompt panel (AskUserQuestion, ElicitationPrompt) that replaces the
+ * composer: the composer surface, raised over the transcript.
+ * Per-theme lift: `--prompt-panel-shadow`.
+ */
+export const PROMPT_PANEL_CLASS = `${COMPOSER_SURFACE_CLASS} shadow-prompt-panel`

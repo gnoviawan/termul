@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tamper fixture</title>
+<style>
+#decoy { position: fixed; left: 0; top: 0; width: 160px; height: 40px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Tamper fixture</h1>
+<form id="f" onsubmit="return false">
+<input type="hidden" name="children" value="shadows form.children">
+<input type="hidden" name="tagName" value="shadows form.tagName">
+<input type="hidden" name="shadowRoot" value="shadows form.shadowRoot">
+<label for="secret">Secret field</label>
+<input id="secret" name="secret" type="text" aria-label="Secret field">
+<button id="real" type="button">Real button</button>
+</form>
+<p id="result">Result: none</p>
+<p id="leaks">Leaks: none</p>
+<p id="status">Tamper fixture loading</p>
+</main>
+<button id="decoy" type="button">Decoy button</button>
+<img name="title" alt="">
+<img name="body" alt="">
+<img name="documentElement" alt="">
+<script>
+// The images and hidden inputs named like document and form properties
+// shadow those properties in every world, the helpers' included.
+// The page world tries to forge helper results and to see helper state.
+// Helpers that ran in this world would read the forged values, click the
+// decoy, write "FORGED" into the field, or trip a trap; each trap names
+// itself under "Leaks". The page keeps the originals for its own use.
+(function () {
+  var call = Function.prototype.call;
+  var bind = call.bind.bind(call);
+  var setText = bind(Object.getOwnPropertyDescriptor(Node.prototype, 'textContent').set);
+  var rect = bind(Element.prototype.getBoundingClientRect);
+  var byId = bind(Document.prototype.getElementById);
+  var valueDesc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  var getValue = bind(valueDesc.get);
+  var setValue = bind(valueDesc.set);
+  var ownNames = Object.getOwnPropertyNames;
+  var arrayIndexOf = bind(Array.prototype.indexOf);
+  var arrayJoin = bind(Array.prototype.join);
+  var leaksEl = byId(document, 'leaks');
+  var resultEl = byId(document, 'result');
+  var decoy = byId(document, 'decoy');
+  var found = [];
+  function leak(what) {
+    if (arrayIndexOf(found, what) < 0) {
+      found[found.length] = what;
+      setText(leaksEl, 'Leaks: ' + arrayJoin(found, ', '));
+    }
+  }
+
+  JSON.stringify = function () { return '"FORGED"'; };
+  JSON.parse = function () { return { error: 'stale_ref' }; };
+  Array.prototype.filter = function () { return []; };
+  String.prototype.trim = function () { return 'FORGED'; };
+  window.getComputedStyle = function () { return { visibility: 'hidden', display: 'none' }; };
+
+  Object.defineProperty(Object.prototype, '__termulBrowser', {
+    configurable: true,
+    get: function () { return undefined; },
+    set: function () { leak('__termulBrowser'); }
+  });
+  Element.prototype.getBoundingClientRect = function () {
+    leak('getBoundingClientRect');
+    return rect(decoy);
+  };
+  Document.prototype.querySelector = function () {
+    leak('querySelector');
+    return decoy;
+  };
+  var getAttribute = bind(Element.prototype.getAttribute);
+  Element.prototype.getAttribute = function (name) {
+    if (name === 'aria-label') {
+      leak('getAttribute');
+      return 'FORGED';
+    }
+    return getAttribute(this, name);
+  };
+  Object.defineProperty(HTMLElement.prototype, 'innerText', {
+    configurable: true,
+    get: function () { return 'FORGED'; }
+  });
+  Object.defineProperty(Document.prototype, 'title', {
+    configurable: true,
+    get: function () { return 'FORGED'; }
+  });
+  Object.defineProperty(HTMLInputElement.prototype, 'value', {
+    configurable: true,
+    get: function () { return getValue(this); },
+    set: function () {
+      leak('value');
+      setValue(this, 'FORGED');
+    }
+  });
+
+  var baseline = ownNames(window);
+  setInterval(function () {
+    var names = ownNames(window);
+    for (var i = 0; i < names.length; i++) {
+      if (arrayIndexOf(baseline, names[i]) < 0 && /termul/i.test(names[i])) leak('global ' + names[i]);
+    }
+  }, 50);
+
+  byId(document, 'real').addEventListener('click', function () {
+    setText(resultEl, 'Result: clicked real [' + getValue(byId(document, 'secret')) + ']');
+  });
+  decoy.addEventListener('click', function () {
+    setText(resultEl, 'Result: clicked decoy');
+  });
+  setText(byId(document, 'status'), 'Tamper fixture ready');
+})();
+</script>
+</body>
+</html>

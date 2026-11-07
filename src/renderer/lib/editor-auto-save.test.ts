@@ -62,7 +62,12 @@ describe('editor-auto-save (GH-539)', () => {
     path: string,
     overrides: Partial<{ isDirty: boolean; operationStatus: string }> = {}
   ) {
-    mocks.openFiles.set(path, { isDirty: true, operationStatus: 'idle', ...overrides })
+    mocks.openFiles.set(path, {
+      kind: 'text',
+      isDirty: true,
+      operationStatus: 'idle',
+      ...overrides
+    })
   }
 
   it('does not schedule when auto save is disabled', () => {
@@ -130,7 +135,7 @@ describe('editor-auto-save (GH-539)', () => {
     expect(mocks.saveFile).not.toHaveBeenCalled()
     expect(getPendingAutoSaveCount()).toBe(1)
 
-    mocks.openFiles.set('/project/a.txt', { isDirty: true, operationStatus: 'idle' })
+    mocks.openFiles.set('/project/a.txt', { kind: 'text', isDirty: true, operationStatus: 'idle' })
     vi.advanceTimersByTime(1000)
     expect(mocks.saveFile).toHaveBeenCalledTimes(1)
   })
@@ -235,7 +240,7 @@ describe('editor-auto-save (GH-539)', () => {
     expect(mocks.saveFile).toHaveBeenCalledWith('/project/a.txt')
 
     // The busy file's timer deferred and re-scheduled; once idle it saves.
-    mocks.openFiles.set('/project/b.txt', { isDirty: true, operationStatus: 'idle' })
+    mocks.openFiles.set('/project/b.txt', { kind: 'text', isDirty: true, operationStatus: 'idle' })
     vi.advanceTimersByTime(1000)
     expect(mocks.saveFile).toHaveBeenCalledTimes(2)
     expect(mocks.saveFile).toHaveBeenCalledWith('/project/b.txt')
@@ -354,7 +359,11 @@ describe('editor-auto-save (GH-539)', () => {
       await Promise.resolve()
       expect(settled).toBe(false)
 
-      mocks.openFiles.set('/project/a.txt', { isDirty: false, operationStatus: 'idle' })
+      mocks.openFiles.set('/project/a.txt', {
+        kind: 'text',
+        isDirty: false,
+        operationStatus: 'idle'
+      })
       saveGate.resolve(true)
       await expect(flush).resolves.toEqual({ saved: ['/project/a.txt'], failed: [] })
       // The flush must not start a second write for the already-saved file.
@@ -429,8 +438,16 @@ describe('editor-auto-save (GH-539)', () => {
       scheduleAutoSave('/project/clean.txt')
       scheduleAutoSave('/project/busy.txt')
       mocks.openFiles.delete('/project/closed.txt')
-      mocks.openFiles.set('/project/clean.txt', { isDirty: false, operationStatus: 'idle' })
-      mocks.openFiles.set('/project/busy.txt', { isDirty: true, operationStatus: 'saving' })
+      mocks.openFiles.set('/project/clean.txt', {
+        kind: 'text',
+        isDirty: false,
+        operationStatus: 'idle'
+      })
+      mocks.openFiles.set('/project/busy.txt', {
+        kind: 'text',
+        isDirty: true,
+        operationStatus: 'saving'
+      })
 
       const result = await flushPendingAutoSaves()
 

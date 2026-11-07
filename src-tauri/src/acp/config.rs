@@ -71,7 +71,7 @@ impl From<&SessionId> for agent_client_protocol::schema::v1::SessionId {
 }
 
 /// Configuration describing how to launch an ACP agent subprocess.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentConfig {
     /// Stable renderer/config identity used for durable session matching. It is

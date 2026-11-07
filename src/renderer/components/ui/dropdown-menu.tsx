@@ -14,6 +14,7 @@ import {
   MENU_SHORTCUT_CLASS,
   MENU_SUB_TRIGGER_OPEN_CLASS
 } from './menu-styles'
+import { usePortalContainer } from './portal-container'
 
 const DropdownMenu = DropdownMenuPrimitive.Root
 
@@ -31,15 +32,22 @@ const DropdownMenuSubTrigger = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.SubTrigger>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubTrigger> & {
     inset?: boolean
+    /** Muted hint before the chevron, such as a count. */
+    trailing?: React.ReactNode
   }
->(({ className, inset, children, ...props }, ref) => (
+>(({ className, inset, trailing, children, ...props }, ref) => (
   <DropdownMenuPrimitive.SubTrigger
     ref={ref}
     className={cn(MENU_ITEM_CLASS, MENU_SUB_TRIGGER_OPEN_CLASS, inset && 'pl-8', className)}
     {...props}
   >
     {children}
-    <ChevronRight className="ml-auto h-3.5 w-3.5 text-muted-foreground" />
+    <span className="ml-auto flex items-center gap-1.5 pl-4">
+      {trailing != null ? (
+        <span className="text-2xs tabular-nums text-muted-foreground">{trailing}</span>
+      ) : null}
+      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+    </span>
   </DropdownMenuPrimitive.SubTrigger>
 ))
 DropdownMenuSubTrigger.displayName = DropdownMenuPrimitive.SubTrigger.displayName
@@ -60,7 +68,7 @@ const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
 >(({ className, sideOffset = 4, children, ...props }, ref) => (
-  <DropdownMenuPrimitive.Portal>
+  <DropdownMenuPrimitive.Portal container={usePortalContainer()}>
     <DropdownMenuPrimitive.Content
       ref={ref}
       sideOffset={sideOffset}

@@ -72,7 +72,7 @@ require_tools() {
       done
       ;;
     linux)
-      for tool in cp chmod mkdir; do
+      for tool in cp chmod mkdir od tr; do
         if ! command -v "$tool" >/dev/null 2>&1; then
           missing+=("$tool")
         fi
@@ -269,6 +269,7 @@ install_linux() {
   local bin_dir="${TERMUL_INSTALL_BIN_DIR:-${HOME}/.local/bin}"
   local desktop_dir="${TERMUL_INSTALL_DESKTOP_DIR:-${HOME}/.local/share/applications}"
   local target_path="${bin_dir}/termul-manager"
+  local appimage_target="${bin_dir}/termul-manager.AppImage"
   local desktop_path="${desktop_dir}/termul-manager.desktop"
 
   if [[ "$arch" != "x86_64" ]]; then
@@ -295,7 +296,52 @@ install_linux() {
     verify_sha256 "$appimage_path" "$asset_name" "$sums_file" || exit 1
 
     mkdir -p "$bin_dir" "$desktop_dir" || exit 1
-    cp "$appimage_path" "$target_path" || exit 1
+    cp "$appimage_path" "$appimage_target" || exit 1
+    chmod 755 "$appimage_target" || exit 1
+    cat >"$target_path" <<'LAUNCHER'
+#!/usr/bin/env bash
+set -e
+
+# The AppImage bundles a libwayland-client that Mesa 25 and later cannot create
+# an EGL display with, which leaves the window blank on Wayland (#1682).
+# Preloading the host copy fixes it. TERMUL_LAUNCHER_PRELOAD records the entry
+# added here so Termul removes exactly that entry from its terminals.
+unset TERMUL_LAUNCHER_PRELOAD
+if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+  if [[ -n "${TERMUL_WAYLAND_CLIENT_LIB:-}" ]]; then
+    _candidates=("$TERMUL_WAYLAND_CLIENT_LIB")
+  else
+    _candidates=(
+      /usr/lib64/libwayland-client.so.0
+      /usr/lib/x86_64-linux-gnu/libwayland-client.so.0
+      /usr/lib/libwayland-client.so.0
+    )
+  fi
+  # Only a 64-bit library (ELF class byte 0x02) can be preloaded into the
+  # 64-bit AppImage; ld.so ignores a 32-bit copy and the window stays blank.
+  _elf64() { [[ "$(od -An -tx1 -j4 -N1 "$1" 2>/dev/null | tr -d ' \n')" == 02 ]]; }
+  for _lib in "${_candidates[@]}"; do
+    if [[ ! -f "$_lib" ]] || ! _elf64 "$_lib"; then
+      if [[ -n "${TERMUL_WAYLAND_CLIENT_LIB:-}" ]]; then
+        echo "termul-manager: TERMUL_WAYLAND_CLIENT_LIB=${_lib} is not a 64-bit library; starting without the Wayland preload" >&2
+      fi
+      continue
+    fi
+    case " ${LD_PRELOAD//:/ } " in
+      *" ${_lib} "*) ;;
+      *)
+        export LD_PRELOAD="${LD_PRELOAD:+${LD_PRELOAD}:}${_lib}"
+        export TERMUL_LAUNCHER_PRELOAD="$_lib"
+        ;;
+    esac
+    break
+  done
+fi
+
+_self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null)" || _self=""
+[[ -n "$_self" ]] || _self="${BASH_SOURCE[0]}"
+exec "${_self%/*}/termul-manager.AppImage" "$@"
+LAUNCHER
     chmod 755 "$target_path" || exit 1
     cat >"$desktop_path" <<DESKTOP
 [Desktop Entry]

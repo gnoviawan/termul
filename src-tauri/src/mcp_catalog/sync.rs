@@ -1,0 +1,901 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io::{self, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::{DateTime, SecondsFormat, Utc};
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
+use serde_json::Value;
+
+use super::snapshot::{item_from_row, CatalogItem, LoadedCatalog, McpCatalogSource, OFFICIAL_META};
+use super::McpCatalogService;
+
+pub(crate) const REGISTRY_BASE: &str = "https://registry.modelcontextprotocol.io";
+const POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const RETRY_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const PAGE_LIMIT: usize = 100;
+const MAX_PAGES: usize = 5000;
+const MAX_PAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SERVER_BYTES: usize = 1024 * 1024;
+const MAX_CACHE_JSON_BYTES: u64 = 512 * 1024 * 1024;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const REQUEST_ATTEMPTS: u32 = 3;
+const CACHE_FORMAT_VERSION: u32 = 2;
+const CONFIG_SCHEMA_VERSION: u32 = 1;
+const CACHE_FILE: &str = "registry-cache.json.gz";
+/// `update_cache` returns this when `Since` has no extendable cache and a stamp
+/// at or after the snapshot, so the cache that stamp describes went missing.
+const CACHE_UNAVAILABLE: &str = "registry cache missing or invalid";
+/// Cursor and `full` flag, so the next sync can plan without parsing `CACHE_FILE`.
+const STAMP_FILE: &str = "registry-cursor.json";
+const CONFIG_FILE: &str = "config.json";
+const DROPPED_SERVER_FIELDS: [&str; 2] = ["$schema", "_meta"];
+const ICON_FIELDS: [&str; 4] = ["src", "mimeType", "sizes", "theme"];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(
+    tag = "state",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SyncPhase {
+    Idle,
+    Syncing {
+        full: bool,
+        fetched: usize,
+    },
+    Failed {
+        error: String,
+        retry_at: DateTime<Utc>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(tag = "state", rename_all = "lowercase")]
+pub enum McpCatalogSync {
+    Disabled,
+    #[serde(untagged)]
+    Enabled(SyncPhase),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SyncPlan {
+    Full,
+    Since(DateTime<Utc>),
+}
+
+impl SyncPlan {
+    pub(crate) fn for_catalog(source: &McpCatalogSource) -> Self {
+        match source_cursor(source) {
+            Some(at) if !source.sample => Self::Since(at),
+            _ => Self::Full,
+        }
+    }
+
+    fn is_full(self) -> bool {
+        self == Self::Full
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum SyncError {
+    Cancelled,
+    Request(String),
+    Status(u16),
+    TooLarge(usize),
+    Malformed(String),
+    TooManyPages,
+    Cache(String),
+}
+
+impl std::fmt::Display for SyncError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cancelled => f.write_str("sync was turned off"),
+            Self::Request(error) => write!(f, "registry request failed: {error}"),
+            Self::Status(status) => write!(f, "registry returned HTTP {status}"),
+            Self::TooLarge(cap) => write!(f, "registry response exceeded {cap} bytes"),
+            Self::Malformed(error) => write!(f, "registry response is malformed: {error}"),
+            Self::TooManyPages => {
+                write!(f, "registry crawl did not finish within {MAX_PAGES} pages")
+            }
+            Self::Cache(error) => write!(f, "catalog cache write failed: {error}"),
+        }
+    }
+}
+
+impl SyncError {
+    fn retryable(&self) -> bool {
+        match self {
+            Self::Request(_) => true,
+            Self::Status(status) => *status == 429 || *status >= 500,
+            _ => false,
+        }
+    }
+}
+
+pub(crate) struct Registry {
+    base: String,
+    client: reqwest::Client,
+}
+
+#[derive(Deserialize)]
+struct RegistryPage {
+    servers: Vec<Box<RawValue>>,
+    #[serde(default)]
+    metadata: PageMetadata,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PageMetadata {
+    next_cursor: Option<String>,
+}
+
+impl Registry {
+    pub(crate) fn new(base: impl Into<String>) -> reqwest::Result<Self> {
+        let client = reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .redirect(crate::acp::https_only::redirect_policy())
+            .build()?;
+        Ok(Self {
+            base: base.into(),
+            client,
+        })
+    }
+
+    fn url(&self, segments: &[&str]) -> Result<reqwest::Url, SyncError> {
+        let mut url = reqwest::Url::parse(&self.base)
+            .map_err(|error| SyncError::Request(error.to_string()))?;
+        url.path_segments_mut()
+            .map_err(|()| SyncError::Request("registry base is not a URL".to_string()))?
+            .pop_if_empty()
+            .extend(segments);
+        Ok(url)
+    }
+
+    async fn page(&self, plan: SyncPlan, cursor: Option<&str>) -> Result<RegistryPage, SyncError> {
+        let mut url = self.url(&["v0.1", "servers"])?;
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("limit", &PAGE_LIMIT.to_string());
+            match plan {
+                SyncPlan::Full => query.append_pair("version", "latest"),
+                SyncPlan::Since(at) => query.append_pair("updated_since", &rfc3339(at)),
+            };
+            if let Some(cursor) = cursor {
+                query.append_pair("cursor", cursor);
+            }
+        }
+        let body = self.get(url, MAX_PAGE_BYTES).await?;
+        serde_json::from_slice(&body).map_err(|error| SyncError::Malformed(error.to_string()))
+    }
+
+    async fn latest(&self, name: &str) -> Result<Option<Box<RawValue>>, SyncError> {
+        let url = self.url(&["v0.1", "servers", name, "versions", "latest"])?;
+        match self.get(url, MAX_SERVER_BYTES).await {
+            Err(SyncError::Status(404)) => Ok(None),
+            Err(error) => Err(error),
+            Ok(body) => serde_json::from_slice(&body)
+                .map(Some)
+                .map_err(|error| SyncError::Malformed(error.to_string())),
+        }
+    }
+
+    async fn get(&self, url: reqwest::Url, cap: usize) -> Result<Vec<u8>, SyncError> {
+        let mut attempt = 1;
+        loop {
+            match self.get_once(url.clone(), cap).await {
+                Err(error) if error.retryable() && attempt < REQUEST_ATTEMPTS => {
+                    log::debug!("[mcp-catalog] sync request attempt {attempt} failed: {error}");
+                    tokio::time::sleep(Duration::from_secs(1 << attempt)).await;
+                    attempt += 1;
+                }
+                outcome => return outcome,
+            }
+        }
+    }
+
+    async fn get_once(&self, url: reqwest::Url, cap: usize) -> Result<Vec<u8>, SyncError> {
+        use futures_util::StreamExt;
+        let request_error =
+            |error: reqwest::Error| SyncError::Request(error.without_url().to_string());
+        let response = self.client.get(url).send().await.map_err(request_error)?;
+        if !response.status().is_success() {
+            return Err(SyncError::Status(response.status().as_u16()));
+        }
+        let mut body = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(request_error)?;
+            if body.len() + chunk.len() > cap {
+                return Err(SyncError::TooLarge(cap));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowStatus {
+    Active,
+    Deprecated,
+    Deleted,
+}
+
+struct Row {
+    name: String,
+    latest: bool,
+    status: RowStatus,
+    slim: Box<RawValue>,
+}
+
+impl Row {
+    fn parse(raw: &RawValue) -> Option<Self> {
+        let mut row: Value = serde_json::from_str(raw.get()).ok()?;
+        let official = row["_meta"][OFFICIAL_META].take();
+        let mut server = row.get_mut("server").map(Value::take)?;
+        let name = server["name"]
+            .as_str()
+            .filter(|name| !name.is_empty())?
+            .to_string();
+        if let Some(fields) = server.as_object_mut() {
+            for field in DROPPED_SERVER_FIELDS {
+                fields.remove(field);
+            }
+            slim_icons(fields);
+        }
+        let status = match official["status"].as_str() {
+            Some("deleted") => RowStatus::Deleted,
+            Some("deprecated") => RowStatus::Deprecated,
+            _ => RowStatus::Active,
+        };
+        let latest = official["isLatest"].as_bool() == Some(true);
+        let slim = serde_json::value::to_raw_value(&serde_json::json!({
+            "server": server,
+            "_meta": { OFFICIAL_META: official },
+        }))
+        .ok()?;
+        Some(Self {
+            name,
+            latest,
+            status,
+            slim,
+        })
+    }
+
+    fn browsable(self) -> Option<Box<RawValue>> {
+        (self.latest && self.status != RowStatus::Deleted).then_some(self.slim)
+    }
+}
+
+fn slim_icons(server: &mut serde_json::Map<String, Value>) {
+    let icons: Vec<Value> = match server.remove("icons") {
+        Some(Value::Array(icons)) => icons
+            .into_iter()
+            .filter(|icon| icon["src"].is_string())
+            .map(|mut icon| {
+                Value::Object(
+                    ICON_FIELDS
+                        .iter()
+                        .filter_map(|field| Some((field.to_string(), icon.get_mut(field)?.take())))
+                        .collect(),
+                )
+            })
+            .collect(),
+        _ => return,
+    };
+    if !icons.is_empty() {
+        server.insert("icons".to_string(), Value::Array(icons));
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct Delta {
+    pub rows: BTreeMap<String, Option<Box<RawValue>>>,
+    pub received: usize,
+    pub refetched: usize,
+}
+
+pub(crate) async fn fetch(
+    registry: &Registry,
+    plan: SyncPlan,
+    progress: impl Fn(usize),
+) -> Result<Delta, SyncError> {
+    let mut delta = Delta::default();
+    let mut refetch = BTreeSet::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..MAX_PAGES {
+        let page = registry.page(plan, cursor.as_deref()).await?;
+        for row in page.servers.iter().filter_map(|raw| Row::parse(raw)) {
+            delta.received += 1;
+            // The registry moves `isLatest` to another version without bumping its
+            // `updated_at`, so an `updated_since` page never shows the new latest row.
+            if !plan.is_full() && row.status != RowStatus::Active {
+                refetch.insert(row.name);
+                continue;
+            }
+            let name = row.name.clone();
+            if let Some(slim) = row.browsable() {
+                delta.rows.insert(name, Some(slim));
+            }
+        }
+        progress(delta.received);
+        cursor = page.metadata.next_cursor.filter(|next| !next.is_empty());
+        if cursor.is_none() {
+            for name in refetch {
+                let latest = registry.latest(&name).await?;
+                delta.refetched += 1;
+                let row = latest
+                    .as_deref()
+                    .and_then(Row::parse)
+                    .and_then(Row::browsable);
+                delta.rows.insert(name, row);
+            }
+            return Ok(delta);
+        }
+    }
+    Err(SyncError::TooManyPages)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RegistryCache {
+    format_version: u32,
+    pub cursor: DateTime<Utc>,
+    pub full: bool,
+    pub servers: BTreeMap<String, Option<Box<RawValue>>>,
+}
+
+impl RegistryCache {
+    fn new(cursor: DateTime<Utc>, full: bool) -> Self {
+        Self {
+            format_version: CACHE_FORMAT_VERSION,
+            cursor,
+            full,
+            servers: BTreeMap::new(),
+        }
+    }
+
+    fn changes(&self) -> impl Iterator<Item = (String, Option<CatalogItem>)> + '_ {
+        self.servers
+            .iter()
+            .map(|(name, row)| (name.clone(), row.as_deref().and_then(item_from_raw)))
+    }
+}
+
+fn item_from_raw(row: &RawValue) -> Option<CatalogItem> {
+    serde_json::from_str(row.get()).ok().and_then(item_from_row)
+}
+
+fn rfc3339(at: DateTime<Utc>) -> String {
+    at.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn source_cursor(source: &McpCatalogSource) -> Option<DateTime<Utc>> {
+    let at = DateTime::parse_from_rfc3339(source.updated_at.as_deref()?).ok()?;
+    Some(at.with_timezone(&Utc))
+}
+
+pub(crate) fn read_cache(dir: &Path, snapshot: &McpCatalogSource) -> Option<RegistryCache> {
+    let path = dir.join(CACHE_FILE);
+    let file = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            log::warn!("[mcp-catalog] sync cache unreadable: {error}");
+            return None;
+        }
+    };
+    let reader = BufReader::new(GzDecoder::new(file).take(MAX_CACHE_JSON_BYTES));
+    let cache: RegistryCache = match serde_json::from_reader(reader) {
+        Ok(cache) => cache,
+        Err(error) => {
+            log::warn!("[mcp-catalog] sync cache is invalid, ignoring it: {error}");
+            return None;
+        }
+    };
+    if cache.format_version != CACHE_FORMAT_VERSION {
+        log::warn!(
+            "[mcp-catalog] sync cache format {} ignored",
+            cache.format_version
+        );
+        return None;
+    }
+    if source_cursor(snapshot).is_some_and(|at| cache.cursor < at) {
+        log::info!(
+            "[mcp-catalog] sync cache cursor={} is older than the snapshot, discarding it",
+            rfc3339(cache.cursor)
+        );
+        return None;
+    }
+    Some(cache)
+}
+
+fn write_cache(dir: &Path, cache: &RegistryCache) -> io::Result<()> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    serde_json::to_writer(&mut encoder, cache).map_err(io::Error::other)?;
+    encoder.flush()?;
+    crate::acp::atomic_file::replace(&dir.join(CACHE_FILE), &encoder.finish()?)
+}
+
+fn published_source(base: &McpCatalogSource, cache: &RegistryCache) -> McpCatalogSource {
+    McpCatalogSource {
+        updated_at: Some(rfc3339(cache.cursor)),
+        sample: base.sample && !cache.full,
+    }
+}
+
+/// Source a sync publishes after `plan` commits at `started_at`, without parsing rows.
+fn source_after_sync(
+    previous: &McpCatalogSource,
+    plan: SyncPlan,
+    started_at: DateTime<Utc>,
+) -> McpCatalogSource {
+    McpCatalogSource {
+        updated_at: Some(rfc3339(started_at)),
+        sample: if plan.is_full() {
+            false
+        } else {
+            previous.sample
+        },
+    }
+}
+
+pub(crate) fn merge(base: &LoadedCatalog, cache: &RegistryCache) -> LoadedCatalog {
+    let source = published_source(&base.source, cache);
+    if cache.full {
+        LoadedCatalog::from_items(
+            cache.changes().filter_map(|(_, item)| item).collect(),
+            source,
+        )
+    } else {
+        base.with_changes(cache.changes(), source)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheStamp {
+    cursor: DateTime<Utc>,
+    full: bool,
+}
+
+/// `Ok(None)` when there is no stamp, `Err` when it is unreadable or invalid.
+fn load_stamp(dir: &Path) -> Result<Option<CacheStamp>, ()> {
+    let bytes = match fs::read(dir.join(STAMP_FILE)) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            log::warn!("[mcp-catalog] sync cursor stamp unreadable: {error}");
+            return Err(());
+        }
+    };
+    serde_json::from_slice(&bytes).map(Some).map_err(|error| {
+        log::warn!(
+            "[mcp-catalog] sync cursor stamp is invalid ({:?} at {}:{}), ignoring it",
+            error.classify(),
+            error.line(),
+            error.column()
+        );
+    })
+}
+
+fn read_stamp(dir: &Path, snapshot: &McpCatalogSource) -> Option<McpCatalogSource> {
+    let stamp = load_stamp(dir).ok().flatten()?;
+    if source_cursor(snapshot).is_some_and(|at| stamp.cursor < at) {
+        log::info!(
+            "[mcp-catalog] sync cursor stamp {} is older than the snapshot, ignoring it",
+            rfc3339(stamp.cursor)
+        );
+        return None;
+    }
+    Some(McpCatalogSource {
+        updated_at: Some(rfc3339(stamp.cursor)),
+        sample: snapshot.sample && !stamp.full,
+    })
+}
+
+fn write_stamp(dir: &Path, cache: &RegistryCache) -> io::Result<()> {
+    let bytes = serde_json::to_vec(&CacheStamp {
+        cursor: cache.cursor,
+        full: cache.full,
+    })
+    .map_err(io::Error::other)?;
+    crate::acp::atomic_file::replace(&dir.join(STAMP_FILE), &bytes)
+}
+
+/// Gzip header of a cache this process can extend. Does not parse server rows.
+fn cache_header_ok(dir: &Path) -> bool {
+    let Ok(file) = fs::File::open(dir.join(CACHE_FILE)) else {
+        return false;
+    };
+    let mut prefix = [0u8; 256];
+    let Ok(n) = GzDecoder::new(file).read(&mut prefix) else {
+        return false;
+    };
+    std::str::from_utf8(&prefix[..n]).is_ok_and(|text| text.contains("\"formatVersion\":2"))
+}
+
+/// The on-disk cursor. A stamp is ignored unless its cache file is readable,
+/// so a missing cache cannot plan `Since` and then persist only the new rows.
+fn stored_source(dir: &Path, snapshot: &McpCatalogSource) -> McpCatalogSource {
+    if let Some(source) = read_stamp(dir, snapshot) {
+        if cache_header_ok(dir) {
+            return source;
+        }
+        log::warn!(
+            "[mcp-catalog] sync cursor stamp ignored, registry cache is missing or invalid; forcing a full crawl"
+        );
+        // Do not fall back to Since(snapshot): a release snapshot cursor would
+        // still plan incremental, and update_cache would then refuse the stamp.
+        return McpCatalogSource {
+            updated_at: None,
+            sample: true,
+        };
+    }
+    read_cache(dir, snapshot)
+        .map(|cache| published_source(snapshot, &cache))
+        .unwrap_or_else(|| snapshot.clone())
+}
+
+/// Whether an incremental sync with no extendable cache may start a delta-only
+/// one. A restart folds that cache onto the embedded snapshot, so the crawl
+/// must start at or before the snapshot cursor; a loaded catalog that synced
+/// past it holds changes the delta would not. Then yes on the first sync (no
+/// stamp), and when the stamp predates the snapshot: an upgrade shipped a newer
+/// snapshot, so the delta since it is complete. A stamp at or after the
+/// snapshot means its cache went missing or invalid, and a delta-only cache
+/// would drop what it held.
+fn may_start_delta_cache(dir: &Path, snapshot: &McpCatalogSource, from: DateTime<Utc>) -> bool {
+    let Some(at) = source_cursor(snapshot).filter(|at| from <= *at) else {
+        return false;
+    };
+    match load_stamp(dir) {
+        Ok(None) => true,
+        Ok(Some(stamp)) => stamp.cursor < at,
+        Err(()) => false,
+    }
+}
+
+/// Writes the registry delta. Does not parse rows into catalog items.
+fn update_cache(
+    dir: &Path,
+    source: &McpCatalogSource,
+    snapshot: &McpCatalogSource,
+    plan: SyncPlan,
+    delta: Delta,
+    started_at: DateTime<Utc>,
+) -> io::Result<RegistryCache> {
+    let mut cache = match plan {
+        SyncPlan::Full => RegistryCache::new(started_at, true),
+        SyncPlan::Since(from) => match read_cache(dir, source) {
+            Some(cache) => cache,
+            None if may_start_delta_cache(dir, snapshot, from) => {
+                log::info!(
+                    "[mcp-catalog] sync starting a fresh delta cache from cursor={}",
+                    rfc3339(from)
+                );
+                RegistryCache::new(started_at, false)
+            }
+            None => {
+                log::warn!("[mcp-catalog] incremental sync cannot extend the registry cache");
+                return Err(io::Error::other(CACHE_UNAVAILABLE));
+            }
+        },
+    };
+    cache.cursor = started_at;
+    if plan.is_full() {
+        cache.servers = delta.rows;
+    } else {
+        cache.servers.extend(delta.rows);
+    }
+    write_cache(dir, &cache)?;
+    if let Err(error) = write_stamp(dir, &cache) {
+        log::warn!("[mcp-catalog] sync cursor stamp failed: {error}");
+    }
+    Ok(cache)
+}
+
+pub(crate) fn commit(
+    dir: &Path,
+    current: &LoadedCatalog,
+    snapshot: &McpCatalogSource,
+    plan: SyncPlan,
+    delta: Delta,
+    started_at: DateTime<Utc>,
+) -> io::Result<LoadedCatalog> {
+    let changes: Vec<_> = if plan.is_full() {
+        Vec::new()
+    } else {
+        delta
+            .rows
+            .iter()
+            .map(|(name, row)| (name.clone(), row.as_deref().and_then(item_from_raw)))
+            .collect()
+    };
+    let cache = update_cache(dir, &current.source, snapshot, plan, delta, started_at)?;
+    if plan.is_full() {
+        return Ok(merge(&LoadedCatalog::default(), &cache));
+    }
+    Ok(current.with_changes(
+        changes,
+        source_after_sync(&current.source, plan, started_at),
+    ))
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncConfig {
+    schema_version: u32,
+    sync_enabled: bool,
+}
+
+pub(crate) fn read_enabled(dir: &Path) -> bool {
+    let path = dir.join(CONFIG_FILE);
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return true,
+        Err(error) => {
+            log::warn!("[mcp-catalog] sync setting unreadable, keeping sync off: {error}");
+            return false;
+        }
+    };
+    match serde_json::from_slice::<SyncConfig>(&bytes) {
+        Ok(config) if config.schema_version == CONFIG_SCHEMA_VERSION => config.sync_enabled,
+        Ok(config) => {
+            log::warn!(
+                "[mcp-catalog] sync setting schema {} unsupported, keeping sync off",
+                config.schema_version
+            );
+            false
+        }
+        Err(error) => {
+            // serde_json's message quotes the offending value, so log only where it failed.
+            log::warn!(
+                "[mcp-catalog] sync setting is invalid ({:?} at {}:{}), keeping sync off",
+                error.classify(),
+                error.line(),
+                error.column()
+            );
+            let _ = crate::acp::atomic_file::backup_corrupt(&path, &bytes);
+            false
+        }
+    }
+}
+
+fn write_enabled(dir: &Path, enabled: bool) -> io::Result<()> {
+    let config = SyncConfig {
+        schema_version: CONFIG_SCHEMA_VERSION,
+        sync_enabled: enabled,
+    };
+    let bytes = serde_json::to_vec_pretty(&config).map_err(io::Error::other)?;
+    crate::acp::atomic_file::replace(&dir.join(CONFIG_FILE), &bytes)
+}
+
+pub(crate) struct SyncHost {
+    dir: PathBuf,
+    registry: Registry,
+    enabled: tokio::sync::watch::Sender<bool>,
+    setting: tokio::sync::Mutex<()>,
+}
+
+impl SyncHost {
+    pub(crate) fn new(dir: PathBuf, registry: Registry) -> Self {
+        let enabled = read_enabled(&dir);
+        Self {
+            dir,
+            registry,
+            enabled: tokio::sync::watch::Sender::new(enabled),
+            setting: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    pub(crate) fn enabled(&self) -> bool {
+        *self.enabled.borrow()
+    }
+
+    async fn until_enabled_is(&self, enabled: bool) {
+        // `wait_for` fails only once the sender is dropped, and `self` owns it.
+        let _ = self
+            .enabled
+            .subscribe()
+            .wait_for(|now| *now == enabled)
+            .await;
+    }
+
+    pub(crate) async fn set_enabled(&self, enabled: bool) -> io::Result<()> {
+        let _setting = self.setting.lock().await;
+        let dir = self.dir.clone();
+        tokio::task::spawn_blocking(move || write_enabled(&dir, enabled))
+            .await
+            .map_err(io::Error::other)??;
+        self.enabled.send_replace(enabled);
+        Ok(())
+    }
+}
+
+impl McpCatalogService {
+    pub(crate) async fn run_sync(self: Arc<Self>, host: Arc<SyncHost>) {
+        // A request may have parsed the snapshot before sync attached. Fold
+        // the cache in then. Do not parse the snapshot just to apply it.
+        self.apply_cached_catalog(&host.dir).await;
+        let mut next_run = tokio::time::Instant::now();
+        loop {
+            if !host.enabled() {
+                log::info!("[mcp-catalog] sync is off");
+                host.until_enabled_is(true).await;
+                continue;
+            }
+            if tokio::time::Instant::now() < next_run {
+                tokio::select! {
+                    () = tokio::time::sleep_until(next_run) => {}
+                    () = host.until_enabled_is(false) => {}
+                }
+                continue;
+            }
+            let phase = match self.sync_once(&host).await {
+                Ok(()) => SyncPhase::Idle,
+                Err(SyncError::Cancelled) => {
+                    log::info!("[mcp-catalog] sync stopped: turned off");
+                    *self.phase.lock() = SyncPhase::Idle;
+                    continue;
+                }
+                Err(error) => {
+                    log::warn!("[mcp-catalog] sync failed: {error}");
+                    SyncPhase::Failed {
+                        error: error.to_string(),
+                        retry_at: Utc::now() + RETRY_INTERVAL,
+                    }
+                }
+            };
+            next_run = tokio::time::Instant::now()
+                + if phase == SyncPhase::Idle {
+                    POLL_INTERVAL
+                } else {
+                    RETRY_INTERVAL
+                };
+            *self.phase.lock() = phase;
+        }
+    }
+
+    /// Cursor for the next crawl. Uses the embedded metadata, or the on-disk
+    /// cache when one exists. Does not parse the snapshot's rows.
+    async fn sync_source(&self) -> McpCatalogSource {
+        if let Some(catalog) = self.loaded() {
+            return catalog.source.clone();
+        }
+        if let Some(source) = self.sync_cursor.lock().clone() {
+            return source;
+        }
+        let snapshot = self.snapshot.clone();
+        let dir = self.state_dir.lock().clone();
+        let source = match dir {
+            Some(dir) => {
+                let snapshot_for_read = snapshot.clone();
+                tokio::task::spawn_blocking(move || stored_source(&dir, &snapshot_for_read))
+                    .await
+                    .unwrap_or(snapshot)
+            }
+            None => snapshot,
+        };
+        let mut cursor = self.sync_cursor.lock();
+        if cursor.is_none() {
+            *cursor = Some(source.clone());
+        }
+        source
+    }
+
+    async fn apply_cached_catalog(&self, dir: &Path) {
+        let gate = Arc::clone(&self.load_gate);
+        let catalog_slot = Arc::clone(&self.catalog);
+        let cursor = Arc::clone(&self.sync_cursor);
+        let dir = dir.to_path_buf();
+        let _merged = tokio::task::spawn_blocking(move || {
+            let _gate = gate.lock();
+            let base = catalog_slot.read().as_ref().map(Arc::clone)?;
+            let cache = read_cache(&dir, &base.source)?;
+            // fold_cache refuses an incomplete overlay on a failed snapshot.
+            let catalog = super::fold_cache((*base).clone(), Some(cache));
+            super::publish(&catalog_slot, &cursor, catalog);
+            Some(())
+        })
+        .await
+        .ok();
+    }
+
+    async fn crawl(&self, host: &SyncHost, plan: SyncPlan) -> Result<Delta, SyncError> {
+        let full = plan.is_full();
+        match plan {
+            SyncPlan::Full => log::info!("[mcp-catalog] sync start: full crawl"),
+            SyncPlan::Since(at) => log::info!("[mcp-catalog] sync start: cursor={}", rfc3339(at)),
+        }
+        *self.phase.lock() = SyncPhase::Syncing { full, fetched: 0 };
+        // Biased so the setting is checked before every poll of the crawl: no page,
+        // refetch, or retry goes out once sync is off, and a request in flight is dropped.
+        tokio::select! {
+            biased;
+            () = host.until_enabled_is(false) => Err(SyncError::Cancelled),
+            delta = fetch(&host.registry, plan, |fetched| {
+                *self.phase.lock() = SyncPhase::Syncing { full, fetched };
+            }) => delta,
+        }
+    }
+
+    async fn store(
+        &self,
+        host: &SyncHost,
+        plan: SyncPlan,
+        delta: Delta,
+        started_at: DateTime<Utc>,
+        source: &McpCatalogSource,
+    ) -> Result<(), SyncError> {
+        let (received, refetched, changed) = (delta.received, delta.refetched, delta.rows.len());
+        let full = plan.is_full();
+        let gate = Arc::clone(&self.load_gate);
+        let catalog_slot = Arc::clone(&self.catalog);
+        let cursor_slot = Arc::clone(&self.sync_cursor);
+        let dir = host.dir.clone();
+        let source_for_cache = source.clone();
+        let snapshot = self.snapshot.clone();
+        let updated = tokio::task::spawn_blocking(move || -> io::Result<Option<usize>> {
+            let _gate = gate.lock();
+            // Drop the read guard before `publish` takes the write lock.
+            let current = catalog_slot.read().as_ref().map(Arc::clone);
+            if let Some(current) = current {
+                let catalog = commit(&dir, &current, &snapshot, plan, delta, started_at)?;
+                let count = catalog.items.len();
+                super::publish(&catalog_slot, &cursor_slot, catalog);
+                Ok(Some(count))
+            } else {
+                update_cache(&dir, &source_for_cache, &snapshot, plan, delta, started_at)?;
+                *cursor_slot.lock() = Some(source_after_sync(&source_for_cache, plan, started_at));
+                Ok(None)
+            }
+        })
+        .await
+        .map_err(|error| SyncError::Cache(error.to_string()))?
+        .map_err(|error| SyncError::Cache(error.to_string()))?;
+        let cursor = rfc3339(started_at);
+        match updated {
+            Some(items) => {
+                log::info!(
+                    "[mcp-catalog] sync done: full={full} received={received} refetched={refetched} changed={changed} items={items} cursor={cursor}",
+                );
+            }
+            None => {
+                log::info!(
+                    "[mcp-catalog] sync done: full={full} received={received} refetched={refetched} changed={changed} loaded=false cursor={cursor}",
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn sync_once(&self, host: &SyncHost) -> Result<(), SyncError> {
+        let started_at = Utc::now();
+        let source = self.sync_source().await;
+        let mut plan = SyncPlan::for_catalog(&source);
+        loop {
+            let delta = self.crawl(host, plan).await?;
+            match self.store(host, plan, delta, started_at, &source).await {
+                Err(SyncError::Cache(message))
+                    if !plan.is_full() && message.contains(CACHE_UNAVAILABLE) =>
+                {
+                    log::warn!(
+                        "[mcp-catalog] incremental sync cannot extend the cache, starting a full crawl"
+                    );
+                    plan = SyncPlan::Full;
+                }
+                other => return other,
+            }
+        }
+    }
+}

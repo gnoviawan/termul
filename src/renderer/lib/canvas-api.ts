@@ -43,7 +43,8 @@ export const canvasApi: CanvasApi = {
     transport().dirtyChanged(projectId, mountSeq, dirty, contentVersion),
   writeSnapshot: (projectId, mountSeq, snapshot) =>
     transport().writeSnapshot(projectId, mountSeq, snapshot),
-  diskChanged: (projectId, mountSeq) => transport().diskChanged(projectId, mountSeq),
+  diskChanged: (projectId, mountSeq, reloadFailed) =>
+    transport().diskChanged(projectId, mountSeq, reloadFailed),
   resolveConflict: (projectId, mountSeq, choice, snapshot) =>
     transport().resolveConflict(projectId, mountSeq, choice, snapshot),
   crashed: (projectId, mountSeq, reason) => transport().crashed(projectId, mountSeq, reason)

@@ -1,11 +1,18 @@
 import { toast } from 'sonner'
 import { ModeChip } from '@/components/chat/AgentHeader'
-import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
-import { AgentModelSelector } from '@/components/chat/agent-model-selector/AgentModelSelector'
+import {
+  AgentModelSelector,
+  type PhoneSelectorControls
+} from '@/components/chat/agent-model-selector/AgentModelSelector'
 import type { SelectorSource } from '@/components/chat/agent-model-selector/selector-source'
 import type { ComposerToolbarMode } from '@/components/chat/chat-layout'
 import { ProjectClaudeAccountChip } from '@/components/chat/claude-account/ClaudeAccountChip'
-import { McpBadge } from '@/components/chat/McpBadge'
+import { ComposerAddMenu } from '@/components/chat/composer/ComposerAddMenu'
+import {
+  type ComposerAddHandle,
+  ComposerAddSheet
+} from '@/components/chat/composer/ComposerAddSheet'
+import { useTermulTools } from '@/components/chat/composer/use-termul-tools'
 import { ArrowUp } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
@@ -15,19 +22,20 @@ import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { cn } from '@/lib/utils'
 import { type AcpSession, useAcpStore } from '@/stores/acp-store'
+import type { OptionValues } from '@/stores/acp-store/composer-options'
 import { CLAUDE_AGENT_CONFIG_ID } from '@/stores/claude-account-switch'
 import { AgentUpdateCta } from './AgentUpdateCta'
 
 /**
- * The composer card's bottom row: attachments + MCP badge (+ the Claude
- * account chip) on the left; the update CTA, the agent/model selector (agent,
+ * The composer card's bottom row: the + menu (attachments, mentions,
+ * commands, connectors) and the Claude account chip on the left; the update CTA, the agent/model selector (agent,
  * model, effort, Fast, agent options), the mode chip, and the launch button on
- * the right. On the phone shell the account chip sits compact before the
- * launch button, where the chat composer has it.
+ * the right. On the phone shell it is the chat composer's row: the + sheet
+ * (attachments, mentions, commands, connectors), the model pill, and launch.
+ * The Select model sheet holds the mode and the Claude account.
  */
 export function LauncherToolbar({
-  pickFiles,
-  canPick,
+  addHandle,
   isMobileShell,
   mcpCount,
   mcpServers,
@@ -67,8 +75,8 @@ export function LauncherToolbar({
   onSelectorCloseAutoFocus,
   toolbarMode
 }: {
-  pickFiles: () => Promise<void>
-  canPick: boolean
+  /** The + sheet's and + menu's handle into the launcher's attachments and editor. */
+  addHandle: ComposerAddHandle
   isMobileShell: boolean
   toolbarMode: ComposerToolbarMode
   mcpCount: number
@@ -96,7 +104,7 @@ export function LauncherToolbar({
   modelOption: SessionConfigOption | null
   modelSource: 'config' | 'models' | null
   optionsInteractive: boolean
-  handleSetModel: (valueId: string) => Promise<void>
+  handleSetModel: (valueId: string, values?: OptionValues) => Promise<void>
   thoughtLevel: SessionConfigOption | null
   modelConfig: SessionConfigOption[]
   handleSetConfig: (configId: string, valueId: string | boolean) => Promise<void>
@@ -113,44 +121,126 @@ export function LauncherToolbar({
    */
   onSelectorCloseAutoFocus?: (event: Event) => void
 }): React.JSX.Element {
-  const accountChip =
-    selectedEntry?.configId === CLAUDE_AGENT_CONFIG_ID && activeProjectId ? (
-      <ProjectClaudeAccountChip projectId={activeProjectId} compact={isMobileShell} />
+  const termulTools = useTermulTools(activeProjectId || null)
+  const claudeProjectId =
+    selectedEntry?.configId === CLAUDE_AGENT_CONFIG_ID && activeProjectId ? activeProjectId : null
+  const mcpListProps = {
+    count: mcpCount,
+    servers: mcpServers,
+    onToggle: (id: string, enabled: boolean) => {
+      void setMcpServerEnabled(id, enabled)
+        .then(() => {
+          if (!preparedKey || !activeConfigId || !projectRoot) return
+          const store = useAcpStore.getState()
+          store.cancelPreparedChat(preparedKey)
+          store.prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
+        })
+        .catch(() => {
+          toast.error('Could not update the MCP server. Your previous setting was restored.')
+        })
+    },
+    probeStatus: mcpProbeStatus,
+    probeError: mcpProbeError,
+    tools: mcpTools,
+    onLoadTools: (id: string) => {
+      void loadMcpTools(id)
+    }
+  }
+  const updateCta =
+    selectedEntry && (selectedUpdateAgent || pendingRestartVersion) ? (
+      // One CTA communicates the full lifecycle: Update → Updating
+      // → Restart. The Restart action opens a new chat on the new
+      // version; currently open chats are deliberately preserved.
+      <AgentUpdateCta
+        agentName={selectedEntry.config?.name ?? selectedEntry.agent.name}
+        version={pendingRestartVersion ?? selectedUpdateAgent?.version ?? ''}
+        updating={updatingSelected}
+        restarting={restartingUpdatedAgent}
+        restartAvailable={pendingRestartVersion !== null}
+        onUpdate={handleSelectedAgentUpdate}
+        onRestart={handleRestartUpdatedAgent}
+      />
     ) : null
+  // One control for agent, model, effort, Fast, and agent options: the same
+  // selector as a chat, with the launcher's draft as its source.
+  const selector = (phone?: PhoneSelectorControls) => (
+    <AgentModelSelector
+      draft={{
+        source: selectorSource,
+        agentName: selectedConfig?.name ?? selectedEntry?.agent.name ?? null
+      }}
+      disabled={Boolean(installingConfigId) || savingManualPath}
+      busy={false}
+      modelOption={modelOption}
+      modelSource={modelSource}
+      thoughtLevel={optionsInteractive ? thoughtLevel : null}
+      fastMode={optionsInteractive ? fastMode : null}
+      agentTemplateId={selectedConfig?.templateId ?? selectedEntry?.agent.id ?? null}
+      agentIcon={selectedConfig?.icon ?? null}
+      genericOptions={optionsInteractive ? [...modelConfig, ...nonFastGenericOptions] : []}
+      onSetConfig={handleSetConfig}
+      onSetModel={handleSetModel}
+      onCloseAutoFocus={onSelectorCloseAutoFocus}
+      phone={phone}
+    />
+  )
+  const launchButton = (
+    <Button
+      type="button"
+      variant="composer"
+      size={isMobileShell ? 'touch' : 'icon'}
+      onClick={() => launch()}
+      disabled={!canLaunch}
+      className={cn('shrink-0', isMobileShell ? 'w-11 [&_svg]:size-5' : '[&_svg]:size-[18px]')}
+      aria-label="Start agent chat"
+      title="Start agent chat"
+    >
+      <ArrowUp />
+    </Button>
+  )
+
+  if (isMobileShell) {
+    return (
+      <div
+        className="flex items-center justify-between gap-3 px-2 pb-2"
+        data-composer-toolbar={toolbarMode}
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-2" data-composer-toolbar-row="mobile">
+          <ComposerAddSheet
+            handle={addHandle}
+            disabled={!addHandle.canPick}
+            termulTools={termulTools}
+            connectorsHost="launcher"
+            {...mcpListProps}
+          />
+          {selector({
+            modes: optionsInteractive ? (modePreviewSession?.modes ?? null) : null,
+            onSetMode: handleSetMode,
+            compact: null,
+            claudeProjectId
+          })}
+          <div className="flex-1" />
+          {updateCta}
+          {launchButton}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
       className="flex items-center justify-between gap-3 px-2 pb-2"
       data-composer-toolbar={toolbarMode}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <AttachFilesButton
-          onClick={() => void pickFiles()}
-          disabled={!canPick}
-          className={isMobileShell ? 'size-11' : undefined}
+        <ComposerAddMenu
+          handle={addHandle}
+          disabled={!addHandle.canPick}
+          connectors={mcpListProps}
+          connectorsHost="launcher"
+          termulTools={termulTools}
         />
-        <McpBadge
-          count={mcpCount}
-          servers={mcpServers}
-          onToggle={(id, enabled) => {
-            void setMcpServerEnabled(id, enabled)
-              .then(() => {
-                if (!preparedKey || !activeConfigId || !projectRoot) return
-                const store = useAcpStore.getState()
-                store.cancelPreparedChat(preparedKey)
-                store.prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
-              })
-              .catch(() => {
-                toast.error('Could not update the MCP server. Your previous setting was restored.')
-              })
-          }}
-          probeStatus={mcpProbeStatus}
-          probeError={mcpProbeError}
-          tools={mcpTools}
-          onLoadTools={(id) => {
-            void loadMcpTools(id)
-          }}
-        />
-        {!isMobileShell && accountChip}
+        {claudeProjectId ? <ProjectClaudeAccountChip projectId={claudeProjectId} /> : null}
       </div>
       <div
         className={cn(
@@ -164,43 +254,8 @@ export function LauncherToolbar({
           // The launch button stays a fixed sibling so it never scrolls away.
           const chips = (
             <>
-              {selectedEntry && (selectedUpdateAgent || pendingRestartVersion) && (
-                // One CTA communicates the full lifecycle: Update → Updating
-                // → Restart. The Restart action opens a new chat on the new
-                // version; currently open chats are deliberately preserved.
-                <AgentUpdateCta
-                  agentName={selectedEntry.config?.name ?? selectedEntry.agent.name}
-                  version={pendingRestartVersion ?? selectedUpdateAgent?.version ?? ''}
-                  updating={updatingSelected}
-                  restarting={restartingUpdatedAgent}
-                  restartAvailable={pendingRestartVersion !== null}
-                  onUpdate={handleSelectedAgentUpdate}
-                  onRestart={handleRestartUpdatedAgent}
-                />
-              )}
-              {/* One control for agent, model, effort, Fast, and agent options:
-                  the same selector as a chat, with the launcher's draft as its
-                  source. */}
-              <AgentModelSelector
-                draft={{
-                  source: selectorSource,
-                  agentName: selectedConfig?.name ?? selectedEntry?.agent.name ?? null
-                }}
-                disabled={Boolean(installingConfigId) || savingManualPath}
-                busy={false}
-                modelOption={modelOption}
-                modelSource={modelSource}
-                thoughtLevel={optionsInteractive ? thoughtLevel : null}
-                fastMode={optionsInteractive ? fastMode : null}
-                agentTemplateId={selectedConfig?.templateId ?? selectedEntry?.agent.id ?? null}
-                agentIcon={selectedConfig?.icon ?? null}
-                genericOptions={
-                  optionsInteractive ? [...modelConfig, ...nonFastGenericOptions] : []
-                }
-                onSetConfig={handleSetConfig}
-                onSetModel={handleSetModel}
-                onCloseAutoFocus={onSelectorCloseAutoFocus}
-              />
+              {updateCta}
+              {selector()}
               {modePreviewSession && (
                 <ModeChip
                   session={modePreviewSession}
@@ -228,19 +283,7 @@ export function LauncherToolbar({
             </div>
           )
         })()}
-        {isMobileShell && accountChip}
-        <Button
-          type="button"
-          variant="composer"
-          size={isMobileShell ? 'touch' : 'icon'}
-          onClick={() => launch()}
-          disabled={!canLaunch}
-          className={cn('shrink-0', isMobileShell ? 'w-11 [&_svg]:size-5' : '[&_svg]:size-[18px]')}
-          aria-label="Start agent chat"
-          title="Start agent chat"
-        >
-          <ArrowUp />
-        </Button>
+        {launchButton}
       </div>
     </div>
   )

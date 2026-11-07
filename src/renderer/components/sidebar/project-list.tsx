@@ -3,6 +3,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { ChevronDown, ChevronRight, FolderPlus } from '@/components/icons'
 import { RailTooltip } from '@/components/shell/rail-button'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
+import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import type { Project, ProjectGroup } from '@/types/project'
@@ -12,6 +13,7 @@ import type { ProjectRowStatus } from './indicators'
 import { RailGroupRow } from './rail-group-row'
 import { RailProjectItem } from './rail-project-item'
 import { RAIL_SECTION_BUTTON_CLASS, RailSectionHeader } from './rail-section-header'
+import { useDragLift } from './use-drag-lift'
 
 export interface ProjectListProps {
   projects: Project[]
@@ -50,7 +52,6 @@ export interface ProjectListProps {
   /** Select the project and go to the workspace. */
   openProject: (projectId: string) => void
   /** Select the project without navigating (for the settings shortcut). */
-  selectProject: (id: string) => void
   onReorderProjects: (projectIds: string[]) => void
 
   // Archived section
@@ -99,7 +100,6 @@ export function ProjectList({
   renderProjectContextMenu,
   openNeedsYou,
   openProject,
-  selectProject,
   onReorderProjects,
   archivedProjects,
   showArchived,
@@ -113,6 +113,11 @@ export function ProjectList({
   // Dropping on a folder header or group container moves the project there.
   // The row also watches git for its diff stat.
   const showSections = railSections
+  // The lifted row's shadow is a CSS transition keyed off data-dragging:
+  // Motion can't interpolate a var() shadow, so whileDrag would snap it.
+  // The lift (opaque bg) holds until the row lands, and `relative` lets
+  // Reorder's own zIndex apply, so neighbours never show through it.
+  const { liftedId, lift, release, settle } = useDragLift()
   const renderProjectRow = (project: Project): React.JSX.Element => {
     const shortcutIndex = activeIndexById.get(project.id) ?? -1
     return (
@@ -121,12 +126,13 @@ export function ProjectList({
         value={project}
         drag="y"
         layout="position"
-        className="list-none"
+        data-dragging={liftedId === project.id || undefined}
+        className="relative list-none rounded-lg transition-shadow duration-[110ms] ease-out motion-reduce:transition-none data-[dragging]:bg-sidebar data-[dragging]:shadow-md data-[dragging]:duration-150"
         whileDrag={{
           scale: 1.02,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
           pointerEvents: 'none'
         }}
+        onDragStart={() => lift(project.id)}
         onDrag={(_event, info) => {
           const element = document.elementFromPoint(info.point.x, info.point.y)
           const container = element?.closest('[data-group-container-id]')
@@ -147,12 +153,16 @@ export function ProjectList({
             const currentGroup = groups.find((g) => g.projectIds.includes(project.id))
             const currentGroupId = currentGroup?.id ?? null
             if (nextGroupId !== currentGroupId) {
+              // The row changes lists, so its snap-back (and settle) never runs.
+              settle(project.id)
               moveProjectToGroup(project.id, nextGroupId)
             }
           }
           setActiveDragOverGroupId(null)
           activeDragOverGroupIdRef.current = null
+          release(project.id)
         }}
+        onDragTransitionEnd={() => settle(project.id)}
       >
         <RailProjectItem
           project={project}
@@ -170,10 +180,9 @@ export function ProjectList({
           onEditNameChange={setEditName}
           onSaveRename={() => handleSaveRename(project.id)}
           onCancelRename={handleCancelRename}
-          onSettingsClick={() => {
-            selectProject(project.id)
-            useSettingsModalStore.getState().openProject()
-          }}
+          onSettingsClick={() =>
+            useSettingsModalStore.getState().openProject(undefined, project.id)
+          }
         />
       </Reorder.Item>
     )
@@ -315,7 +324,7 @@ export function ProjectList({
             <div className="mt-2 flex flex-col gap-0.5">
               <button
                 onClick={() => setShowArchived(!showArchived)}
-                className="label-panel flex h-8 w-full items-center gap-1.5 rounded-md pl-1 pr-1.5 transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default disabled:hover:bg-transparent"
+                className={`label-panel flex h-8 w-full items-center gap-1.5 rounded-md pl-1 pr-1.5 transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground focus-visible:ring-inset disabled:cursor-default disabled:hover:bg-transparent ${FOCUS_RING_CLASS}`}
                 aria-expanded={showArchived}
                 aria-label={`Archived projects (${archivedProjects.length})`}
               >

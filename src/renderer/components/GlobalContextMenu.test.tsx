@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import {
   ContextMenu,
@@ -151,6 +151,25 @@ describe('GlobalContextMenu', () => {
     expect(isDisabled('Paste')).toBe(true)
     // P9: Select All disabled when no mutable editable is focused.
     expect(isDisabled('Select All')).toBe(true)
+  })
+
+  it('stays closed on a touch-primary device, leaving the long-press to the OS', () => {
+    const coarse = vi
+      .spyOn(window, 'matchMedia')
+      .mockImplementation(
+        (query) => ({ matches: query === '(pointer: coarse)', media: query }) as MediaQueryList
+      )
+    onTestFinished(() => coarse.mockRestore())
+    render(
+      <GlobalContextMenu>
+        <input data-testid="surface-input" defaultValue="hello" />
+      </GlobalContextMenu>
+    )
+    focusInput(true)
+    const opened = fireEvent.contextMenu(screen.getByTestId('surface-input'))
+
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(opened).toBe(true)
   })
 })
 

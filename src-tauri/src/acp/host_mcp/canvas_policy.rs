@@ -4,12 +4,20 @@
 //! The editor never touches the file system for an agent. `file.save` is
 //! Termul's own save, whatever path it names. An export with a `path` runs
 //! without it, so the bytes come back inline, and Termul writes them to that
-//! path only when it lies inside the project. Every other command or method
-//! that reads or writes a path is refused with `UNSUPPORTED_IN_KIOSK`.
+//! path only when it lies inside the project. The editor picks an export's
+//! format from the path's extension when none is given, so without the path
+//! Termul names the format itself. Every other command or method that reads
+//! or writes a path is refused with `UNSUPPORTED_IN_KIOSK`, and so is every
+//! command that would leave the project's one document behind or make the
+//! editor contact a server ([`Why`]). A call that runs another command,
+//! named in its params (`command.batch`, `text.preview`) or bound to the key
+//! it presses (`ui.key`), is routed as each command it runs. Termul decides
+//! by reading a command's params, so a command whose whole params are a
+//! reference the engine fills in from an earlier batch step is refused.
 
 use std::path::{Component, Path, PathBuf};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::acp::host_mcp::canvas::{CanvasError, CanvasErrorCode};
 
@@ -29,9 +37,9 @@ pub enum CanvasRoute {
     Refuse(CanvasError),
 }
 
-/// When a command or method reaches the file system.
+/// When a refused command or method is refused.
 #[derive(Clone, Copy)]
-enum FileArg {
+enum When {
     Always,
     /// A string param with this name is a file path.
     Path(&'static str),
@@ -39,60 +47,242 @@ enum FileArg {
     VariablesPath,
 }
 
+/// Why a command is refused, which its refusal message says.
+#[derive(Clone, Copy)]
+enum Why {
+    /// It reads or writes a file on disk. `instead` is its inline form, if
+    /// it has one.
+    Files { instead: Option<&'static str> },
+    /// It opens, closes or switches documents. The kiosk hides the tab bar,
+    /// so the project's document could not be brought back, and Termul's
+    /// save would write whichever document is in front over its file.
+    OtherDocument,
+    /// It clears the unsaved mark without writing anything, so Termul's
+    /// autosave, which waits for that mark, would skip the changes.
+    SkipsSave,
+    /// It reaches past the canvas: it hands the document to a server or a
+    /// live session, opens a link, or contacts or writes outside Termul. The
+    /// text says what it does.
+    Outside(&'static str),
+    /// It installs, updates or publishes plugin code. An installed plugin's
+    /// code runs on this machine, so an agent may not bring new code in.
+    PluginCode,
+    /// It runs the editor's last command again. That command and its params
+    /// live in the editor, may be the user's, and were never routed here.
+    RepeatsUnseen,
+}
+
 #[derive(Clone, Copy)]
 enum CommandPolicy {
     HostSave,
     ExportTo,
-    Refuse(&'static [FileArg]),
+    Refuse(&'static [When], Why),
 }
 
-const ALWAYS: &[FileArg] = &[FileArg::Always];
-const PATH: &[FileArg] = &[FileArg::Path("path")];
+const ALWAYS: &[When] = &[When::Always];
+const PATH: &[When] = &[When::Path("path")];
+const DIR: &[When] = &[When::Path("dir")];
+const FILES: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::Files { instead: None });
+const FILE_AT_PATH: CommandPolicy = CommandPolicy::Refuse(PATH, Why::Files { instead: None });
+const OTHER_DOCUMENT: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::OtherDocument);
+const LEAVES_TERMUL: CommandPolicy =
+    outside("shares the document outside Termul, with a server or a live session");
+const PLUGIN_CODE: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::PluginCode);
+/// The kiosk has no live sessions or online files, and their commands ask
+/// sharing servers for files, links and people (`collab.files` with
+/// `refresh` asks the server `pref.publishServer` names).
+const LIVE_SESSIONS: CommandPolicy =
+    outside("is for live sessions and files kept on a sharing server outside Termul");
+/// Loading a linked library asks a team library's server for it, or reads a
+/// library file outside the project.
+const LINKED_LIBRARIES: CommandPolicy = outside(
+    "loads the document's linked libraries, which contacts the servers of its team libraries \
+     and reads library files outside the project",
+);
 
-/// figcraft engine commands that name files (`crates/engine/src/cmd`).
+const fn outside(does: &'static str) -> CommandPolicy {
+    CommandPolicy::Refuse(ALWAYS, Why::Outside(does))
+}
+
+const fn files_unless(when: &'static [When], instead: &'static str) -> CommandPolicy {
+    CommandPolicy::Refuse(
+        when,
+        Why::Files {
+            instead: Some(instead),
+        },
+    )
+}
+
+/// figcraft engine commands Termul runs itself or refuses (`crates/engine/src`).
 const COMMANDS: &[(&str, CommandPolicy)] = &[
     ("file.save", CommandPolicy::HostSave),
     ("file.export", CommandPolicy::ExportTo),
     ("file.exportSvg", CommandPolicy::ExportTo),
     ("file.exportFramesPdf", CommandPolicy::ExportTo),
-    ("file.saveAs", CommandPolicy::Refuse(ALWAYS)),
-    ("file.open", CommandPolicy::Refuse(ALWAYS)),
-    ("file.openRecent", CommandPolicy::Refuse(ALWAYS)),
-    ("file.recover", CommandPolicy::Refuse(ALWAYS)),
-    ("file.revert", CommandPolicy::Refuse(ALWAYS)),
-    ("library.add", CommandPolicy::Refuse(ALWAYS)),
-    ("window.new", CommandPolicy::Refuse(ALWAYS)),
+    ("file.saveAs", FILES),
+    ("file.open", FILES),
+    ("file.openRecent", FILES),
+    ("file.recover", FILES),
+    ("file.revert", FILES),
+    ("library.add", FILES),
     (
         "file.exportLayers",
-        CommandPolicy::Refuse(&[FileArg::Path("dir")]),
+        files_unless(DIR, "leave out `dir` to get the files back as `data`"),
     ),
     (
         "file.import",
-        CommandPolicy::Refuse(&[FileArg::Path("path"), FileArg::VariablesPath]),
+        CommandPolicy::Refuse(
+            &[When::Path("path"), When::VariablesPath],
+            Why::Files { instead: None },
+        ),
     ),
-    ("file.placeImage", CommandPolicy::Refuse(PATH)),
-    ("image.place", CommandPolicy::Refuse(PATH)),
-    ("variable.export", CommandPolicy::Refuse(PATH)),
+    ("file.placeImage", FILE_AT_PATH),
+    ("image.place", FILE_AT_PATH),
+    (
+        "image.replace",
+        files_unless(PATH, "pass the image's bytes as base64 `data`"),
+    ),
+    ("variable.export", FILE_AT_PATH),
     (
         "variable.import",
-        CommandPolicy::Refuse(&[FileArg::VariablesPath]),
+        CommandPolicy::Refuse(&[When::VariablesPath], Why::Files { instead: None }),
+    ),
+    (
+        "text.loadFont",
+        files_unless(PATH, "pass the font file's bytes as base64 `data`"),
+    ),
+    (
+        "data.fill",
+        files_unless(DIR, "leave out `dir` and export the copies with export"),
+    ),
+    (
+        "component.playground",
+        files_unless(PATH, "leave out `path` and export the preview with export"),
+    ),
+    (
+        "codeConnect.export",
+        files_unless(PATH, "leave out `path` to get the JSON back as `text`"),
+    ),
+    (
+        "codeConnect.import",
+        files_unless(PATH, "pass the JSON itself as `json`"),
+    ),
+    ("file.new", OTHER_DOCUMENT),
+    ("file.newBoard", OTHER_DOCUMENT),
+    ("file.newFromTemplate", OTHER_DOCUMENT),
+    ("file.duplicate", OTHER_DOCUMENT),
+    ("file.close", OTHER_DOCUMENT),
+    ("version.duplicate", OTHER_DOCUMENT),
+    ("branch.create", OTHER_DOCUMENT),
+    ("branch.open", OTHER_DOCUMENT),
+    ("doc.switch", OTHER_DOCUMENT),
+    ("doc.nextTab", OTHER_DOCUMENT),
+    ("doc.previousTab", OTHER_DOCUMENT),
+    ("collab.join", OTHER_DOCUMENT),
+    ("collab.openFile", OTHER_DOCUMENT),
+    ("collab.recoverFile", OTHER_DOCUMENT),
+    ("collab.cursor", LIVE_SESSIONS),
+    ("collab.cursorChat", LIVE_SESSIONS),
+    ("collab.diff", LIVE_SESSIONS),
+    ("collab.files", LIVE_SESSIONS),
+    ("collab.follow", LIVE_SESSIONS),
+    ("collab.forgetFile", LIVE_SESSIONS),
+    ("collab.leave", LIVE_SESSIONS),
+    ("collab.manageFile", LIVE_SESSIONS),
+    ("collab.peers", LIVE_SESSIONS),
+    ("collab.removePerson", LIVE_SESSIONS),
+    ("collab.report", LIVE_SESSIONS),
+    ("collab.serverInfo", LIVE_SESSIONS),
+    ("collab.spotlight", LIVE_SESSIONS),
+    ("collab.stop", LIVE_SESSIONS),
+    (
+        "collab.registerLinks",
+        outside("makes this app the opener of figcraft:// invite links on this machine"),
+    ),
+    (
+        "pref.publishServer",
+        outside("sets the sharing server the editor contacts for online files and join codes"),
+    ),
+    ("window.new", OTHER_DOCUMENT),
+    (
+        "edit.repeat",
+        CommandPolicy::Refuse(ALWAYS, Why::RepeatsUnseen),
+    ),
+    (
+        "file.markSaved",
+        CommandPolicy::Refuse(ALWAYS, Why::SkipsSave),
+    ),
+    ("library.publishToServer", LEAVES_TERMUL),
+    ("collab.host", LEAVES_TERMUL),
+    ("collab.publish", LEAVES_TERMUL),
+    ("collab.share", LEAVES_TERMUL),
+    ("text.openLink", outside("opens a link in a web browser")),
+    (
+        "help.page",
+        outside("opens FigCraft's help page in a web browser"),
+    ),
+    (
+        "library.check",
+        outside(
+            "contacts the servers of the document's team libraries, and lets the editor contact \
+             them by itself from then on",
+        ),
+    ),
+    ("library.list", LINKED_LIBRARIES),
+    ("library.updates", LINKED_LIBRARIES),
+    ("library.usage", LINKED_LIBRARIES),
+    ("library.acceptUpdates", LINKED_LIBRARIES),
+    ("library.place", LINKED_LIBRARIES),
+    ("library.import", LINKED_LIBRARIES),
+    ("library.swap", LINKED_LIBRARIES),
+    ("library.swapAt", LINKED_LIBRARIES),
+    ("library.applyStyle", LINKED_LIBRARIES),
+    ("library.importVariable", LINKED_LIBRARIES),
+    ("library.bindVariable", LINKED_LIBRARIES),
+    ("library.aliasVariable", LINKED_LIBRARIES),
+    ("library.setVariableMode", LINKED_LIBRARIES),
+    ("library.extendCollection", LINKED_LIBRARIES),
+    (
+        "font.download",
+        outside("downloads a font family and installs it into this machine's shared font folder"),
+    ),
+    // Listing installed plugins and running, using or closing one stay
+    // allowed: they bring in no code and contact no server.
+    ("plugin.directory.install", PLUGIN_CODE),
+    ("plugin.import", PLUGIN_CODE),
+    ("plugin.directory.publish", PLUGIN_CODE),
+    ("plugin.directory.unpublish", PLUGIN_CODE),
+    (
+        "plugin.directory.list",
+        outside("asks a plugin directory server for its plugins"),
     ),
 ];
 
 /// Control methods other than `engine.execute` that can name a file.
-const METHODS: &[(&str, &[FileArg])] = &[("ui.render", PATH), ("ui.screenshot", PATH)];
+const METHODS: &[(&str, &[When])] = &[("ui.render", PATH), ("ui.screenshot", PATH)];
 
 const EXECUTE: &str = "engine.execute";
+const EXPORT: &str = "file.export";
 const BATCH: &str = "command.batch";
+const PREVIEW: &str = "text.preview";
+const KEY: &str = "ui.key";
+/// The keys that make a value in a batch step's params a reference to an
+/// earlier step's result (figcraft `automation/batch.rs`). The engine swaps
+/// it for that value only after Termul routed the batch.
+const REFERENCE_KEYS: [&str; 3] = ["$step", "$ref", "$name"];
 
 /// Route one call. `params` is the call's parsed params.
 #[must_use]
 pub fn route(method: &str, params: &Value) -> CanvasRoute {
-    if method == EXECUTE {
-        return route_execute(params);
+    match method {
+        EXECUTE => return route_execute(params),
+        KEY => return route_key(params),
+        _ => {}
     }
     match METHODS.iter().find(|(name, _)| *name == method) {
-        Some((_, args)) if touches_files(args, params) => CanvasRoute::Refuse(unsupported(method)),
+        Some((_, when)) if applies(when, params) => {
+            CanvasRoute::Refuse(refusal(method, Why::Files { instead: None }))
+        }
         _ => CanvasRoute::Forward,
     }
 }
@@ -102,18 +292,39 @@ fn route_execute(execute: &Value) -> CanvasRoute {
         return CanvasRoute::Forward;
     };
     let params = execute.get("params").unwrap_or(&Value::Null);
-    if command == BATCH {
-        return route_batch(params);
+    if is_reference(params) {
+        return CanvasRoute::Refuse(CanvasError::new(
+            CanvasErrorCode::UnsupportedInKiosk,
+            format!(
+                "`{command}`'s params come from an earlier batch step, so Termul cannot check \
+                 them; pass them directly"
+            ),
+        ));
+    }
+    match command {
+        BATCH => return route_batch(params),
+        PREVIEW => return route_preview(params),
+        _ => {}
     }
     match COMMANDS.iter().find(|(name, _)| *name == command) {
         None => CanvasRoute::Forward,
         Some((_, CommandPolicy::HostSave)) => CanvasRoute::HostSave,
+        Some((_, CommandPolicy::ExportTo)) if unresolved(params, "path") => {
+            CanvasRoute::Refuse(refusal(command, Why::Files { instead: None }))
+        }
         Some((_, CommandPolicy::ExportTo)) => match string_param(params, "path") {
             None => CanvasRoute::Forward,
             Some(path) => {
                 let mut execute = execute.clone();
                 if let Some(params) = execute.get_mut("params").and_then(Value::as_object_mut) {
                     params.remove("path");
+                    let unnamed = params.get("format").and_then(Value::as_str).is_none();
+                    if command == EXPORT && unnamed {
+                        let Some(format) = export_format(path) else {
+                            return CanvasRoute::Refuse(unknown_format(path));
+                        };
+                        params.insert("format".to_string(), Value::from(format));
+                    }
                 }
                 CanvasRoute::ExportTo {
                     path: path.to_string(),
@@ -121,57 +332,207 @@ fn route_execute(execute: &Value) -> CanvasRoute {
                 }
             }
         },
-        Some((_, CommandPolicy::Refuse(args))) if touches_files(args, params) => {
-            CanvasRoute::Refuse(unsupported(command))
+        Some((_, CommandPolicy::Refuse(when, why))) if applies(when, params) => {
+            CanvasRoute::Refuse(refusal(command, *why))
         }
-        Some((_, CommandPolicy::Refuse(_))) => CanvasRoute::Forward,
+        Some((_, CommandPolicy::Refuse(..))) => CanvasRoute::Forward,
     }
 }
 
+/// Route `inner`, the `engine.execute` call a wrapper runs, as the wrapper:
+/// forwarded when `inner` would be, else refused with `context` and why
+/// `inner` is.
+fn route_as(inner: &Value, context: &str) -> CanvasRoute {
+    let why = match route_execute(inner) {
+        CanvasRoute::Forward => return CanvasRoute::Forward,
+        CanvasRoute::Refuse(error) if error.code == CanvasErrorCode::UnsupportedInKiosk => {
+            error.message
+        }
+        _ => format!(
+            "`{}` saves or touches files; run it on its own (save_file saves, export returns \
+             bytes or writes inside the project)",
+            inner.get("command").and_then(Value::as_str).unwrap_or("?")
+        ),
+    };
+    CanvasRoute::Refuse(CanvasError::new(
+        CanvasErrorCode::UnsupportedInKiosk,
+        format!("{context}{why}"),
+    ))
+}
+
 /// A batch runs as one undo step inside the editor, so a step Termul would
-/// have to handle itself refuses the whole batch.
+/// have to handle itself refuses the whole batch, and a step the kiosk
+/// refuses on its own refuses it for the same reason.
 fn route_batch(params: &Value) -> CanvasRoute {
     let steps = params
         .get("commands")
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_default();
-    for (index, step) in steps.iter().enumerate() {
-        if route_execute(step) != CanvasRoute::Forward {
-            let command = step.get("command").and_then(Value::as_str).unwrap_or("?");
-            return CanvasRoute::Refuse(CanvasError::new(
-                CanvasErrorCode::UnsupportedInKiosk,
-                format!(
-                    "batch step {index} (`{command}`) saves or touches files; run it on its own \
-                     (save_file saves, export returns bytes or writes inside the project)"
-                ),
-            ));
-        }
-    }
-    CanvasRoute::Forward
+    steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| route_as(step, &format!("batch step {index}: ")))
+        .find(|route| *route != CanvasRoute::Forward)
+        .unwrap_or(CanvasRoute::Forward)
 }
 
-fn touches_files(args: &[FileArg], params: &Value) -> bool {
-    args.iter().any(|arg| match arg {
-        FileArg::Always => true,
-        FileArg::Path(name) => string_param(params, name).is_some(),
-        FileArg::VariablesPath => string_param(params, "variables")
-            .is_some_and(|text| serde_json::from_str::<Value>(text).is_err()),
-    })
+/// `text.preview` runs the command named in its `command` param with its
+/// `params`, the shape of an `engine.execute` call, so it is routed as that
+/// command, whatever the engine lets it preview.
+fn route_preview(params: &Value) -> CanvasRoute {
+    let context = format!("`{PREVIEW}` runs the command it previews: ");
+    if unresolved(params, "command") {
+        return CanvasRoute::Refuse(CanvasError::new(
+            CanvasErrorCode::UnsupportedInKiosk,
+            format!(
+                "{context}its `command` is taken from an earlier batch step, which Termul cannot \
+                 check before the batch runs; name the command itself"
+            ),
+        ));
+    }
+    route_as(params, &context)
+}
+
+/// `ui.key` runs the command its key is bound to (figcraft `keymap`), so it
+/// is routed as that command. The editor looks the key up on the platform
+/// the browser reports and in the context it is in (on the canvas or editing
+/// text), which Termul cannot see, so the key is routed as its binding on
+/// every platform in every context.
+fn route_key(params: &Value) -> CanvasRoute {
+    use figcraft_engine::keymap::{lookup, Context, Mods, Platform};
+    let Some(key) = string_param(params, "key") else {
+        return CanvasRoute::Forward;
+    };
+    let held = |name: &str| params.get(name).and_then(Value::as_bool) == Some(true);
+    let mods = Mods {
+        shift: held("shift"),
+        alt: held("alt"),
+        cmd: held("cmd"),
+        ctrl: held("ctrl"),
+    };
+    let pressed = [
+        ("cmd", mods.cmd),
+        ("ctrl", mods.ctrl),
+        ("alt", mods.alt),
+        ("shift", mods.shift),
+    ]
+    .into_iter()
+    .filter_map(|(name, held)| held.then_some(name))
+    .chain([key])
+    .collect::<Vec<_>>()
+    .join("+");
+    [Platform::Mac, Platform::Other]
+        .into_iter()
+        .flat_map(|platform| {
+            [Context::Canvas, Context::Text].map(|context| lookup(platform, context, key, mods))
+        })
+        .flatten()
+        .map(|binding| {
+            route_as(
+                &json!({"command": binding.id}),
+                &format!("`{KEY}` {pressed} runs the shortcut `{}`: ", binding.id),
+            )
+        })
+        .find(|route| *route != CanvasRoute::Forward)
+        .unwrap_or(CanvasRoute::Forward)
+}
+
+/// A param taken from an earlier batch step counts as given: the engine
+/// fills it in after Termul checked the batch.
+fn applies(when: &[When], params: &Value) -> bool {
+    is_reference(params)
+        || when.iter().any(|when| match when {
+            When::Always => true,
+            When::Path(name) => string_param(params, name).is_some() || unresolved(params, name),
+            When::VariablesPath => {
+                unresolved(params, "variables")
+                    || string_param(params, "variables")
+                        .is_some_and(|text| serde_json::from_str::<Value>(text).is_err())
+            }
+        })
+}
+
+fn is_reference(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| REFERENCE_KEYS.iter().any(|key| object.contains_key(*key)))
+}
+
+/// Whether param `name` is a reference to an earlier batch step's result.
+fn unresolved(params: &Value, name: &str) -> bool {
+    params.get(name).is_some_and(is_reference)
 }
 
 fn string_param<'a>(params: &'a Value, name: &str) -> Option<&'a str> {
     params.get(name).and_then(Value::as_str)
 }
 
-fn unsupported(name: &str) -> CanvasError {
+/// The format the editor would read from `path`'s extension (figcraft
+/// `ExportFormat::from_ext`, plus `fig` for the whole file). `xml` is an
+/// Android Vector Drawable.
+fn export_format(path: &str) -> Option<&'static str> {
+    let extension = Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
+    match extension.as_str() {
+        "png" => Some("png"),
+        "jpg" | "jpeg" => Some("jpg"),
+        "svg" => Some("svg"),
+        "webp" => Some("webp"),
+        "pdf" => Some("pdf"),
+        "xml" | "vd" | "vectordrawable" => Some("xml"),
+        "fig" => Some("fig"),
+        _ => None,
+    }
+}
+
+fn unknown_format(path: &str) -> CanvasError {
     CanvasError::new(
-        CanvasErrorCode::UnsupportedInKiosk,
+        CanvasErrorCode::EngineError,
         format!(
-            "`{name}` reads or writes files, which the Termul canvas does not allow: save_file \
-             saves the project's document, and export returns bytes or writes inside the project"
+            "export cannot tell the format of `{path}`: give it a png, jpg, svg, webp, pdf, xml \
+             or fig extension, or pass `format`"
         ),
     )
+}
+
+fn refusal(name: &str, why: Why) -> CanvasError {
+    let message = match why {
+        Why::Files { instead } => {
+            let refused = format!(
+                "`{name}` reads or writes files, which the Termul canvas does not allow: \
+                 save_file saves the project's document, and export returns bytes or writes \
+                 inside the project"
+            );
+            match instead {
+                Some(instead) => format!("{refused}. Instead, {instead}"),
+                None => refused,
+            }
+        }
+        Why::OtherDocument => format!(
+            "`{name}` opens, closes or switches documents, which the Termul canvas does not \
+             allow: it shows only the project's document, with no tabs to switch back, and \
+             Termul's save would write the document in front over the project's canvas file"
+        ),
+        Why::SkipsSave => format!(
+            "`{name}` marks the document saved without saving it, which the Termul canvas does \
+             not allow: Termul saves the canvas while it has unsaved changes, so they would \
+             never be written. Save with save_file"
+        ),
+        Why::Outside(does) => {
+            format!("`{name}` {does}, which the Termul canvas does not allow")
+        }
+        Why::RepeatsUnseen => format!(
+            "`{name}` runs the editor's last command again, which may be one the user ran and \
+             which Termul cannot check, so the Termul canvas does not allow it. Run that command \
+             itself instead"
+        ),
+        Why::PluginCode => format!(
+            "`{name}` installs, updates or publishes plugin code, which isn't available from \
+             the agent canvas tools. A plugin that is already installed can still run with \
+             plugin.run"
+        ),
+    };
+    CanvasError::new(CanvasErrorCode::UnsupportedInKiosk, message)
 }
 
 /// A file inside the project an export may write.
@@ -211,41 +572,109 @@ fn names_a_stream_or_device(part: &str) -> bool {
     numbered("COM") || numbered("LPT")
 }
 
+/// Why an export path is refused. Each reason names its own cause so the
+/// agent can tell what to change.
+#[derive(Debug)]
+enum PathRefusal {
+    NoFile,
+    Absolute,
+    ClimbsWithDotDot,
+    StreamOrDevice {
+        part: String,
+    },
+    /// `link` (`/`-separated, from the root) is the first part that resolves
+    /// outside the project, to `target`.
+    LinkOutside {
+        link: String,
+        target: PathBuf,
+    },
+    /// `part` exists but could not be resolved, such as a dangling link.
+    Unresolvable {
+        part: String,
+        error: std::io::Error,
+    },
+    /// Resolved outside the project although no single part does now: the
+    /// folders changed between the check and the diagnosis.
+    ResolvesOutside,
+}
+
+impl PathRefusal {
+    fn into_error(self, requested: &str) -> CanvasError {
+        let message = match self {
+            Self::NoFile => {
+                format!("export needs a file path inside the project; `{requested}` names no file")
+            }
+            Self::Absolute => format!(
+                "export writes only to a path relative to the project folder; `{requested}` is \
+                 absolute or starts at a drive or root"
+            ),
+            Self::ClimbsWithDotDot => format!(
+                "export does not follow `..`; name `{requested}` from the project folder down \
+                 without it"
+            ),
+            Self::StreamOrDevice { part } => format!(
+                "export does not write to `{requested}`: `{part}` names a Windows stream or device"
+            ),
+            Self::LinkOutside { link, target } => format!(
+                "export writes only inside the project; in `{requested}`, `{link}` is a link to \
+                 `{}`, which is outside the project; export to a folder inside the project instead",
+                crate::path_validation::strip_verbatim_prefix(&target.to_string_lossy())
+            ),
+            Self::Unresolvable { part, error } => format!(
+                "export cannot tell whether `{part}` in `{requested}` stays inside the project: {error}"
+            ),
+            Self::ResolvesOutside => format!(
+                "export writes only inside the project; `{requested}` resolves outside it"
+            ),
+        };
+        CanvasError::new(CanvasErrorCode::UnsupportedInKiosk, message)
+    }
+}
+
+/// Name the first of `parts`, walked down from the canonical `root`, that
+/// resolves outside it. Only explains a refusal already decided.
+fn escaping_part(root: &Path, parts: &[String]) -> PathRefusal {
+    let mut path = root.to_path_buf();
+    for (index, part) in parts.iter().enumerate() {
+        path.push(part);
+        let named = parts[..=index].join("/");
+        match std::fs::canonicalize(&path) {
+            Ok(resolved) if resolved.starts_with(root) => {}
+            Ok(target) => {
+                return PathRefusal::LinkOutside {
+                    link: named,
+                    target,
+                }
+            }
+            Err(_) if path.symlink_metadata().is_err() => break,
+            Err(error) => return PathRefusal::Unresolvable { part: named, error },
+        }
+    }
+    PathRefusal::ResolvesOutside
+}
+
 /// Check `requested` names a file inside `root`: relative, no `..`, no
 /// stream or device name, and no existing part of it a link that resolves
 /// outside the root.
 pub fn resolve_project_file(root: &Path, requested: &str) -> Result<ProjectFile, CanvasError> {
-    let outside = || {
-        CanvasError::new(
-            CanvasErrorCode::UnsupportedInKiosk,
-            format!(
-                "export writes only to a relative path inside the project; `{requested}` is not one"
-            ),
-        )
-    };
+    let refuse = |reason: PathRefusal| reason.into_error(requested);
     let mut parts = Vec::new();
     for component in Path::new(requested).components() {
         match component {
             Component::Normal(part) => {
                 let part = part.to_string_lossy().into_owned();
                 if names_a_stream_or_device(&part) {
-                    return Err(CanvasError::new(
-                        CanvasErrorCode::UnsupportedInKiosk,
-                        format!(
-                            "export does not write to `{requested}`: `{part}` names a Windows stream or device"
-                        ),
-                    ));
+                    return Err(refuse(PathRefusal::StreamOrDevice { part }));
                 }
                 parts.push(part);
             }
             Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(outside())
-            }
+            Component::ParentDir => return Err(refuse(PathRefusal::ClimbsWithDotDot)),
+            Component::RootDir | Component::Prefix(_) => return Err(refuse(PathRefusal::Absolute)),
         }
     }
     if parts.is_empty() {
-        return Err(outside());
+        return Err(refuse(PathRefusal::NoFile));
     }
     let root = std::fs::canonicalize(root).map_err(|error| {
         CanvasError::new(
@@ -265,8 +694,124 @@ pub fn resolve_project_file(root: &Path, requested: &str) -> Result<ProjectFile,
             absolute,
             relative: parts.join("/"),
         }),
-        _ => Err(outside()),
+        _ => Err(refuse(escaping_part(&root, &parts))),
     }
+}
+
+/// Write `bytes` to `requested` inside `root`, checking the path again right
+/// before the write: a link planted since an earlier check (while the editor
+/// exported) must not lead the write out of the project. The write goes
+/// through the parent as it resolves after its folders exist, and the
+/// folders from the root down are opened without following links so none
+/// swapped for a link after the check can redirect it ([`write_in_real_folder`]).
+pub fn write_project_file(
+    root: &Path,
+    requested: &str,
+    bytes: &[u8],
+) -> Result<ProjectFile, CanvasError> {
+    let file = resolve_project_file(root, requested)?;
+    let failed = |error: std::io::Error| {
+        CanvasError::new(
+            CanvasErrorCode::EngineError,
+            format!("could not write `{}`: {error}", file.relative),
+        )
+    };
+    let (Some(parent), Some(name)) = (file.absolute.parent(), file.absolute.file_name()) else {
+        return Err(failed(std::io::Error::other("the path names no file")));
+    };
+    std::fs::create_dir_all(parent).map_err(failed)?;
+    let resolved_parent = std::fs::canonicalize(parent).map_err(failed)?;
+    let resolved_root = std::fs::canonicalize(root).map_err(failed)?;
+    if !resolved_parent.starts_with(&resolved_root) {
+        let parts: Vec<String> = file.relative.split('/').map(str::to_owned).collect();
+        return Err(escaping_part(&resolved_root, &parts).into_error(requested));
+    }
+    write_in_real_folder(&resolved_root, &resolved_parent, name, bytes).map_err(failed)?;
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn write_in_real_folder(
+    root: &Path,
+    dir: &Path,
+    name: &std::ffi::OsStr,
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    let _held = hold_real_folders(root, dir)?;
+    crate::acp::atomic_file::replace(&dir.join(name), bytes)
+}
+
+/// Unix lets a held folder be renamed, so the write never goes by path: it
+/// names `name` inside the folder opened by [`open_real_folder`].
+#[cfg(unix)]
+fn write_in_real_folder(
+    root: &Path,
+    dir: &Path,
+    name: &std::ffi::OsStr,
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    use std::os::fd::AsFd;
+    let folder = open_real_folder(root, dir)?;
+    crate::acp::atomic_file::replace_at(folder.as_fd(), name, bytes)
+}
+
+/// Open `root`, then each folder down to `dir` (a canonical path under it)
+/// relative to the one above, refusing any that is a link now.
+#[cfg(unix)]
+fn open_real_folder(root: &Path, dir: &Path) -> std::io::Result<rustix::fd::OwnedFd> {
+    use rustix::fs::{openat, Mode, OFlags, CWD};
+    use rustix::io::Errno;
+    let below = dir
+        .strip_prefix(root)
+        .map_err(|_| std::io::Error::other("the folder is outside the project"))?;
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut folder = openat(CWD, root, flags, Mode::empty())?;
+    for part in below.components() {
+        folder = openat(&folder, part.as_os_str(), flags, Mode::empty()).map_err(|error| {
+            if error == Errno::LOOP || error == Errno::NOTDIR {
+                std::io::Error::other("a folder on the path became a link after the check")
+            } else {
+                error.into()
+            }
+        })?;
+    }
+    Ok(folder)
+}
+
+/// Open `root` and each folder down to `dir` (a canonical path under it)
+/// without following a link, refusing one that is a link now. Windows lets
+/// nobody rename or delete a folder, or any folder above it, while a handle
+/// that does not share delete access is open, so the checked path keeps
+/// naming the same real folders until the handles drop.
+#[cfg(windows)]
+fn hold_real_folders(root: &Path, dir: &Path) -> std::io::Result<Vec<std::fs::File>> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    let below = dir
+        .strip_prefix(root)
+        .map_err(|_| std::io::Error::other("the folder is outside the project"))?;
+    let mut folder = root.to_path_buf();
+    let mut held = Vec::new();
+    for part in std::iter::once(None).chain(below.components().map(Some)) {
+        if let Some(part) = part {
+            folder.push(part);
+        }
+        let handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&folder)?;
+        // A symlink or junction; other reparse points (cloud files) are folders.
+        if handle.metadata()?.file_type().is_symlink() {
+            return Err(std::io::Error::other(
+                "a folder on the path became a link after the check",
+            ));
+        }
+        held.push(handle);
+    }
+    Ok(held)
 }
 
 #[cfg(test)]

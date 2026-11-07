@@ -1,4 +1,5 @@
 use super::*;
+use crate::pty::session_protocol::gate::SessionGate;
 
 /// A running terminal instance
 pub struct TerminalInstance {
@@ -10,6 +11,8 @@ pub struct TerminalInstance {
     pub child: Arc<AsyncMutex<Option<Box<dyn Child + Send>>>>,
     pub master: Arc<AsyncMutex<Option<Box<dyn MasterPty + Send>>>>,
     pub writer: Arc<AsyncMutex<Option<Box<dyn Write + Send>>>>,
+    /// Session gate sharing the PTY writer lock.
+    pub session_gate: Arc<SessionGate>,
     pub reader_handle: Arc<AsyncMutex<Option<std::thread::JoinHandle<()>>>>,
     pub flusher_handle: Arc<AsyncMutex<Option<std::thread::JoinHandle<()>>>>,
     pub shell: String,

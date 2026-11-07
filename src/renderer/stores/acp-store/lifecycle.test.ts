@@ -146,12 +146,14 @@ vi.mock('@/lib/api', async (importActual) => {
 })
 
 import { invoke } from '@tauri-apps/api/core'
+import type { ContentBlock } from '@/lib/acp-api'
 import {
   _clearPayloadCacheForTesting,
   loadSessionIndex,
   setCachedSessionPayload
 } from '@/lib/acp-history-persistence'
 import { _resetAcpTransportForTests, AcpTransportError } from '@/lib/acp-transport'
+import { ACP_STREAM_INTERRUPT_MESSAGE } from '@/lib/agents/acp-spawn-errors'
 import { logFrontendError } from '@/lib/log-api'
 import {
   _resetAcpAuthForTesting,
@@ -191,6 +193,7 @@ describe('failed session lifecycle (story 5)', () => {
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     const placeholderId = useAcpStore.getState().createLaunchPlaceholder({
+      configId: 'cfg-1',
       cwd: '/work',
       projectId: 'p1',
       initialUserBlocks: [{ type: 'text', text: 'hello agent' }]
@@ -215,7 +218,10 @@ describe('failed session lifecycle (story 5)', () => {
     // can retry, with the launch config recorded for the retry.
     expect(session.status).toBe('error')
     expect(session.launchConfigId).toBe('cfg-1')
-    expect(session.lastError).toContain('connection refused by agent')
+    // The launch path now classifies setup failures (acp-spawn-errors):
+    // a plain non-definite spawn rejection surfaces under the transport
+    // label (constant upstream). The raw cause stays in the browser logs.
+    expect(session.lastError).toContain(ACP_STREAM_INTERRUPT_MESSAGE)
     expect(state.launchingSessionIds[placeholderId]).toBeUndefined()
     // The sidebar projection gains a 'error'-status row instead of showing
     // "No chats yet" while the failed tab is open.
@@ -313,6 +319,7 @@ describe('failed session lifecycle (story 5)', () => {
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     const placeholderId = useAcpStore.getState().createLaunchPlaceholder({
+      configId: 'cfg-1',
       cwd: '/work',
       projectId: 'p1',
       initialUserBlocks: [{ type: 'text', text: 'hello agent' }]
@@ -351,6 +358,7 @@ describe('failed session lifecycle (story 5)', () => {
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     const placeholderId = useAcpStore.getState().createLaunchPlaceholder({
+      configId: 'cfg-1',
       cwd: '/work',
       projectId: 'p1',
       initialUserBlocks: [{ type: 'text', text: 'hello agent' }]
@@ -394,7 +402,7 @@ describe('failed session lifecycle (story 5)', () => {
       .saveAgentConfig({ id: 'cfg-npx', name: 'NPX Agent', command: 'npx', args: [], env: {} })
     const placeholderId = useAcpStore
       .getState()
-      .createLaunchPlaceholder({ cwd: '/work', projectId: 'p1' })
+      .createLaunchPlaceholder({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
     ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn npx ENOENT'))
     await expect(
       useAcpStore.getState().finalizeChatLaunch({
@@ -405,6 +413,30 @@ describe('failed session lifecycle (story 5)', () => {
       })
     ).rejects.toThrow()
     expect(useAcpStore.getState().sessions[placeholderId].lastError).toMatch(/Install Node\.js/)
+  })
+
+  it('marks the first prompt of a launch as sent here, placed or seeded', () => {
+    const placed = useAcpStore.getState().createLaunchPlaceholder({
+      configId: 'cfg-1',
+      cwd: '/work',
+      projectId: 'p1',
+      initialUserBlocks: [{ type: 'text', text: 'hello agent' }]
+    })
+    const seeded = useAcpStore
+      .getState()
+      .createLaunchPlaceholder({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
+    useAcpStore.getState().seedLaunchUserMessage(seeded, [{ type: 'text', text: 'hello seeded' }])
+
+    const placedMessage = useAcpStore.getState().messages[placed][0]
+    const seededMessage = useAcpStore.getState().messages[seeded][0]
+    expect([placedMessage.blocks, placedMessage.sentHere]).toEqual([
+      [{ type: 'text', text: 'hello agent' }],
+      true
+    ])
+    expect([seededMessage.blocks, seededMessage.sentHere]).toEqual([
+      [{ type: 'text', text: 'hello seeded' }],
+      true
+    ])
   })
 
   it('deleting an open failed session also closes its workspace tab', async () => {
@@ -528,13 +560,38 @@ describe('failed session lifecycle (story 5)', () => {
     )
   })
 
+  it('RETRY_SUCCESS: the re-sent first prompt goes ahead of a send queued on the failed chat', async () => {
+    const placeholderId = await seedFailedLaunch(new Error('connection refused by agent'))
+    await useAcpStore.getState().sendPrompt(placeholderId, 'are you there?')
+
+    const sentTexts: string[] = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
+      async (command: string, args?: { text?: string }) => {
+        if (command === 'acp_spawn_agent')
+          return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+        if (command === 'acp_new_session') return { sessionId: 'sess-retry' }
+        if (command === 'acp_send_prompt') {
+          sentTexts.push(args?.text ?? '')
+          return 'end_turn'
+        }
+        throw new Error(`unexpected invoke command: ${command}`)
+      }
+    )
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+
+    expect(sentTexts).toEqual(['hello agent'])
+    expect(useAcpStore.getState().promptQueues['sess-retry']?.map((q) => q.blocks)).toEqual([
+      [{ type: 'text', text: 'are you there?' }]
+    ])
+  })
+
   it('RETRY_NO_USER_MSG: a launch without a first prompt retries without re-sending', async () => {
     await useAcpStore
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     const placeholderId = useAcpStore
       .getState()
-      .createLaunchPlaceholder({ cwd: '/work', projectId: 'p1' })
+      .createLaunchPlaceholder({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
     ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn boom'))
     await expect(
       useAcpStore.getState().finalizeChatLaunch({
@@ -903,10 +960,15 @@ describe('failed session lifecycle (story 5)', () => {
 
   describe('sends during a launch', () => {
     type SentPrompt = { agentId: string; sessionId: string }
+    type SendArgs = SentPrompt & { text?: string; content?: ContentBlock[] }
 
-    async function startGatedLaunch(initialText?: string): Promise<{
+    async function startGatedLaunch(
+      initialText?: string,
+      { painted = true }: { painted?: boolean } = {}
+    ): Promise<{
       placeholderId: string
       sent: SentPrompt[]
+      sentTexts: string[]
       release: () => void
       launch: Promise<unknown>
     }> {
@@ -914,22 +976,26 @@ describe('failed session lifecycle (story 5)', () => {
         .getState()
         .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
       const placeholderId = useAcpStore.getState().createLaunchPlaceholder({
+        configId: 'cfg-1',
         cwd: '/work',
         projectId: 'p1',
-        initialUserBlocks: initialText ? [{ type: 'text', text: initialText }] : undefined
+        initialUserBlocks:
+          initialText && painted ? [{ type: 'text', text: initialText }] : undefined
       })
       let releaseCreate!: (value: { sessionId: string }) => void
       const createGate = new Promise<{ sessionId: string }>((resolve) => {
         releaseCreate = resolve
       })
       const sent: SentPrompt[] = []
+      const sentTexts: string[] = []
       ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
-        async (command: string, args?: SentPrompt) => {
+        async (command: string, args?: SendArgs) => {
           if (command === 'acp_spawn_agent')
             return { agentId: 'agent-1', capabilities: {}, authMethods: [] }
           if (command === 'acp_new_session') return createGate
           if (command === 'acp_send_prompt' && args) {
             sent.push({ agentId: args.agentId, sessionId: args.sessionId })
+            sentTexts.push(args.text ?? (args.content ?? []).map((b) => b.text).join(''))
             return 'end_turn'
           }
           return undefined
@@ -948,6 +1014,7 @@ describe('failed session lifecycle (story 5)', () => {
       return {
         placeholderId,
         sent,
+        sentTexts,
         release: () => releaseCreate({ sessionId: 'sess-real' }),
         launch
       }
@@ -978,6 +1045,22 @@ describe('failed session lifecycle (story 5)', () => {
         [{ type: 'text', text: 'second message' }]
       ])
       expect(useAcpStore.getState().promptQueues[placeholderId]).toBeUndefined()
+    })
+
+    it('sends an unpainted launch prompt ahead of a send queued during the launch', async () => {
+      // A GitHub hand-off (fix CI, resolve comments) launches without painting
+      // its first prompt, so the user can type a follow-up before it is sent.
+      const { placeholderId, sentTexts, release, launch } = await startGatedLaunch('fix the CI', {
+        painted: false
+      })
+      await useAcpStore.getState().sendPrompt(placeholderId, 'then update the changelog')
+
+      release()
+      await launch
+      expect(sentTexts).toEqual(['fix the CI'])
+      expect(useAcpStore.getState().promptQueues['sess-real']?.map((q) => q.blocks)).toEqual([
+        [{ type: 'text', text: 'then update the changelog' }]
+      ])
     })
   })
 })

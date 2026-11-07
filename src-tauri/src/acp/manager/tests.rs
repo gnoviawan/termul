@@ -83,6 +83,29 @@ fn summarized_thinking_meta_asks_for_a_visible_summary() {
     );
 }
 
+#[test]
+fn headless_options_limit_claude_tools_and_deny_protected_paths() {
+    use agent_client_protocol::schema::v1::ToolKind;
+    let allowlist =
+        crate::acp::session::ToolAllowlist::new([ToolKind::Search, ToolKind::Read, ToolKind::Other]);
+    let meta = Value::Object(with_headless_options(summarized_thinking_meta(), &allowlist));
+    let options = &meta["claudeCode"]["options"];
+    assert_eq!(options["thinking"]["display"], "summarized");
+    assert_eq!(options["settingSources"], serde_json::json!([]));
+    assert_eq!(options["allowDangerouslySkipPermissions"], false);
+    assert_eq!(options["tools"], serde_json::json!(["Read", "Grep", "Glob"]));
+    let deny = options["settings"]["permissions"]["deny"].as_array().unwrap();
+    for rule in ["Read(**/.env*)", "Edit(**/.claude/**)", "Edit(**/.git/**)", "Read(**/.mcp.json)"] {
+        assert!(deny.contains(&serde_json::json!(rule)), "{rule}");
+    }
+
+    let none = Value::Object(with_headless_options(
+        Meta::new(),
+        &crate::acp::session::ToolAllowlist::default(),
+    ));
+    assert_eq!(none["claudeCode"]["options"]["tools"], serde_json::json!([]));
+}
+
 #[tokio::test]
 async fn owns_session_queries_authoritative_agent_driver_state() {
     let manager = AcpManager::new(vec![]);
@@ -435,6 +458,7 @@ async fn session_resume_reopen_preserves_omitted_fields() {
             modes: None,
             models: None,
             config_options: None,
+            answered_by_host: false,
         }
     );
     assert_eq!(
@@ -559,6 +583,39 @@ fn to_auth_method_infos_maps_full_metadata() {
     assert_eq!(infos[1].name, "API key");
     assert_eq!(infos[1].r#type, "agent");
     assert_eq!(infos[1].description, None);
+}
+
+/// `_meta["api-key"]` as codex-acp 2.5.0 and Gemini CLI 0.62.0 advertise it
+/// maps to `takesApiKey: true`; a provider whose key shape is unknown, a
+/// gateway method and a plain method carry no flag.
+#[test]
+fn to_auth_method_infos_flags_api_key_methods() {
+    let methods: Vec<AuthMethod> = serde_json::from_value(serde_json::json!([
+        { "id": "api-key", "name": "API Key", "_meta": { "api-key": { "provider": "openai" } } },
+        { "id": "gemini-api-key", "name": "Gemini API key",
+          "_meta": { "api-key": { "provider": "google" } } },
+        { "id": "byok", "name": "BYOK", "_meta": { "api-key": { "provider": "somebody-new" } } },
+        { "id": "gateway", "name": "Gateway", "_meta": { "gateway": { "protocol": "openai" } } },
+        { "id": "chat-gpt", "name": "ChatGPT" },
+    ]))
+    .unwrap();
+    let wire: Vec<(String, Option<serde_json::Value>)> = to_auth_method_infos(&methods)
+        .iter()
+        .map(|info| {
+            let json = serde_json::to_value(info).unwrap();
+            (info.id.clone(), json.get("takesApiKey").cloned())
+        })
+        .collect();
+    assert_eq!(
+        wire,
+        [
+            ("api-key".to_string(), Some(serde_json::json!(true))),
+            ("gemini-api-key".to_string(), Some(serde_json::json!(true))),
+            ("byok".to_string(), None),
+            ("gateway".to_string(), None),
+            ("chat-gpt".to_string(), None),
+        ]
+    );
 }
 
 /// An agent that advertises no auth methods maps to an empty vec (the
@@ -2920,4 +2977,462 @@ async fn new_session_injects_a_refreshed_oauth_token() {
         stored.and_then(|token| token.refresh_token).as_deref(),
         Some("stored-refresh")
     );
+}
+
+// ---- #1420: plan token handling on a history reopen ----------------------
+
+/// A session that already has a live plan token and a cached plan, held by
+/// `agent-live`. A reopen on any other agent mints a new token.
+fn manager_with_live_plan_token(session_id: &str) -> (AcpManager, String) {
+    let manager = AcpManager::new(vec![]);
+    let (_, old_token, _) = manager.host_plan_server.register_session("agent-live");
+    manager
+        .host_plan_server
+        .bind_session(&old_token, session_id);
+    manager.host_plan_server.seed_plan_for_test(session_id);
+    (manager, old_token)
+}
+
+#[tokio::test]
+async fn a_rejected_mcp_list_leaves_the_live_token_and_plan_cache_alone() {
+    let (manager, old_token) = manager_with_live_plan_token("sess-gate");
+    let agent = AgentId("agent-gate".to_string());
+    manager.install_test_agent_with_resume(agent.clone(), [].into_iter().collect());
+    // The fixture agent has no HTTP MCP capability, so the gate rejects this.
+    let http = McpServer::Http(agent_client_protocol::schema::v1::McpServerHttp::new(
+        "remote",
+        "https://example.invalid/mcp",
+    ));
+
+    let error = manager
+        .resume_session(
+            &agent,
+            SessionId("sess-gate".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+            Some(vec![http]),
+        )
+        .await
+        .expect_err("the gate must reject an HTTP server");
+
+    assert!(error.contains("HTTP MCP"), "unexpected error: {error}");
+    assert_eq!(
+        manager.host_plan_server.tokens_bound_to("sess-gate"),
+        vec![old_token],
+        "only the new token is evicted"
+    );
+    assert!(manager.host_plan_server.plan_cached_for_test("sess-gate"));
+}
+
+#[tokio::test]
+async fn a_failed_resume_keeps_the_old_token_and_evicts_the_new_one() {
+    let (manager, old_token) = manager_with_live_plan_token("sess-own");
+    let owner = AgentId("agent-owner".to_string());
+    // This fixture answers `session/resume` with an error.
+    manager.install_test_agent_with_mid_turn_session(
+        owner.clone(),
+        ["sess-own".to_string()].into_iter().collect(),
+        true,
+    );
+
+    manager
+        .resume_session(
+            &owner,
+            SessionId("sess-own".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+            Some(Vec::new()),
+        )
+        .await
+        .expect_err("the fixture rejects session/resume");
+
+    assert_eq!(
+        manager.host_plan_server.tokens_bound_to("sess-own"),
+        vec![old_token],
+        "the live child's token survives and the new one is evicted"
+    );
+    assert!(manager.host_plan_server.plan_cached_for_test("sess-own"));
+}
+
+#[tokio::test]
+async fn a_successful_resume_replaces_the_old_token_with_the_new_one() {
+    let (manager, old_token) = manager_with_live_plan_token("sess-ok");
+    let agent = AgentId("agent-ok".to_string());
+    manager.install_test_agent_with_resume(agent.clone(), [].into_iter().collect());
+
+    manager
+        .resume_session(
+            &agent,
+            SessionId("sess-ok".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+            Some(Vec::new()),
+        )
+        .await
+        .expect("the fixture accepts session/resume");
+
+    let bound = manager.host_plan_server.tokens_bound_to("sess-ok");
+    assert_eq!(bound.len(), 1, "exactly the new token remains: {bound:?}");
+    assert_ne!(bound[0], old_token, "the old token is dropped");
+}
+
+/// The driver answered the reopen without the agent (it already holds the
+/// session live). The agent never got the new token, so the settle evicts
+/// only that token and the session's state stays.
+#[tokio::test]
+async fn a_reopen_the_host_answered_keeps_the_live_token_and_plan_cache() {
+    let (manager, old_token) = manager_with_live_plan_token("sess-answered");
+    let agent = AgentId("agent-answers".to_string());
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        while let Some(command) = command_rx.recv().await {
+            match command {
+                AcpCommand::OwnsSession { reply, .. } => {
+                    let _ = reply.send(Ok(false));
+                }
+                AcpCommand::SessionIds { reply } => {
+                    let _ = reply.send(Ok(Vec::<String>::new()));
+                }
+                AcpCommand::ResumeSession { reply, .. } => {
+                    let _ = reply.send(Ok(SessionReopenOutcome {
+                        modes: None,
+                        models: None,
+                        config_options: None,
+                        answered_by_host: true,
+                    }));
+                }
+                _ => {}
+            }
+        }
+    });
+    let mut capabilities = AgentCapabilities::default();
+    capabilities.session_capabilities.resume =
+        Some(agent_client_protocol::schema::v1::SessionResumeCapabilities::default());
+    manager.agents.lock().insert(
+        agent.clone(),
+        AgentEntry {
+            command_tx,
+            capabilities,
+            stable_namespace: None,
+            name: "test-agent".to_string(),
+            config_id: None,
+            join_handle: None,
+            exit: Default::default(),
+            stamp: SpawnStamp::default(),
+        },
+    );
+
+    manager
+        .resume_session(
+            &agent,
+            SessionId("sess-answered".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+            Some(Vec::new()),
+        )
+        .await
+        .expect("the host answer is a success");
+
+    assert_eq!(
+        manager.host_plan_server.tokens_bound_to("sess-answered"),
+        vec![old_token]
+    );
+    assert!(manager
+        .host_plan_server
+        .plan_cached_for_test("sess-answered"));
+}
+
+#[tokio::test]
+async fn a_reopen_without_an_mcp_list_touches_no_tokens() {
+    let (manager, old_token) = manager_with_live_plan_token("sess-none-list");
+    let agent = AgentId("agent-none-list".to_string());
+    manager.install_test_agent_with_resume(agent.clone(), [].into_iter().collect());
+
+    manager
+        .resume_session(
+            &agent,
+            SessionId("sess-none-list".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect("the fixture accepts session/resume");
+
+    assert_eq!(
+        manager.host_plan_server.tokens_bound_to("sess-none-list"),
+        vec![old_token]
+    );
+}
+
+async fn resume_with_empty_user_list(manager: &AcpManager, agent: &AgentId, session_id: &str) {
+    manager
+        .resume_session(
+            agent,
+            SessionId(session_id.to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+            Some(Vec::new()),
+        )
+        .await
+        .expect("the fixture accepts session/resume");
+}
+
+async fn next_mcp_list(
+    sent: &mut mpsc::UnboundedReceiver<Option<Vec<McpServer>>>,
+) -> serde_json::Value {
+    let servers = sent
+        .recv()
+        .await
+        .unwrap()
+        .expect("the request sends a list");
+    serde_json::to_value(servers).unwrap()
+}
+
+/// A PWA reopen of an idle chat resumes the session on the agent that still
+/// holds it. claude-acp rebuilds a live session whose MCP list changed, and
+/// that kills its background shells and subagents, so the reopen must send
+/// the list the session was created with and keep the session's state.
+#[tokio::test]
+async fn a_reopen_on_the_agent_that_created_the_session_sends_the_creation_mcp_list() {
+    let manager = AcpManager::new(vec![]);
+    let agent = AgentId("agent-holder".to_string());
+    let mut sent = manager.install_test_agent_with_resume(agent.clone(), [].into_iter().collect());
+    manager
+        .new_session(&agent, "/tmp".to_string(), Vec::new())
+        .await
+        .expect("the fixture accepts session/new");
+    let created = next_mcp_list(&mut sent).await;
+    manager.host_plan_server.seed_plan_for_test("sess-created");
+
+    resume_with_empty_user_list(&manager, &agent, "sess-created").await;
+    resume_with_empty_user_list(&manager, &agent, "sess-created").await;
+
+    assert_eq!(next_mcp_list(&mut sent).await, created);
+    assert_eq!(next_mcp_list(&mut sent).await, created);
+    assert_eq!(
+        manager
+            .host_plan_server
+            .tokens_bound_to("sess-created")
+            .len(),
+        1
+    );
+    assert!(manager
+        .host_plan_server
+        .plan_cached_for_test("sess-created"));
+}
+
+/// The chat of the 2026-11-03 report: a fresh agent resumed the session, and
+/// a later PWA reopen landed on that same agent.
+#[tokio::test]
+async fn a_reopen_after_a_successful_reopen_on_the_same_agent_sends_the_same_list() {
+    let (manager, other_agents_token) = manager_with_live_plan_token("sess-moved");
+    let agent = AgentId("agent-fresh".to_string());
+    let mut sent = manager.install_test_agent_with_resume(agent.clone(), [].into_iter().collect());
+
+    resume_with_empty_user_list(&manager, &agent, "sess-moved").await;
+    let first = next_mcp_list(&mut sent).await;
+    resume_with_empty_user_list(&manager, &agent, "sess-moved").await;
+
+    assert_eq!(next_mcp_list(&mut sent).await, first);
+    let bound = manager.host_plan_server.tokens_bound_to("sess-moved");
+    assert_eq!(bound.len(), 1, "{bound:?}");
+    assert_ne!(
+        bound[0], other_agents_token,
+        "another agent's token is never reused"
+    );
+}
+
+#[tokio::test]
+async fn a_rejected_reopen_on_the_holding_agent_keeps_its_token() {
+    let manager = AcpManager::new(vec![]);
+    let agent = AgentId("agent-holder-gate".to_string());
+    manager.install_test_agent_with_resume(agent.clone(), [].into_iter().collect());
+    let (_, held_token, _) = manager.host_plan_server.register_session(&agent.0);
+    manager
+        .host_plan_server
+        .bind_session(&held_token, "sess-held-gate");
+    // The fixture agent has no HTTP MCP capability, so the gate rejects this.
+    let http = McpServer::Http(agent_client_protocol::schema::v1::McpServerHttp::new(
+        "remote",
+        "https://example.invalid/mcp",
+    ));
+
+    manager
+        .resume_session(
+            &agent,
+            SessionId("sess-held-gate".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+            Some(vec![http]),
+        )
+        .await
+        .expect_err("the gate must reject an HTTP server");
+
+    assert_eq!(
+        manager.host_plan_server.tokens_bound_to("sess-held-gate"),
+        vec![held_token]
+    );
+}
+
+// ---- agent work outside a prompt turn (`session::unprompted`) -------------
+
+fn tool_call_notification(
+    session_id: &str,
+    status: agent_client_protocol::schema::v1::ToolCallStatus,
+) -> agent_client_protocol::schema::v1::SessionNotification {
+    use agent_client_protocol::schema::v1 as acp;
+    acp::SessionNotification::new(
+        acp::SessionId::new(session_id),
+        acp::SessionUpdate::ToolCall(acp::ToolCall::new("tool-1", "Run a command").status(status)),
+    )
+}
+
+fn tool_finished_notification(
+    session_id: &str,
+) -> agent_client_protocol::schema::v1::SessionNotification {
+    use agent_client_protocol::schema::v1 as acp;
+    acp::SessionNotification::new(
+        acp::SessionId::new(session_id),
+        acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+            "tool-1",
+            acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed),
+        )),
+    )
+}
+
+/// Driver state holding `session_id`, as after `session/new`.
+fn held_session_state(session_id: &str) -> Arc<Mutex<DriverState>> {
+    let state = Arc::new(Mutex::new(DriverState::new()));
+    state
+        .lock()
+        .set_session_root(session_id.to_string(), std::path::PathBuf::from("/tmp"));
+    state
+}
+
+#[tokio::test]
+async fn an_update_for_a_session_the_driver_does_not_hold_is_not_work() {
+    let state = Arc::new(Mutex::new(DriverState::new()));
+    let sink = Arc::new(CapturingSink::default());
+    let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+
+    handle_session_notification(
+        &state,
+        None,
+        &sinks,
+        &AgentId::new(),
+        thought_notification("sess-closed", "late"),
+    )
+    .await
+    .expect("update");
+
+    assert!(working_events(&sink).is_empty());
+}
+
+/// The `working` value of every `agent_working` event the sink saw, in order.
+fn working_events(sink: &CapturingSink) -> Vec<bool> {
+    sink.seen
+        .lock()
+        .iter()
+        .filter(|event| event.type_ == crate::acp::events::EVENT_AGENT_WORKING)
+        .map(|event| event.payload["working"].as_bool().expect("working flag"))
+        .collect()
+}
+
+#[tokio::test]
+async fn an_update_outside_a_prompt_turn_reports_the_agent_working_once() {
+    let state = held_session_state("sess-1");
+    let sink = Arc::new(CapturingSink::default());
+    let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+    let agent = AgentId::new();
+
+    for text in ["first", "second"] {
+        handle_session_notification(
+            &state,
+            None,
+            &sinks,
+            &agent,
+            thought_notification("sess-1", text),
+        )
+        .await
+        .expect("update");
+    }
+
+    assert_eq!(working_events(&sink), vec![true]);
+    let first = &sink.seen.lock()[0];
+    assert_eq!(
+        first.type_,
+        crate::acp::events::EVENT_AGENT_WORKING,
+        "busy before the update shows"
+    );
+    assert_eq!(first.payload["sessionId"], "sess-1");
+    assert_eq!(state.lock().activity(0).unprompted_sessions, 1);
+    assert!(
+        state.lock().activity(0).has_evidence(),
+        "the idle reaper keeps the agent"
+    );
+}
+
+#[tokio::test]
+async fn an_update_during_a_prompt_turn_is_not_work_outside_a_turn() {
+    let state = held_session_state("sess-1");
+    assert!(state.lock().try_begin_turn("sess-1").is_some());
+    let sink = Arc::new(CapturingSink::default());
+    let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+
+    handle_session_notification(
+        &state,
+        None,
+        &sinks,
+        &AgentId::new(),
+        thought_notification("sess-1", "turn"),
+    )
+    .await
+    .expect("update");
+
+    assert!(working_events(&sink).is_empty());
+    assert_eq!(state.lock().activity(0).unprompted_sessions, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_sweeper_reports_the_end_of_work_once_the_session_goes_quiet() {
+    use agent_client_protocol::schema::v1::ToolCallStatus;
+    let state = held_session_state("sess-1");
+    let sink = Arc::new(CapturingSink::default());
+    let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+    let agent = AgentId::new();
+    let sweeper = tokio::spawn(sweep_unprompted_work(
+        state.clone(),
+        sinks.clone(),
+        agent.clone(),
+    ));
+
+    handle_session_notification(
+        &state,
+        None,
+        &sinks,
+        &agent,
+        tool_call_notification("sess-1", ToolCallStatus::InProgress),
+    )
+    .await
+    .expect("tool call");
+    // A command can run far longer than the quiet period.
+    tokio::time::sleep(crate::acp::session::UNPROMPTED_QUIET * 10).await;
+    assert_eq!(working_events(&sink), vec![true]);
+
+    handle_session_notification(
+        &state,
+        None,
+        &sinks,
+        &agent,
+        tool_finished_notification("sess-1"),
+    )
+    .await
+    .expect("tool update");
+    tokio::time::sleep(crate::acp::session::UNPROMPTED_QUIET - Duration::from_secs(1)).await;
+    assert_eq!(working_events(&sink), vec![true]);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(working_events(&sink), vec![true, false]);
+    assert_eq!(state.lock().activity(0).unprompted_sessions, 0);
+    sweeper.abort();
 }

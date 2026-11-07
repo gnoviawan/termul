@@ -1,7 +1,10 @@
 //! Shared crash-consistent same-directory atomic file replacement.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Write};
+#[cfg(unix)]
+use std::os::fd::BorrowedFd;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -12,6 +15,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// parent directory. Windows replacement/open-sharing failures are returned to
 /// the caller; no portable parent-directory fsync claim is made there.
 pub fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    replace_with_mode(path, bytes, None)
+}
+
+/// [`replace`] for files holding credentials: on Unix the temp file is
+/// created owner-only, so the target is never readable by others, even
+/// briefly.
+pub fn replace_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    replace_with_mode(path, bytes, Some(0o600))
+}
+
+fn replace_with_mode(path: &Path, bytes: &[u8], mode: Option<u32>) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         io::Error::other(format!("atomic target '{}' has no parent", path.display()))
     })?;
@@ -19,10 +33,15 @@ pub fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
     let tmp = temp_path(path);
     let write_result = (|| -> io::Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if let Some(mode) = mode {
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+        let mut file = options.open(&tmp)?;
         file.write_all(bytes)?;
         file.flush()?;
         file.sync_all()?;
@@ -36,6 +55,37 @@ pub fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
     })();
     if write_result.is_err() {
         let _ = fs::remove_file(&tmp);
+    }
+    write_result
+}
+
+/// [`replace`] for the entry `name` of the open directory `dir`. The temp
+/// file and the rename name entries of `dir` itself, never a path, so a
+/// folder above it swapped for a link after `dir` was opened cannot move the
+/// write elsewhere.
+#[cfg(unix)]
+pub fn replace_at(dir: BorrowedFd<'_>, name: &OsStr, bytes: &[u8]) -> io::Result<()> {
+    use rustix::fs::{fsync, openat, renameat, unlinkat, AtFlags, Mode, OFlags};
+    let tmp = temp_name(name);
+    let write_result = (|| -> io::Result<()> {
+        let flags =
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let mut file = fs::File::from(openat(
+            dir,
+            tmp.as_str(),
+            flags,
+            Mode::from_raw_mode(0o666),
+        )?);
+        file.write_all(bytes)?;
+        file.flush()?;
+        file.sync_all()?;
+        drop(file);
+        renameat(dir, tmp.as_str(), dir, name)?;
+        fsync(dir)?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = unlinkat(dir, tmp.as_str(), AtFlags::empty());
     }
     write_result
 }
@@ -237,14 +287,16 @@ pub fn peek_schema_version(bytes: &[u8]) -> Option<u32> {
 }
 
 fn temp_path(path: &Path) -> PathBuf {
-    path.with_file_name(format!(
+    path.with_file_name(temp_name(path.file_name().unwrap_or_default()))
+}
+
+fn temp_name(name: &OsStr) -> String {
+    format!(
         "{}.{}.{}.tmp",
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("artifact"),
+        name.to_str().unwrap_or("artifact"),
         std::process::id(),
         unique_suffix()
-    ))
+    )
 }
 
 /// Whether `path` is a temp file [`replace`] or [`create_new`] made for a

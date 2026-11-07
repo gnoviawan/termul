@@ -1,0 +1,204 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { ComponentProps } from 'react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { UpdatesSection } from './updates-section'
+
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => true
+}))
+
+// The install retry must go through the same confirm flow as the install
+// button, so these mocks sit below confirmInstallAndRestart, not on it.
+const confirmMock = vi.fn(async (_message: string, _options?: unknown) => false)
+vi.mock('@/lib/tauri-dialog', () => ({
+  confirm: (message: string, options?: unknown) => confirmMock(message, options)
+}))
+
+vi.mock('@/lib/tauri-safe-update', () => ({
+  hasActiveTerminalSessions: () => true
+}))
+
+const storeInstallAndRestart = vi.fn(async () => {})
+vi.mock('@/stores/updater-store', () => ({
+  updaterStore: {
+    getState: () => ({
+      installAndRestart: storeInstallAndRestart,
+      downloaded: true,
+      error: null
+    })
+  }
+}))
+
+vi.mock('sonner', () => ({
+  toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn() })
+}))
+
+type Props = ComponentProps<typeof UpdatesSection>
+
+function renderSection(overrides: Partial<Props> = {}): Props {
+  const props: Props = {
+    isAurUpdater: false,
+    isChecking: false,
+    updateAvailable: false,
+    version: null,
+    lastChecked: null,
+    autoUpdateEnabled: true,
+    skippedVersion: null,
+    updateError: null,
+    updateErrorSource: null,
+    isManualUpdateMode: false,
+    updateChannel: 'stable',
+    checkForUpdates: vi.fn(),
+    downloadUpdate: vi.fn(),
+    installAndRestart: vi.fn(),
+    handleAutoUpdateToggle: vi.fn(),
+    setUpdateChannel: vi.fn(),
+    ...overrides
+  }
+  render(<UpdatesSection {...props} />)
+  return props
+}
+
+describe('UpdatesSection update mode copy', () => {
+  it('describes nightly updates as signed in-app installs', () => {
+    renderSection({ updateChannel: 'nightly' })
+
+    expect(screen.getByText(/Updates are signed and install in the app\./)).toBeTruthy()
+    expect(screen.queryByText(/manual download/)).toBeNull()
+  })
+
+  it('describes nightly updates as a manual download once the check fell back', () => {
+    renderSection({
+      updateChannel: 'nightly',
+      isManualUpdateMode: true,
+      updateAvailable: true,
+      version: '0.5.0-nightly.20261028.101.bbbbbbb'
+    })
+
+    expect(
+      screen.getByText(/Updates are offered as a manual download from the nightly release page\./)
+    ).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Open download page/ })).toBeTruthy()
+  })
+
+  it('shows the in-app notice without a download-page button for a signed nightly update', () => {
+    renderSection({
+      updateChannel: 'nightly',
+      updateAvailable: true,
+      version: '0.5.0-nightly.20261028.101.bbbbbbb'
+    })
+
+    expect(screen.getByText(/A new version is ready to download\./)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Open download page/ })).toBeNull()
+  })
+
+  it('keeps insider on the manual-download copy', () => {
+    renderSection({ updateChannel: 'insider' })
+
+    expect(
+      screen.getByText(/Updates are offered as a manual download from the insider release page\./)
+    ).toBeTruthy()
+  })
+})
+
+describe('UpdatesSection error copy', () => {
+  it('reports a failed check as a check failure', () => {
+    renderSection({ updateError: 'network down', updateErrorSource: 'check' })
+
+    expect(screen.getByText(/Termul could not check for updates\./)).toBeTruthy()
+  })
+
+  it('reports a failed download as a download failure, not a check failure', () => {
+    renderSection({ updateError: 'signature mismatch', updateErrorSource: 'download' })
+
+    expect(screen.getByText(/Termul could not download the update\./)).toBeTruthy()
+    expect(screen.queryByText(/could not check for updates/)).toBeNull()
+  })
+
+  it('reports a failed install as an install failure, not a check failure', () => {
+    renderSection({ updateError: 'install failed', updateErrorSource: 'install' })
+
+    expect(screen.getByText(/Termul could not install the update\./)).toBeTruthy()
+    expect(screen.queryByText(/could not check for updates/)).toBeNull()
+  })
+})
+
+describe('UpdatesSection error retry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  function clickTryAgain(): void {
+    fireEvent.click(screen.getByRole('button', { name: /Try again/ }))
+  }
+
+  it('retries the check after a failed check', () => {
+    const props = renderSection({ updateError: 'network down', updateErrorSource: 'check' })
+
+    clickTryAgain()
+
+    expect(props.checkForUpdates).toHaveBeenCalledTimes(1)
+    expect(props.downloadUpdate).not.toHaveBeenCalled()
+    expect(props.installAndRestart).not.toHaveBeenCalled()
+  })
+
+  it('retries the download after a failed download', () => {
+    const props = renderSection({
+      updateError: 'signature mismatch',
+      updateErrorSource: 'download'
+    })
+
+    clickTryAgain()
+
+    expect(props.downloadUpdate).toHaveBeenCalledTimes(1)
+    expect(props.checkForUpdates).not.toHaveBeenCalled()
+  })
+
+  it('asks to confirm before retrying a failed install, and does not install if declined', async () => {
+    confirmMock.mockResolvedValueOnce(false)
+    const props = renderSection({
+      updateError: 'install failed',
+      updateErrorSource: 'install',
+      updateAvailable: true,
+      version: '0.5.0-nightly.20261028.101.bbbbbbb'
+    })
+
+    clickTryAgain()
+
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1))
+    expect(confirmMock.mock.calls[0][0]).toMatch(/Your running terminal sessions will be closed\./)
+    expect(storeInstallAndRestart).not.toHaveBeenCalled()
+    expect(props.installAndRestart).not.toHaveBeenCalled()
+    expect(props.checkForUpdates).not.toHaveBeenCalled()
+  })
+
+  it('retries a failed manual install by reopening the page, with no restart prompt', () => {
+    const props = renderSection({
+      updateError: 'could not open the page',
+      updateErrorSource: 'install',
+      updateAvailable: true,
+      isManualUpdateMode: true,
+      version: '0.5.0-nightly.20261028.101.bbbbbbb'
+    })
+
+    clickTryAgain()
+
+    expect(props.installAndRestart).toHaveBeenCalledTimes(1)
+    expect(confirmMock).not.toHaveBeenCalled()
+  })
+
+  it('retries the failed install once the user confirms', async () => {
+    confirmMock.mockResolvedValueOnce(true)
+    renderSection({
+      updateError: 'install failed',
+      updateErrorSource: 'install',
+      updateAvailable: true,
+      version: '0.5.0-nightly.20261028.101.bbbbbbb'
+    })
+
+    clickTryAgain()
+
+    await waitFor(() => expect(storeInstallAndRestart).toHaveBeenCalledTimes(1))
+    expect(confirmMock).toHaveBeenCalledTimes(1)
+  })
+})

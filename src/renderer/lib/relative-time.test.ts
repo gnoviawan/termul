@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { formatRelativeTime, formatRelativeTimeFromMs } from './relative-time'
+import {
+  formatChatCreatedTime,
+  formatRelativeTime,
+  formatRelativeTimeFromMs,
+  startOfToday,
+  startOfYesterday
+} from './relative-time'
 
 const enUsDefaultLocale = Intl.DateTimeFormat().resolvedOptions().locale === 'en-US'
 
@@ -93,5 +99,87 @@ describe('formatRelativeTimeFromMs', () => {
     vi.useFakeTimers()
     vi.setSystemTime(now)
     expect(formatRelativeTimeFromMs(now - MINUTE)).toBe('1m')
+  })
+})
+
+describe('formatChatCreatedTime', () => {
+  // Local wall-clock instants, so the day boundaries hold in any time zone.
+  const now = new Date(2026, 9, 30, 16, 0).getTime()
+  const clock = (ms: number): string =>
+    new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+
+  it('shows the clock time for a chat created today', () => {
+    const created = new Date(2026, 9, 30, 14, 5).getTime()
+    expect(formatChatCreatedTime(created, now)).toBe(clock(created))
+  })
+
+  it('names the day for a chat created yesterday, down to its first minute', () => {
+    const created = new Date(2026, 9, 29, 0, 0).getTime()
+    expect(formatChatCreatedTime(created, now)).toBe(`Yesterday ${clock(created)}`)
+    const late = new Date(2026, 9, 29, 23, 59).getTime()
+    expect(formatChatCreatedTime(late, now)).toBe(`Yesterday ${clock(late)}`)
+  })
+
+  it('shows the clock time from the first minute of today', () => {
+    const created = new Date(2026, 9, 30, 0, 0).getTime()
+    expect(formatChatCreatedTime(created, now)).toBe(clock(created))
+  })
+
+  it.runIf(enUsDefaultLocale)(
+    'shows a short date for older chats, with the year only when it differs',
+    () => {
+      expect(formatChatCreatedTime(new Date(2026, 9, 28, 23, 59).getTime(), now)).toBe('Oct 28')
+      expect(formatChatCreatedTime(new Date(2025, 11, 31, 12, 0).getTime(), now)).toBe(
+        'Dec 31, 2025'
+      )
+    }
+  )
+
+  it('shows a date, not a clock time, for anything before yesterday', () => {
+    const created = new Date(2026, 9, 28, 23, 59).getTime()
+    expect(formatChatCreatedTime(created, now)).toBe(
+      new Date(created).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    )
+  })
+
+  it('shows nothing for a missing, zero or non-finite time', () => {
+    expect(formatChatCreatedTime(undefined, now)).toBe('')
+    expect(formatChatCreatedTime(0, now)).toBe('')
+    expect(formatChatCreatedTime(Number.NaN, now)).toBe('')
+    expect(formatChatCreatedTime(Number.POSITIVE_INFINITY, now)).toBe('')
+  })
+
+  it('reads the clock when now is omitted', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+    const created = new Date(2026, 9, 30, 9, 30).getTime()
+    expect(formatChatCreatedTime(created)).toBe(clock(created))
+  })
+})
+
+describe('startOfYesterday', () => {
+  it('is local midnight of the previous calendar day', () => {
+    const now = new Date(2026, 9, 30, 16, 0).getTime()
+    expect(startOfYesterday(now)).toBe(new Date(2026, 9, 29, 0, 0).getTime())
+    expect(startOfToday(now)).toBe(new Date(2026, 9, 30, 0, 0).getTime())
+  })
+
+  describe('in a zone with daylight saving', () => {
+    const originalTz = process.env.TZ
+    afterEach(() => {
+      if (originalTz === undefined) delete process.env.TZ
+      else process.env.TZ = originalTz
+    })
+
+    it('steps a calendar day, not 24 h, the day after a DST change', () => {
+      process.env.TZ = 'America/New_York'
+      // 2026-03-08 is 23 h long (spring forward), 2026-11-01 is 25 h (fall back).
+      expect(startOfYesterday(new Date(2026, 2, 9, 12, 0).getTime())).toBe(
+        new Date(2026, 2, 8, 0, 0).getTime()
+      )
+      expect(startOfYesterday(new Date(2026, 10, 2, 12, 0).getTime())).toBe(
+        new Date(2026, 10, 1, 0, 0).getTime()
+      )
+    })
   })
 })

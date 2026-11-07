@@ -162,6 +162,30 @@ async fn canvas_hidden_is_an_answer_not_a_timeout() {
 }
 
 #[tokio::test]
+async fn a_reply_the_renderer_gives_for_an_editor_that_never_ran_the_call_keeps_the_count() {
+    for code in [
+        CanvasErrorCode::CanvasTimeout,
+        CanvasErrorCode::CanvasClosed,
+    ] {
+        let mut editor = Editor::mounted(true);
+        editor.time_out().await;
+        editor.time_out().await;
+        editor
+            .answered(Err(CanvasError::new(code, "answered by the renderer")))
+            .await;
+        editor.time_out().await;
+        let notice = tokio::time::timeout(Duration::from_secs(2), editor.remounted_notice())
+            .await
+            .unwrap_or_else(|_| panic!("{code:?} reset the count: no remount"));
+        assert!(
+            notice.reason.contains("3 consecutive calls timed out"),
+            "{code:?}: {}",
+            notice.reason
+        );
+    }
+}
+
+#[tokio::test]
 async fn timeouts_before_the_document_loaded_are_not_a_crash() {
     let mut editor = Editor::mounted(false);
     for _ in 0..4 {
@@ -245,4 +269,125 @@ async fn presence_lookups_that_time_out_never_remount_nor_reset_the_count() {
         notice.previous_mount_seq, editor.seq,
         "a presence answer does not reset the agent's timeouts"
     );
+}
+
+#[tokio::test]
+async fn calls_that_time_out_together_in_one_stall_count_once() {
+    let mut editor = Editor::mounted(true);
+    let stalled: Vec<_> = (0..3)
+        .map(|_| {
+            let mounts = Arc::clone(&editor.mounts);
+            tokio::spawn(async move { mounts.call(PROJECT, "node.get", "{}".into(), QUICK).await })
+        })
+        .collect();
+    for call in stalled {
+        assert_eq!(
+            call.await.unwrap().unwrap_err().code,
+            CanvasErrorCode::CanvasTimeout
+        );
+    }
+    for _ in 0..3 {
+        editor
+            .frames
+            .recv()
+            .await
+            .expect("each call reached the renderer");
+    }
+    editor.time_out().await;
+    assert!(
+        editor.still_mounted(),
+        "one stall and one more timeout are two, not four"
+    );
+    editor.time_out().await;
+    assert_eq!(
+        editor.remounted_notice().await.previous_mount_seq,
+        editor.seq
+    );
+}
+
+#[tokio::test]
+async fn a_late_answer_to_a_timed_out_call_resets_the_count() {
+    let mut editor = Editor::mounted(true);
+    editor.time_out().await;
+    let outcome = editor
+        .mounts
+        .call(PROJECT, "node.get", "{}".into(), QUICK)
+        .await;
+    assert_eq!(outcome.unwrap_err().code, CanvasErrorCode::CanvasTimeout);
+    let late = editor
+        .frames
+        .recv()
+        .await
+        .expect("the call reached the renderer");
+    editor
+        .mounts
+        .reply(HOLDER, late.call_id, late.mount_seq, Ok("{}".into()));
+    editor.time_out().await;
+    editor.time_out().await;
+    assert!(
+        editor.still_mounted(),
+        "the late answer proved the editor alive"
+    );
+}
+
+#[tokio::test]
+async fn calls_queued_behind_a_render_still_inside_its_wait_are_not_a_crash() {
+    let mut editor = Editor::mounted(true);
+    let mounts = Arc::clone(&editor.mounts);
+    let render = tokio::spawn(async move {
+        mounts
+            .call(
+                PROJECT,
+                "host.renderPng",
+                "{}".into(),
+                Duration::from_secs(30),
+            )
+            .await
+    });
+    editor
+        .frames
+        .recv()
+        .await
+        .expect("the render reached the renderer");
+
+    for _ in 0..4 {
+        editor.time_out().await;
+    }
+
+    assert!(editor.still_mounted(), "the editor is busy rendering");
+    render.abort();
+}
+
+#[tokio::test]
+async fn once_a_render_outlasts_its_own_wait_timeouts_count_again() {
+    let mut editor = Editor::mounted(true);
+    let mounts = Arc::clone(&editor.mounts);
+    let render = tokio::spawn(async move {
+        mounts
+            .call(
+                PROJECT,
+                "host.renderPng",
+                "{}".into(),
+                Duration::from_millis(300),
+            )
+            .await
+    });
+    editor
+        .frames
+        .recv()
+        .await
+        .expect("the render reached the renderer");
+    editor.time_out().await;
+    assert_eq!(
+        render.await.unwrap().unwrap_err().code,
+        CanvasErrorCode::CanvasTimeout
+    );
+
+    editor.time_out().await;
+    editor.time_out().await;
+
+    let notice = tokio::time::timeout(Duration::from_secs(2), editor.remounted_notice())
+        .await
+        .expect("the render and two calls after it are three in a row");
+    assert!(notice.reason.contains("3 consecutive calls timed out"));
 }

@@ -5,7 +5,11 @@
 //! saved bytes into a new iframe, and reports what the crash lost.
 //!
 //! Only a call that went unanswered counts: any reply, a typed refusal such
-//! as `CANVAS_HIDDEN` included, proves the editor alive and resets the count.
+//! as `CANVAS_HIDDEN` included, proves the editor alive and resets the count,
+//! and so does a reply that arrives after its call timed out. Calls that
+//! were already waiting when a timeout was counted belong to the same stall
+//! and do not count again, so several agent calls in flight during one busy
+//! spell count once.
 //! A mount still loading does not count either: an editor started while the
 //! page is hidden reaches `event.ready` only once it is shown (figcraft
 //! SPIKE.md), which is not a crash.
@@ -14,7 +18,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use super::{closed, CanvasPersistence, Lifecycle, Mount, Phase};
+use super::{closed, CanvasPersistence, Lifecycle, Mount, MountState, Phase};
 use crate::canvas::CanvasError;
 use crate::commands::sanitize_log_field;
 
@@ -43,7 +47,7 @@ pub(super) fn now_ms() -> u64 {
 }
 
 /// Edits the crashed editor held that were not on disk.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LostChanges {
     /// `contentVersion - savedVersion`, at least 1.
@@ -52,7 +56,7 @@ pub struct LostChanges {
     pub since_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Remount {
     pub previous_mount_seq: u64,
@@ -97,12 +101,45 @@ impl CanvasPersistence {
     /// A forwarded call got its answer.
     pub(super) fn call_answered(&self, project_id: &str, mount_seq: u64) {
         if let Ok(mount) = self.mount_for(project_id, mount_seq) {
-            mount.state.lock().timeouts = 0;
+            Self::alive(&mut mount.state.lock());
         }
     }
 
-    /// A forwarded call timed out; the last allowed one remounts.
-    pub(super) fn call_timed_out(&self, project_id: &str, mount_seq: u64) {
+    /// The editor of `mount_seq` on connection `holder_id` answered a call
+    /// after it had timed out.
+    pub(super) fn late_answer(&self, holder_id: &str, mount_seq: u64) {
+        let mount = self
+            .mounts
+            .lock()
+            .values()
+            .find(|mount| mount.mount_seq == mount_seq)
+            .cloned();
+        if let Some(mount) = mount {
+            let mut state = mount.state.lock();
+            let same_connection = state
+                .link
+                .connection()
+                .is_some_and(|connection| connection.holder().id() == holder_id);
+            if same_connection {
+                Self::alive(&mut state);
+            }
+        }
+    }
+
+    fn alive(state: &mut MountState) {
+        state.timeouts = 0;
+        state.stall_counted_at = None;
+    }
+
+    /// A forwarded call sent at `sent_at` timed out; the last allowed one
+    /// remounts. A call sent before the last counted timeout fired waited
+    /// through that same stall and is not counted again.
+    pub(super) fn call_timed_out(
+        &self,
+        project_id: &str,
+        mount_seq: u64,
+        sent_at: tokio::time::Instant,
+    ) {
         let Ok(mount) = self.mount_for(project_id, mount_seq) else {
             return;
         };
@@ -111,7 +148,14 @@ impl CanvasPersistence {
             if !matches!(state.phase, Phase::Ready(_)) || state.lifecycle != Lifecycle::Open {
                 return;
             }
+            if state
+                .stall_counted_at
+                .is_some_and(|counted| sent_at < counted)
+            {
+                return;
+            }
             state.timeouts += 1;
+            state.stall_counted_at = Some(tokio::time::Instant::now());
             state.timeouts
         };
         if timeouts >= mount.crash_timeouts {
@@ -161,6 +205,7 @@ impl CanvasPersistence {
             remount.mount_seq,
             self.tick(),
             old.request(),
+            old.max_mounted,
             Some(remount.clone()),
         );
         if !self.install(project_id, Some(old), fresh) {

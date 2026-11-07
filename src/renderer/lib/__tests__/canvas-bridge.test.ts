@@ -74,6 +74,20 @@ describe('buildCanvasEmbedUrl', () => {
       )
     ).toBe('/canvas/cv1/ff/?embed=kiosk&ho=https%3A%2F%2Ftermul.example&ms=1')
   })
+
+  // figcraft installs `window.figcraft` for a query entry named `control`
+  // (`?control` or `control=…`, figcraft-web `query.rs`): an editor channel
+  // that canvas_policy never sees.
+  it('never opens the editor control channel, whatever the ids hold', () => {
+    const url = buildCanvasEmbedUrl(
+      { baseUrl: '', canvasId: 'control&control=1', canvasToken: '?control' },
+      'https://termul.example/?control&control=1',
+      2
+    )
+    const search = url.slice(url.indexOf('?') + 1)
+    const keys = search.split('&').map((entry) => entry.split('=')[0])
+    expect(keys).toEqual(['embed', 'ho', 'ms'])
+  })
 })
 
 describe('canvasOriginOf', () => {
@@ -172,6 +186,19 @@ describe('createCanvasBridge', () => {
     await expect(reply).resolves.toEqual({ ok: true, result: '"current"' })
   })
 
+  it('forwards the events.poll behind wait_for_changes to the editor', async () => {
+    editor.ready()
+    const reply = bridge.call('events.poll', asJsonText('{"after":3,"timeoutMs":20000}'))
+    expect(editor.lastRequest()).toEqual({
+      id: 1,
+      method: 'events.poll',
+      params: '{"after":3,"timeoutMs":20000}',
+      mountSeq: MOUNT_SEQ
+    })
+    editor.send({ id: 1, ok: true, result: '{"cursor":4,"events":[]}', mountSeq: MOUNT_SEQ })
+    await expect(reply).resolves.toEqual({ ok: true, result: '{"cursor":4,"events":[]}' })
+  })
+
   it('answers UNKNOWN_METHOD locally for methods outside the protocol', async () => {
     editor.ready()
     for (const method of ['event.ready', 'app.quit', 'window.close', 'bogus', 'engine.']) {
@@ -224,6 +251,43 @@ describe('createCanvasBridge', () => {
       { method: 'event.dirtyChanged', dirty: true, contentVersion: '18446744073709551615' },
       { method: 'event.crashed', reason: 'panic' }
     ])
+  })
+
+  it('drops a queued call unrun with CANVAS_TIMEOUT once its deadline passed before event.ready', async () => {
+    vi.useFakeTimers({ now: 1_000, toFake: ['Date'] })
+    try {
+      const late = bridge.call('engine.execute', asJsonText('{"command":"x"}'), 1_500)
+      const timely = bridge.call('document.inspect', undefined, 5_000)
+      const unbounded = bridge.call('engine.commands')
+      vi.setSystemTime(2_000)
+      editor.ready()
+
+      expect(editor.posted.mock.calls.map(([envelope]) => envelope.method)).toEqual([
+        'document.inspect',
+        'engine.commands'
+      ])
+      await expect(late).resolves.toEqual({
+        ok: false,
+        error: { code: 'CANVAS_TIMEOUT', message: expect.any(String) }
+      })
+      editor.send({ id: 2, ok: true, result: '{}', mountSeq: MOUNT_SEQ })
+      await expect(timely).resolves.toEqual({ ok: true, result: '{}' })
+      void unbounded
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('answers calls posted to a page that then reloaded with CANVAS_CLOSED', async () => {
+    editor.ready()
+    const lost = bridge.call('host.snapshot')
+    editor.ready()
+    await expect(lost).resolves.toEqual({
+      ok: false,
+      error: { code: 'CANVAS_CLOSED', message: expect.any(String) }
+    })
+    void bridge.call('document.inspect')
+    expect(editor.lastRequest().method).toBe('document.inspect')
   })
 
   it('resolves pending and later calls with CANVAS_CLOSED once disposed', async () => {
@@ -310,6 +374,27 @@ describe('answerGatewayCall', () => {
       ok: false,
       error: { code: 'CANVAS_HIDDEN', message: 'hidden' }
     })
+  })
+
+  it('answers CANVAS_TIMEOUT without reaching the editor once the host stopped waiting', async () => {
+    const run = vi.fn()
+    const answer = answerGatewayCall(
+      {
+        callId: 3,
+        mountSeq: MOUNT_SEQ,
+        method: 'engine.execute',
+        params: '{}',
+        deadline: Date.now() - 1
+      },
+      MOUNT_SEQ,
+      run
+    )
+    await expect(answer).resolves.toMatchObject({
+      callId: 3,
+      ok: false,
+      error: { code: 'CANVAS_TIMEOUT' }
+    })
+    expect(run).not.toHaveBeenCalled()
   })
 
   it('answers CANVAS_CLOSED without reaching the editor when the call targets another mount', async () => {

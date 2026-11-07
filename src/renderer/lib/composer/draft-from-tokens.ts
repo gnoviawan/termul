@@ -16,12 +16,29 @@
 import {
   CMD_TOKEN_END,
   CMD_TOKEN_START,
+  type ConversationSegment,
   FILE_TOKEN_END,
   FILE_TOKEN_SEP,
   FILE_TOKEN_START,
-  parseSkillSegments
+  parseConversationSegments,
+  parseSkillSegments,
+  type SkillSegment
 } from '@/lib/skill-tokens'
-import { CMD_PILL_NODE, FILE_PILL_NODE, SKILL_PILL_NODE } from './doc-to-prompt'
+import {
+  CMD_PILL_NODE,
+  CONTEXT_PILL_NODE,
+  CONVERSATION_PILL_NODE,
+  FILE_PILL_NODE,
+  SKILL_PILL_NODE,
+  TOOL_PILL_NODE
+} from './doc-to-prompt'
+import {
+  contextToAttrs,
+  parseSelectionContextSegments,
+  type SelectionContext,
+  type SelectionContextSegment
+} from './selection-context'
+import { parseToolSegments, type ToolSegment } from './tool-tokens'
 
 interface PmDocJSON {
   type: 'doc'
@@ -48,6 +65,9 @@ type ComposerSegment =
   | { kind: 'skill'; name: string }
   | { kind: 'command'; name: string }
   | { kind: 'file'; display: string; absPath: string }
+  | { kind: 'context'; context: SelectionContext }
+  | { kind: 'conversation'; title: string; sessionId: string }
+  | ToolSegment
 
 /**
  * Split a composer value into ordered text/skill/command segments. Delegates
@@ -65,11 +85,27 @@ function parseComposerSegments(value: string): ComposerSegment[] {
   // tokens (\uE004..\uE005) are not skill sentinels, so `parseSkillSegments`
   // treats them as plain text — they land inside the text segments, which we
   // walk below.
-  const skillSegments = parseSkillSegments(value)
+  const skillSegments = parseSkillSegments(value).flatMap(
+    (seg): Array<SkillSegment | SelectionContextSegment> =>
+      seg.kind === 'skill' ? [seg] : parseSelectionContextSegments(seg.text)
+  )
+  const pillSegments = skillSegments.flatMap(
+    (seg): Array<SkillSegment | SelectionContextSegment | ConversationSegment | ToolSegment> =>
+      seg.kind === 'text'
+        ? parseConversationSegments(seg.text).flatMap(
+            (c): Array<ConversationSegment | ToolSegment> =>
+              c.kind === 'text' ? parseToolSegments(c.text) : [c]
+          )
+        : [seg]
+  )
   const segments: ComposerSegment[] = []
-  for (const seg of skillSegments) {
+  for (const seg of pillSegments) {
     if (seg.kind === 'skill') {
       segments.push({ kind: 'skill', name: seg.name })
+      continue
+    }
+    if (seg.kind === 'context' || seg.kind === 'conversation' || seg.kind === 'tool') {
+      segments.push(seg)
       continue
     }
     // Text segment: walk for command tokens (\uE004<name>\uE005) and file
@@ -178,6 +214,21 @@ export function draftFromTokens(
         type: FILE_PILL_NODE,
         attrs: { display: seg.display, absPath: seg.absPath }
       })
+      continue
+    }
+    if (seg.kind === 'context') {
+      paragraphs.at(-1)!.push({ type: CONTEXT_PILL_NODE, attrs: contextToAttrs(seg.context) })
+      continue
+    }
+    if (seg.kind === 'conversation') {
+      paragraphs.at(-1)!.push({
+        type: CONVERSATION_PILL_NODE,
+        attrs: { title: seg.title, sessionId: seg.sessionId }
+      })
+      continue
+    }
+    if (seg.kind === 'tool') {
+      paragraphs.at(-1)!.push({ type: TOOL_PILL_NODE, attrs: { id: seg.tool.id } })
       continue
     }
     // Text segment: split on `\n` to open new paragraphs.

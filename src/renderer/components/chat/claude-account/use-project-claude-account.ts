@@ -1,4 +1,5 @@
 import type {
+  ClaudeAccountsSnapshot,
   ClaudeAccountUsage,
   ClaudeAccountView,
   ClaudeUsageWindow
@@ -34,6 +35,23 @@ const choice = (
   window: primaryUsageWindow(usage[account.id])
 })
 
+/** The Account a Project uses: its own choice, else the Default Account. */
+export const projectAccountId = (snapshot: ClaudeAccountsSnapshot, projectId: string): string =>
+  snapshot.projectAccounts[projectId] ?? snapshot.defaultAccountId
+
+/** Signed-in Accounts other than `currentId` with room left, least used first. */
+export function rankAlternatives(
+  snapshot: ClaudeAccountsSnapshot,
+  usage: Record<string, ClaudeAccountUsage>,
+  currentId: string
+): AccountChoice[] {
+  return snapshot.accounts
+    .filter((a) => a.id !== currentId && accountReadiness(a, usage[a.id]) === 'ready')
+    .map((a) => choice(a, usage))
+    .filter((c) => (c.window?.percent ?? 0) < 100)
+    .sort((x, y) => (x.window?.percent ?? 0) - (y.window?.percent ?? 0))
+}
+
 /**
  * The Claude Account context of one Project, before or without a chat.
  * `null` for no Project (nothing is read) and while the Account list loads.
@@ -44,24 +62,16 @@ export function useProjectClaudeAccount(projectId: string | null): ProjectClaude
   if (!projectId || !snapshot) return null
 
   const defaultAccount = snapshot.accounts.find((a) => a.id === snapshot.defaultAccountId) ?? null
-  const chosenId = snapshot.projectAccounts[projectId]
-  const currentAccount = snapshot.accounts.find(
-    (a) => a.id === (chosenId ?? snapshot.defaultAccountId)
-  )
+  const currentId = projectAccountId(snapshot, projectId)
+  const currentAccount = snapshot.accounts.find((a) => a.id === currentId)
   if (!currentAccount) return null
-
-  const alternatives = snapshot.accounts
-    .filter((a) => a.id !== currentAccount.id && accountReadiness(a, usage[a.id]) === 'ready')
-    .map((a) => choice(a, usage))
-    .filter((c) => (c.window?.percent ?? 0) < 100)
-    .sort((x, y) => (x.window?.percent ?? 0) - (y.window?.percent ?? 0))
 
   return {
     accounts,
     projectId,
     current: choice(currentAccount, usage),
     defaultAccount,
-    explicit: Boolean(chosenId),
-    alternatives
+    explicit: Boolean(snapshot.projectAccounts[projectId]),
+    alternatives: rankAlternatives(snapshot, usage, currentAccount.id)
   }
 }

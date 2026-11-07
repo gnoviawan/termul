@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
 import type { PendingAttachment } from './chat-attachments'
@@ -81,5 +81,16 @@ describe('AttachmentPreviewGroup', () => {
   it('does not render an open trigger for embedded text attachments', () => {
     render(<AttachmentPreviewGroup attachments={[fileAtt]} onRemove={() => {}} />)
     expect(screen.queryByRole('button', { name: /Open / })).not.toBeInTheDocument()
+  })
+
+  it('renders the remove control disabled when removeDisabled is set', () => {
+    const onRemove = vi.fn()
+    render(<AttachmentPreviewGroup attachments={[imageAtt]} onRemove={onRemove} removeDisabled />)
+
+    const removeButton = screen.getByRole('button', { name: /Remove Image/ })
+    expect(removeButton).toBeDisabled()
+
+    fireEvent.click(removeButton)
+    expect(onRemove).not.toHaveBeenCalled()
   })
 })

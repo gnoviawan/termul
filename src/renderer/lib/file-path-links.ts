@@ -512,7 +512,8 @@ export async function openFilePathFromTerminal(
     // openFile can return without storing when the tab limit is hit and no
     // tab is evictable — verify the file actually landed before reporting
     // success or adding a workspace tab.
-    if (!useEditorStore.getState().openFiles.has(resolution.path)) {
+    const opened = useEditorStore.getState().openFiles.get(resolution.path)
+    if (!opened) {
       return {
         ok: false,
         reason: 'open-failed',
@@ -520,14 +521,13 @@ export async function openFilePathFromTerminal(
       }
     }
 
-    if (position.line) {
-      useEditorStore
-        .getState()
-        .updateCursorPosition(resolution.path, position.line, position.column ?? 1)
+    const line = opened.kind === 'text' ? position.line : undefined
+    if (line) {
+      useEditorStore.getState().updateCursorPosition(resolution.path, line, position.column ?? 1)
     }
 
     useWorkspaceStore.getState().addEditorTab(resolution.path)
-    if (position.line) revealEditorLine(resolution.path, position.line)
+    if (line) revealEditorLine(resolution.path, line)
     return { ok: true }
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error)

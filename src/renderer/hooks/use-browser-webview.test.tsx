@@ -7,13 +7,17 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import {
+  type BrowserTabView,
   browserTabCreate,
   browserTabDestroy,
   browserTabHide,
+  browserTabNavigate,
   browserTabResize,
-  browserTabShow
+  browserTabShow,
+  onBrowserTabUpdated
 } from '@/lib/browser-api'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import { useBrowserWebview } from './use-browser-webview'
 import {
   resetNativeWebviewOcclusionForTests,
@@ -37,8 +41,7 @@ vi.mock('@/lib/browser-api', () => ({
   browserTabNavigate: vi.fn(),
   browserTabResize: vi.fn(),
   browserTabShow: vi.fn(),
-  onBrowserTabLoaded: vi.fn(() => ({ unlisten: vi.fn() })),
-  onBrowserTabNavigated: vi.fn(() => ({ unlisten: vi.fn() }))
+  onBrowserTabUpdated: vi.fn(() => ({ unlisten: vi.fn() }))
 }))
 
 let resizeCallback: ResizeObserverCallback | null = null
@@ -374,6 +377,104 @@ describe('useBrowserWebview agent control', () => {
     await waitFor(() =>
       expect(useBrowserSessionStore.getState().getTab('browser-1')?.agentControlled).toBe(true)
     )
+    view.unmount()
+  })
+})
+
+describe('useBrowserWebview registry projection', () => {
+  let publish: ((view: BrowserTabView) => void) | null = null
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubGlobal('ResizeObserver', ResizeObserverMock)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(LOGICAL_RECT)
+    vi.mocked(onBrowserTabUpdated).mockImplementation((callback) => {
+      publish = callback
+      return { unlisten: vi.fn() }
+    })
+    vi.mocked(browserTabCreate).mockResolvedValue({
+      success: true,
+      data: { id: 'browser-1', url: 'https://example.com', title: '', agentControlled: false }
+    })
+    vi.mocked(browserTabDestroy).mockResolvedValue({ success: true, data: undefined })
+    vi.mocked(browserTabResize).mockResolvedValue({ success: true, data: undefined })
+    vi.mocked(browserTabShow).mockResolvedValue({ success: true, data: undefined })
+    useBrowserSessionStore.getState().createTab('browser-1', 'https://example.com')
+  })
+
+  afterEach(() => {
+    useBrowserSessionStore.getState().removeTab('browser-1')
+    publish = null
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  function UrlFollowingHarness(): JSX.Element {
+    const url = useBrowserSessionStore((s) => s.tabs.get('browser-1')?.url ?? '')
+    const { containerRef } = useBrowserWebview('browser-1', true, url)
+    return <div ref={containerRef} />
+  }
+
+  it('mirrors a navigation the page made without navigating the webview again', async () => {
+    const view = render(<UrlFollowingHarness />)
+    await waitFor(() => expect(browserTabCreate).toHaveBeenCalled())
+
+    act(() => {
+      publish?.({
+        tabId: 'browser-1',
+        url: 'https://example.com/clicked',
+        title: 'Clicked',
+        loading: false,
+        agentControlled: false,
+        epoch: 2
+      })
+      publish?.({
+        tabId: 'browser-2',
+        url: 'https://other.test/',
+        title: 'Other tab',
+        loading: true,
+        agentControlled: true,
+        epoch: 1
+      })
+    })
+
+    expect(useBrowserSessionStore.getState().getTab('browser-1')).toMatchObject({
+      url: 'https://example.com/clicked',
+      title: 'Clicked',
+      loading: false
+    })
+    expect(browserTabNavigate).not.toHaveBeenCalled()
+    view.unmount()
+  })
+})
+
+describe('useBrowserWebview refused agent tab', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubGlobal('ResizeObserver', ResizeObserverMock)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(LOGICAL_RECT)
+    vi.mocked(browserTabDestroy).mockResolvedValue({ success: true, data: undefined })
+    vi.mocked(browserTabCreate).mockResolvedValue({
+      success: false,
+      error: 'no agent asked for this tab',
+      code: 'BROWSER_TAB_UNKNOWN_AGENT_TAB'
+    })
+    useBrowserSessionStore.getState().createTab('browser-1', 'https://example.com')
+    useWorkspaceStore.getState().addBrowserTab('browser-1')
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it('drops the pane tab of an agent tab the host no longer waits on', async () => {
+    expect(JSON.stringify(useWorkspaceStore.getState().root)).toContain('browser-browser-1')
+    const view = render(<BrowserWebviewHarness />)
+    await waitFor(() =>
+      expect(useBrowserSessionStore.getState().getTab('browser-1')).toBeUndefined()
+    )
+    expect(JSON.stringify(useWorkspaceStore.getState().root)).not.toContain('browser-browser-1')
     view.unmount()
   })
 })

@@ -93,3 +93,27 @@ export async function unmountCanvases(projectIds?: string[]): Promise<boolean> {
   }
   return true
 }
+
+/**
+ * Unmount `projectIds`' canvases before something the host may still refuse
+ * (deleting or archiving a project). Resolves to a function that mounts them
+ * again, without opening their tabs, for when it does (a project that has
+ * opened a canvas since keeps that one); `null` when the user chose to keep
+ * editing one of them.
+ */
+export async function unmountCanvasesFor(projectIds: string[]): Promise<(() => void) | null> {
+  const mounted = projectIds.flatMap((projectId) => {
+    const session = useCanvasStore.getState().sessions[projectId]
+    const kind = session?.phase.kind
+    return session && (kind === 'loading' || kind === 'ready')
+      ? [{ projectId, docPath: session.docPath }]
+      : []
+  })
+  if (!(await unmountCanvases(projectIds))) return null
+  return () => {
+    for (const { projectId, docPath } of mounted) {
+      if (useCanvasStore.getState().sessions[projectId]) continue
+      void useCanvasStore.getState().openCanvas(projectId, docPath, { showTab: false })
+    }
+  }
+}

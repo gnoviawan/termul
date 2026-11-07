@@ -19,6 +19,7 @@ fn tab(client_instance_id: &str) -> OpenRequest {
     OpenRequest {
         client_instance_id: client_instance_id.to_string(),
         autosave_ms: None,
+        autosave_max_ms: None,
         lease_grace_ms: None,
         max_mounted: Some(16),
         crash_timeouts: None,
@@ -57,6 +58,7 @@ async fn open_canvas_mints_one_token_per_project_until_close() {
     let base = CanvasBundleBase {
         base_url: "http://127.0.0.1:4567".into(),
         pin_tag: "termul-test".into(),
+        fallback_fonts: vec!["host-fonts/a.ttf".into()],
     };
     let project = "project-open-canvas";
     let canvas_id = canvas_id_for_project(project);
@@ -81,6 +83,7 @@ async fn open_canvas_mints_one_token_per_project_until_close() {
             "docKey": "C:/p/design.figcraft",
             "mountSeq": first.mount_seq,
             "evicted": [],
+            "fallbackFonts": ["host-fonts/a.ttf"],
         })
     );
     assert!(
@@ -195,6 +198,7 @@ fn bundle_base_has_the_same_shape_on_both_surfaces() {
     let desktop = serde_json::to_value(super::static_server::CanvasBundleBase {
         base_url: "http://127.0.0.1:1".into(),
         pin_tag: pinned_tag().into(),
+        fallback_fonts: Vec::new(),
     })
     .unwrap();
     let keys = |value: &serde_json::Value| -> Vec<String> {
@@ -277,6 +281,31 @@ mod served_from_dev_dir {
                 ("app.js", b"export default 1"),
             ])
         }
+
+        /// Like [`Self::standard`], but the bundle lives one directory below a
+        /// temp dir this test owns, so a `..` traversal target can be written
+        /// into that owned parent (removed on drop) instead of the shared
+        /// system temp dir. [`Self::dir`] is the owned parent.
+        fn nested() -> Self {
+            let guard = ENV_LOCK.lock();
+            let dir = tempfile::tempdir().unwrap();
+            let bundle = dir.path().join("bundle");
+            let files: [(&str, &[u8]); 3] = [
+                ("index.html", INDEX.as_bytes()),
+                ("app_bg.wasm", b"\0asm"),
+                ("app.js", b"export default 1"),
+            ];
+            for (name, bytes) in files {
+                let path = bundle.join(name);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, bytes).unwrap();
+            }
+            std::env::set_var(crate::web::assets::CANVAS_BUNDLE_DIR_ENV, &bundle);
+            Self {
+                _guard: guard,
+                dir: Some(dir),
+            }
+        }
     }
 
     impl Drop for Bundle {
@@ -354,7 +383,12 @@ mod served_from_dev_dir {
         let second = get(&uri, &revalidate);
         assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
 
-        let head = serve_bundle(&Method::HEAD, &uri.parse::<Uri>().unwrap(), &none);
+        // The route, not `serve_bundle`, drops a HEAD body (after setting
+        // Content-Length from it).
+        let head = web_router()
+            .oneshot(Request::head(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
         assert_eq!(head.status(), StatusCode::OK);
         assert_eq!(body_text(head).await, "");
 
@@ -364,18 +398,13 @@ mod served_from_dev_dir {
 
     #[tokio::test]
     async fn paths_cannot_leave_the_bundle_directory() {
-        let bundle = Bundle::standard();
+        let bundle = Bundle::nested();
         let id = "cv_traversal";
         let token = bundle_tokens().issue(id).unwrap();
+        // The owned temp dir is the bundle's parent, so `..` targets it — and
+        // it is removed when `bundle` drops, never leaking into shared /tmp.
         std::fs::write(
-            bundle
-                .dir
-                .as_ref()
-                .unwrap()
-                .path()
-                .parent()
-                .unwrap()
-                .join("secret.txt"),
+            bundle.dir.as_ref().unwrap().path().join("secret.txt"),
             "top secret",
         )
         .unwrap();
@@ -423,6 +452,17 @@ mod served_from_dev_dir {
     }
 
     #[tokio::test]
+    async fn an_empty_index_answers_the_same_typed_error() {
+        let _bundle = Bundle::with(&[("index.html", b""), ("app.js", b"export default 1")]);
+        let id = "cv_empty_index";
+        let token = bundle_tokens().issue(id).unwrap();
+        let response = get(&format!("/canvas/{id}/{token}/"), &HeaderMap::new());
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+        assert_eq!(body["code"], "BUNDLE_MISSING");
+    }
+
+    #[tokio::test]
     async fn web_router_and_desktop_router_serve_the_same_bundle() {
         let _bundle = Bundle::standard();
         let id = "cv_parity";
@@ -457,6 +497,126 @@ mod served_from_dev_dir {
                 .await
                 .unwrap();
             assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    fn content_length(response: &Response) -> Option<&str> {
+        response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+    }
+
+    /// #1728: HEAD carries the same `Content-Length` as GET (RFC 9110
+    /// §9.3.2) on both the web router and the desktop listener.
+    #[tokio::test]
+    async fn head_reports_the_file_length_on_both_routers() {
+        let _bundle = Bundle::standard();
+        let id = "cv_head_length";
+        let token = bundle_tokens().issue(id).unwrap();
+        let files: [(&str, usize); 3] = [
+            ("", INDEX.len()),
+            ("app_bg.wasm", 4),
+            ("app.js", "export default 1".len()),
+        ];
+        for (router, name) in [(web_router(), "web"), (bundle_router(), "desktop")] {
+            for (file, size) in files {
+                let uri = format!("/canvas/{id}/{token}/{file}");
+                let head = router
+                    .clone()
+                    .oneshot(Request::head(&uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(head.status(), StatusCode::OK, "{name} {file}");
+                let expected = size.to_string();
+                assert_eq!(
+                    content_length(&head),
+                    Some(expected.as_str()),
+                    "{name} HEAD {file}"
+                );
+                assert_eq!(body_text(head).await, "", "{name} HEAD {file} has no body");
+
+                let get = get_from(router.clone(), uri).await;
+                assert_eq!(get.status(), StatusCode::OK, "{name} {file}");
+                assert_eq!(
+                    content_length(&get),
+                    Some(expected.as_str()),
+                    "{name} GET {file}"
+                );
+                assert_eq!(body_text(get).await.len(), size, "{name} GET {file}");
+            }
+        }
+    }
+
+    /// #1728 on the wire: hyper keeps the routed `Content-Length` on a HEAD
+    /// response and sends no body.
+    #[tokio::test]
+    async fn head_content_length_reaches_the_wire() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let _bundle = Bundle::standard();
+        let id = "cv_head_wire";
+        let token = bundle_tokens().issue(id).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, web_router()).await });
+
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "HEAD /canvas/{id}/{token}/app.js HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        server.abort();
+
+        let (head, body) = response.split_once("\r\n\r\n").unwrap();
+        assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+        let length = head
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().to_string())
+            })
+            .expect("a content-length header");
+        assert_eq!(length, "export default 1".len().to_string());
+        assert_eq!(body, "", "HEAD sends no body");
+    }
+
+    async fn get_from(router: axum::Router, uri: String) -> Response {
+        router
+            .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn only_the_desktop_listener_lends_the_fallback_fonts() {
+        let _bundle = Bundle::standard();
+        let id = "cv_fallback_fonts";
+        let token = bundle_tokens().issue(id).unwrap();
+        assert!(
+            same_origin_base().fallback_fonts.is_empty(),
+            "termul-server and shared-live list none"
+        );
+        for url in super::super::fallback_fonts::urls() {
+            let desktop = get_from(bundle_router(), format!("/canvas/{id}/{token}/{url}")).await;
+            assert_eq!(desktop.status(), StatusCode::OK, "{url}");
+            let content_type = desktop.headers()[header::CONTENT_TYPE].to_str().unwrap();
+            assert!(content_type.starts_with("font/"), "{url}: {content_type}");
+            assert!(!body_text(desktop).await.is_empty(), "{url}");
+            let web = get_from(web_router(), format!("/canvas/{id}/{token}/{url}")).await;
+            assert_eq!(web.status(), StatusCode::NOT_FOUND, "the web router: {url}");
+            let stranger = get_from(bundle_router(), format!("/canvas/{id}/nope/{url}")).await;
+            assert_eq!(stranger.status(), StatusCode::UNAUTHORIZED, "{url}");
+        }
+        for name in ["arial.ttf", "../index.html", "..%5C..%5Cwin.ini", ""] {
+            let other = get_from(
+                bundle_router(),
+                format!("/canvas/{id}/{token}/host-fonts/{name}"),
+            )
+            .await;
+            assert_eq!(other.status(), StatusCode::NOT_FOUND, "{name}");
         }
     }
 
@@ -524,6 +684,18 @@ mod served_from_dev_dir {
             .unwrap();
         assert_eq!(script.status(), 200, "a sub-resource needs no cookie");
 
+        let first_addr = server.addr().unwrap();
+        assert!(crate::host_perimeter::is_owned_port(first_addr.port()));
+        let page_path = format!("/canvas/{id}/{token}/");
+        assert_eq!(
+            raw_status(first_addr, &page_path, "attacker.example").await,
+            "HTTP/1.1 403 Forbidden"
+        );
+        assert_eq!(
+            raw_status(first_addr, &page_path, &first_addr.to_string()).await,
+            "HTTP/1.1 200 OK"
+        );
+
         server.drop_listener();
         let second = loop {
             if server.bind_count() == 2 {
@@ -539,6 +711,8 @@ mod served_from_dev_dir {
             .await
             .unwrap();
         assert_eq!(page.status(), 200, "rebuilt base URL serves the bundle");
+        let second_port = server.addr().unwrap().port();
+        assert!(crate::host_perimeter::is_owned_port(second_port));
 
         server.shutdown();
         tokio::time::timeout(Duration::from_secs(5), supervisor)
@@ -546,5 +720,33 @@ mod served_from_dev_dir {
             .unwrap()
             .unwrap();
         assert_eq!(server.base(), None);
+        assert!(
+            !crate::host_perimeter::is_owned_port(second_port),
+            "port released after shutdown"
+        );
     }
+
+    /// Raw HTTP/1.1 GET so the `Host` header is exactly the one a rebinding
+    /// page would send.
+    async fn raw_status(addr: std::net::SocketAddr, path: &str, host: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        response.lines().next().unwrap_or_default().to_string()
+    }
+}
+
+#[test]
+fn an_open_request_carries_the_autosave_max_wait_on_both_transports() {
+    let request: OpenRequest = serde_json::from_str(
+        r#"{"clientInstanceId":"tab","autosaveMs":1500,"autosaveMaxMs":2500}"#,
+    )
+    .unwrap();
+    assert_eq!(request.autosave_max_ms, Some(2500));
+    let absent: OpenRequest = serde_json::from_str(r#"{"clientInstanceId":"tab"}"#).unwrap();
+    assert_eq!(absent.autosave_max_ms, None);
 }

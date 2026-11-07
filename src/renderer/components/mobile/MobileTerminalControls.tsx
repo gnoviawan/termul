@@ -1,14 +1,32 @@
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ClipboardPaste, Keyboard } from '@/components/icons'
+import {
+  findEditorInputTarget,
+  routeMobileKey
+} from '@/components/terminal/command-editor/foreign-insert'
 import { Button } from '@/components/ui/button'
 import { useDockClearance } from '@/hooks/use-dock-clearance'
 import { clipboardApi } from '@/lib/clipboard-api'
+import {
+  canTerminalWriteToPty,
+  resolveLifecycleTerminalId
+} from '@/lib/command-lifecycle/input-guard'
 import { terminalApi } from '@/lib/terminal-api'
 import { cn } from '@/lib/utils'
+import { useTerminalStore } from '@/stores/terminal-store'
 
 interface MobileTerminalControlsProps {
   terminalId: string
+}
+
+function terminalWriteIds(terminalId: string): { lifecycleId: string; writeId: string } {
+  const store = useTerminalStore.getState()
+  const byId = store.terminals.find((terminal) => terminal.id === terminalId)
+  if (byId) return { lifecycleId: byId.id, writeId: byId.ptyId ?? byId.id }
+  const byPty = store.findTerminalByPtyId(terminalId)
+  if (byPty) return { lifecycleId: byPty.id, writeId: byPty.ptyId ?? terminalId }
+  return { lifecycleId: resolveLifecycleTerminalId(terminalId) ?? terminalId, writeId: terminalId }
 }
 
 // [visible label, escape sequence, spoken name]. Speech engines misread the
@@ -32,26 +50,57 @@ export function MobileTerminalControls({
   terminalId
 }: MobileTerminalControlsProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(true)
+  const pasteGeneration = useRef(0)
+  // Cleanup runs when terminalId changes and on unmount, invalidating in-flight pastes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: terminalId is the invalidation trigger, not a value the effect reads.
+  useEffect(
+    () => () => {
+      pasteGeneration.current += 1
+    },
+    [terminalId]
+  )
   const keyGroupId = useId()
   // The bar exists only on the mobile shell. It reports its top edge so a toast
   // clears the whole bar, one row or two (`useDockClearance`).
   const barRef = useDockClearance(true)
 
   const write = async (data: string): Promise<void> => {
-    const result = await terminalApi.write(terminalId, data)
+    const { lifecycleId, writeId } = terminalWriteIds(terminalId)
+    const target = findEditorInputTarget(terminalId)
+    if (target) {
+      await routeMobileKey(target, 'key', data, async (text) => {
+        const result = await terminalApi.write(writeId, text)
+        if (!result.success) toast.error(`Terminal write failed: ${result.error}`)
+      })
+      return
+    }
+    if (!canTerminalWriteToPty(lifecycleId, data)) return
+    const result = await terminalApi.write(writeId, data)
     if (!result.success) {
       toast.error(`Terminal write failed: ${result.error}`)
     }
   }
 
   const paste = async (): Promise<void> => {
+    const generation = pasteGeneration.current
     const result = await clipboardApi.readText()
+    if (pasteGeneration.current !== generation) return
     if (!result.success) {
       toast.error(`Clipboard read failed: ${result.error}`)
       return
     }
     if (result.data) {
-      const writeResult = await terminalApi.write(terminalId, result.data)
+      const { lifecycleId, writeId } = terminalWriteIds(terminalId)
+      const target = findEditorInputTarget(terminalId)
+      if (target) {
+        await routeMobileKey(target, 'paste', result.data, async (text) => {
+          const writeResult = await terminalApi.write(writeId, text)
+          if (!writeResult.success) toast.error(`Paste failed: ${writeResult.error}`)
+        })
+        return
+      }
+      if (!canTerminalWriteToPty(lifecycleId, result.data)) return
+      const writeResult = await terminalApi.write(writeId, result.data)
       if (!writeResult.success) {
         toast.error(`Paste failed: ${writeResult.error}`)
       }
@@ -69,6 +118,7 @@ export function MobileTerminalControls({
           wrap container (toggle, Paste and the nine keys). Pointer-down is
           prevented on every button so xterm keeps focus and the on-screen
           keyboard stays up; click still fires. */}
+      {/* biome-ignore lint/a11y/useSemanticElements: this is a labelled shortcut-key group, not a form fieldset */}
       <div
         id={keyGroupId}
         role="group"

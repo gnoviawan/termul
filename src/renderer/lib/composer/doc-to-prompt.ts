@@ -33,6 +33,7 @@ import type { Node as PmNode } from '@tiptap/pm/model'
 import {
   CMD_TOKEN_END,
   CMD_TOKEN_START,
+  conversationToken,
   FILE_TOKEN_END,
   FILE_TOKEN_SEP,
   FILE_TOKEN_START,
@@ -42,6 +43,9 @@ import {
   SKILL_TOKEN_END,
   SKILL_TOKEN_START
 } from '@/lib/skill-tokens'
+import { contextFromAttrs, selectionContextToken } from './selection-context'
+import type { TermulToolId } from './termul-tools'
+import { toolToken } from './tool-tokens'
 
 /**
  * The pill node type name. Kept in one place so the (de)serializers and the
@@ -67,6 +71,29 @@ export const CMD_PILL_NODE = 'commandPill'
 export const FILE_PILL_NODE = 'filePill'
 
 /**
+ * The selection-context pill node type name. Its token (`\uE008…\uE009`) is
+ * owned by `selection-context.ts`.
+ */
+export const CONTEXT_PILL_NODE = 'contextPill'
+
+export const CONVERSATION_PILL_NODE = 'conversationPill'
+
+/** A Termul tool pill. Its token (`\uE00C…\uE00D`) is owned by `tool-tokens.ts`. */
+export const TOOL_PILL_NODE = 'toolPill'
+
+type PillKind =
+  | 'pill'
+  | 'commandPill'
+  | 'filePill'
+  | 'contextPill'
+  | 'conversationPill'
+  | 'toolPill'
+
+function isPillKind(kind: DocSegment['kind']): kind is PillKind {
+  return kind !== 'text'
+}
+
+/**
  * The fixed padding run re-emitted after every pill token to preserve the
  * on-disk draft schema (`\uE002..\uE003`). A single FIGURE SPACE (U+2007) — the
  * content is not load-bearing (the pill is a real DOM node, so the padding no
@@ -77,7 +104,7 @@ export const FILE_PILL_NODE = 'filePill'
 export const SKILL_PAD_DEFAULT = SKILL_PAD_CHAR
 
 export interface DocSegment {
-  kind: 'text' | 'pill' | 'commandPill' | 'filePill'
+  kind: 'text' | PillKind
   /** Visible text for a `text` segment; the padded token (`\uE000<name>\uE001\uE002<pad>\uE003`)
    * for a `pill` segment; the command token (`\uE004<name>\uE005`) for a
    * `commandPill` segment. */
@@ -118,7 +145,7 @@ export function walkDocSegments(doc: PmNode): DocSegment[] {
       block.forEach((node, offset) => {
         const docFrom = blockOffset + 1 + offset
         let displayText = ''
-        let kind: 'text' | 'pill' | 'commandPill' | 'filePill' = 'text'
+        let kind: DocSegment['kind'] = 'text'
         if (node.isText) {
           displayText = node.text ?? ''
           blockEndedInHardBreak = false
@@ -150,6 +177,21 @@ export function walkDocSegments(doc: PmNode): DocSegment[] {
           // at send time without an external lookup map.
           displayText = `${FILE_TOKEN_START}${display}${FILE_TOKEN_SEP}${absPath}${FILE_TOKEN_END}`
           kind = 'filePill'
+          blockEndedInHardBreak = false
+        } else if (node.type.name === CONTEXT_PILL_NODE) {
+          displayText = selectionContextToken(contextFromAttrs(node.attrs))
+          kind = 'contextPill'
+          blockEndedInHardBreak = false
+        } else if (node.type.name === CONVERSATION_PILL_NODE) {
+          displayText = conversationToken(
+            String(node.attrs.title ?? ''),
+            String(node.attrs.sessionId ?? '')
+          )
+          kind = 'conversationPill'
+          blockEndedInHardBreak = false
+        } else if (node.type.name === TOOL_PILL_NODE) {
+          displayText = toolToken(String(node.attrs.id ?? '') as TermulToolId)
+          kind = 'toolPill'
           blockEndedInHardBreak = false
         } else if (node.type.name === 'hardBreak') {
           displayText = '\n'
@@ -222,8 +264,7 @@ export function docOffsetToDisplayOffset(doc: PmNode, docOffset: number): number
   for (const seg of segments) {
     if (docOffset < seg.docTo) {
       if (docOffset <= seg.docFrom) return seg.displayFrom
-      if (seg.kind === 'pill' || seg.kind === 'commandPill' || seg.kind === 'filePill')
-        return seg.displayFrom
+      if (isPillKind(seg.kind)) return seg.displayFrom
       return seg.displayFrom + (docOffset - seg.docFrom)
     }
   }
@@ -252,8 +293,7 @@ export function displayOffsetToDocOffset(doc: PmNode, displayOffset: number): nu
       // the display newline belongs at the end of the preceding paragraph.
       if (seg.docFrom === seg.docTo) return Math.max(0, seg.docFrom - 1)
       if (displayOffset <= seg.displayFrom) return seg.docFrom
-      if (seg.kind === 'pill' || seg.kind === 'commandPill' || seg.kind === 'filePill')
-        return seg.docTo
+      if (isPillKind(seg.kind)) return seg.docTo
       return seg.docFrom + (displayOffset - seg.displayFrom)
     }
   }

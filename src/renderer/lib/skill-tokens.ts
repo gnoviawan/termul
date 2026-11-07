@@ -43,6 +43,8 @@
  * whole token + padding block + trailing space in one backspace.
  */
 
+import { replaceToolTokensInline, TOOL_TOKEN_END } from './composer/tool-tokens'
+
 export const SKILL_TOKEN_START = '\uE000'
 export const SKILL_TOKEN_END = '\uE001'
 /** Sentinel pair wrapping the optional caret-alignment padding block. */
@@ -454,18 +456,12 @@ export function replaceCommandTokensInline(value: string): string {
     .replaceAll(CMD_TOKEN_END, '')
 }
 
-/**
- * Display → readable-text conversion for any surface that must never show
- * private-use sentinels: command tokens become `/name`, skill tokens become
- * `(name)`, file tokens become `(display)`. Used by history titles
- * (`deriveTitle`), queue-row previews (`previewQueuedPrompt`), clipboard copy
- * (`MessageActions`), and degraded wire paths (retry re-dispatch) that start
- * from stored display text. For a full fresh-send wire framing use
- * `buildPromptParts` instead — this helper only guarantees sentinel-free
- * readable text.
- */
 export function sanitizeDisplayText(value: string): string {
-  return replaceFileTokensInline(replaceSkillTokensInline(replaceCommandTokensInline(value)))
+  return replaceToolTokensInline(
+    replaceConversationTokensInline(
+      replaceFileTokensInline(replaceSkillTokensInline(replaceCommandTokensInline(value)))
+    )
+  )
 }
 
 export type RemoveCommandTokenResult =
@@ -535,14 +531,15 @@ export const FILE_TOKEN_END = '\uE007'
 export const FILE_TOKEN_SEP = '\u001F'
 
 /**
- * True when a `/` or `@` at `index` is a trigger, not part of a word.
- *
- * The character before `index` is a boundary at the start of the text, on
- * whitespace, or at the end of a pill (`\uE001`, `\uE003`, `\uE005`, `\uE007`).
- * The figure space inside a skill padding block is not a boundary: the scanner
- * stops on the sentinel that closes the pill, so a trigger glued to a pill
- * still opens the menu.
+ * Selection-context sentinels: `\uE008[<language>\u001F]<payload>\uE009`. The
+ * payload is URI-encoded, so it has no whitespace, `/`, `@`, or sentinel, and
+ * the slash/mention scanners cannot see the quoted text. The token model lives
+ * in `lib/composer/selection-context.ts`.
  */
+export const CONTEXT_TOKEN_START = '\uE008'
+export const CONTEXT_TOKEN_END = '\uE009'
+export const CONTEXT_TOKEN_SEP = '\u001F'
+
 export function isComposerTriggerBoundary(value: string, index: number): boolean {
   if (index <= 0) return true
   const prev = value[index - 1]
@@ -551,7 +548,10 @@ export function isComposerTriggerBoundary(value: string, index: number): boolean
     prev === SKILL_TOKEN_END ||
     prev === SKILL_PAD_END ||
     prev === CMD_TOKEN_END ||
-    prev === FILE_TOKEN_END
+    prev === FILE_TOKEN_END ||
+    prev === CONTEXT_TOKEN_END ||
+    prev === CONV_TOKEN_END ||
+    prev === TOOL_TOKEN_END
   )
 }
 
@@ -713,4 +713,91 @@ export function replaceFileTokensInline(value: string): string {
       return isFolderTokenPath(s.absPath) ? s.display : `(${s.display})`
     })
     .join('')
+}
+
+export const CONV_TOKEN_START = '\uE00A'
+export const CONV_TOKEN_END = '\uE00B'
+export const CONV_TOKEN_SEP = '\u001F'
+
+const PILL_CONTROL_CHARS_RE = new RegExp(`[\\uE000-\\uE00F${CONV_TOKEN_SEP}]`, 'g')
+
+export type ConversationSegment =
+  | { kind: 'text'; text: string }
+  | { kind: 'conversation'; title: string; sessionId: string }
+
+export function conversationTitleText(title: string): string {
+  return title.replace(PILL_CONTROL_CHARS_RE, '').replace(/\s+/g, ' ').trim()
+}
+
+export function conversationToken(title: string, sessionId: string): string {
+  const safeTitle = conversationTitleText(title) || 'Untitled chat'
+  const safeId = sessionId.replace(PILL_CONTROL_CHARS_RE, '')
+  return `${CONV_TOKEN_START}${safeTitle}${CONV_TOKEN_SEP}${safeId}${CONV_TOKEN_END}`
+}
+
+export function parseConversationSegments(value: string): ConversationSegment[] {
+  const segments: ConversationSegment[] = []
+  let text = ''
+  let i = 0
+  while (i < value.length) {
+    const start = value.indexOf(CONV_TOKEN_START, i)
+    if (start === -1) break
+    const end = value.indexOf(CONV_TOKEN_END, start + 1)
+    if (end === -1) break
+    const inner = value.slice(start + 1, end)
+    const sep = inner.indexOf(CONV_TOKEN_SEP)
+    const title = sep === -1 ? '' : inner.slice(0, sep)
+    const sessionId = sep === -1 ? '' : inner.slice(sep + 1)
+    text += value.slice(i, start)
+    if (title.length === 0 || sessionId.length === 0) {
+      text += value.slice(start, end + 1)
+    } else {
+      if (text.length > 0) segments.push({ kind: 'text', text })
+      text = ''
+      segments.push({ kind: 'conversation', title, sessionId })
+    }
+    i = end + 1
+  }
+  text += value.slice(i)
+  if (text.length > 0) segments.push({ kind: 'text', text })
+  return segments
+}
+
+export function insertConversationToken(
+  value: string,
+  caret: number,
+  title: string,
+  sessionId: string,
+  deleteBefore = 0
+): InsertTokenResult {
+  const start = Math.max(0, Math.min(caret - deleteBefore, value.length))
+  const end = Math.max(start, Math.min(caret, value.length))
+  const before = value.slice(0, start)
+  const token = conversationToken(title, sessionId)
+  return {
+    value: `${before}${token} ${value.slice(end)}`,
+    caret: before.length + token.length + 1
+  }
+}
+
+export function replaceConversationTokensInline(
+  value: string,
+  label: (title: string, sessionId: string) => string = (title) => `(conversation: ${title})`
+): string {
+  return parseConversationSegments(value)
+    .map((s) => (s.kind === 'conversation' ? label(s.title, s.sessionId) : s.text))
+    .join('')
+}
+
+export function extractConversationRefs(
+  value: string
+): Array<{ title: string; sessionId: string }> {
+  const seen = new Set<string>()
+  const refs: Array<{ title: string; sessionId: string }> = []
+  for (const s of parseConversationSegments(value)) {
+    if (s.kind !== 'conversation' || seen.has(s.sessionId)) continue
+    seen.add(s.sessionId)
+    refs.push({ title: s.title, sessionId: s.sessionId })
+  }
+  return refs
 }

@@ -75,9 +75,57 @@ describe('web-client-identity', () => {
 
   it('a reload of one tab keeps its client instance id', () => {
     const instance = getClientInstanceId()
+    window.dispatchEvent(new Event('pagehide'))
     __resetClientIdentityForTesting() // fresh module state, same sessionStorage
     expect(getClientInstanceId()).toBe(instance)
     expect(window.sessionStorage.getItem(CLIENT_INSTANCE_ID_STORAGE_KEY)).toBe(instance)
+  })
+
+  it('a duplicated tab, which copies sessionStorage while the original lives, gets its own id', () => {
+    const original = getClientInstanceId()
+    __resetClientIdentityForTesting() // a second page with a copy of the same sessionStorage
+    const duplicate = getClientInstanceId()
+    expect(duplicate).not.toBe(original)
+    expect(getClientInstanceId()).toBe(duplicate)
+    expect(window.sessionStorage.getItem(CLIENT_INSTANCE_ID_STORAGE_KEY)).toBe(duplicate)
+  })
+
+  it('a page made from a copy of a released id gets its own once the reload took it', () => {
+    const instance = getClientInstanceId()
+    window.dispatchEvent(new Event('pagehide'))
+    const copied = { ...window.sessionStorage }
+
+    __resetClientIdentityForTesting() // the reload
+    expect(getClientInstanceId()).toBe(instance)
+
+    window.sessionStorage.clear() // a duplicate made before the reload ran
+    for (const [key, value] of Object.entries(copied)) window.sessionStorage.setItem(key, value)
+    __resetClientIdentityForTesting()
+    expect(getClientInstanceId()).not.toBe(instance)
+  })
+
+  it('a duplicate of a page now back from the back-forward cache gets its own id', () => {
+    const instance = getClientInstanceId()
+    window.dispatchEvent(new Event('pagehide'))
+    const copied = { ...window.sessionStorage }
+    const shown = new Event('pageshow')
+    Object.defineProperty(shown, 'persisted', { value: true })
+    window.dispatchEvent(shown)
+
+    window.sessionStorage.clear()
+    for (const [key, value] of Object.entries(copied)) window.sessionStorage.setItem(key, value)
+    __resetClientIdentityForTesting()
+    expect(getClientInstanceId()).not.toBe(instance)
+  })
+
+  it('a page back from the back-forward cache holds its id again', () => {
+    const instance = getClientInstanceId()
+    window.dispatchEvent(new Event('pagehide'))
+    const shown = new Event('pageshow')
+    Object.defineProperty(shown, 'persisted', { value: true })
+    window.dispatchEvent(shown)
+    __resetClientIdentityForTesting()
+    expect(getClientInstanceId()).not.toBe(instance)
   })
 
   it('replaces a corrupt (empty or oversized) stored id with a fresh valid one', () => {

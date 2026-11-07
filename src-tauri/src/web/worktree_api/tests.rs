@@ -61,6 +61,7 @@ pub(super) fn test_state(root: &std::path::Path) -> AppState {
         )),
         oauth_base_url: "http://127.0.0.1".to_string(),
         connections: Default::default(),
+        server_admin: None,
     }
 }
 
@@ -553,7 +554,9 @@ pub(super) fn production_router(root: &std::path::Path) -> axum::Router {
         "http://127.0.0.1".to_string(),
         None,
         crate::web::origin::OriginPolicy::default(),
+        crate::web::host_allow::HostAllowList::loopback(),
         crate::web::connection_runtime::ConnectionRuntime::default(),
+        None,
     )
 }
 

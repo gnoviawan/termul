@@ -12,26 +12,41 @@ import { useOptimisticSelect } from '@/components/chat/use-optimistic-select'
 import { X } from '@/components/icons'
 import { AnimatedMenuContent } from '@/components/ui/animated-menu-content'
 import { Popover, PopoverTrigger } from '@/components/ui/popover'
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetTitle,
-  SheetTrigger
-} from '@/components/ui/sheet'
+import { Sheet, SheetTrigger } from '@/components/ui/sheet'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
-import type { SessionConfigOption, SessionUsage } from '@/lib/acp-api'
+import type { SessionConfigOption, SessionModeState, SessionUsage } from '@/lib/acp-api'
+import { isModelPickerV2Enabled } from '@/lib/model-picker-flag'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
+import type { OptionValues } from '@/stores/acp-store/composer-options'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { shouldShowSessionUsage } from '../context-usage-utils'
+import { MobileModelPill } from './mobile/MobileModelPill'
+import { MobileModelSheet } from './mobile/MobileModelSheet'
+import type { ModeControl } from './mobile/MobileSheetOptions'
+import type { CompactControl } from './mobile/MobileUsageCard'
+
+/** What only the phone sheet uses: the modes, Compact, and whose Claude account to show. */
+export interface PhoneSelectorControls {
+  modes: SessionModeState | null
+  onSetMode: (modeId: string) => void | Promise<void>
+  /** The context ring's Compact; the launcher has no context to compact. */
+  compact: CompactControl | null
+  /** Launcher: the project whose Claude account the sheet shows (a chat reads its own). */
+  claudeProjectId?: string | null
+}
+
+import type { SelectorPanelProps } from './SelectorPanel'
 import { SelectorPanel } from './SelectorPanel'
+import { SelectorPanelV2, type SelectorPanelV2Props } from './SelectorPanelV2'
 import { type SelectorSource, useSessionSelectorSource } from './selector-source'
 import { useCurrentAgentConfigId } from './use-agent-switch'
 
 const PRESS = 'duration-150 ease-out enabled:active:scale-[0.96] motion-reduce:active:scale-100'
 
 const NO_MESSAGES: ReadonlyArray<{ role: string }> = []
+
+const NO_MODE_SET = (): void => {}
 
 /** Booleans make `currentValue` non-string; the pill labels want strings. */
 function selectValue(value: string | boolean | undefined): string | undefined {
@@ -63,13 +78,20 @@ interface AgentModelSelectorProps {
   usage?: SessionUsage | null
   messages?: ReadonlyArray<{ role: string }>
   onSetConfig: (configId: string, valueId: string | boolean) => void | Promise<void>
-  onSetModel: (modelId: string) => void | Promise<void>
+  /** `values`: a favorite's option values, applied after the model. */
+  onSetModel: (modelId: string, values?: OptionValues) => void | Promise<void>
   /**
    * Optional takeover of the close focus pass (Radix `onCloseAutoFocus`). The
    * launcher uses it to move the caret into the composer only after this
    * menu has fully closed — focusing earlier dismisses the popover.
    */
   onCloseAutoFocus?: (event: Event) => void
+  phone?: PhoneSelectorControls
+  /**
+   * Design canvas only: always show the v2 panel, with these v2-only props
+   * (agent rail, favorites). The app leaves it unset and follows the flag.
+   */
+  v2PanelProps?: Partial<Omit<SelectorPanelV2Props, keyof SelectorPanelProps>>
 }
 
 /**
@@ -117,7 +139,9 @@ export function AgentModelSelector({
   genericOptions,
   onSetConfig,
   onSetModel,
-  onCloseAutoFocus
+  onCloseAutoFocus,
+  phone,
+  v2PanelProps
 }: AgentModelSelectorProps): React.JSX.Element | null {
   const isMobile = useMobileWebShell()
   const sessionAgent = useComposerAgentLabel(sessionId)
@@ -142,8 +166,9 @@ export function AgentModelSelector({
   const escapeRef = useRef<(() => boolean) | null>(null)
 
   const selectModel = useCallback(
-    (valueId: string) => {
+    (valueId: string, values?: OptionValues) => {
       if (!modelOption) return
+      if (values) return onSetModel(valueId, values)
       if (modelSource === 'models') return onSetModel(valueId)
       return onSetConfig(modelOption.id, valueId)
     },
@@ -166,12 +191,17 @@ export function AgentModelSelector({
     [fastMode, onSetConfig]
   )
 
-  const modelSelect = useOptimisticSelect(selectValue(modelOption?.currentValue), selectModel)
+  const modelSelect = useOptimisticSelect<OptionValues>(
+    selectValue(modelOption?.currentValue),
+    selectModel
+  )
   const effortSelect = useOptimisticSelect(selectValue(thoughtLevel?.currentValue), selectEffort)
   const fastSelect = useOptimisticSelect(
     fastMode ? (storedConfigValue(fastMode) ?? undefined) : undefined,
     selectFast
   )
+  const modes = phone?.modes ?? null
+  const modeSelect = useOptimisticSelect(modes?.currentModeId, phone?.onSetMode ?? NO_MODE_SET)
 
   const modelName = modelOption
     ? flattenConfigOptionValues(modelOption).find(
@@ -223,41 +253,43 @@ export function AgentModelSelector({
     (part): part is string => Boolean(part)
   )
   const pillAria = ariaParts.join('. ') || 'Model and effort'
-  const pending = modelSelect.pending || effortSelect.pending || fastSelect.pending
+  const pending =
+    modelSelect.pending || effortSelect.pending || fastSelect.pending || modeSelect.pending
   const armed = Boolean(agent.armedName)
   const pillText = armed
     ? `→ ${modelName ?? agent.armedName}`
     : (modelName ?? statusText ?? (agent.present ? agent.name : (effortName ?? 'Fast')))
 
-  const panel = (
-    <SelectorPanel
-      key={generation}
-      source={source}
-      touch={isMobile}
-      disabled={disabled}
-      modelOption={modelOption}
-      modelValue={modelSelect.displayValue}
-      onPickModel={(value) => modelSelect.select(value)}
-      thoughtLevel={thoughtLevel}
-      effortValue={effortSelect.displayValue}
-      onEffort={(value) => effortSelect.select(value)}
-      fastMode={fastMode}
-      fastOn={fastOn}
-      onToggleFast={fastNext ? () => fastSelect.select(fastNext) : null}
-      genericOptions={genericOptions}
-      onSetConfig={(configId, valueId) =>
-        // Return the setter's promise so a switch waits for the real outcome.
-        // Chat and launcher setters toast, then rethrow. Swallow that rejection
-        // here so it does not surface again as an unhandled rejection.
-        Promise.resolve(onSetConfig(configId, valueId)).catch(() => undefined)
-      }
-      usage={usage}
-      messages={messages}
-      capabilities={capabilities}
-      onClose={close}
-      escapeRef={escapeRef}
-    />
-  )
+  // View-only v2 behind an opt-in flag (default off); same props and source.
+  const Panel = v2PanelProps || isModelPickerV2Enabled() ? SelectorPanelV2 : SelectorPanel
+  const panelProps: SelectorPanelProps = {
+    source,
+    touch: isMobile,
+    disabled,
+    modelOption,
+    modelValue: modelSelect.displayValue,
+    onPickModel: (value, values) => modelSelect.select(value, values),
+    thoughtLevel,
+    effortValue: effortSelect.displayValue,
+    onEffort: (value) => effortSelect.select(value),
+    fastMode,
+    fastOn,
+    onToggleFast: fastNext ? () => fastSelect.select(fastNext) : null,
+    genericOptions,
+    agentConfigId: source.currentConfigId,
+    // Return the setter's promise so a switch waits for the real outcome.
+    // Rejections propagate to the footer, which both marks the value
+    // unavailable (#1480) and swallows the already-toasted failure — so
+    // nothing surfaces as an unhandled rejection here.
+    onSetConfig: (configId, valueId) => Promise.resolve(onSetConfig(configId, valueId)),
+    usage,
+    messages,
+    capabilities,
+    onClose: close,
+    escapeRef
+  }
+
+  const panel = <Panel {...v2PanelProps} key={generation} {...panelProps} />
 
   const trigger = (
     <ComposerPill
@@ -267,7 +299,7 @@ export function AgentModelSelector({
       chevronDirection="up"
       aria-label={pillAria}
       data-testid="agent-model-selector-trigger"
-      className={cn('max-w-[240px]', PRESS, isMobile && 'min-h-11 py-2')}
+      className={cn('max-w-[240px]', PRESS)}
     >
       <AgentGlyph
         templateId={agentTemplateId}
@@ -287,38 +319,67 @@ export function AgentModelSelector({
       aria-label="Cancel agent switch"
       title="Cancel the armed switch — the next send stays with the current agent"
       data-testid="agent-switch-cancel"
-      className="relative inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-[background-color,color] duration-150 ease-out before:absolute before:-inset-2.5 before:content-[''] hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10 focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+      className="relative inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-[background-color,color] duration-150 ease-out before:absolute before:-inset-2.5 before:content-[''] hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10 focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-60"
       onClick={() => cancelAgentSwitch(sessionId)}
     >
       <X size={10} aria-hidden="true" />
     </button>
   ) : null
 
-  const shell = isMobile ? (
-    <Sheet open={open} onOpenChange={handleOpenChange}>
-      <SheetTrigger asChild disabled={disabled}>
-        {trigger}
-      </SheetTrigger>
-      <SheetContent
-        side="bottom"
-        onEscapeKeyDown={onEscapeKeyDown}
-        onCloseAutoFocus={onCloseAutoFocus}
-        // The sheet's built-in close button is the last child; the grabber
-        // and a tap on the scrim close this sheet.
-        className="flex max-h-[85dvh] flex-col gap-0 border-border bg-popover p-0 pb-[env(safe-area-inset-bottom)] pt-2 [&>button:last-child]:hidden"
-      >
-        <div
-          aria-hidden="true"
-          className="mx-auto mb-1.5 h-1 w-9 shrink-0 rounded-full bg-foreground/20"
-        />
-        <SheetTitle className="sr-only">Model and agent</SheetTitle>
-        <SheetDescription className="sr-only">
-          Choose a model, an agent, and its options.
-        </SheetDescription>
-        {panel}
-      </SheetContent>
-    </Sheet>
-  ) : (
+  if (isMobile) {
+    const modeControl: ModeControl | null =
+      modes && modes.availableModes.length > 0
+        ? { modes, displayValue: modeSelect.displayValue, onPick: modeSelect.select }
+        : null
+    const defaultModeId = modeControl?.modes.availableModes[0]?.id
+    const nonDefaultMode =
+      modeControl && modeControl.displayValue !== defaultModeId
+        ? modeControl.modes.availableModes.find((m) => m.id === modeControl.displayValue)
+        : undefined
+    const phoneAria = [
+      modelName ?? statusText,
+      effortName,
+      nonDefaultMode ? `${nonDefaultMode.name} mode` : null,
+      agent.present ? agent.aria : null
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join('. ')
+    return (
+      <span className="inline-flex min-w-0 items-center gap-0.5">
+        <Sheet open={open} onOpenChange={handleOpenChange}>
+          <SheetTrigger asChild disabled={disabled}>
+            <MobileModelPill
+              disabled={disabled}
+              agentTemplateId={agentTemplateId}
+              agentIcon={agentIcon}
+              label={pillText}
+              effort={modelName ? effortName : undefined}
+              modeId={nonDefaultMode?.id}
+              armed={armed}
+              pending={pending || Boolean(modelStatus?.loading)}
+              aria-label={phoneAria || 'Model and effort'}
+              data-testid="agent-model-selector-trigger"
+            />
+          </SheetTrigger>
+          <MobileModelSheet
+            key={generation}
+            {...panelProps}
+            sessionId={sessionId}
+            open={open}
+            overlayId={overlayId}
+            mode={modeControl}
+            compact={phone?.compact ?? null}
+            claudeProjectId={phone?.claudeProjectId ?? null}
+            favoritesStore={v2PanelProps?.favoritesStore}
+            onCloseAutoFocus={onCloseAutoFocus}
+          />
+        </Sheet>
+        {cancel}
+      </span>
+    )
+  }
+
+  const shell = (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild disabled={disabled}>
         {trigger}

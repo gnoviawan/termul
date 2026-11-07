@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Far button fixture</title>
+</head>
+<body>
+<main>
+<h1>Far button fixture</h1>
+<p id="scrolled">Scrolled: no</p>
+<div style="height: 4000px"></div>
+<button type="button">Far away</button>
+</main>
+<script>
+window.addEventListener('scroll', function () {
+  document.getElementById('scrolled').textContent = 'Scrolled: yes';
+});
+</script>
+</body>
+</html>

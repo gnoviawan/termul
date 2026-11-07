@@ -7,7 +7,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
-use super::disk::{ConflictChoice, Resolution, ResolveOutcome};
+use super::disk::{ConflictChoice, DiskOutcome, Resolution, ResolveOutcome};
 use super::{CanvasPersistence, DirtyOutcome, PersistenceView, WriteOutcome};
 use crate::canvas::CanvasError;
 
@@ -25,7 +25,7 @@ fn invalid(what: &str, detail: impl std::fmt::Display) -> CanvasError {
 /// The document's bytes as base64, or `None` when the file does not exist
 /// yet (a new document: the editor starts empty and the first save creates
 /// the file).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentBytes {
     pub bytes: Option<String>,
@@ -122,6 +122,21 @@ pub async fn dirty_changed(
     mounts
         .dirty_changed(project_id, mount_seq, dirty, content_version)
         .await
+}
+
+/// Termul's watcher saw the document change, or (`reload_failed`) the
+/// renderer could not load the bytes the last report handed it.
+pub async fn disk_changed(
+    mounts: &CanvasPersistence,
+    project_id: &str,
+    mount_seq: u64,
+    reload_failed: bool,
+) -> Result<DiskOutcome, CanvasError> {
+    if reload_failed {
+        mounts.reload_failed(project_id, mount_seq)
+    } else {
+        mounts.disk_changed(project_id, mount_seq).await
+    }
 }
 
 /// `snapshot` is the `host.snapshot` result text, required for `saveCopy`.

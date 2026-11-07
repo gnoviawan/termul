@@ -16,6 +16,12 @@
  */
 
 import type { ClaudeRateLimit } from '@shared/types/claude-accounts.types'
+import type {
+  Subagent,
+  SubagentControl,
+  SubagentId,
+  SubagentStopOutcome
+} from '@shared/types/subagent'
 import {
   type AgentCapabilities,
   isProviderErrorCode,
@@ -31,7 +37,10 @@ import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { type CommandRun, runCommand } from '@/lib/command-engine'
 import { keyDigest } from '@/lib/command-journal'
 import { waitUntilVisible } from '@/lib/command-visibility'
+import { hasConversationWire } from '@/lib/conversation-envelope'
+import { invokeIpc } from '@/lib/ipc/tauri'
 import { logFrontendError } from '@/lib/log-api'
+import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpOAuth } from '@/lib/web-server-api'
 
@@ -205,11 +214,18 @@ export interface ToolCall {
    * live calls derive counts from `content` instead. */
   diffStat?: { added: number; removed: number }
   /** True for a restored durable file-change summary (payload `toolCalls`):
-   * feeds the Changed files panel but never renders as a timeline card. */
+   * feeds the changed-files list but never renders as a timeline card. */
   restoredSummary?: boolean
-  /** Subagent usage scalars lifted from `_meta.claudeCode.toolResponse` at ingest
-   * (the next update replaces `_meta`, so the store keeps just these). */
-  subagentUsage?: { totalTokens?: number; totalDurationMs?: number; totalToolUseCount?: number }
+  /** The host's canonical record when this call dispatches a subagent, lifted
+   * from `_meta["termul/subagent"]` at ingest. Absent on later events = unchanged. */
+  subagent?: Subagent
+  /** Subagents this call steers (`_meta["termul/subagentControl"]`). */
+  subagentControl?: SubagentControl
+  /** Subagent dispatch that made this call (`_meta.claudeCode.parentToolUseId`).
+   * The timeline shows such a call inside its subagent, not in the main turn. */
+  parentToolCallId?: string
+  /** Latest text the subagent wrote (bounded tail), kept on its dispatch call. */
+  subagentText?: string
   [k: string]: unknown
 }
 
@@ -224,6 +240,9 @@ export interface ToolCallUpdate {
   rawOutput?: unknown
   /** See {@link ToolCall.diffStat} — carried by durable recovery records. */
   diffStat?: { added: number; removed: number }
+  /** See {@link ToolCall.subagent} — lifted at ingest. */
+  subagent?: Subagent
+  subagentControl?: SubagentControl
   [k: string]: unknown
 }
 
@@ -387,7 +406,21 @@ export interface AuthMethod {
   type?: 'agent' | 'terminal' | 'env_var'
   args?: string[]
   env?: Record<string, string>
+  /**
+   * The agent reads a key the user types from `authenticate` (it advertised
+   * `_meta["api-key"]` for a provider whose key shape the host knows).
+   * Signing in without one makes the agent read its own environment.
+   */
+  takesApiKey?: boolean
 }
+
+/**
+ * What a sign-in hands the agent beyond the method id. A key is held only
+ * for the call: never logged, persisted or remembered.
+ */
+export type AuthenticateInput =
+  | { gateway: { baseUrl: string; apiKey?: string } }
+  | { apiKey: string }
 
 export interface AgentSpawnedEvent {
   agentId: AgentId
@@ -417,6 +450,28 @@ export interface AgentSpawnedEvent {
 export interface BrowserOpenRequestEvent {
   agentId: AgentId
   url: string
+}
+
+/**
+ * `acp:agent_sign_in_request` payload: the agent asked the user to sign in
+ * at `url`, following `message` (it carries a device code). Agent-level (no
+ * session id). Answered through `respondElicitation` by `requestId`.
+ */
+export interface AgentSignInRequestEvent {
+  agentId: AgentId
+  requestId: string
+  url: string
+  message: string
+}
+
+/**
+ * `acp:agent_sign_in_resolved` payload: the host no longer holds sign-in
+ * prompt `requestId` (the sign-in completed, was answered, or `authenticate`
+ * ended), so every client drops its dialog.
+ */
+export interface AgentSignInResolvedEvent {
+  agentId: AgentId
+  requestId: string
 }
 
 /**
@@ -461,6 +516,8 @@ export interface MessageChunkEvent {
   content: ContentBlock
   /** ACP message id. Equal ids belong to one message. */
   messageId?: string
+  /** Subagent dispatch that wrote this chunk; its text stays out of the main reply. */
+  parentToolCallId?: string
 }
 export interface ToolCallEvent {
   agentId: AgentId
@@ -499,6 +556,8 @@ export interface PermissionRequestEvent {
   requestId: string
   toolCall: ToolCallUpdate
   options: PermissionOption[]
+  /** The client turn id of the turn that raised it (absent for a turnless prompt). */
+  turnId?: string
 }
 
 /** One selectable option of an `AskUserQuestionEvent` (issue #411). */
@@ -649,6 +708,12 @@ export interface AgentDisconnectedEvent {
   agentId: AgentId
   reason: AgentExitReason
 }
+/** The agent started or stopped working in a session outside a prompt turn. */
+export interface AgentWorkingEvent {
+  agentId: AgentId
+  sessionId: SessionId
+  working: boolean
+}
 export interface SessionClosedEvent {
   agentId: AgentId
   sessionId: SessionId
@@ -748,22 +813,30 @@ export const ACP_EVENTS = {
   sessionInfoUpdate: 'acp:session_info_update',
   agentSwitch: 'acp:agent_switch',
   usageUpdate: 'acp:usage_update',
+  agentWorking: 'acp:agent_working',
   browserOpenRequest: 'acp:browser_open_request',
-  browserConsentRequest: 'acp:browser_consent_request',
-  browserAgentTab: 'acp:browser_agent_tab'
+  agentSignInRequest: 'acp:agent_sign_in_request',
+  agentSignInResolved: 'acp:agent_sign_in_resolved',
+  browserAgentTab: 'acp:browser_agent_tab',
+  browserTicketClosed: 'acp:browser_ticket_closed',
+  browserStopChanged: 'acp:browser_stop_changed',
+  /** An agent tab's URL, title, loading state or epoch changed. The
+   *  desktop pane mirrors the Tauri event of the same name instead. */
+  browserTabUpdated: 'acp:browser_tab_updated',
+  browserTabClosed: 'acp:browser_tab_closed'
 } as const
 
-/** Host asks the user to grant browser automation for a session
- * (`browser` tool first call). Once-per-session; deny re-prompts on the
- * agent's next call. */
-export interface BrowserConsentRequestEvent {
-  requestId: string
+/** A browser consent ticket was answered, timed out or withdrawn. */
+export interface BrowserTicketClosedEvent {
   sessionId: string
-  agentId: string
-  /** The action the agent is trying to run (e.g. "navigate"). */
-  action: string
-  /** Agent-stated intent for a mutating action, when provided. */
-  element?: string
+  requestId: string
+  outcome: string
+}
+
+/** Stop latched (`stopped: true`) or the user's next message cleared it. */
+export interface BrowserStopChangedEvent {
+  sessionId: string
+  stopped: boolean
 }
 
 /** Agent browser tab lifecycle — the host asks the desktop renderer to open
@@ -775,20 +848,9 @@ export interface BrowserAgentTabEvent {
   sessionId: string
 }
 
-/**
- * Respond to `acp:browser_consent_request`. Tauri-only — remote
- * (WS-relayed) clients never render the prompt (the consent strip and card
- * surfaces are desktop-only); the host times out and denies (fail-closed).
- * Returns false for unknown/expired requests.
- */
-export async function browserConsentRespond(requestId: string, allowed: boolean): Promise<boolean> {
-  if (!isTauriContext()) return false
-  try {
-    await invoke('browser_consent_respond', { requestId, allowed })
-    return true
-  } catch {
-    return false
-  }
+/** The host registry dropped an agent tab (`acp:browser_tab_closed`). */
+export interface BrowserTabClosedEvent {
+  tabId: string
 }
 
 // --- Command wrappers ------------------------------------------------------
@@ -857,6 +919,18 @@ export async function listMcpTools(server: McpServerConfig): Promise<McpToolInfo
 }
 // --- MCP OAuth (desktop: Tauri command, web: HTTP route) -------------------
 
+export const MCP_UNSAFE_URL = 'MCP_UNSAFE_URL'
+
+export class McpOAuthError extends Error {
+  readonly code: string
+
+  constructor(message: string, code: string) {
+    super(message)
+    this.name = 'McpOAuthError'
+    this.code = code
+  }
+}
+
 /** Start the OAuth flow for an MCP server URL on behalf of `projectId` (the
  * web host authorizes the URL against that project's MCP list; the desktop
  * Tauri command authorizes nothing and takes the URL only). On desktop, opens the system
@@ -864,24 +938,29 @@ export async function listMcpTools(server: McpServerConfig): Promise<McpToolInfo
  * token is stored). On web, opens a blank window first (preserves transient
  * user activation for the popup), navigates it to the auth URL once returned,
  * then polls the status endpoint until the token is stored. Throws on
- * failure (discovery, registration, timeout). */
+ * failure (discovery, registration, timeout), as an {@link McpOAuthError}
+ * with code {@link MCP_UNSAFE_URL} when the host refused the sign-in link. */
 export async function startMcpOAuth(projectId: string, serverUrl: string): Promise<void> {
   if (isTauriContext()) {
-    await invoke('acp_mcp_oauth_start', { serverUrl })
+    const result = await invokeIpc<void>('acp_mcp_oauth_start', { serverUrl })
+    if (!result.success) throw new McpOAuthError(result.error, result.code)
     return
   }
   // Web path: open a blank window BEFORE the async request so the browser
   // does not block the popup (transient user activation window). Navigate it
-  // once the auth URL is returned.
-  const popup = window.open('about:blank', '_blank', 'noopener')
+  // once the auth URL is returned. No `noopener` feature: the HTML spec makes
+  // window.open return null with it even though the window opened, so the
+  // handle would be lost (#1541).
+  const popup = window.open('about:blank', '_blank')
   if (!popup) {
     throw new Error('Popup blocked — allow popups for this site to start OAuth')
   }
+  popup.opener = null
   let authUrl: string
   try {
     const result = await webServerMcpOAuth.start(projectId, serverUrl)
     if (!result.success) {
-      throw new Error(result.error ?? 'OAuth start failed')
+      throw new McpOAuthError(result.error ?? 'OAuth start failed', result.code)
     }
     authUrl = result.data.authUrl
   } catch (err) {
@@ -1246,11 +1325,22 @@ export async function acpSendPromptBlocks(
   turnId?: string,
   displayContent?: ContentBlock[]
 ): Promise<PromptDispatchResult> {
-  return getAcpTransport().sendPromptBlocks(agentId, sessionId, content, turnId, displayContent)
+  const display =
+    displayContent ?? (hasConversationWire(content) ? wireBlocksToDisplay(content) : undefined)
+  return getAcpTransport().sendPromptBlocks(agentId, sessionId, content, turnId, display)
 }
 
 export async function acpCancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void> {
   await getAcpTransport().cancelPrompt(agentId, sessionId)
+}
+
+/** Stop one subagent of chat `rootSessionId` (desktop and web share the `/ws` request). */
+export async function acpStopSubagent(
+  agentId: AgentId,
+  rootSessionId: SessionId,
+  subagentId: SubagentId
+): Promise<SubagentStopOutcome> {
+  return getAcpTransport().stopSubagent(agentId, rootSessionId, subagentId)
 }
 
 export async function acpSetConfigOption(
@@ -1311,14 +1401,14 @@ export async function acpAnswerQuestion(
 export async function acpAuthenticate(
   agentId: AgentId,
   methodId: string,
-  gateway?: { baseUrl: string; apiKey?: string }
+  input?: AuthenticateInput
 ): Promise<void> {
-  // `fresh`: the request may carry a gateway key the id cannot name, so a
-  // later try is never mistaken for a resend of an earlier one.
+  // `fresh`: the request may carry a key the id cannot name, so a later try
+  // is never mistaken for a resend of an earlier one.
   await ledgered(
     'authenticate_agent',
     `${agentId}|${methodId}`,
-    (call) => getAcpTransport().authenticate(agentId, methodId, gateway, call),
+    (call) => getAcpTransport().authenticate(agentId, methodId, input, call),
     { fresh: true, acceptedWithoutResult: () => undefined }
   )
 }
@@ -1418,6 +1508,7 @@ export const acpApi = {
   sendPrompt: acpSendPrompt,
   sendPromptBlocks: acpSendPromptBlocks,
   cancelPrompt: acpCancelPrompt,
+  stopSubagent: acpStopSubagent,
   setConfigOption: acpSetConfigOption,
   setMode: acpSetMode,
   setModel: acpSetModel,

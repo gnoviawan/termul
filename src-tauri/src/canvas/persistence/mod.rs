@@ -79,14 +79,14 @@ pub use close::{CloseMode, CloseOutcome};
 pub use crash::{crash_timeouts, LostChanges, Remount, DEFAULT_CRASH_TIMEOUTS, REMOUNTED_METHOD};
 pub use disk::{ConflictChoice, ConflictView, DiskOutcome, ResolveOutcome, CODE_DOCUMENT_DELETED};
 pub use evict::{mount_cap, Admitted, Eviction, CODE_EVICTION_BLOCKED, DEFAULT_MAX_MOUNTED};
-pub use gateway::{LostLease, ReplyMatch, SliceMatch};
+pub use gateway::{CallFailed, LateAnswer, LostLease, ReplyMatch, SliceMatch};
 pub use lease::{
     lease_grace, ExpiredLease, LeaseChange, MountRequest, Opened, RendererId,
     DEFAULT_LEASE_GRACE_MS,
 };
 pub use wire::{
-    dirty_changed, document_loaded, parse_version, read_document, resolve_conflict, write_snapshot,
-    DocumentBytes, CODE_CANVAS_NOT_READY, CODE_INVALID_PAYLOAD, CODE_READ_FAILED,
+    dirty_changed, disk_changed, document_loaded, parse_version, read_document, resolve_conflict,
+    write_snapshot, DocumentBytes, CODE_CANVAS_NOT_READY, CODE_INVALID_PAYLOAD, CODE_READ_FAILED,
 };
 
 /// `canvas.autosave_ms` when the renderer sends none.
@@ -94,12 +94,28 @@ pub const DEFAULT_AUTOSAVE_MS: u64 = 1500;
 const MIN_AUTOSAVE_MS: u64 = 100;
 const MAX_AUTOSAVE_MS: u64 = 60_000;
 
+/// `canvas.autosave_max_ms` when the renderer sends none.
+pub const DEFAULT_AUTOSAVE_MAX_MS: u64 = 10_000;
+const MAX_AUTOSAVE_MAX_MS: u64 = 600_000;
+
 /// The debounce for a requested `canvas.autosave_ms`, clamped to a sane range.
 pub fn autosave_delay(requested_ms: Option<u64>) -> Duration {
     Duration::from_millis(
         requested_ms
             .unwrap_or(DEFAULT_AUTOSAVE_MS)
             .clamp(MIN_AUTOSAVE_MS, MAX_AUTOSAVE_MS),
+    )
+}
+
+/// The longest a dirty document waits for a save for a requested
+/// `canvas.autosave_max_ms`, clamped to a sane range: a steady stream of
+/// edits (an agent driving the canvas) supersedes the debounce forever
+/// otherwise.
+pub fn autosave_max_wait(requested_ms: Option<u64>) -> Duration {
+    Duration::from_millis(
+        requested_ms
+            .unwrap_or(DEFAULT_AUTOSAVE_MAX_MS)
+            .clamp(MIN_AUTOSAVE_MS, MAX_AUTOSAVE_MAX_MS),
     )
 }
 
@@ -114,6 +130,11 @@ struct Persisted {
     /// The file changed on disk while the editor held unsaved work (AD-27).
     /// Autosave is suppressed until the user resolves it.
     conflict: Option<disk::Conflict>,
+    /// The file handed to the editor to load (a reload, or the user taking
+    /// the disk's version). Until the editor loaded it the editor still holds
+    /// the old content, so nothing is written; the file becomes the one the
+    /// next write replaces once it has.
+    reloading: Option<Expected>,
     /// Wall-clock ms of the first edit not on disk; shown when a crash
     /// loses it.
     unsaved_since: Option<u64>,
@@ -215,8 +236,14 @@ struct MountState {
     /// read. A write is checked against it, and a watcher event whose file
     /// still matches it is Termul's own write.
     disk: Option<Expected>,
-    /// Consecutive calls that timed out on this ready mount.
+    /// Consecutive stalls (calls that timed out) on this ready mount.
     timeouts: u32,
+    /// When the last counted timeout fired.
+    stall_counted_at: Option<tokio::time::Instant>,
+    /// When the oldest edit no save was handed out for was reported; a save
+    /// is due `autosave_max` after it however often edits supersede the
+    /// debounce.
+    unsaved_wait_since: Option<tokio::time::Instant>,
 }
 
 /// One mounted document, leased to `holder`. `generation` is the debounce:
@@ -227,9 +254,13 @@ struct Mount {
     holder: RendererId,
     doc_path: PathBuf,
     autosave: Duration,
+    autosave_max: Duration,
     lease_grace: Duration,
     /// `canvas.crash_timeouts`: consecutive timeouts that mark it crashed.
     crash_timeouts: u32,
+    /// The `canvas.max_mounted` it was opened under; the host keeps the
+    /// highest of these ([`evict`]).
+    max_mounted: usize,
     /// The crash this mount replaced, so a late report of it answers the
     /// same remount instead of starting another.
     remounted_from: Option<Remount>,
@@ -246,6 +277,7 @@ impl Mount {
         mount_seq: u64,
         tick: u64,
         request: MountRequest,
+        max_mounted: usize,
         remounted_from: Option<Remount>,
     ) -> Arc<Self> {
         let (generation, _) = watch::channel(0);
@@ -255,8 +287,10 @@ impl Mount {
             holder: request.renderer,
             doc_path: request.doc_path,
             autosave: request.autosave,
+            autosave_max: request.autosave_max,
             lease_grace: request.lease_grace,
             crash_timeouts: request.crash_timeouts,
+            max_mounted,
             remounted_from,
             state: Mutex::new(MountState {
                 phase: Phase::Loading,
@@ -268,6 +302,8 @@ impl Mount {
                 link: Link::Unattached,
                 disk: None,
                 timeouts: 0,
+                stall_counted_at: None,
+                unsaved_wait_since: None,
             }),
             generation,
             write_lock: tokio::sync::Mutex::new(()),
@@ -281,6 +317,7 @@ impl Mount {
             renderer: self.holder.clone(),
             doc_path: self.doc_path.clone(),
             autosave: self.autosave,
+            autosave_max: self.autosave_max,
             lease_grace: self.lease_grace,
             crash_timeouts: self.crash_timeouts,
         }
@@ -299,7 +336,7 @@ impl Mount {
 
 /// The projection the renderer's canvas store holds. Versions are u64 on the
 /// engine side and travel as decimal text so no JavaScript number rounds them.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistenceView {
     pub mount_seq: u64,
@@ -330,7 +367,7 @@ impl PersistenceView {
 }
 
 /// What a dirty notification resolved to once its debounce settled.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum DirtyOutcome {
     /// A later notification (or an unmount) took over this one's timer.
@@ -343,8 +380,9 @@ pub enum DirtyOutcome {
 
 /// Result of a snapshot write. `mark_saved` is the version the editor must
 /// be told it is saved at; `None` when nothing was written.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"Result of a snapshot write. `markSaved` is the version to mark the editor saved at; `null` when nothing was written."#)]
 pub struct WriteOutcome {
     pub view: PersistenceView,
     pub mark_saved: Option<String>,
@@ -509,20 +547,30 @@ impl CanvasPersistence {
         let mount = self.mount_for(project_id, mount_seq)?;
         {
             let mut state = mount.state.lock();
+            if let Phase::Ready(Persisted {
+                reloading: Some(handed),
+                ..
+            }) = &state.phase
+            {
+                state.disk = Some(handed.clone());
+            }
             state.phase = Phase::Ready(Persisted {
                 content_version,
                 saved_version: content_version,
                 ..Persisted::default()
             });
             state.timeouts = 0;
+            state.stall_counted_at = None;
+            state.unsaved_wait_since = None;
         }
         mount.bump_generation();
         Ok(mount.view())
     }
 
     /// Record the engine's `{dirty, contentVersion}` and, when a save is due,
-    /// wait out the debounce. Ignored while `Loading` (AD-31: dirty cannot be
-    /// set before the document is loaded).
+    /// wait out the debounce, but never past `autosave_max` from the oldest
+    /// edit no save was handed out for. Ignored while `Loading` (AD-31: dirty
+    /// cannot be set before the document is loaded).
     pub async fn dirty_changed(
         &self,
         project_id: &str,
@@ -545,10 +593,19 @@ impl CanvasPersistence {
         }
         let mut generation = mount.bump_generation();
         let mine = *generation.borrow_and_update();
-        if !Self::due(&mount) {
-            return Ok(DirtyOutcome::Idle { view: mount.view() });
-        }
-        let settled = tokio::time::sleep(mount.autosave);
+        let settles_at = {
+            let mut state = mount.state.lock();
+            let due = matches!(&state.phase, Phase::Ready(persisted) if persisted.save_due());
+            if !due {
+                state.unsaved_wait_since = None;
+                drop(state);
+                return Ok(DirtyOutcome::Idle { view: mount.view() });
+            }
+            let now = tokio::time::Instant::now();
+            let waiting_since = *state.unsaved_wait_since.get_or_insert(now);
+            (now + mount.autosave).min(waiting_since + mount.autosave_max)
+        };
+        let settled = tokio::time::sleep_until(settles_at);
         tokio::pin!(settled);
         loop {
             tokio::select! {
@@ -563,19 +620,17 @@ impl CanvasPersistence {
         if mount.state.lock().lifecycle == Lifecycle::Closed {
             return Ok(DirtyOutcome::Superseded);
         }
+        let due = {
+            let mut state = mount.state.lock();
+            state.unsaved_wait_since = None;
+            matches!(&state.phase, Phase::Ready(persisted) if persisted.save_due())
+        };
         let view = mount.view();
-        Ok(if Self::due(&mount) {
+        Ok(if due {
             DirtyOutcome::SaveDue { view }
         } else {
             DirtyOutcome::Idle { view }
         })
-    }
-
-    fn due(mount: &Mount) -> bool {
-        match &mount.state.lock().phase {
-            Phase::Ready(persisted) => persisted.save_due(),
-            Phase::Loading => false,
-        }
     }
 
     /// Write a `host.snapshot` taken at `content_version`. Writes are
@@ -604,6 +659,12 @@ impl CanvasPersistence {
                     return Err(CanvasError::new(
                         CODE_CANVAS_NOT_READY,
                         "the canvas document has not loaded yet",
+                    ))
+                }
+                Phase::Ready(persisted) if persisted.reloading.is_some() => {
+                    return Err(CanvasError::new(
+                        CODE_CANVAS_NOT_READY,
+                        "the canvas is loading the document from disk; save again once it has",
                     ))
                 }
                 Phase::Ready(persisted)
@@ -739,7 +800,7 @@ impl CanvasPersistence {
     fn replace_mount(&self, project_id: &str, mount_seq: u64, request: MountRequest) {
         let previous = self.mounts.lock().insert(
             project_id.to_string(),
-            Mount::new(mount_seq, self.tick(), request, None),
+            Mount::new(mount_seq, self.tick(), request, DEFAULT_MAX_MOUNTED, None),
         );
         if let Some(previous) = previous {
             Self::retire(&previous);

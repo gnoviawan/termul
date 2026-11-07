@@ -1,10 +1,10 @@
+import { rowId } from '@/components/settings/row-id'
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { SettingsRow, settingsDescriptionId } from '@/components/settings/SettingsRow'
 import { SettingsSelect } from '@/components/settings/SettingsSelect'
 import { Switch } from '@/components/ui/switch'
 import { DEFAULT_APP_SETTINGS, EDITOR_AUTO_SAVE_DELAY_OPTIONS } from '@/types/settings'
-import { rowId } from './categories'
 
 interface EditorSectionProps {
   editorAutoSave: boolean

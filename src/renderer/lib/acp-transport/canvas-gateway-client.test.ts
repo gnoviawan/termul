@@ -70,10 +70,28 @@ describe('CanvasGatewayClient', () => {
     client.setCallHandler(handler)
     client.handleFrame(CALL)
     await settled()
-    expect(handler).toHaveBeenCalledWith(CALL)
+    expect(handler).toHaveBeenCalledWith(CALL, undefined)
     expect(sent).toEqual([
       ['canvas_reply', { callId: 12, mountSeq: 3, ok: true, result: '{"id":18446744073709551615}' }]
     ])
+  })
+
+  it("turns the host's time left into a local deadline on arrival", async () => {
+    vi.useFakeTimers({ now: 50_000, toFake: ['Date'] })
+    try {
+      const { client } = harness()
+      const handler = vi.fn(async (call: WsCanvasCallFrame) => ({
+        callId: call.callId,
+        mountSeq: call.mountSeq,
+        ok: true as const,
+        result: '{}'
+      }))
+      client.setCallHandler(handler)
+      client.handleFrame({ ...CALL, timeoutMs: 9_000 })
+      expect(handler).toHaveBeenCalledWith({ ...CALL, timeoutMs: 9_000 }, 59_000)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   describe('a reply longer than one message', () => {

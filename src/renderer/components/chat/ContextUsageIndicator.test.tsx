@@ -9,7 +9,7 @@ vi.mock('@/hooks/use-mobile-web-shell', () => ({
   useMobileWebShell: () => mobileShellRef.current
 }))
 
-/** 40K of a 190K conversation window (200K total minus the 10K bootstrap): 21%. */
+/** 50K of 200K shown (25%); 40K of the 190K conversation window (21%) drives the warning. */
 function usage(overrides: Partial<SessionUsage> = {}): SessionUsage {
   return {
     used: 50_000,
@@ -22,7 +22,7 @@ function usage(overrides: Partial<SessionUsage> = {}): SessionUsage {
 }
 
 const MESSAGES = [{ role: 'user' }, { role: 'assistant' }]
-const RING = /Context \d+ percent used/
+const RING = /^Context \d+%/
 
 function ring(): HTMLElement {
   return screen.getByRole('button', { name: RING })
@@ -52,9 +52,11 @@ describe('ContextUsageIndicator ring visibility', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('names the ring with the rounded conversation percent', () => {
+  it('names the ring with the shown percent and the tokens used', () => {
     render(<ContextUsageIndicator usage={usage()} messages={MESSAGES} />)
-    expect(screen.getByRole('button', { name: 'Context 21 percent used' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Context 25%, 50K of 200K tokens' })
+    ).toBeInTheDocument()
   })
 })
 
@@ -72,12 +74,12 @@ describe('ContextUsageIndicator on desktop', () => {
     expect(popover).not.toHaveAttribute('data-sheet')
     expect(document.querySelector('[data-sheet]')).toBeNull()
     expect(within(popover).getByText('Context window')).toBeInTheDocument()
-    expect(within(popover).getByText('21% conversation used')).toBeInTheDocument()
-    expect(within(popover).getByText(/\/ .* tokens/)).toBeInTheDocument()
-    expect(within(popover).getByText(/remaining/)).toBeInTheDocument()
-    expect(within(popover).getByText(/Total in context:/)).toBeInTheDocument()
+    expect(within(popover).getByText('25% used')).toBeInTheDocument()
+    expect(within(popover).getByText('Setup')).toBeInTheDocument()
+    expect(within(popover).getByText('Conversation')).toBeInTheDocument()
+    expect(within(popover).getByTestId('context-left')).toHaveTextContent('150K left')
     expect(within(popover).getByText('Reported cost')).toBeInTheDocument()
-    expect(within(popover).getByText('Reported by agent')).toBeInTheDocument()
+    expect(within(popover).queryByText('Reported by agent')).not.toBeInTheDocument()
     // No overlay-stack entry: the popover is not part of the mobile back stack.
     expect(overlayIds()).toEqual([])
   })
@@ -115,12 +117,12 @@ describe('ContextUsageIndicator on the mobile web shell', () => {
     expect(sheet.className).toContain('pb-[max(0.5rem,env(safe-area-inset-bottom))]')
     // The title carries the heading, so the details do not repeat it.
     expect(within(sheet).getAllByText('Context window')).toHaveLength(1)
-    expect(within(sheet).getByText('21% conversation used')).toBeInTheDocument()
-    expect(within(sheet).getByText(/\/ .* tokens/)).toBeInTheDocument()
-    expect(within(sheet).getByText(/remaining/)).toBeInTheDocument()
-    expect(within(sheet).getByText(/Total in context:/)).toBeInTheDocument()
+    expect(within(sheet).getByText('25% used')).toBeInTheDocument()
+    expect(within(sheet).getByText('Setup')).toBeInTheDocument()
+    expect(within(sheet).getByText('Conversation')).toBeInTheDocument()
+    expect(within(sheet).getByTestId('context-left')).toHaveTextContent('150K left')
     expect(within(sheet).getByText('Reported cost')).toBeInTheDocument()
-    expect(within(sheet).getByText('Reported by agent')).toBeInTheDocument()
+    expect(within(sheet).queryByText('Reported by agent')).not.toBeInTheDocument()
   })
 
   it('registers context-details-sheet while open and unregisters on close', () => {
@@ -215,6 +217,154 @@ describe('ContextUsageDetails', () => {
 
     render(<ContextUsageDetails usage={usage()} showHeading={false} />)
     expect(screen.queryByText('Context window')).not.toBeInTheDocument()
-    expect(screen.getByText('Reported by agent')).toBeInTheDocument()
+  })
+})
+
+describe('ContextUsageIndicator warning and Compact', () => {
+  /** 170K of 200K: 85%. */
+  const high = () => usage({ used: 170_000 })
+
+  it('turns on the warning at 80% of the shown percent and keeps it until below 78%', () => {
+    // 80% shown (setup included); the conversation alone would be 79%.
+    const view = render(
+      <ContextUsageIndicator usage={usage({ used: 160_000 })} messages={MESSAGES} />
+    )
+    expect(ring()).toHaveAttribute('data-warning', 'true')
+    expect(ring()).toHaveAccessibleName('Context 80%, 160K of 200K tokens, nearing the limit')
+
+    // 79%: inside the hysteresis band, so the warning stays.
+    view.rerender(<ContextUsageIndicator usage={usage({ used: 158_000 })} messages={MESSAGES} />)
+    expect(ring()).toHaveAttribute('data-warning', 'true')
+
+    // 77%: below the off threshold.
+    view.rerender(<ContextUsageIndicator usage={usage({ used: 154_000 })} messages={MESSAGES} />)
+    expect(ring()).not.toHaveAttribute('data-warning')
+  })
+
+  it('warns as soon as the label rounds to 80%', () => {
+    // 159.8K of 200K is 79.9%, shown as "80%".
+    render(<ContextUsageIndicator usage={usage({ used: 159_800 })} messages={MESSAGES} />)
+    expect(ring()).toHaveAttribute('data-warning', 'true')
+    expect(ring()).toHaveAccessibleName(/^Context 80%.*nearing the limit$/)
+  })
+
+  it('shows "Nearing the limit" in the footer when the warning is on', () => {
+    render(<ContextUsageIndicator usage={high()} messages={MESSAGES} />)
+    fireEvent.click(ring())
+    expect(screen.getByTestId('context-left')).toHaveTextContent('Nearing the limit · 30K left')
+  })
+
+  it('hides Compact when the agent offers no compact command', () => {
+    render(<ContextUsageIndicator usage={usage()} messages={MESSAGES} />)
+    fireEvent.click(ring())
+    expect(screen.queryByRole('button', { name: 'Compact' })).not.toBeInTheDocument()
+  })
+
+  it('sends compact once and shows Compacting… until the turn ends', () => {
+    const onCompact = vi.fn()
+    const signals = { connected: true, activeTurn: false, compaction: null }
+    const view = render(
+      <ContextUsageIndicator
+        usage={usage()}
+        messages={MESSAGES}
+        onCompact={onCompact}
+        compactSignals={signals}
+      />
+    )
+    fireEvent.click(ring())
+    fireEvent.click(screen.getByRole('button', { name: 'Compact' }))
+    expect(onCompact).toHaveBeenCalledTimes(1)
+    const pending = screen.getByRole('button', { name: 'Compacting…' })
+    expect(pending).toBeDisabled()
+
+    view.rerender(
+      <ContextUsageIndicator
+        usage={usage()}
+        messages={MESSAGES}
+        onCompact={onCompact}
+        compactSignals={{ ...signals, activeTurn: true }}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Compacting…' })).toBeInTheDocument()
+
+    view.rerender(
+      <ContextUsageIndicator
+        usage={usage()}
+        messages={MESSAGES}
+        onCompact={onCompact}
+        compactSignals={signals}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Compact' })).toBeEnabled()
+  })
+
+  it('gives up after 60 seconds and shows the failure line', () => {
+    vi.useFakeTimers()
+    try {
+      render(
+        <ContextUsageIndicator
+          usage={usage()}
+          messages={MESSAGES}
+          onCompact={vi.fn()}
+          compactSignals={{ connected: true, activeTurn: false, compaction: null }}
+        />
+      )
+      fireEvent.click(ring())
+      fireEvent.click(screen.getByRole('button', { name: 'Compact' }))
+      act(() => {
+        vi.advanceTimersByTime(60_000)
+      })
+      expect(screen.getByRole('button', { name: 'Compact' })).toBeEnabled()
+      expect(screen.getByText("Compact didn't finish")).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sends compact only once when two clicks land in the same tick', () => {
+    const onCompact = vi.fn()
+    render(
+      <ContextUsageIndicator
+        usage={usage()}
+        messages={MESSAGES}
+        onCompact={onCompact}
+        compactSignals={{ connected: true, activeTurn: false, compaction: null }}
+      />
+    )
+    fireEvent.click(ring())
+    const button = screen.getByRole('button', { name: 'Compact' })
+    act(() => {
+      button.click()
+      button.click()
+    })
+    expect(onCompact).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not time out while the agent reports compaction running', () => {
+    vi.useFakeTimers()
+    try {
+      const props = { usage: usage(), messages: MESSAGES, onCompact: vi.fn() }
+      const view = render(
+        <ContextUsageIndicator
+          {...props}
+          compactSignals={{ connected: true, activeTurn: false, compaction: null }}
+        />
+      )
+      fireEvent.click(ring())
+      fireEvent.click(screen.getByRole('button', { name: 'Compact' }))
+      view.rerender(
+        <ContextUsageIndicator
+          {...props}
+          compactSignals={{ connected: true, activeTurn: true, compaction: 'started' }}
+        />
+      )
+      act(() => {
+        vi.advanceTimersByTime(90_000)
+      })
+      expect(screen.getByRole('button', { name: 'Compacting…' })).toBeInTheDocument()
+      expect(screen.queryByText("Compact didn't finish")).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

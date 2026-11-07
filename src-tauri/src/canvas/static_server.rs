@@ -31,9 +31,10 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+use super::fallback_fonts;
 use super::persistence::{
-    autosave_delay, canvas_mounts, crash_timeouts, lease_grace, mount_cap, CloseMode, CloseOutcome,
-    Eviction, LeaseChange, MountRequest, RendererId,
+    autosave_delay, autosave_max_wait, canvas_mounts, crash_timeouts, lease_grace, mount_cap,
+    CloseMode, CloseOutcome, Eviction, LeaseChange, MountRequest, RendererId,
 };
 use super::pin::pinned_tag;
 use super::{canvas_id_for_project, CanvasError, CODE_TOKEN_GENERATION_FAILED};
@@ -102,19 +103,23 @@ pub fn bundle_tokens() -> &'static BundleTokens {
 pub struct CanvasBundleBase {
     pub base_url: String,
     pub pin_tag: String,
+    /// Font URLs, relative to the bundle page, for `host.fallbackFonts`.
+    /// Only the desktop loopback listener serves any ([`fallback_fonts`]).
+    pub fallback_fonts: Vec<String>,
 }
 
 pub fn same_origin_base() -> CanvasBundleBase {
     CanvasBundleBase {
         base_url: String::new(),
         pin_tag: pinned_tag().to_string(),
+        fallback_fonts: Vec::new(),
     }
 }
 
 /// What the renderer needs to mount a project's canvas: it builds the iframe
 /// URL `<baseUrl>/canvas/<canvasId>/<canvasToken>/?embed=kiosk&ho=..&ms=<mountSeq>`
 /// itself. No `Debug`: the token must never reach a log line.
-#[derive(Clone, Serialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CanvasOpenInfo {
     pub canvas_id: String,
@@ -127,19 +132,25 @@ pub struct CanvasOpenInfo {
     pub mount_seq: u64,
     /// Canvases this open unloaded to stay under `canvas.max_mounted` (AD-26),
     /// each saved first. The renderer shows them as unloaded.
+    #[schemars(description = r#"Canvases this open unloaded to stay under the `canvas.max_mounted` limit, each saved first. Show them as unloaded."#)]
     pub evicted: Vec<Eviction>,
+    /// [`CanvasBundleBase::fallback_fonts`].
+    #[schemars(description = r#"Font URLs, relative to the bundle page, for `host.fallbackFonts`. Only the desktop app serves any; elsewhere the list is empty."#)]
+    pub fallback_fonts: Vec<String>,
 }
 
 /// What a renderer's open carries besides the document: the one shape both
 /// transports accept, `canvas_open`'s `request` argument and the rest of
 /// `POST /canvas/open`'s body. Every setting is optional; the host clamps it.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenRequest {
     /// The opening window or tab; it gets the lease.
     pub client_instance_id: String,
     /// `canvas.autosave_ms`.
     pub autosave_ms: Option<u64>,
+    /// `canvas.autosave_max_ms`.
+    pub autosave_max_ms: Option<u64>,
     /// `canvas.lease_grace_ms`.
     pub lease_grace_ms: Option<u64>,
     /// `canvas.max_mounted`.
@@ -177,6 +188,7 @@ pub async fn open_canvas(
                 renderer: renderer_id,
                 doc_path: PathBuf::from(&doc_key),
                 autosave: autosave_delay(request.autosave_ms),
+                autosave_max: autosave_max_wait(request.autosave_max_ms),
                 lease_grace: lease_grace(request.lease_grace_ms),
                 crash_timeouts: crash_timeouts(request.crash_timeouts),
             },
@@ -217,6 +229,7 @@ pub async fn open_canvas(
         doc_key,
         mount_seq,
         evicted: admitted.evicted,
+        fallback_fonts: base.fallback_fonts,
     })
 }
 
@@ -420,15 +433,22 @@ pub fn log_bundle_status() {
 }
 
 async fn desktop_bundle_handler(method: Method, uri: Uri, headers: HeaderMap) -> Response {
-    serve_bundle(&method, &uri, &headers)
+    let font = BundlePath::parse(uri.path())
+        .filter(|path| bundle_tokens().authorize(path.canvas_id, path.token))
+        .and_then(|path| path.tail?.strip_prefix(fallback_fonts::ROUTE));
+    match font {
+        Some(file) => fallback_fonts::response(&method, file).await,
+        None => serve_bundle(&method, &uri, &headers),
+    }
 }
 
 /// The loopback listener's whole route set.
 pub fn bundle_router() -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/canvas/{id}", any(desktop_bundle_handler))
         .route("/canvas/{id}/", any(desktop_bundle_handler))
-        .route("/canvas/{id}/{*rest}", any(desktop_bundle_handler))
+        .route("/canvas/{id}/{*rest}", any(desktop_bundle_handler));
+    crate::web::host_allow::layer(router, crate::web::host_allow::HostAllowList::loopback())
 }
 
 /// Supervisor of the desktop loopback listener. Drive [`StaticServer::run`]
@@ -459,6 +479,7 @@ impl StaticServer {
         self.addr().map(|addr| CanvasBundleBase {
             base_url: format!("http://{addr}"),
             pin_tag: pinned_tag().to_string(),
+            fallback_fonts: fallback_fonts::urls(),
         })
     }
 
@@ -506,6 +527,7 @@ impl StaticServer {
             let Ok(addr) = listener.local_addr() else {
                 continue;
             };
+            let _owned_port = crate::host_perimeter::OwnedPort::claim(addr.port());
             let restart = self.binds.fetch_add(1, Ordering::Relaxed) > 0;
             log::info!(
                 "[canvas] bundle listener {} on {addr}",

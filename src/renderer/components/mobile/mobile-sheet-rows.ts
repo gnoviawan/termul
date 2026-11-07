@@ -1,4 +1,5 @@
 import {
+  Bug,
   FolderTree,
   GitBranch,
   Search,
@@ -25,6 +26,8 @@ export interface ShellNavigationActions {
   onOpenCommandPalette?: () => void
   onNewTerminal?: () => void
   onOpenProjectSettings?: () => void
+  /** Opens the Report a Bug dialog (spec-bug-report-dialog). */
+  onReportBug?: () => void
 }
 
 export interface ShellNavigationRow {
@@ -35,9 +38,9 @@ export interface ShellNavigationRow {
 
 /**
  * The navigation rows whose callback is given, in the header ⋯ sheet's order:
- * Git changes, Files, Command palette, New terminal, Project settings. The
- * terminal ⋯ sheet passes no `onNewTerminal`, because the header ✎ already is
- * New terminal there.
+ * Git changes, Files, Command palette, New terminal, Project settings,
+ * Report a bug. The terminal ⋯ sheet passes no `onNewTerminal`, because the
+ * header ✎ already is New terminal there.
  */
 export function visibleNavigationRows(actions: ShellNavigationActions): ShellNavigationRow[] {
   const rows: Array<{ label: string; Icon: TermulIcon; run: (() => void) | undefined }> = [
@@ -45,7 +48,8 @@ export function visibleNavigationRows(actions: ShellNavigationActions): ShellNav
     { label: 'Files', Icon: FolderTree, run: actions.onOpenFiles },
     { label: 'Command palette', Icon: Search, run: actions.onOpenCommandPalette },
     { label: 'New terminal', Icon: TerminalSquare, run: actions.onNewTerminal },
-    { label: 'Project settings', Icon: Settings, run: actions.onOpenProjectSettings }
+    { label: 'Project settings', Icon: Settings, run: actions.onOpenProjectSettings },
+    { label: 'Report a bug', Icon: Bug, run: actions.onReportBug }
   ]
   return rows.flatMap(({ label, Icon, run }) => (run ? [{ label, Icon, run }] : []))
 }

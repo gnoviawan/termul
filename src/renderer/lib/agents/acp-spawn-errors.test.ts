@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 import type { AuthMethod } from '@/lib/acp-api'
 import { AcpTransportError } from '@/lib/acp-transport/types'
 import {
+  ACP_RATE_LIMIT_MESSAGE,
+  ACP_STREAM_INTERRUPT_MESSAGE,
   AGENT_AUTH_REQUIRED_CODE,
   AmbiguousAuthError,
   classifySetupError,
+  formatAcpAgentError,
   formatAcpSpawnError,
   isAgentAuthRequiredError,
   isAmbiguousAuthError,
@@ -14,6 +17,31 @@ import {
   providerCodeOf,
   SETUP_ERROR_LABELS
 } from './acp-spawn-errors'
+
+describe('formatAcpAgentError', () => {
+  it('rewrites NGHTTP2_ENHANCE_YOUR_CALM / RetriableError stream closes as rate-limit', () => {
+    expect(
+      formatAcpAgentError(
+        'Error: RetriableError: [internal] Stream closed with error code NGHTTP2_ENHANCE_YOUR_CALM'
+      )
+    ).toBe(ACP_RATE_LIMIT_MESSAGE)
+    expect(formatAcpAgentError('rate limit exceeded')).toBe(ACP_RATE_LIMIT_MESSAGE)
+    expect(formatAcpAgentError('HTTP 429 Too Many Requests')).toBe(ACP_RATE_LIMIT_MESSAGE)
+  })
+
+  it('rewrites generic stream/connection drops as interrupted', () => {
+    expect(formatAcpAgentError('RetriableError: [internal] Stream closed')).toBe(
+      ACP_STREAM_INTERRUPT_MESSAGE
+    )
+    expect(formatAcpAgentError('ECONNRESET')).toBe(ACP_STREAM_INTERRUPT_MESSAGE)
+    expect(formatAcpAgentError('the stream was destroyed')).toBe(ACP_STREAM_INTERRUPT_MESSAGE)
+  })
+
+  it('passes unrelated diagnostics through verbatim', () => {
+    expect(formatAcpAgentError('credit limit exceeded')).toBe('credit limit exceeded')
+    expect(formatAcpAgentError(new Error('insufficient credit'))).toBe('insufficient credit')
+  })
+})
 
 describe('formatAcpSpawnError', () => {
   it('passes non-ENOENT messages through verbatim', () => {
@@ -29,6 +57,87 @@ describe('formatAcpSpawnError', () => {
     expect(formatAcpSpawnError('command not found', { command: 'cursor-agent' })).toMatch(
       /"cursor-agent"/
     )
+  })
+
+  it('explains an npx package executable missing after npx itself launched (exit 127)', () => {
+    // JSON data escapes its newline; the appended stderr tail uses real newlines.
+    const raw =
+      'agent failed to start: Internal error: {\n' +
+      '  "data": "Process exited with exit status: 127: sh: codex-acp: command not found\\n"\n' +
+      '}\nagent stderr:\nsh: codex-acp: command not found'
+    const result = classifySetupError(raw, { command: 'npx' })
+    expect(result).toMatchObject({
+      category: 'spawn',
+      label: 'Agent unavailable'
+    })
+    expect(result.detail).toContain('"codex-acp"')
+    expect(result.detail).toContain('npx cache')
+    expect(result.detail).not.toContain('Install Node.js')
+  })
+
+  it.each([
+    '@scope/tool',
+    'tool+extra',
+    'tool.v2'
+  ])('recognizes npx child executable %s without blaming Node.js', (binary) => {
+    const raw = `Process exited with exit status: 127: sh: ${binary}: command not found`
+    const result = formatAcpSpawnError(raw, { command: 'npx' })
+    expect(result).toContain(`"${binary}"`)
+    expect(result).toContain('npm config get cache')
+    expect(result).not.toContain('Install Node.js')
+  })
+
+  it('recognizes POSIX-sh "not found" wording for a missing npx child executable', () => {
+    // dash writes "sh: 1: <bin>: not found" where bash writes "command not
+    // found" — the same damaged npx cache, different shell.
+    const raw =
+      'agent failed to start: Internal error: {\n' +
+      '  "data": "Process exited with exit status: 127: sh: 1: codex-acp: not found\\n"\n' +
+      '}\nagent stderr:\nsh: 1: codex-acp: not found'
+    const result = classifySetupError(raw, { command: 'npx' })
+    expect(result).toMatchObject({ category: 'spawn', label: 'Agent unavailable' })
+    expect(result.detail).toContain('"codex-acp"')
+    expect(result.detail).toContain('npx cache')
+  })
+
+  it('explains an npx package missing an optional/platform dependency', () => {
+    // @agentclientprotocol/codex-acp spawns `codex app-server` via
+    // @openai/codex; a partial ~/.npm/_npx tree lacks the platform package and
+    // the vendor's own message sends users to a global install that does not
+    // repair the npx cache.
+    const raw =
+      'agent initialize failed: Codex process has exited with code 1:\n' +
+      'file:///root/.npm/_npx/c51fd8e4d04c136d/node_modules/@openai/codex/bin/codex.js:60\n' +
+      'Error: Missing optional dependency @openai/codex-linux-x64. ' +
+      'Reinstall Codex: npm install -g @openai/codex@latest\n' +
+      '    at findCodexExecutable'
+    const result = classifySetupError(raw, { command: 'npx' })
+    expect(result).toMatchObject({ category: 'spawn', label: 'Agent unavailable' })
+    expect(result.detail).toContain('@openai/codex-linux-x64')
+    expect(result.detail).toContain('npx cache')
+    expect(result.detail).not.toContain('npm install -g')
+  })
+
+  it('explains an npx package that cannot load a cached module', () => {
+    const raw = "Process exited with exit status: 1: Error: Cannot find module 'foo/dist/index.js'"
+    const result = classifySetupError(raw, { command: 'npx' })
+    expect(result.category).toBe('spawn')
+    expect(result.detail).toContain('npx cache')
+    // A non-npx launcher gets no npx-cache blame for the same wording.
+    expect(classifySetupError(raw, { command: 'node' }).category).not.toBe('spawn')
+  })
+
+  it('does not blame the npx cache for other exit-127 or missing-command failures', () => {
+    const other = 'Process exited with exit status: 127: sh: unrelated tool failed'
+    expect(formatAcpSpawnError(other, { command: 'npx' })).toBe(other)
+    expect(
+      formatAcpSpawnError(
+        'Process exited with exit status: 127: sh: codex-acp: command not found',
+        {
+          command: 'uvx'
+        }
+      )
+    ).toContain('Install uv')
   })
 
   it('keeps a resolver error that names a different binary verbatim', () => {
@@ -181,6 +290,15 @@ describe('classifySetupError order and categories (P4)', () => {
     expect(classifySetupError('connection refused').category).toBe('transport')
     expect(classifySetupError('ECONNRESET').category).toBe('transport')
     expect(classifySetupError('agent thread is no longer running').category).toBe('transport')
+  })
+
+  it('rewrites transport/rate-limit detail into friendly copy', () => {
+    expect(classifySetupError('the stream was destroyed').detail).toBe(ACP_STREAM_INTERRUPT_MESSAGE)
+    expect(
+      classifySetupError(
+        'Error: RetriableError: [internal] Stream closed with error code NGHTTP2_ENHANCE_YOUR_CALM'
+      ).detail
+    ).toBe(ACP_RATE_LIMIT_MESSAGE)
   })
 
   it('treats "connection timed out" as transport, not timeout (evicts the process)', () => {

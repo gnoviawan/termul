@@ -41,14 +41,19 @@ import {
   type AgentDisconnectedEvent,
   type AgentErrorEvent,
   type AgentId,
+  type AgentSignInRequestEvent,
+  type AgentSignInResolvedEvent,
   type AgentSpawnedEvent,
   type AgentSwitchEvent,
+  type AgentWorkingEvent,
   type AskUserQuestionEvent,
   type AvailableCommand,
   acpApi,
   type BrowserAgentTabEvent,
-  type BrowserConsentRequestEvent,
   type BrowserOpenRequestEvent,
+  type BrowserStopChangedEvent,
+  type BrowserTabClosedEvent,
+  type BrowserTicketClosedEvent,
   type CommandsUpdateEvent,
   type ConfigOptionsUpdateEvent,
   type ContentBlock,
@@ -73,14 +78,13 @@ import {
 } from '@/lib/acp-api'
 import { AcpConnectionCoordinator, type AcpRecovery } from '@/lib/acp-connection'
 import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transport'
-import { noteTurnEndSeq } from '@/lib/chat-read-sync'
+import { splitReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { logFrontendError } from '@/lib/log-api'
 import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
 import { getAgentChatSessionIdsInAllTrees, useWorkspaceStore } from '@/stores/workspace-store'
 import type { QueuedPrompt } from '../prompt-queue-orchestration'
 import { attachAgentRosterWatch } from './agent-roster-watch'
 import {
-  collectProjectsWithActiveAgentChat,
   dropHiddenToolCalls,
   dropRecordKey,
   normalizeUserMessages,
@@ -93,6 +97,7 @@ import {
   withCommands
 } from './helpers'
 import { setLaunchPlaceholderNotedListener, setLiveLaunchSessionLookup } from './live-turn'
+import { syncPendingPrompts } from './pending-permission-sync'
 import {
   historySeqWatermarks,
   isCurrentRecoveryGeneration,
@@ -113,6 +118,7 @@ import {
 } from './slices/session'
 import { createSwitchSlice } from './slices/switch'
 import { appendBlocks, createTranscriptSlice } from './slices/transcript'
+import { subagentChunkText, withSubagentIngest, withSubagentText } from './subagent-transcript'
 import type {
   AcpSession,
   AcpState,
@@ -133,6 +139,7 @@ export * from './live-turn'
 export {
   _addEphemeralSessionIdForTesting,
   _handoffOnlyTurnIdsForTesting,
+  _resetBusyQueueRetriesForTesting,
   _resetEphemeralSessionIdsForTesting,
   _resetHistorySeqWatermarksForTesting,
   _resetInFlightPreparedForTesting,
@@ -141,13 +148,15 @@ export {
   _resetPromptReconcileForTesting,
   isEphemeralAcpSession,
   persistComposerOptions,
-  renewAgentCredentials
+  renewAgentCredentials,
+  runsCurrentLaunch
 } from './shared-state'
 export { _resetAcpAuthForTesting } from './slices/agent'
-export { mcpServerDeletionCount } from './slices/mcp'
+export { mcpProbesInFlight, mcpServerDeletionCount } from './slices/mcp'
 export {
   _resetInFlightHistoryOpensForTesting,
-  _resetSessionIndexLoadGenerationForTesting
+  _resetSessionIndexLoadGenerationForTesting,
+  historyOpenInFlight
 } from './slices/session'
 export {
   _clampedToolCallIdsSizeForTesting,
@@ -284,9 +293,10 @@ async function installTransportRecovery(
       // ids double as backfill/dedup anchors against payload installs.
       const rawTurnId = payload.turnId
       const turnId = typeof rawTurnId === 'string' && rawTurnId.length > 0 ? rawTurnId : null
-      const rawTurnBlocks = Array.isArray(payload.content)
-        ? (payload.content as ContentBlock[])
-        : []
+      const guarded = splitReadOnlyGuard(
+        Array.isArray(payload.content) ? (payload.content as ContentBlock[]) : []
+      )
+      const rawTurnBlocks = guarded.blocks
       // spec-agent-switch-separator-redesign: a pre-fix handoff record stored
       // the wire framing (summary + `---` + draft); strip the preamble so the
       // replayed bubble shows only the draft. A summary-only record's first
@@ -320,10 +330,21 @@ async function installTransportRecovery(
         blocks,
         streaming: false,
         timestamp: Date.now(),
-        seq: event.seq
+        seq: event.seq,
+        ...(guarded.guard ? { readOnlyGuard: guarded.guard } : {})
       }
       messages.push(message)
     } else if (event.type === 'message_chunk') {
+      // Subagent text is transparent to the run (host fold parity) and
+      // belongs to its dispatch card.
+      if (typeof payload.parentToolCallId === 'string' && payload.parentToolCallId) {
+        const text = subagentChunkText(payload.role, payload.content)
+        const idx = recoveredToolCalls.findIndex((t) => t.toolCallId === payload.parentToolCallId)
+        if (text !== null && idx !== -1) {
+          recoveredToolCalls[idx] = withSubagentText(recoveredToolCalls[idx], text)
+        }
+        continue
+      }
       const role = (
         payload.role === 'thought' ? 'thought' : payload.role === 'user' ? 'user' : 'agent'
       ) as MessageRole
@@ -359,7 +380,7 @@ async function installTransportRecovery(
       const toolCall = payload.toolCall as ToolCall | undefined
       if (!toolCall || typeof toolCall.toolCallId !== 'string') continue
       const stamped: ToolCall = {
-        ...toolCall,
+        ...withSubagentIngest(toolCall),
         ...applyTerminalStream(undefined, toolCall),
         timestamp: typeof toolCall.timestamp === 'number' ? toolCall.timestamp : Date.now(),
         // The envelope seq is the server record seq: timeline placement and
@@ -389,7 +410,7 @@ async function installTransportRecovery(
       const prior = recoveredToolCalls[idx]
       recoveredToolCalls[idx] = {
         ...prior,
-        ...update,
+        ...withSubagentIngest(update),
         ...applyTerminalStream(prior, update),
         timestamp: prior.timestamp,
         seq: prior.seq
@@ -466,11 +487,6 @@ async function installTransportRecovery(
         : current.sessions
     }
   })
-  for (const event of recovery.events) {
-    if (event.type === 'prompt_complete') {
-      noteTurnEndSeq(recovery.sessionId, event.seq, recovery.logEpoch ?? null)
-    }
-  }
   // AD-6: a prompt that lost its reply resolves from the recovered log.
   reconcilePromptAfterRecovery(recovery.sessionId, recovery.events)
 }
@@ -529,13 +545,20 @@ export function initAcpEventListeners(): () => void {
     // The transport captures this before the snapshot round-trip so a late
     // recovery for a torn-down/replaced session is rejected at install.
     recoveryGeneration: (sessionId) => sessionReopenGenerations.get(sessionId) ?? 0,
-    pendingPermissionSessions: () => [
-      ...new Set(
-        Object.values(useAcpStore.getState().pendingPermissions).map(
-          (permission) => permission.sessionId
+    pendingPermissionSessions: () => {
+      const state = useAcpStore.getState()
+      return [
+        ...new Set(
+          [
+            ...Object.values(state.pendingPermissions),
+            ...Object.values(state.pendingQuestions),
+            ...Object.values(state.pendingElicitations)
+          ].map((prompt) => prompt.sessionId)
         )
-      )
-    ],
+      ]
+    },
+    installPendingPrompts: (sessionId, prompts) =>
+      syncPendingPrompts(useAcpStore.getState, useAcpStore.setState, sessionId, prompts),
     setReconnecting: (reconnecting, recovered) => {
       useAcpStore.setState({ transportReconnecting: reconnecting })
       if (!reconnecting) {
@@ -556,8 +579,9 @@ export function initAcpEventListeners(): () => void {
   connection.attach()
   teardown = [
     startClosedTranscriptEviction(),
-    // Web only: the agent roster arrives through the `agents` watch (the
-    // desktop listens to the Tauri `acp:agent_*` events below).
+    // The `agents` watch: every relay transport has one, the desktop's
+    // channel carrier included. It carries the roster and the browser policy
+    // and automation change hints.
     ...(transport.watches
       ? [attachAgentRosterWatch(transport.watches, () => useAcpStore.getState())]
       : []),
@@ -603,6 +627,9 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<UsageUpdateEvent>(ACP_EVENTS.usageUpdate, (e) =>
       useAcpStore.getState()._onUsageUpdate(e)
     ),
+    acpApi.onEvent<AgentWorkingEvent>(ACP_EVENTS.agentWorking, (e) =>
+      useAcpStore.getState()._onAgentWorking(e)
+    ),
     acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, (e, eventSeq) =>
       useAcpStore.getState()._onPermissionRequest(e, eventSeq)
     ),
@@ -615,11 +642,9 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<ElicitationRequestEvent>(ACP_EVENTS.elicitationRequest, (e, eventSeq) =>
       useAcpStore.getState()._onElicitationRequest(e, eventSeq)
     ),
-    acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e, eventSeq) => {
-      const logEpoch = getAcpTransport().getSessionCursor?.(e.sessionId)?.logEpoch ?? null
-      noteTurnEndSeq(e.sessionId, eventSeq, logEpoch)
+    acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e, eventSeq) =>
       useAcpStore.getState()._onPromptComplete(e, eventSeq)
-    }),
+    ),
     acpApi.onEvent<AgentCrashedEvent>(ACP_EVENTS.agentCrashed, (e) => {
       useAcpStore.getState()._onAgentCrashed(e)
       toast.error(e.message || 'Agent crashed')
@@ -637,11 +662,23 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<BrowserOpenRequestEvent>(ACP_EVENTS.browserOpenRequest, (e) =>
       useAcpStore.getState()._onBrowserOpenRequest(e)
     ),
-    acpApi.onEvent<BrowserAgentTabEvent>(ACP_EVENTS.browserAgentTab, (e) =>
-      useAcpStore.getState()._onBrowserAgentTab(e)
+    acpApi.onEvent<AgentSignInRequestEvent>(ACP_EVENTS.agentSignInRequest, (e) =>
+      useAcpStore.getState()._onAgentSignInRequest(e)
     ),
-    acpApi.onEvent<BrowserConsentRequestEvent>(ACP_EVENTS.browserConsentRequest, (e) =>
-      useAcpStore.getState()._onBrowserConsentRequest(e)
+    acpApi.onEvent<AgentSignInResolvedEvent>(ACP_EVENTS.agentSignInResolved, (e) =>
+      useAcpStore.getState()._onAgentSignInResolved(e)
+    ),
+    acpApi.onEvent<BrowserAgentTabEvent>(ACP_EVENTS.browserAgentTab, (e, eventSeq) =>
+      useAcpStore.getState()._onBrowserAgentTab(e, eventSeq)
+    ),
+    acpApi.onEvent<BrowserTabClosedEvent>(ACP_EVENTS.browserTabClosed, (e) =>
+      useAcpStore.getState()._onBrowserTabClosed(e)
+    ),
+    acpApi.onEvent<BrowserTicketClosedEvent>(ACP_EVENTS.browserTicketClosed, (e) =>
+      useAcpStore.getState()._onBrowserTicketClosed(e)
+    ),
+    acpApi.onEvent<BrowserStopChangedEvent>(ACP_EVENTS.browserStopChanged, (e) =>
+      useAcpStore.getState()._onBrowserStopChanged(e)
     )
   ]
   return () => {
@@ -722,10 +759,6 @@ export function useAgentIcon(agentId: AgentId | null, agentConfigId?: string): s
       return selectAgentIdentity(s, agentId).icon
     })
   )
-}
-
-export function useProjectsWithActiveAgentChat(): string[] {
-  return useAcpStore(useShallow((state) => collectProjectsWithActiveAgentChat(state.sessions)))
 }
 
 export const useConfigWarmState = (configId: string): ConfigWarmState =>

@@ -27,7 +27,7 @@ pub enum CloseMode {
     Discard,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CloseOutcome {
     /// False when the project had no mount.
@@ -181,19 +181,24 @@ impl CanvasPersistence {
     ) -> Result<Option<u64>, CanvasError> {
         let mount_seq = mount.mount_seq;
         if !persisted.unsaved() {
-            let Some(saved) = persisted.saved_version else {
-                return Ok(None);
-            };
+            let saved = persisted.saved_version;
             // The host's dirty state can trail the editor by one notification
             // in flight; the editor itself says whether it is still at the
-            // saved version. An editor that cannot answer has nothing the
-            // host knows of to lose.
-            match self.mark_saved(project_id, mount_seq, saved).await {
-                Ok(marked) if !marked.dirty && marked.content_version == saved => {
-                    return Ok(Some(saved))
+            // saved version. A document never saved has none, and asking at
+            // version 0, which the editor never reports, changes nothing. An
+            // editor that cannot answer has nothing the host knows of to lose.
+            match self
+                .mark_saved(project_id, mount_seq, saved.unwrap_or(0))
+                .await
+            {
+                Ok(marked)
+                    if !marked.dirty
+                        && saved.is_none_or(|saved| marked.content_version == saved) =>
+                {
+                    return Ok(saved)
                 }
                 Ok(_) => {}
-                Err(_) => return Ok(Some(saved)),
+                Err(_) => return Ok(saved),
             }
         }
 

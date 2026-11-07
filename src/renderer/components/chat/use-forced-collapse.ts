@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 /**
  * Collapse state for a dock bar with a temporary "force collapsed" override
- * (the mobile dock collapses its plan and changed-files bars while the
+ * (the mobile dock collapses its plan bar while the
  * on-screen keyboard is up and an approval is pending).
  *
  * While `force` is true the bar renders collapsed. A header tap during that

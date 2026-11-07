@@ -9,6 +9,7 @@
 import { MAX_CLIENT_ID_LEN, WS_PROTOCOL_VERSION } from '@shared/types/web-protocol.types'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { __resetCommandJournalForTesting } from '../command-journal'
+import { __resetClientIdentityForTesting } from '../web-client-identity'
 import { createWebPersistenceApi } from '../web-persistence-api'
 
 const mockHandleProtocolVersionMismatch = vi.hoisted(() => vi.fn())
@@ -247,6 +248,7 @@ describe('createWebPersistenceApi', () => {
     host.clear()
     hostLog.length = 0
     window.sessionStorage.clear()
+    __resetClientIdentityForTesting()
     __resetCommandJournalForTesting()
     api = makeApi(DEVICE)
   })

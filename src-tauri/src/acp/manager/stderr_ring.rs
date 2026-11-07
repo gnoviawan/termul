@@ -62,7 +62,8 @@ static TOKEN_SHAPE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Mask everything in `line` that looks like a key, token, cookie or bearer
-/// value.
+/// value. `pub(crate)` so the diagnostics collector applies the same mask to
+/// log tails before they leave the host.
 pub(crate) fn redact_line(line: &str) -> String {
     let masked = BEARER.replace_all(line, format!("$1 {MASK}"));
     let masked = COOKIE.replace_all(&masked, format!("${{1}}{MASK}"));

@@ -5,6 +5,7 @@ import { PaneDndProvider } from '@/hooks/use-pane-dnd'
 import { ShellSkeleton } from '@/layouts/workspace-layout/ShellSkeleton'
 import { terminalApi } from '@/lib/api'
 import { sheetCloseAutoFocus } from '@/lib/sheet-focus-return'
+import { useReportBugStore } from '@/stores/report-bug-store'
 import { useTerminalActions, useTerminalStore } from '@/stores/terminal-store'
 import { findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
@@ -81,6 +82,7 @@ export function MobileWorkspaceShell({
           onRenameTerminal={renameTerminal}
           onCloseEditorTab={handleCloseEditorTab}
           onOpenProjectSettings={handleOpenProjectSettings}
+          onReportBug={() => useReportBugStore.getState().openReport()}
           onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
           onRestartTerminal={(terminalId) => {
             // Restart: kill the PTY, close the old tab, then re-spawn.

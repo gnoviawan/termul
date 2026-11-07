@@ -3,6 +3,7 @@
  * No store dependency. Pure move, no logic changes.
  */
 
+import type { GithubRepoSlot } from '@shared/types/github.types'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
 import type { LeafNode, PaneNode, SplitNode } from '@/types/workspace.types'
@@ -158,11 +159,20 @@ export function gitHistoryTabId(cwd: string): string {
   return `git-history-${cwd}`
 }
 
+/** Issue and PR numbers share one sequence per repository, so the kind is not part of the id. */
+export function githubItemTabId(cwd: string, repo: GithubRepoSlot, number: number): string {
+  return `github-item-${cwd}-${repo}-${number}`
+}
+
 /** Diff tab id: `diff:` + stable hash of the canonical (cwd, path, side) identity. */
 export { commitDiffTabId, diffTabId } from '@/lib/diff-tab-identity'
 
 export function canvasTabId(projectId: string): string {
   return `canvas-${projectId}`
+}
+
+export function automationsTabId(projectId: string): string {
+  return `automations-${projectId}`
 }
 
 export function agentChatTabId(sessionId: string): string {

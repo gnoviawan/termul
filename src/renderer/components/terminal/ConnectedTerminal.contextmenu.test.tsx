@@ -214,6 +214,7 @@ vi.mock('@/stores/keyboard-shortcuts-store', async () => {
 vi.mock('../../utils/terminal-registry', () => ({
   buildRehydrateSequences: vi.fn(() => ''),
   captureScrollPosition: vi.fn(),
+  onTerminalModesChanged: vi.fn(() => () => {}),
   registerTerminal: vi.fn(),
   restoreScrollback: vi.fn(),
   restoreScrollPosition: vi.fn(),
@@ -223,7 +224,10 @@ vi.mock('./terminal-cache', () => ({
   cacheTerminal: vi.fn(),
   takeCachedTerminal: vi.fn(() => undefined)
 }))
-vi.mock('./terminal-config', () => ({ getTerminalOptions: vi.fn(() => ({})) }))
+vi.mock('./terminal-config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./terminal-config')>()),
+  getTerminalOptions: vi.fn(() => ({}))
+}))
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 

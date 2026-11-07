@@ -2,11 +2,11 @@
 //!
 //! The read loop never awaits a handler: it hands each validated request to a
 //! [`KeyedExecutor`]. Requests that name the same entity (one session, agent,
-//! terminal, project or store key) run one at a time in arrival order through
-//! that entity's serial queue; requests on different entities, and requests
-//! that name none, run concurrently. So `send_prompt` then `cancel_prompt` on
-//! one session cannot reorder, while a slow install on another entity cannot
-//! block a prompt.
+//! terminal, project, store key or Claude sign-in) run one at a time in
+//! arrival order through that entity's serial queue; requests on different
+//! entities, and requests that name none, run concurrently. So `send_prompt`
+//! then `cancel_prompt` on one session cannot reorder, while a slow install on
+//! another entity cannot block a prompt.
 //!
 //! The executor owns its tasks: dropping it aborts every running handler, and
 //! [`KeyedExecutor::shutdown`] additionally waits for them to unwind (the
@@ -40,8 +40,9 @@ type Job = Pin<Box<dyn Future<Output = ()> + Send>>;
 pub(super) type EntityKey = String;
 
 /// The serial-queue key for `request`: the first entity it names, in the order
-/// session, terminal, agent, project, store key. `None` for requests that name
-/// no entity (they run concurrently with everything).
+/// session, terminal, agent, project, store key, or the Claude sign-in of an
+/// Account. `None` for requests that name no entity (they run concurrently
+/// with everything).
 ///
 /// Ticket answers (`respond_permission`, `answer_question`,
 /// `respond_elicitation`) are keyless on purpose: they carry only the ticket
@@ -76,6 +77,16 @@ pub(super) fn entity_key(request: &WsRequest) -> Option<EntityKey> {
         if let Some(name) = text("watch") {
             let scope = text("scope").unwrap_or("");
             return Some(format!("watch:{name}:{scope}"));
+        }
+    }
+    // A cancel queues behind the link sign-in start it follows. Run first, it
+    // would find no sign-in yet and leave the CLI waiting for a code.
+    if matches!(
+        request.type_.as_str(),
+        "start_claude_link_login" | "cancel_claude_login"
+    ) {
+        if let Some(account) = text("accountId") {
+            return Some(format!("claude_login:{account}"));
         }
     }
     // `add_project` carries the new project's id as `id`.

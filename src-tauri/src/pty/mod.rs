@@ -6,6 +6,7 @@ pub mod claims;
 pub mod da_filter;
 pub mod env_refresh;
 pub mod manager;
+pub mod session_protocol;
 
 #[cfg(target_os = "windows")]
 pub mod windows;

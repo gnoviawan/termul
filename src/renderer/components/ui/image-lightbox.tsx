@@ -1,70 +1,41 @@
-import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { useId, useState } from 'react'
-import { X } from '@/components/icons'
-import { NativeWebviewOccluder } from '@/hooks/use-native-webview-occlusion'
-
-import { cn } from '@/lib/utils'
-import { useOverlayRegistration } from '@/stores/overlay-stack-store'
+import { useState } from 'react'
+import { type GalleryImage, ImageGalleryLightbox } from './image-gallery-lightbox'
 
 interface ImageLightboxProps {
-  /** Full-resolution image source shown when expanded. */
-  src: string
-  alt: string
-  /** The thumbnail trigger; rendered inside a focusable button via `asChild`. */
+  image: GalleryImage
+  onDownload: (image: GalleryImage) => void
+  /** The thumbnail, rendered inside the focusable trigger button. */
   children: React.ReactNode
 }
 
 /**
- * Wraps a thumbnail trigger and opens the image full-screen on click. Click the
- * image, the close button, or press Escape to dismiss.
- *
- * The trigger is always a `<button>` so the lightbox is keyboard-accessible
- * even when the thumbnail itself is a non-interactive `<img>`/`<div>` —
- * `DialogPrimitive.Trigger asChild` preserves the child's semantics, so we
- * supply the interactive element ourselves.
+ * Wraps a thumbnail and opens the image in the full-screen viewer on click.
+ * The trigger is always a `<button>` so the viewer is keyboard-accessible even
+ * when the thumbnail itself is a non-interactive `<img>`.
  */
-export function ImageLightbox({ src, alt, children }: ImageLightboxProps): React.JSX.Element {
-  // Open state is held here (not inside Radix) so the mobile web shell can
-  // register the lightbox in the overlay back stack. The Trigger stays, so
-  // focus returns to the thumbnail on close.
-  const [open, setOpen] = useState(false)
-  const id = `image-lightbox:${useId()}`
-  useOverlayRegistration(id, open, () => setOpen(false), { mobileShellOnly: true })
+export function ImageLightbox({
+  image,
+  onDownload,
+  children
+}: ImageLightboxProps): React.JSX.Element {
+  const [opener, setOpener] = useState<HTMLElement | null>(null)
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={setOpen}>
-      <DialogPrimitive.Trigger asChild>
-        <button
-          type="button"
-          aria-label={`Open image: ${alt}`}
-          className="inline-flex cursor-zoom-in items-center bg-transparent p-0"
-        >
-          {children}
-        </button>
-      </DialogPrimitive.Trigger>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-overlay/85 backdrop-blur-sm data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-        <DialogPrimitive.Content
-          aria-describedby={undefined}
-          className={cn(
-            'fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 outline-none',
-            'data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95'
-          )}
-        >
-          <NativeWebviewOccluder />
-          <DialogPrimitive.Title className="sr-only">{alt}</DialogPrimitive.Title>
-          <img
-            src={src}
-            alt={alt}
-            className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl outline outline-1 -outline-offset-1 outline-primary-foreground/10"
-          />
-          <DialogPrimitive.Close
-            aria-label="Close image"
-            className="fixed right-4 top-4 flex size-9 items-center justify-center rounded-full bg-primary-foreground/10 text-primary-foreground/90 backdrop-blur transition-colors hover:bg-primary-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-foreground/40"
-          >
-            <X className="size-4" />
-          </DialogPrimitive.Close>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+    <>
+      <button
+        type="button"
+        aria-label={`Open image: ${image.alt}`}
+        className="inline-flex cursor-zoom-in items-center bg-transparent p-0"
+        onClick={(event) => setOpener(event.currentTarget)}
+      >
+        {children}
+      </button>
+      <ImageGalleryLightbox
+        images={[image]}
+        openIndex={opener ? 0 : null}
+        opener={opener}
+        onClose={() => setOpener(null)}
+        onDownload={onDownload}
+      />
+    </>
   )
 }

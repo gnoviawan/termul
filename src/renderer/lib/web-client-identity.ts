@@ -9,6 +9,16 @@
  *   webview keeps it per install).
  * - `clientInstanceId` — one per tab / window. Kept in `sessionStorage`, so
  *   two tabs of one profile differ while a reload of one tab keeps its id.
+ *   Browsers copy `sessionStorage` into a duplicated tab (and a same-origin
+ *   `window.open`), so a stored id alone could name two live pages, and the
+ *   host would take one page's canvas lease as the other's reload. A page
+ *   therefore releases its id when it goes away (`pagehide`), and a new page
+ *   keeps the stored id only when it takes up that release: a reload.
+ *   Otherwise another live page holds it and this page mints its own. The
+ *   release is a one-time claim in `localStorage`, which every tab shares, so
+ *   a page made from a copy of the released tab's `sessionStorage` finds it
+ *   already taken. A tab killed without `pagehide`, or restored after
+ *   [`RELEASE_TTL_MS`], gets a new id, which only costs it the lease grace.
  *
  * Storage can throw (disabled storage, opaque origins, quota). The ids then
  * live in module memory for the page lifetime so every handshake of this page
@@ -26,6 +36,14 @@ import { randomUUID } from './uuid'
 
 export const DEVICE_ID_STORAGE_KEY = 'termul.deviceId'
 export const CLIENT_INSTANCE_ID_STORAGE_KEY = 'termul.clientInstanceId'
+/** The claim (`sessionStorage`) on the id a page released when it went away. */
+export const CLIENT_INSTANCE_RELEASED_KEY = 'termul.clientInstanceId.released'
+/** Every released id not yet taken up, by claim (`localStorage`). */
+export const CLIENT_INSTANCE_RELEASES_KEY = 'termul.clientInstanceId.releases'
+/** How long a released id waits for the page that takes it up. */
+const RELEASE_TTL_MS = 10 * 60_000
+
+type Releases = Record<string, { id: string; at: number }>
 
 type StorageKind = 'local' | 'session'
 
@@ -108,9 +126,104 @@ export function getDeviceId(): string {
   return resolveId('local', DEVICE_ID_STORAGE_KEY)
 }
 
-/** Stable per tab / window (`sessionStorage`); survives reload of that tab. */
+/** This page's client instance id, once resolved. */
+let pageInstanceId: string | null = null
+/** The claim this page released its id under, until it holds it again. */
+let releasedClaim: string | null = null
+let releaseWatched = false
+
+function readReleases(local: Storage): Releases {
+  try {
+    const parsed: unknown = JSON.parse(local.getItem(CLIENT_INSTANCE_RELEASES_KEY) ?? '{}')
+    return parsed && typeof parsed === 'object' ? (parsed as Releases) : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Store `releases` without the ones past their time. */
+function writeReleases(local: Storage, releases: Releases): void {
+  const oldest = Date.now() - RELEASE_TTL_MS
+  const live = Object.entries(releases).filter(([, release]) => release?.at >= oldest)
+  local.setItem(CLIENT_INSTANCE_RELEASES_KEY, JSON.stringify(Object.fromEntries(live)))
+}
+
+/** Release the id when the page goes away, and hold it again when the page
+ * comes back from the back-forward cache. */
+function watchRelease(): void {
+  if (releaseWatched || typeof window === 'undefined') return
+  releaseWatched = true
+  window.addEventListener('pagehide', () => {
+    const local = safeStorage('local')
+    if (!pageInstanceId || !local) return
+    try {
+      const claim = randomUUID()
+      const releases = readReleases(local)
+      releases[claim] = { id: pageInstanceId, at: Date.now() }
+      writeReleases(local, releases)
+      safeStorage('session')?.setItem(CLIENT_INSTANCE_RELEASED_KEY, claim)
+      releasedClaim = claim
+    } catch {
+      // Without storage the next page mints a new id.
+    }
+  })
+  window.addEventListener('pageshow', (event) => {
+    if (!(event as PageTransitionEvent).persisted || !releasedClaim) return
+    const claim = releasedClaim
+    releasedClaim = null
+    try {
+      safeStorage('session')?.removeItem(CLIENT_INSTANCE_RELEASED_KEY)
+      const local = safeStorage('local')
+      if (!local) return
+      const releases = readReleases(local)
+      delete releases[claim]
+      writeReleases(local, releases)
+    } catch {
+      // A claim left behind expires with `RELEASE_TTL_MS`.
+    }
+  })
+}
+
+/** The stored id when this page takes up the release of the page that held
+ * it (a reload of this tab), else `null`. */
+function takeReleasedInstanceId(): string | null {
+  const session = safeStorage('session')
+  const local = safeStorage('local')
+  if (!session || !local) return null
+  try {
+    const stored = session.getItem(CLIENT_INSTANCE_ID_STORAGE_KEY)
+    const claim = session.getItem(CLIENT_INSTANCE_RELEASED_KEY)
+    session.removeItem(CLIENT_INSTANCE_RELEASED_KEY)
+    if (!claim) return null
+    const releases = readReleases(local)
+    const release = releases[claim]
+    delete releases[claim]
+    writeReleases(local, releases)
+    return isValidId(stored) && release?.id === stored ? stored : null
+  } catch {
+    warnFallback('session', 'read')
+    return null
+  }
+}
+
+/** Stable per tab / window (`sessionStorage`); survives reload of that tab,
+ * and a duplicated tab gets its own. */
 export function getClientInstanceId(): string {
-  return resolveId('session', CLIENT_INSTANCE_ID_STORAGE_KEY)
+  if (pageInstanceId) return pageInstanceId
+  let id = takeReleasedInstanceId()
+  if (!id) {
+    id = randomUUID()
+    try {
+      const storage = safeStorage('session')
+      if (!storage) throw new Error('storage unavailable')
+      storage.setItem(CLIENT_INSTANCE_ID_STORAGE_KEY, id)
+    } catch {
+      warnFallback('session', 'write')
+    }
+  }
+  pageInstanceId = id
+  watchRelease()
+  return id
 }
 
 /**
@@ -144,6 +257,8 @@ export function buildAuthenticatePayload(
 export function __resetClientIdentityForTesting(): void {
   memoryIds.local = null
   memoryIds.session = null
+  pageInstanceId = null
+  releasedClaim = null
   warnedFallback.local = false
   warnedFallback.session = false
 }

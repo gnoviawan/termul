@@ -5,7 +5,8 @@
  * `opening` (facade open in flight) → `loading` (iframe navigating, bridge
  * attached; on `event.ready` the pin is checked and the document loaded) →
  * `ready` (document loaded, theme and locale sent), `failed` (mount
- * refused, load failed or editor crashed) or `unloaded` (no mount: the host
+ * refused, load failed, no `event.ready` within the load watchdog's
+ * timeout, or editor crashed) or `unloaded` (no mount: the host
  * evicted it to stay under `canvas.max_mounted` (AD-26), or an open was
  * refused because the canvas that had to make room could not be saved). The host allocates `mountSeq` on
  * every open and never reuses it, so a remount cannot accept the previous
@@ -68,10 +69,17 @@ import {
   type CanvasBridgeReply,
   type JsonText
 } from '@/lib/canvas-bridge'
+import { canvasDocFile, sameCanvasDoc } from '@/lib/canvas-doc'
 import { readCanvasThemeTokens } from '@/lib/canvas-theme'
 import { logFrontendError } from '@/lib/log-api'
 import { basename } from '@/lib/path-basename'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
+import {
+  armLoadWatchdog,
+  CANVAS_LOAD_TIMEOUT_MS,
+  clearLoadWatchdog
+} from '@/stores/canvas-load-watchdog'
+import { useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
 export interface CanvasMount {
@@ -120,8 +128,13 @@ export interface CanvasState {
   sessions: Record<string, CanvasSession>
   /** True when the project has a canvas session afterwards; false on a typed
    * failure (callers fall back); 'superseded' when a newer open or close
-   * took over the project while this one was in flight. */
-  openCanvas: (projectId: string, docPath: string) => Promise<boolean | 'superseded'>
+   * took over the project while this one was in flight. `showTab: false`
+   * mounts without opening or focusing the canvas tab. */
+  openCanvas: (
+    projectId: string,
+    docPath: string,
+    options?: { showTab?: boolean }
+  ) => Promise<boolean | 'superseded'>
   /** Unmount through the host's AD-31 sequence; the session ends only when
    * the host unmounted. `discard` is the user's choice to drop unsaved
    * changes after a failed save. */
@@ -144,8 +157,14 @@ export interface CanvasState {
   attachBridge: (projectId: string, mountSeq: number, bridge: CanvasBridge) => void
   detachBridge: (projectId: string, bridge: CanvasBridge) => void
   handleBridgeEvent: (projectId: string, mountSeq: number, event: CanvasBridgeEvent) => void
-  /** Forward one control-protocol call to the project's editor. */
-  callCanvas: (projectId: string, method: string, params?: JsonText) => Promise<CanvasBridgeReply>
+  /** Forward one control-protocol call to the project's editor; `deadline`
+   * drops it unrun if it is still queued for a loading editor then. */
+  callCanvas: (
+    projectId: string,
+    method: string,
+    params?: JsonText,
+    deadline?: number
+  ) => Promise<CanvasBridgeReply>
   /** User Save: snapshot and write now, regardless of the debounce. True
    * when the file on disk holds this snapshot or a newer one. */
   saveCanvas: (projectId: string) => Promise<boolean>
@@ -162,6 +181,9 @@ export interface CanvasState {
 }
 
 const bridges = new Map<string, { mountSeq: number; bridge: CanvasBridge }>()
+/** Dirty notifications forwarded per project; a retry runs only while no
+ * newer one went out. */
+const dirtyNotices = new Map<string, number>()
 const lifecycleGenerations = new Map<string, number>()
 const savesInFlight = new Map<string, number>()
 
@@ -185,6 +207,16 @@ function nextLifecycleGeneration(projectId: string): number {
 
 function isStaleLifecycle(projectId: string, generation: number): boolean {
   return lifecycleGenerations.get(projectId) !== generation
+}
+
+/** The host answered `CANVAS_CLOSED` for a mount this window still showed:
+ * it was dropped without this window being told. */
+const HOST_DROPPED_PHASE: CanvasPhase = {
+  kind: 'failed',
+  code: 'CANVAS_CLOSED',
+  mountSeq: null,
+  message:
+    'Termul closed this canvas, so changes made here since were not saved. Open it again to continue from its last save.'
 }
 
 /** The phase a session moves to when this window loses its mount. */
@@ -273,6 +305,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
    * goes stale and its bridge is disposed. */
   const releaseMount = (projectId: string): void => {
     nextLifecycleGeneration(projectId)
+    clearLoadWatchdog(projectId)
     bridges.get(projectId)?.bridge.dispose()
     bridges.delete(projectId)
     savesInFlight.delete(projectId)
@@ -286,15 +319,43 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     })
   }
 
+  /** The host answered `CANVAS_CLOSED` for `mountSeq`: if this window still
+   * shows it, say so instead of letting edits go unsaved. */
+  const hostDropped = (projectId: string, mountSeq: number): void => {
+    if (!isLiveMount(projectId, mountSeq)) return
+    logCanvas('warn', 'hostDropped', `the host no longer holds the canvas of project ${projectId}`)
+    releaseMount(projectId)
+    patchSession(projectId, { phase: HOST_DROPPED_PHASE, ...CLEAN_PROJECTION })
+  }
+
   const failMount = (
     projectId: string,
     mountSeq: number,
     code: CanvasErrorCode,
     message: string
   ): void => {
+    clearLoadWatchdog(projectId)
     bridges.get(projectId)?.bridge.dispose()
     bridges.delete(projectId)
     patchSession(projectId, { phase: { kind: 'failed', code, message, mountSeq } })
+  }
+
+  /** #1490: the mount's frame never posted `event.ready`, so without this
+   * the tab would show "Loading editor…" forever. */
+  const loadTimedOut = (projectId: string, mountSeq: number): void => {
+    const phase = get().sessions[projectId]?.phase
+    if (phase?.kind !== 'loading' || phase.mount.mountSeq !== mountSeq) return
+    logCanvas(
+      'warn',
+      'loadTimeout',
+      `canvas editor did not report ready for project ${projectId} mountSeq=${mountSeq} within ${CANVAS_LOAD_TIMEOUT_MS}ms`
+    )
+    failMount(
+      projectId,
+      mountSeq,
+      'EDITOR_LOAD_TIMEOUT',
+      'The canvas editor did not finish loading. Open the canvas again to retry.'
+    )
   }
 
   /** AD-31: the document is loaded before anything can be dirty or saved. A
@@ -334,6 +395,32 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     return loaded.data
   }
 
+  /** #1421: the editor embeds only Inter, so symbols, CJK and emoji come
+   * from the system fonts the desktop lends it. They load before the
+   * document, so its first render and an agent's first screenshot have
+   * them. A failure costs only those characters, never the mount. */
+  const loadFallbackFonts = async (projectId: string, mount: CanvasMount, bridge: CanvasBridge) => {
+    const urls = mount.info.fallbackFonts
+    if (urls.length === 0) return
+    const reply = await bridge.call('host.fallbackFonts', asJsonText(JSON.stringify({ urls })))
+    if (!reply.ok) {
+      // UNKNOWN_METHOD: a bundle older than `host.fallbackFonts`.
+      logCanvas(
+        reply.error.code === 'UNKNOWN_METHOD' ? 'info' : 'warn',
+        'fonts',
+        `fallback fonts not loaded for project ${projectId}: ${reply.error.code} ${reply.error.message}`
+      )
+      return
+    }
+    if (!/"failed"\s*:\s*\[\s*\]/.test(reply.result)) {
+      logCanvas(
+        'warn',
+        'fonts',
+        `some fallback fonts failed for project ${projectId}: ${reply.result}`
+      )
+    }
+  }
+
   const completeMount = async (projectId: string, mount: CanvasMount): Promise<void> => {
     const bridge = currentBridge(projectId, mount.mountSeq)
     if (!bridge) return
@@ -354,6 +441,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       )
       return
     }
+    await loadFallbackFonts(projectId, mount, bridge)
+    if (currentBridge(projectId, mount.mountSeq) !== bridge) return
     const view = await loadDocument(projectId, mount, bridge)
     if (view === null) return
     logCanvas(
@@ -364,6 +453,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     patchSession(projectId, { phase: { kind: 'ready', mount }, ...projectionOf(view) })
     get().pushTheme(projectId)
     get().pushLocale(projectId)
+    pushFile(projectId)
   }
 
   const setSaving = (projectId: string, delta: 1 | -1): void => {
@@ -389,6 +479,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       if (!snapshot.ok) return failed(`${snapshot.error.code} ${snapshot.error.message}`)
       const written = await canvasApi.writeSnapshot(projectId, mountSeq, snapshot.result)
       if (!isLiveMount(projectId, mountSeq)) return false
+      if (!written.success && written.code === 'CANVAS_CLOSED') {
+        hostDropped(projectId, mountSeq)
+        return false
+      }
       if (!written.success) return failed(`${written.code} ${written.error}`)
       patchSession(projectId, projectionOf(written.data.view))
       const { markSaved } = written.data
@@ -415,55 +509,97 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
   }
 
   /** The host owns the debounce: this resolves once it settles, and a later
-   * notification supersedes an earlier one. */
+   * notification supersedes an earlier one. A notification that did not
+   * reach the host shows as a save error and is sent again once, after the
+   * autosave delay, unless a newer one went out meanwhile. */
   const forwardDirty = async (
     projectId: string,
     mountSeq: number,
     dirty: boolean,
-    contentVersion: string
+    contentVersion: string,
+    retry = true
   ): Promise<void> => {
+    const notice = (dirtyNotices.get(projectId) ?? 0) + 1
+    dirtyNotices.set(projectId, notice)
     const result = await canvasApi.dirtyChanged(projectId, mountSeq, dirty, contentVersion)
     if (!isLiveMount(projectId, mountSeq)) return
+    if (!result.success && result.code === 'CANVAS_CLOSED') {
+      hostDropped(projectId, mountSeq)
+      return
+    }
     if (!result.success) {
       logCanvas(
         'warn',
         'dirtyChanged',
         `canvas dirty notification failed for project ${projectId}: ${result.code}`
       )
+      patchSession(projectId, { saveError: `Autosave could not reach Termul: ${result.error}` })
+      if (retry) {
+        setTimeout(() => {
+          const now = get().sessions[projectId]
+          if (dirtyNotices.get(projectId) !== notice || now?.phase.kind !== 'ready') return
+          if (now.contentVersion === null) return
+          void forwardDirty(projectId, mountSeq, now.dirty, now.contentVersion, false)
+        }, useAppSettingsStore.getState().settings.canvasAutosaveMs)
+      }
       return
     }
     const outcome = result.data
     if (outcome.kind === 'superseded') return
     patchSession(projectId, projectionOf(outcome.view))
-    if (outcome.kind === 'saveDue') await runSave(projectId, mountSeq)
+    // A frame that reloaded itself holds no edits until its document is back.
+    if (outcome.kind === 'saveDue' && get().sessions[projectId]?.phase.kind === 'ready') {
+      await runSave(projectId, mountSeq)
+    }
+  }
+
+  /** The disk change the host raised as a conflict: shown once. */
+  const showConflict = (projectId: string, view: CanvasPersistenceView): void => {
+    const session = get().sessions[projectId]
+    const hadConflict = session?.conflict != null
+    patchSession(projectId, projectionOf(view))
+    if (session && view.conflict && !hadConflict) {
+      toast.warning(`${basename(session.docPath)} changed on disk`, {
+        description: 'The canvas has unsaved changes. Choose which version to keep.'
+      })
+    }
+  }
+
+  /** The editor did not load what the host handed it, so it still holds its
+   * old content: the host makes the change on disk a conflict (AD-27). */
+  const reloadNotTaken = async (projectId: string, mountSeq: number, why: string) => {
+    logCanvas('warn', 'reload', `canvas reload not applied for project ${projectId}: ${why}`)
+    const reported = await canvasApi.diskChanged(projectId, mountSeq, true)
+    if (isLiveMount(projectId, mountSeq) && reported.success) {
+      showConflict(projectId, reported.data.view)
+    }
+    return false
   }
 
   /** Load the disk's `bytes` into the mounted editor; the host re-initialises
-   * the saved version from the `host.openDocument` ack (AD-31). */
+   * the saved version from the `host.openDocument` ack (AD-31). `cleanAt` is
+   * the version the host judged clean: an editor that has moved past it holds
+   * edits the reload would drop, so it is not reloaded. */
   const reloadDocument = async (
     projectId: string,
     mountSeq: number,
-    bytes: string
+    bytes: string,
+    cleanAt?: string | null
   ): Promise<boolean> => {
     const bridge = currentBridge(projectId, mountSeq)
     if (!bridge) return false
+    const now = get().sessions[projectId]
+    if (cleanAt !== undefined && (now?.dirty || now?.contentVersion !== cleanAt)) {
+      return reloadNotTaken(projectId, mountSeq, 'the editor changed since it was judged clean')
+    }
     const opened = await bridge.call('host.openDocument', asJsonText(JSON.stringify({ bytes })))
     if (!isLiveMount(projectId, mountSeq)) return false
-    if (!opened.ok) {
-      logCanvas(
-        'warn',
-        'reload',
-        `canvas reload failed for project ${projectId}: ${opened.error.code}`
-      )
-      return false
-    }
+    if (!opened.ok) return reloadNotTaken(projectId, mountSeq, opened.error.code)
     const loaded = await canvasApi.documentLoaded(projectId, mountSeq, opened.result)
     if (!isLiveMount(projectId, mountSeq)) return false
-    if (!loaded.success) {
-      logCanvas('warn', 'reload', `canvas reload failed for project ${projectId}: ${loaded.code}`)
-      return false
-    }
+    if (!loaded.success) return reloadNotTaken(projectId, mountSeq, loaded.code)
     patchSession(projectId, projectionOf(loaded.data))
+    pushFile(projectId)
     return true
   }
 
@@ -508,14 +644,28 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     })
   }
 
+  /** The editor knows nothing of the file it shows: without this it names
+   * the document by what is stored inside it ("Untitled"). A document load
+   * resets it, so it follows every load. */
+  const pushFile = (projectId: string): void => {
+    sendHostCall(projectId, 'host.file', () => {
+      const docPath = get().sessions[projectId]?.docPath ?? ''
+      const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+      return asJsonText(JSON.stringify(canvasDocFile(docPath, project)))
+    })
+  }
+
   return {
     sessions: {},
 
-    openCanvas: async (projectId, docPath) => {
+    openCanvas: async (projectId, docPath, options) => {
       if (!projectId || !docPath) return false
+      const showTab = (path: string): void => {
+        if (options?.showTab !== false) useWorkspaceStore.getState().addCanvasTab(projectId, path)
+      }
       const existing = get().sessions[projectId]
-      if (existing && existing.docPath === docPath && mountOf(existing.phase)) {
-        useWorkspaceStore.getState().addCanvasTab(projectId, docPath)
+      if (existing && sameCanvasDoc(existing.docPath, docPath) && mountOf(existing.phase)) {
+        showTab(existing.docPath)
         return true
       }
       if (existing && mountOf(existing.phase)) {
@@ -524,7 +674,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           toast.error(`Could not close the open canvas: ${closed.error}`)
           return false
         }
-        return get().openCanvas(projectId, docPath)
+        return get().openCanvas(projectId, docPath, options)
       }
       const generation = nextLifecycleGeneration(projectId)
       const resuming = existing?.phase.kind === 'unloaded'
@@ -538,10 +688,16 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       } else if (resuming) {
         patchSession(projectId, { docPath, phase: { kind: 'opening' } })
       }
-      const { canvasAutosaveMs, canvasLeaseGraceMs, canvasMaxMounted, canvasCrashTimeouts } =
-        useAppSettingsStore.getState().settings
+      const {
+        canvasAutosaveMs,
+        canvasAutosaveMaxMs,
+        canvasLeaseGraceMs,
+        canvasMaxMounted,
+        canvasCrashTimeouts
+      } = useAppSettingsStore.getState().settings
       const result = await canvasApi.open(docPath, projectId, {
         autosaveMs: canvasAutosaveMs,
+        autosaveMaxMs: canvasAutosaveMaxMs,
         leaseGraceMs: canvasLeaseGraceMs,
         maxMounted: canvasMaxMounted,
         crashTimeouts: canvasCrashTimeouts
@@ -571,7 +727,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         toast.error(`Could not open the canvas: ${result.error}`)
         if (result.code === 'EVICTION_BLOCKED') {
           get().markUnloaded(projectId, 'blocked', result.error, docPath)
-          useWorkspaceStore.getState().addCanvasTab(projectId, docPath)
+          showTab(docPath)
         } else if (existing === undefined) {
           set((state) => {
             const { [projectId]: _dropped, ...rest } = state.sessions
@@ -594,7 +750,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           }
         }
       }))
-      useWorkspaceStore.getState().addCanvasTab(projectId, docPath)
+      armLoadWatchdog(projectId, mount.mountSeq, loadTimedOut)
+      showTab(docPath)
       return true
     },
 
@@ -682,7 +839,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       const session = get().sessions[projectId]
       switch (event.method) {
         case 'event.ready':
+          clearLoadWatchdog(projectId, mountSeq)
           if (session?.phase.kind === 'loading') void completeMount(projectId, session.phase.mount)
+          if (session?.phase.kind === 'ready') {
+            // The frame reloaded itself and shows an empty editor: nothing is
+            // saved until the last save is loaded into it again.
+            logCanvas('warn', 'ready', `canvas frame reloaded for project ${projectId}`)
+            patchSession(projectId, { phase: { kind: 'loading', mount: session.phase.mount } })
+            void completeMount(projectId, session.phase.mount)
+          }
           return
         case 'event.dirtyChanged':
           // AD-31: dirty state starts once the document is loaded.
@@ -700,12 +865,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       }
     },
 
-    callCanvas: (projectId, method, params) => {
+    callCanvas: (projectId, method, params, deadline) => {
       const entry = bridges.get(projectId)
       if (!entry || phaseMountSeq(projectId) !== entry.mountSeq) {
         return Promise.resolve(bridgeFailure('CANVAS_CLOSED', 'no canvas is mounted'))
       }
-      return entry.bridge.call(method, params)
+      return entry.bridge.call(method, params, deadline)
     },
 
     saveCanvas: async (projectId) => {
@@ -747,16 +912,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       }
       const outcome = result.data
       if (outcome.kind === 'reload') {
-        await reloadDocument(projectId, mountSeq, outcome.bytes)
+        await reloadDocument(projectId, mountSeq, outcome.bytes, outcome.view.contentVersion)
         return
       }
-      const hadConflict = get().sessions[projectId]?.conflict != null
-      patchSession(projectId, projectionOf(outcome.view))
-      if (outcome.kind === 'conflict' && !hadConflict) {
-        toast.warning(`${basename(session.docPath)} changed on disk`, {
-          description: 'The canvas has unsaved changes. Choose which version to keep.'
-        })
-      }
+      showConflict(projectId, outcome.view)
     },
 
     resolveConflict: async (projectId, choice) => {
@@ -811,6 +970,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         ...CLEAN_PROJECTION,
         crash: remount
       })
+      armLoadWatchdog(projectId, mount.mountSeq, loadTimedOut)
       logCanvas(
         'warn',
         'remount',

@@ -18,6 +18,10 @@ vi.mock('@/lib/project-registry-api', async (importOriginal) => ({
   projectRegistryApi: registry
 }))
 vi.mock('@/lib/active-project', () => ({ writeActiveProject }))
+const { remountCanvases } = vi.hoisted(() => ({ remountCanvases: vi.fn() }))
+vi.mock('@/lib/canvas-unmount-flow', () => ({
+  unmountCanvasesFor: vi.fn(async () => remountCanvases)
+}))
 vi.mock('@/lib/api', () => ({
   persistenceApi: { read: vi.fn(), write: vi.fn(), writeDebounced: vi.fn() },
   secureStorageApi: { getSecret: vi.fn(), setSecret: vi.fn(), deleteSecret: vi.fn() }
@@ -344,6 +348,19 @@ describe('project-store', () => {
       expect(registry.remove).toHaveBeenCalledTimes(2)
       expect(registry.remove).toHaveBeenLastCalledWith('2', { cascade: true })
       expect(useProjectBusyStore.getState().requests).toEqual([])
+    })
+
+    it('mounts the canvas again when the host refuses, and only then', async () => {
+      await useProjectStore.getState().deleteProject('2')
+      expect(remountCanvases).not.toHaveBeenCalled()
+
+      registry.remove.mockRejectedValueOnce(new ProjectBusyError('2', ['s1'], []))
+      await useProjectStore.getState().deleteProject('2')
+      expect(remountCanvases).toHaveBeenCalledTimes(1)
+
+      registry.archive.mockRejectedValueOnce(new Error('disk full'))
+      await useProjectStore.getState().archiveProject('2')
+      expect(remountCanvases).toHaveBeenCalledTimes(2)
     })
 
     it('tells the user when the host refuses for another reason', async () => {

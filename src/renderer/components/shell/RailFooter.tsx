@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react'
-import { Palette, SlidersHorizontal } from '@/components/icons'
+import { Bug, Palette, SlidersHorizontal } from '@/components/icons'
 import { RailButton, type RailButtonSize, railButtonClass } from '@/components/shell/rail-button'
 import { useShortcutLabel } from '@/components/shell/use-shortcut-label'
 import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
 import { cn } from '@/lib/utils'
+import { useReportBugStore } from '@/stores/report-bug-store'
 import { useSettingsModalStore, useSettingsModalView } from '@/stores/settings-modal-store'
 
 interface RailFooterProps {
@@ -105,6 +106,14 @@ export function RailFooter({
         onClick={() => useSettingsModalStore.getState().openApp()}
       >
         <SlidersHorizontal size={16} />
+      </RailButton>
+      <RailButton
+        label="Report a bug"
+        size="sm"
+        aria-label="Report a bug"
+        onClick={() => useReportBugStore.getState().openReport()}
+      >
+        <Bug size={16} />
       </RailButton>
       <div className="min-w-0 flex-1" />
 

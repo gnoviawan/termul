@@ -74,6 +74,7 @@ fn request(tab: &str, doc: &Path) -> MountRequest {
         renderer: RendererId::new(tab),
         doc_path: doc.to_path_buf(),
         autosave: Duration::from_secs(60),
+        autosave_max: crate::canvas::persistence::autosave_max_wait(None),
         lease_grace: GRACE,
         crash_timeouts: super::DEFAULT_CRASH_TIMEOUTS,
     }
@@ -336,6 +337,22 @@ async fn a_reload_of_the_holder_remounts_with_a_new_mount_seq_and_keeps_the_leas
 }
 
 #[tokio::test]
+async fn a_reload_that_opens_before_its_old_page_disconnects_remounts_once_it_does() {
+    let host = Host::new();
+    let (seq_a, mut tab_a) = host.open_loaded("tab-a", "conn-a").await;
+    host.edit(seq_a).await;
+
+    let reload = host.open_in_background("tab-a");
+    tab_a.next("host.snapshot").await;
+    host.mounts.release_holder("conn-a");
+
+    let reopened = reload.await.unwrap().unwrap();
+    assert_eq!(reopened.lease, LeaseChange::Remounted { previous: seq_a });
+    assert!(reopened.mount_seq > seq_a);
+    assert_eq!(std::fs::read(&host.doc).unwrap(), b"saved at 1");
+}
+
+#[tokio::test]
 async fn a_clean_holder_in_its_grace_is_taken_over_without_a_save() {
     let host = Host::new();
     let (seq_a, _tab_a) = host.open_loaded("tab-a", "conn-a").await;
@@ -372,4 +389,36 @@ async fn the_router_drops_a_mount_whose_holder_did_not_come_back() {
     );
     let (late, _) = connect("tab-a", "conn-a2");
     assert!(!host.mounts.attach(PROJECT, seq_a, late));
+}
+
+#[tokio::test]
+async fn a_duplicate_tab_with_the_same_id_saves_and_tells_the_live_holder_first() {
+    let host = Host::new();
+    let (seq_a, mut tab_a) = host.open_loaded("tab-a", "conn-a").await;
+    host.edit(seq_a).await;
+
+    let duplicate = host.open_in_background("tab-a");
+    let snapshot = tab_a.next("host.snapshot").await;
+    tab_a.answer(&host.mounts, &snapshot, Ok(&snapshot_of(2, b"edited in a")));
+    let verify = tab_a.next("host.markSaved").await;
+    tab_a.answer(
+        &host.mounts,
+        &verify,
+        Ok(r#"{"dirty":false,"contentVersion":2}"#),
+    );
+
+    let opened = duplicate.await.unwrap().unwrap();
+    assert_eq!(
+        opened.lease,
+        LeaseChange::TakenOver {
+            previous: seq_a,
+            saved_version: Some("2".into()),
+        }
+    );
+    assert_eq!(std::fs::read(&host.doc).unwrap(), b"edited in a");
+    let notice = tab_a
+        .notices
+        .try_recv()
+        .expect("the live page is told it lost the canvas");
+    assert_eq!(notice.mount_seq, seq_a);
 }

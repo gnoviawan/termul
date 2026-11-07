@@ -10,6 +10,7 @@ import {
 import {
   clearPendingUpdate,
   DEFAULT_UPDATE_CHANNEL,
+  isUpdateDownloaded,
   registerUpdateEventHandlers,
   type TauriUpdaterEventHandlers,
   checkForUpdates as tauriCheckForUpdates,
@@ -26,6 +27,9 @@ import {
   isVersionSkipped,
   skipVersion as tauriSkipVersion
 } from '@/lib/tauri-version-skip'
+
+/** The updater step that produced the current error. */
+export type UpdaterErrorSource = 'check' | 'download' | 'install'
 
 const RETRY_DELAYS_MS = [5000, 30000, 300000] as const
 const BASE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000
@@ -62,7 +66,11 @@ export interface UpdaterStoreState {
   skippedVersion: string | null
   isChecking: boolean
   isDownloading: boolean
+  /** True while a download runs the pre-update backup, before any package bytes. */
+  isPreparingDownload: boolean
   error: string | null
+  /** Which step produced `error`, so the UI names the failure correctly. */
+  errorSource: UpdaterErrorSource | null
   lastChecked: Date | null
   autoUpdateEnabled: boolean
   releaseNotes: string | null
@@ -104,7 +112,9 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
   skippedVersion: null,
   isChecking: false,
   isDownloading: false,
+  isPreparingDownload: false,
   error: null,
+  errorSource: null,
   lastChecked: null,
   autoUpdateEnabled: true,
   releaseNotes: null,
@@ -119,7 +129,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     const { isChecking, updateChannel } = get()
     if (isChecking) return
 
-    set({ isChecking: true, error: null })
+    set({ isChecking: true, error: null, errorSource: null })
 
     try {
       const activeTerminals = hasActiveTerminalSessions()
@@ -137,7 +147,8 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
           downloadProgress: 0,
           releaseNotes: null,
           error: null,
-          lastChecked: checkedAt
+          lastChecked: checkedAt,
+          isManualUpdateMode: false
         })
         return
       }
@@ -154,7 +165,8 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
           releaseNotes: updateInfo.releaseNotes ?? null,
           downloadProgress: 0,
           error: null,
-          lastChecked: checkedAt
+          lastChecked: checkedAt,
+          isManualUpdateMode: updateInfo.installMode === 'manual'
         })
         return
       }
@@ -164,19 +176,24 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         set({ skippedVersion: null })
       }
 
+      // A re-check that finds the version already downloaded keeps it ready to
+      // install; the facade keeps the downloaded package for the same version.
+      const alreadyDownloaded = isUpdateDownloaded(updateInfo.version)
       set({
         updateAvailable: true,
-        downloaded: false,
+        downloaded: alreadyDownloaded,
         version: updateInfo.version,
         releaseNotes: updateInfo.releaseNotes ?? null,
-        downloadProgress: 0,
+        downloadProgress: alreadyDownloaded ? 100 : 0,
         error: null,
         lastChecked: checkedAt,
-        isManualUpdateMode: false
+        // The update mode, not the channel, decides the UI: a nightly whose
+        // signed check fell back to the release page is a manual update.
+        isManualUpdateMode: updateInfo.installMode === 'manual'
       })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to check for updates'
-      set({ error: errorMessage })
+      set({ error: errorMessage, errorSource: 'check' })
     } finally {
       set({ isChecking: false })
     }
@@ -188,15 +205,28 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
   downloadUpdate: async (): Promise<void> => {
     const { isDownloading, updateAvailable } = get()
     if (isDownloading || !updateAvailable) return
+    // Capture the mode before awaiting: a check that finishes mid-download
+    // must not turn an opened release page into a staged update.
+    const isManualAction = get().isManualUpdateMode
 
-    set({ isDownloading: true, error: null, downloadProgress: 0 })
+    set({
+      isDownloading: true,
+      isPreparingDownload: true,
+      error: null,
+      errorSource: null,
+      downloadProgress: 0
+    })
 
     try {
       const result = await tauriDownloadUpdate((progress) => {
         get()._setDownloadProgress(progress)
       })
 
-      if (result.success) {
+      if (result.success && isManualAction) {
+        // A manual update only opened the release page: nothing is staged, so
+        // it must not look like a downloaded, ready-to-install update.
+        set({ downloaded: false, downloadProgress: 0, error: null })
+      } else if (result.success) {
         set({
           downloaded: true,
           downloadProgress: 100,
@@ -205,14 +235,15 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       } else {
         set({
           error: result.error ?? 'Failed to download update',
+          errorSource: 'download',
           downloaded: false
         })
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to download update'
-      set({ error: errorMessage })
+      set({ error: errorMessage, errorSource: 'download' })
     } finally {
-      set({ isDownloading: false })
+      set({ isDownloading: false, isPreparingDownload: false })
     }
   },
 
@@ -220,19 +251,20 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
    * Install the downloaded update and restart the application
    */
   installAndRestart: async (): Promise<void> => {
-    const { downloaded } = get()
-    if (!downloaded) return
+    const { downloaded, isManualUpdateMode, updateAvailable } = get()
+    // A manual update has nothing to stage: this opens its release page.
+    if (!downloaded && !(isManualUpdateMode && updateAvailable)) return
 
-    set({ error: null })
+    set({ error: null, errorSource: null })
 
     try {
       const result = await tauriInstallAndRestart()
       if (!result.success) {
-        set({ error: result.error ?? 'Failed to install update' })
+        set({ error: result.error ?? 'Failed to install update', errorSource: 'install' })
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to install update'
-      set({ error: errorMessage })
+      set({ error: errorMessage, errorSource: 'install' })
     }
   },
 
@@ -240,14 +272,14 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
    * Skip a specific version update
    */
   skipVersion: async (version: string): Promise<void> => {
-    set({ error: null })
+    set({ error: null, errorSource: null })
 
     try {
       await tauriSkipVersion(version)
       set({ skippedVersion: version, updateAvailable: false, downloaded: false })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to skip version'
-      set({ error: errorMessage })
+      set({ error: errorMessage, errorSource: null })
     }
   },
 
@@ -255,14 +287,14 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
    * Set error state manually
    */
   setError: (error: string | null): void => {
-    set({ error })
+    set({ error, errorSource: null })
   },
 
   /**
    * Enable or disable auto-updates
    */
   setAutoUpdateEnabled: async (enabled: boolean): Promise<void> => {
-    set({ error: null })
+    set({ error: null, errorSource: null })
 
     const applyAutoUpdateSetting = async (): Promise<void> => {
       set({ autoUpdateEnabled: enabled })
@@ -284,14 +316,17 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     try {
       const result = await tauriSetAutoUpdateEnabled(enabled)
       if (!result.success) {
-        set({ error: result.error ?? 'Failed to update auto-update setting' })
+        set({
+          error: result.error ?? 'Failed to update auto-update setting',
+          errorSource: null
+        })
       } else {
         await applyAutoUpdateSetting()
       }
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : 'Failed to update auto-update setting'
-      set({ error: errorMessage })
+      set({ error: errorMessage, errorSource: null })
     }
   },
 
@@ -313,7 +348,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
    * if running, resumes on its own cadence.
    */
   setUpdateChannel: async (channel: UpdateChannel): Promise<void> => {
-    set({ error: null })
+    set({ error: null, errorSource: null })
 
     try {
       await tauriSetUpdateChannel(channel)
@@ -327,7 +362,11 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         downloaded: false,
         version: null,
         downloadProgress: 0,
-        releaseNotes: null
+        releaseNotes: null,
+        // The manual flag described the previous channel's check, and
+        // clearPendingUpdate already reset it in the facade. The next check of
+        // this channel sets it again if that check falls back to manual.
+        isManualUpdateMode: false
       })
 
       // Re-check only when auto-update is enabled — switching channel while
@@ -339,7 +378,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to switch update channel'
-      set({ error: errorMessage })
+      set({ error: errorMessage, errorSource: null })
     }
   },
 
@@ -448,7 +487,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       } catch (err) {
         isInitialized = false
         const errorMessage = err instanceof Error ? err.message : 'Failed to initialize updater'
-        set({ error: errorMessage })
+        set({ error: errorMessage, errorSource: null })
       } finally {
         initializationPromise = null
       }
@@ -551,7 +590,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
    * Internal action: Called when download progress updates (IPC event)
    */
   _setDownloadProgress: (progress: DownloadProgress): void => {
-    set({ downloadProgress: progress.percent })
+    set({ downloadProgress: progress.percent, isPreparingDownload: false })
   },
 
   /**
@@ -560,6 +599,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
   _setUpdaterError: (error: string, code?: string): void => {
     set({
       error: code ? `${error} (${code})` : error,
+      errorSource: null,
       isChecking: false,
       isDownloading: false,
       hasActiveTerminals: hasActiveTerminalSessions()
@@ -578,6 +618,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       isChecking: state.isChecking,
       isDownloading: state.isDownloading,
       error: state.error,
+      errorSource: null,
       lastChecked: state.lastChecked ? new Date(state.lastChecked) : null,
       autoUpdateEnabled: current.autoUpdateEnabled,
       releaseNotes: null,
@@ -681,7 +722,9 @@ export function useUpdaterState() {
       skippedVersion: state.skippedVersion,
       isChecking: state.isChecking,
       isDownloading: state.isDownloading,
+      isPreparingDownload: state.isPreparingDownload,
       error: state.error,
+      errorSource: state.errorSource,
       lastChecked: state.lastChecked,
       autoUpdateEnabled: state.autoUpdateEnabled,
       releaseNotes: state.releaseNotes,

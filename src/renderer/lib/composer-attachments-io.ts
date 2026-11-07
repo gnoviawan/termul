@@ -6,7 +6,7 @@
  * ClipboardEvent (no temp-file path required for inline image blocks).
  */
 import { join, tempDir } from '@tauri-apps/api/path'
-import { readImage } from '@tauri-apps/plugin-clipboard-manager'
+import { readImage, writeImage } from '@tauri-apps/plugin-clipboard-manager'
 import { open } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -38,13 +38,22 @@ function pickAttachmentPathsBrowser(): Promise<string[] | null> {
   return Promise.resolve(null)
 }
 
+export interface BrowserPickOptions {
+  accept?: string
+  capture?: 'environment' | 'user'
+}
+
 /** Pick files in the browser via a transient file input (no path strings). */
-export function pickAttachmentFilesBrowser(): Promise<File[] | null> {
+export function pickAttachmentFilesBrowser(
+  options: BrowserPickOptions = {}
+): Promise<File[] | null> {
   return new Promise((resolve) => {
     let settled = false
     const input = document.createElement('input')
     input.type = 'file'
-    input.multiple = true
+    input.multiple = !options.capture
+    if (options.accept) input.accept = options.accept
+    if (options.capture) input.setAttribute('capture', options.capture)
     input.style.display = 'none'
     const cleanup = () => {
       input.remove()
@@ -92,4 +101,17 @@ export async function readClipboardRgbaImage(): Promise<ClipboardRgbaImage | nul
   } catch {
     return null
   }
+}
+
+/**
+ * Write encoded PNG image bytes to the OS clipboard (Tauri only —
+ * `clipboard-manager:allow-write-image`, granted for the bug-report
+ * "copy image" affordance). Throws on web or when the plugin channel
+ * fails so callers can fall back to the Async Clipboard API.
+ */
+export async function writeClipboardImagePng(pngBytes: Uint8Array): Promise<void> {
+  if (!isTauriContext()) {
+    throw new Error('OS clipboard image write is desktop-only')
+  }
+  await writeImage(pngBytes)
 }

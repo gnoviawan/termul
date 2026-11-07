@@ -29,7 +29,10 @@
 
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { resolveOskState, useOskViewport } from './use-osk-viewport'
+import { resetClippedScroll, resolveOskState, useOskViewport } from './use-osk-viewport'
+
+const mockLog = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLog }))
 
 interface VvStub extends VisualViewport {
   height: number
@@ -365,5 +368,242 @@ describe('useOskViewport', () => {
     })
     await waitFor(() => expect(result.current.isOskOpen).toBe(false))
     expect(document.documentElement.style.getPropertyValue('--termul-keyboard-height')).toBe('0px')
+  })
+
+  it('clears the spacer when only the layout viewport changes (no visualViewport event)', async () => {
+    setInnerHeight(800)
+    const vv = installVisualViewport({ height: 800, offsetTop: 0 })
+    const { result } = renderHook(() => useOskViewport())
+
+    await act(async () => {
+      vv.height = 500
+      vv.fireResize()
+    })
+    await waitFor(() => expect(result.current.keyboardHeight).toBe(300))
+
+    // The layout viewport shrinks onto the keyboard with no visualViewport event.
+    await act(async () => {
+      setInnerHeight(500)
+      window.dispatchEvent(new Event('resize'))
+    })
+    await waitFor(() => expect(result.current.keyboardHeight).toBe(0))
+    expect(result.current.isOskOpen).toBe(false)
+    expect(document.documentElement.style.getPropertyValue('--termul-keyboard-height')).toBe('0px')
+    restoreInnerHeight()
+  })
+
+  it('logs each open and close once, naming the event, and measures again after a close', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    setInnerHeight(800)
+    const vv = installVisualViewport({ height: 800, offsetTop: 0 })
+    renderHook(() => useOskViewport())
+    await act(async () => {})
+    mockLog.mockClear()
+
+    await act(async () => {
+      vv.height = 500
+      vv.fireResize()
+    })
+    await act(async () => {
+      vv.height = 800
+      vv.fireResize()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(600)
+    })
+    await act(async () => {})
+
+    const messages = mockLog.mock.calls.map(([payload]) => payload.message as string)
+    expect(messages.map((m) => m.split(' ').slice(0, 2).join(' '))).toEqual([
+      'trigger=vv-resize open=true',
+      'trigger=vv-resize open=false',
+      'trigger=close-recheck open=false'
+    ])
+    expect(messages[0]).toContain('keyboard=300 inner=800 vv=500')
+    expect(mockLog.mock.calls[0][0]).toMatchObject({ level: 'info', source: 'osk-viewport' })
+    vi.useRealTimers()
+    restoreInnerHeight()
+  })
+
+  async function openThenClose(vv: VvStub): Promise<void> {
+    await act(async () => {
+      vv.height = 500
+      vv.fireResize()
+    })
+    await act(async () => {
+      vv.height = 800
+      vv.fireResize()
+    })
+  }
+
+  it('logs the settled close once across several hook consumers', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    setInnerHeight(800)
+    const vv = installVisualViewport({ height: 800, offsetTop: 0 })
+    renderHook(() => {
+      useOskViewport()
+      useOskViewport()
+      useOskViewport()
+    })
+    await act(async () => {})
+    mockLog.mockClear()
+
+    await openThenClose(vv)
+    await act(async () => {
+      vi.advanceTimersByTime(600)
+    })
+    await act(async () => {})
+
+    const triggers = mockLog.mock.calls.map(([payload]) =>
+      (payload.message as string).split(' ').slice(0, 2).join(' ')
+    )
+    expect(triggers).toEqual([
+      'trigger=vv-resize open=true',
+      'trigger=vv-resize open=false',
+      'trigger=close-recheck open=false'
+    ])
+    vi.useRealTimers()
+    restoreInnerHeight()
+  })
+
+  it('drops the pending close re-check when the keyboard reopens within 600 ms', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    setInnerHeight(800)
+    const vv = installVisualViewport({ height: 800, offsetTop: 0 })
+    renderHook(() => useOskViewport())
+    await act(async () => {})
+
+    await openThenClose(vv)
+    await act(async () => {
+      vv.height = 500
+      vv.fireResize()
+    })
+    mockLog.mockClear()
+    await act(async () => {
+      vi.advanceTimersByTime(600)
+    })
+    await act(async () => {})
+
+    expect(mockLog).not.toHaveBeenCalled()
+    vi.useRealTimers()
+    restoreInnerHeight()
+  })
+
+  /** A focusable field inside an `overflow: hidden` shell, next to a real scroller. */
+  function mountComposer(): { shell: HTMLElement; transcript: HTMLElement; editor: HTMLElement } {
+    const shell = document.createElement('div')
+    shell.className = 'shell flex-1'
+    shell.style.overflowY = 'hidden'
+    const transcript = document.createElement('div')
+    transcript.style.overflowY = 'auto'
+    const editor = document.createElement('div')
+    editor.tabIndex = 0
+    editor.getBoundingClientRect = () => ({ bottom: 316 }) as DOMRect
+    transcript.append(editor)
+    shell.append(transcript)
+    document.body.append(shell)
+    return { shell, transcript, editor }
+  }
+
+  function loggedMessages(): string[] {
+    return mockLog.mock.calls.map(([payload]) => payload.message as string)
+  }
+
+  it('scrolls the clipped ancestors of the focused field back when the keyboard closes', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    setInnerHeight(800)
+    const vv = installVisualViewport({ height: 800, offsetTop: 0 })
+    const { shell, transcript, editor } = mountComposer()
+    try {
+      renderHook(() => useOskViewport())
+      await act(async () => {})
+      mockLog.mockClear()
+
+      editor.focus()
+      await act(async () => {
+        vv.height = 500
+        vv.fireResize()
+      })
+      // What the browser leaves behind while bringing the field into view.
+      shell.scrollTop = 102
+      transcript.scrollTop = 40
+      await act(async () => {
+        vv.height = 800
+        vv.fireResize()
+      })
+
+      expect(shell.scrollTop).toBe(0)
+      expect(transcript.scrollTop).toBe(40)
+      const close = loggedMessages().find((m) => m.startsWith('trigger=vv-resize open=false'))
+      // Measured before the reset: the stuck position the user saw.
+      expect(close).toContain('focusBottom=316 reset=div.shell.flex-1:102')
+
+      // An offset that appears while the layout settles is reset by the re-check.
+      shell.scrollTop = 30
+      await act(async () => {
+        vi.advanceTimersByTime(600)
+      })
+      await act(async () => {})
+      expect(shell.scrollTop).toBe(0)
+      const recheck = loggedMessages().find((m) => m.startsWith('trigger=close-recheck'))
+      expect(recheck).toContain('reset=div.shell.flex-1:30')
+    } finally {
+      shell.remove()
+      vi.useRealTimers()
+      restoreInnerHeight()
+    }
+  })
+
+  it('leaves offsets alone when a pinch-zoom, not the keyboard, shrank the viewport', async () => {
+    setInnerHeight(800)
+    const vv = installVisualViewport({ height: 800, offsetTop: 0 })
+    const { shell, editor } = mountComposer()
+    try {
+      renderHook(() => useOskViewport())
+      await act(async () => {})
+      editor.focus()
+      await act(async () => {
+        vv.scale = 2
+        vv.height = 400
+        vv.fireResize()
+      })
+      shell.scrollTop = 50
+      await act(async () => {
+        vv.scale = 1
+        vv.height = 800
+        vv.fireResize()
+      })
+      expect(shell.scrollTop).toBe(50)
+    } finally {
+      shell.remove()
+      restoreInnerHeight()
+    }
+  })
+})
+
+describe('resetClippedScroll', () => {
+  it('resets only overflow-hidden ancestors, never real scrollers or the page', () => {
+    const outer = document.createElement('main')
+    outer.style.overflowY = 'hidden'
+    outer.setAttribute('data-slot', 'chat-shell')
+    const scroller = document.createElement('div')
+    scroller.style.overflowY = 'scroll'
+    const field = document.createElement('div')
+    scroller.append(field)
+    outer.append(scroller)
+    document.body.append(outer)
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+    try {
+      outer.scrollTop = 12
+      scroller.scrollTop = 50
+
+      expect(resetClippedScroll(field)).toEqual(['main[chat-shell]:12'])
+      expect(outer.scrollTop).toBe(0)
+      expect(scroller.scrollTop).toBe(50)
+      expect(scrollTo).not.toHaveBeenCalled()
+    } finally {
+      scrollTo.mockRestore()
+      outer.remove()
+    }
   })
 })

@@ -6,6 +6,7 @@ Add an entry to the table when you add an ADR.
 | ADR | Title | Status |
 |-----|-------|--------|
 | [ADR-0004](./0004-claude-accounts-linked-config-dirs.md) | Claude accounts use linked config directories | Accepted |
+| [ADR-0005](./0005-selection-context-prompt-format.md) | Selection contexts are sent as leading quote blocks | Accepted |
 
 ## Missing ADRs
 

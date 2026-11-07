@@ -1,0 +1,74 @@
+import type { Editor } from '@tiptap/core'
+import { type MutableRefObject, useEffect } from 'react'
+import { CONTEXT_PILL_NODE } from '@/lib/composer/doc-to-prompt'
+import { contextToAttrs, type SelectionContext } from '@/lib/composer/selection-context'
+import { logFrontendError } from '@/lib/log-api'
+import { insertPillAtCaret } from './insert-pill'
+
+const LOG_SOURCE = 'insert-selection-context'
+
+/** A request from the message list to add a context. A new `nonce` re-applies it. */
+export interface SelectionContextInsertRequest {
+  context: SelectionContext
+  nonce: number
+}
+
+/**
+ * Insert a selection-context pill at the composer caret (the last caret when
+ * the editor is not focused), then focus the editor with the caret after it.
+ * A space is added before the pill when it would touch a word, and after it
+ * (like the other pill splicers) so the user can keep typing.
+ *
+ * Returns `false` (and logs a warning, never the selected text) when the
+ * editor is missing, destroyed, not editable, or the insert throws.
+ */
+export function insertSelectionContext(editor: Editor | null, context: SelectionContext): boolean {
+  if (!editor || editor.isDestroyed || !editor.isEditable) {
+    void logFrontendError({
+      level: 'warn',
+      source: LOG_SOURCE,
+      message: 'Could not add a selection context: the composer editor is unavailable'
+    })
+    return false
+  }
+  try {
+    insertPillAtCaret(editor, CONTEXT_PILL_NODE, contextToAttrs(context))
+    void logFrontendError({
+      level: 'info',
+      source: LOG_SOURCE,
+      message: `Added a selection context (${context.language === undefined ? 'text' : 'code'}, ${context.text.length} chars)`
+    })
+  } catch (err) {
+    void logFrontendError({
+      level: 'warn',
+      source: LOG_SOURCE,
+      message: `Could not add a selection context: ${err instanceof Error ? err.name : 'unknown error'}`
+    })
+    return false
+  }
+  return true
+}
+
+// The request lives in the chat panel and survives a composer remount.
+const appliedRequests = new WeakSet<SelectionContextInsertRequest>()
+
+/**
+ * Apply each insert request to the composer editor once, also across remounts.
+ * A request that arrives while the composer is disabled waits until it is enabled.
+ */
+export function useSelectionContextInsertRequest(
+  editorRef: MutableRefObject<Editor | null>,
+  request: SelectionContextInsertRequest | undefined,
+  disabled: boolean
+): void {
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the nonce is the trigger; the request object is read with it.
+  useEffect(() => {
+    if (!request || disabled || appliedRequests.has(request)) return
+    // Outside React's commit: the pill NodeView renders with flushSync. A failed
+    // insert stays unapplied, so the next composer mount retries it.
+    queueMicrotask(() => {
+      if (appliedRequests.has(request)) return
+      if (insertSelectionContext(editorRef.current, request.context)) appliedRequests.add(request)
+    })
+  }, [request?.nonce, disabled, editorRef])
+}

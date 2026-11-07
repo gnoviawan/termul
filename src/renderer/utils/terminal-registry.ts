@@ -1,6 +1,7 @@
 import type { IDisposable, Terminal } from '@xterm/xterm'
 import type { TerminalModes } from '../../shared/types/ipc.types'
 import { DEFAULT_SCROLLBACK_LIMIT } from '../../shared/types/persistence.types'
+import { attachCommandSeparators } from '../components/terminal/command-separators'
 
 /**
  * Registry to track xterm Terminal instances by terminal ID
@@ -31,6 +32,42 @@ interface ModeTracker {
 }
 
 const modeTrackers = new Map<string, ModeTracker>()
+type ModeListener = (terminalId: string, modes: TerminalModes) => void
+const modeListeners = new Set<ModeListener>()
+
+/** Notifies session followers after a tracked mode snapshot actually changes. */
+export function onTerminalModesChanged(listener: ModeListener): () => void {
+  modeListeners.add(listener)
+  return () => {
+    modeListeners.delete(listener)
+  }
+}
+
+function sameModes(left: TerminalModes, right: TerminalModes): boolean {
+  return (
+    left.alternateScreen === right.alternateScreen &&
+    left.bracketedPaste === right.bracketedPaste &&
+    left.applicationCursor === right.applicationCursor &&
+    left.mouseTracking === right.mouseTracking &&
+    left.sgrMouseMode === right.sgrMouseMode &&
+    left.sgrMousePixelsMode === right.sgrMousePixelsMode
+  )
+}
+
+function publishTrackedModes(terminalId: string, modes: TerminalModes): void {
+  const snapshot = { ...modes }
+  for (const listener of modeListeners) listener(terminalId, snapshot)
+}
+
+function publishIfChanged(terminalId: string, before: TerminalModes, modes: TerminalModes): void {
+  if (!sameModes(before, modes)) publishTrackedModes(terminalId, modes)
+}
+
+function observedAlternateScreen(terminal: Terminal): boolean | undefined {
+  const active = terminal.buffer?.active
+  if (!active || typeof active.type !== 'string') return undefined
+  return active.type === 'alternate'
+}
 
 const EMPTY_MODES: TerminalModes = {
   alternateScreen: false,
@@ -139,23 +176,33 @@ export function startTrackingModes(terminalId: string, terminal: Terminal): void
   const disposables: IDisposable[] = []
 
   const setHandler = parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
+    const before = { ...modes }
     for (const param of params) {
       const modeNum = paramToModeNumber(param)
       if (modeNum !== undefined) applyModeSet(modes, modeNum)
     }
+    publishIfChanged(terminalId, before, modes)
     // Passive observer: return false so xterm's built-in setModePrivate handler
     // still runs and actually applies the mode to the terminal.
     return false
   })
   const resetHandler = parser.registerCsiHandler({ prefix: '?', final: 'l' }, (params) => {
+    const before = { ...modes }
     for (const param of params) {
       const modeNum = paramToModeNumber(param)
       if (modeNum !== undefined) applyModeReset(modes, modeNum)
     }
+    publishIfChanged(terminalId, before, modes)
     return false
   })
   disposables.push(setHandler, resetHandler)
   modeTrackers.set(terminalId, { modes, disposables })
+  // A cached xterm may already be on the alternate screen without re-emitting CSI.
+  const observed = observedAlternateScreen(terminal)
+  if (observed !== undefined) {
+    modes.alternateScreen = observed
+    publishTrackedModes(terminalId, modes)
+  }
 }
 
 /**
@@ -216,6 +263,7 @@ export function registerTerminal(terminalId: string, terminal: Terminal): void {
   // R3: begin DEC private-mode tracking via the public parser API. No-ops for
   // terminals without a parser surface (minimal test mocks).
   startTrackingModes(terminalId, terminal)
+  attachCommandSeparators(terminal)
 }
 
 /**

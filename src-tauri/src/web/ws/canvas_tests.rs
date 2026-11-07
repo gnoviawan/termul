@@ -297,6 +297,7 @@ async fn a_takeover_tells_the_old_connection_and_calls_follow_the_lease() {
         renderer: RendererId::new(tab),
         doc_path: dir.path().join("design.figcraft"),
         autosave: Duration::from_secs(60),
+        autosave_max: crate::canvas::persistence::autosave_max_wait(None),
         lease_grace: Duration::from_secs(5),
         crash_timeouts: DEFAULT_CRASH_TIMEOUTS,
     };

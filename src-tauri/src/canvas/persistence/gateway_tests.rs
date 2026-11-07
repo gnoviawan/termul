@@ -280,3 +280,79 @@ async fn a_presence_lookup_between_the_slices_of_an_agent_reply_leaves_it_whole(
 
     assert_eq!(agent.await.unwrap(), Ok("{\"big\":\"abc\"}".to_string()));
 }
+
+/// The mount `p`, held by connection `a`, whose frames the test reads.
+fn held_mount() -> (
+    Arc<CanvasPersistence>,
+    tokio::sync::mpsc::UnboundedReceiver<crate::acp::host_mcp::canvas::CanvasCallFrame>,
+) {
+    let mounts = Arc::new(CanvasPersistence::default());
+    let (frames, delivered) = tokio::sync::mpsc::unbounded_channel();
+    let seq = mounts.mount("p", PathBuf::from("p.figcraft"), Duration::from_secs(1));
+    let holder = CanvasHolder::new(
+        "a",
+        crate::canvas::persistence::test_renderer(),
+        Arc::new(move |frame| frames.send(frame).is_ok()),
+    );
+    assert!(mounts.attach("p", seq, holder));
+    (mounts, delivered)
+}
+
+#[tokio::test]
+async fn a_call_kept_past_its_timeout_still_gets_the_editors_answer() {
+    let (mounts, mut delivered) = held_mount();
+    let failed = mounts
+        .call_keeping_late(
+            "p",
+            "engine.execute",
+            "{}".into(),
+            Duration::from_millis(20),
+        )
+        .await
+        .expect_err("nobody answered in time");
+    assert_eq!(failed.error.code, CanvasErrorCode::CanvasTimeout);
+    let late = failed.late.expect("the editor received the call");
+    let frame = delivered.recv().await.expect("the call was delivered");
+
+    let reply = mounts.reply("a", frame.call_id, frame.mount_seq, Ok("done".into()));
+
+    assert_eq!(reply, ReplyMatch::Resolved);
+    assert_eq!(
+        late.wait(Duration::from_secs(5)).await,
+        Some(Ok("done".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn a_late_answer_nobody_waits_for_any_more_is_dropped() {
+    let (mounts, mut delivered) = held_mount();
+    let failed = mounts
+        .call_keeping_late(
+            "p",
+            "engine.execute",
+            "{}".into(),
+            Duration::from_millis(20),
+        )
+        .await
+        .expect_err("nobody answered in time");
+    let frame = delivered.recv().await.expect("the call was delivered");
+    drop(failed);
+
+    let reply = mounts.reply("a", frame.call_id, frame.mount_seq, Ok("done".into()));
+
+    assert_eq!(reply, ReplyMatch::NotWaiting);
+}
+
+#[tokio::test]
+async fn an_ordinary_call_that_timed_out_keeps_no_late_answer() {
+    let (mounts, mut delivered) = held_mount();
+    let outcome = mounts
+        .call("p", "node.get", "{}".into(), Duration::from_millis(20))
+        .await;
+    assert_eq!(outcome.unwrap_err().code, CanvasErrorCode::CanvasTimeout);
+    let frame = delivered.recv().await.expect("the call was delivered");
+
+    let reply = mounts.reply("a", frame.call_id, frame.mount_seq, Ok("done".into()));
+
+    assert_eq!(reply, ReplyMatch::NotWaiting);
+}

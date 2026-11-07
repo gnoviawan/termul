@@ -399,25 +399,26 @@ describe.each([webCarrier(), channelCarrier()])('/ws contract over $name', (carr
     ])
   })
 
-  it('delivers the chat_reads watch state and deltas', async () => {
+  it('delivers the chat_activity watch state and deltas', async () => {
     const seen: unknown[] = []
     await transport.connect()
-    transport.watches?.subscribe('chat_reads', {
+    transport.watches?.subscribe('chat_activity', {
       onState: (state) => seen.push(['state', state]),
       onDelta: (delta) => seen.push(['delta', delta])
     })
     await until(() => host.framesOf('watch').length === 1)
-    expect(host.framesOf('watch')[0].payload).toEqual({ watch: 'chat_reads', scope: '' })
+    expect(host.framesOf('watch')[0].payload).toEqual({ watch: 'chat_activity', scope: '' })
 
     const revision = (n: number) => ({ hostEpoch: 'h1', n })
-    const frame = { type: 'watch', watch: 'chat_reads', scope: '' }
-    host.conns[0].emit({ ...frame, revision: revision(1), reset: true, state: { marks: {} } })
-    host.conns[0].emit({ ...frame, revision: revision(2), delta: { sessionId: 's1', seq: 6 } })
+    const frame = { type: 'watch', watch: 'chat_activity', scope: '' }
+    const delta = { sessionId: 's1', busy: true, needsYou: false, unread: false, turnEnd: null }
+    host.conns[0].emit({ ...frame, revision: revision(1), reset: true, state: { sessions: {} } })
+    host.conns[0].emit({ ...frame, revision: revision(2), delta })
     await until(() => seen.length === 2)
 
     expect(seen).toEqual([
-      ['state', { marks: {} }],
-      ['delta', { sessionId: 's1', seq: 6 }]
+      ['state', { sessions: {} }],
+      ['delta', delta]
     ])
   })
 

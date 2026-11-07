@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Same-origin frame fixture</title>
+</head>
+<body>
+<h1>Same-origin frame fixture</h1>
+<iframe id="f" title="Same frame" src="/frame-inner.html" width="400" height="160"></iframe>
+<button id="reload" type="button">Reload frame</button>
+<p>Frames ready</p>
+<script>
+document.getElementById('reload').addEventListener('click', function () {
+  document.getElementById('f').contentWindow.location.reload();
+});
+</script>
+</body>
+</html>

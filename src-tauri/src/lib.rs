@@ -4,17 +4,35 @@ mod acp_binary_install;
 mod acp_registry_snapshot;
 mod agent_registry;
 mod agentation;
+// Chat-authored automations: model, validation, schedules and store.
+// Tauri-free so the desktop and `termul-server` share it.
+pub mod automation;
 mod browser_automation;
 mod browser_tab_manager;
+mod browser_tab_permissions;
+mod browser_tab_saved_grants;
 // Canvas mode: shared, Tauri-free bundle server + persistence. Compiled
 // unconditionally so the standalone `termul-server` mounts the same routes.
 pub mod canvas;
+mod commands;
 // One host per durable path (AD-14): sidecar `File::try_lock` locks taken before
 // any store opens. Tauri-free so the desktop and `termul-server` share it.
-mod commands;
 pub mod data_lock;
+// Bug-report diagnostics bundle + `gh` submit: Tauri-free core so the
+// desktop and `termul-server` share it (like `data_lock`/`server_update`).
+pub mod diagnostics;
 mod exit_cleanup;
+mod git_remote;
+// GitHub issues & PRs through the host `gh` CLI; shared by the Tauri commands
+// and the `/github/*` web routes.
+mod github;
+mod host_perimeter;
+// NTFS directory junctions (worktree symlink fallback, Claude account linker).
+#[cfg(windows)]
+mod junction;
 mod logging;
+pub mod mcp_catalog;
+mod media_bytes;
 mod migrations;
 mod path_validation;
 // Console-window hiding + Windows kill-on-close Job Objects for spawned processes.
@@ -169,11 +187,39 @@ pub use acp::host_mcp;
 // `acp` module is private, so `server_main.rs` reaches `claude_admin::run()`
 // through this path (mirrors how `onboard::run()` is dispatched).
 pub use acp::claude_admin;
+// Seam for the browser conformance runner (`tests/browser_conformance`), which
+// drives the real automation host from outside the crate. The runner reaches
+// the host only through these names, so a host refactor edits this list and
+// the runner's adapter, nothing else. Not a supported API, and absent from
+// every build that does not enable the `conformance` feature.
+#[cfg(feature = "conformance")]
+#[doc(hidden)]
+pub mod conformance_support {
+    pub use crate::acp::browser_policy::{
+        ActionClass, AppPolicyOp, AppPreapproval, BrowserPolicyService, CanonicalOrigin,
+        ProjectPolicyOp, ProjectPreapproval, UnwiredProfileControl,
+    };
+    pub use crate::browser_automation::core::ports::{
+        ConsentOption, PermissionRequest, PortFuture, TicketOutcome, TicketRequest,
+    };
+    pub use crate::browser_automation::core::session_dir;
+    pub use crate::browser_automation::engine::{
+        desktop_engine, BrowserEngine, CapabilityId, EngineError, EngineErrorKind, InputMode, Key, KeyInput,
+        KeyKind, NamedKey, Point, Support,
+    };
+    pub use crate::browser_automation::{
+        budgets, create_tab, dispatch, session_ended, set_browser_host,
+        BrowserCall, DesktopBrowserHost, HostServices,
+    };
+    pub use crate::browser_automation::engine::events::{NavPolicy, NavVerdict, TabEvents};
+    pub use crate::browser_automation::engine::profile::{delete_dir, DataStore};
+    pub use crate::browser_tab_manager::{BrowserBounds, BrowserTabManager};
+}
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use web::{PermissionRendezvous, ProjectRegistry, QuestionRendezvous, WsRelaySink};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ShellInfo {
     pub name: String,
@@ -183,7 +229,7 @@ pub struct ShellInfo {
     pub args: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DetectedShells {
     pub available: Vec<ShellInfo>,
     pub default: Option<ShellInfo>,
@@ -524,6 +570,65 @@ fn main_webview_allows_navigation(url: &tauri::Url) -> bool {
     }
 }
 
+/// A navigation the main-webview guard lets through only for the canvas
+/// iframe (issue #1490).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CanvasFrameNavigation {
+    /// `about:blank`: the iframe's initial document, before `src` is set.
+    InitialDocument,
+    /// `http://127.0.0.1:<port>/canvas/...` on the live bundle listener.
+    Bundle { port: u16 },
+}
+
+/// The canvas exception to [`main_webview_allows_navigation`] (issue #1490).
+///
+/// WKWebView (macOS) and WebKitGTK (Linux) ask the navigation hook about
+/// every frame, not just the main one, so the release guard cancelled the
+/// canvas `<iframe>` that `CanvasShell` points at the loopback bundle
+/// listener and the tab stayed blank. Only that listener is admitted: plain
+/// `http`, host exactly `127.0.0.1`, the live listener's port, and a
+/// `/canvas/` path (the listener serves nothing else; each path still needs
+/// its canvas token there). `canvas_port` is `None` while the listener is
+/// down or rebinding, which admits nothing on loopback. `about:blank` is the
+/// iframe's initial document and carries no content.
+fn canvas_frame_navigation(
+    url: &tauri::Url,
+    canvas_port: Option<u16>,
+) -> Option<CanvasFrameNavigation> {
+    match url.scheme() {
+        "about" => (url.path() == "blank").then_some(CanvasFrameNavigation::InitialDocument),
+        "http" => {
+            let port = canvas_port?;
+            let is_bundle = url.host_str() == Some("127.0.0.1")
+                && url.port_or_known_default() == Some(port)
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.path().starts_with("/canvas/");
+            is_bundle.then_some(CanvasFrameNavigation::Bundle { port })
+        }
+        _ => None,
+    }
+}
+
+/// The main webview's whole navigation decision: the #406 policy, then the
+/// canvas iframe exception.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainNavigation {
+    Allowed,
+    CanvasFrame(CanvasFrameNavigation),
+    Blocked,
+}
+
+fn main_webview_navigation(url: &tauri::Url, canvas_port: Option<u16>) -> MainNavigation {
+    if main_webview_allows_navigation(url) {
+        return MainNavigation::Allowed;
+    }
+    match canvas_frame_navigation(url, canvas_port) {
+        Some(frame) => MainNavigation::CanvasFrame(frame),
+        None => MainNavigation::Blocked,
+    }
+}
+
 fn set_zoom_factor<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     zoom_factor: f64,
@@ -617,7 +722,11 @@ fn open_external_url(url: &str) -> Result<(), String> {
 
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 fn open_external_url(url: &str) -> Result<(), String> {
-    Command::new("xdg-open")
+    // Inside a Linux AppImage, scrub the AppImage-only env so the host
+    // `xdg-open` (and the browser it launches) resolve host libraries.
+    let mut command = Command::new("xdg-open");
+    crate::process_util::clean_appimage_env(&mut command);
+    command
         .arg(url)
         .spawn()
         .map(|_| ())
@@ -1067,11 +1176,20 @@ fn finish_exit(app: &tauri::AppHandle) {
     }
 }
 
+/// The one expansion of `generate_context!` in this crate. On macOS each
+/// expansion embeds `Info.plist` under a fixed symbol, so a second one in the
+/// lib test build (the host perimeter fixtures) fails to compile.
+pub(crate) fn app_context<R: tauri::Runtime>() -> tauri::Context<R> {
+    tauri::generate_context!()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Install the panic hook before anything can panic so Rust panics are
     // captured to the log file with a backtrace (issue #244).
     logging::install_panic_hook();
+    // Before any webview exists: the engines read these at creation.
+    let engine_scrub = host_perimeter::scrub_engine_debug_env();
 
     let builder = tauri::Builder::default();
 
@@ -1120,16 +1238,39 @@ pub fn run() {
 
     // Defense-in-depth: reject top-level navigation on the main app webview so
     // a stray chat-link click (or any external anchor) can never tear down the
-    // SPA (issue #406). Only the `main` webview is restricted — browser-tab
-    // webviews load external URLs by design and stay unrestricted.
+    // SPA (issue #406). Browser-tab webviews decide each hop, redirects
+    // included, in the navigation hook they are built with: the host
+    // perimeter, then the agent's origin authorization. The hook also sees
+    // sub-frame loads on macOS/Linux, so the canvas iframe's bundle listener
+    // is admitted by port and path (issue #1490).
     builder = builder.plugin(
         tauri::plugin::Builder::<_, ()>::new("main-navigation-guard")
             .on_navigation(|webview, url| {
-                if webview.label() == "main" {
-                    let allow = main_webview_allows_navigation(url);
-                    if !allow {
-                        // Log only the scheme and host — a blocked URL's query,
-                        // fragment, or userinfo may carry secrets/PII (CWE-532).
+                if webview.label() != "main" {
+                    return true;
+                }
+                let canvas_port = webview
+                    .try_state::<Arc<crate::canvas::static_server::StaticServer>>()
+                    .and_then(|server| server.addr())
+                    .map(|addr| addr.port());
+                // Logs carry only the scheme, host and port — the URL's path,
+                // query, fragment, or userinfo may carry secrets/PII such as
+                // the canvas token (CWE-532).
+                match main_webview_navigation(url, canvas_port) {
+                    MainNavigation::Allowed => true,
+                    MainNavigation::CanvasFrame(CanvasFrameNavigation::InitialDocument) => {
+                        log::debug!(
+                            "[navigation] allowed canvas frame initial document on main webview: about:blank"
+                        );
+                        true
+                    }
+                    MainNavigation::CanvasFrame(CanvasFrameNavigation::Bundle { port }) => {
+                        log::debug!(
+                            "[navigation] allowed canvas frame load on main webview: http://127.0.0.1:{port}/canvas/<redacted>"
+                        );
+                        true
+                    }
+                    MainNavigation::Blocked => {
                         let scheme = url.scheme();
                         let host = url.host_str().unwrap_or("(unknown)");
                         log::warn!(
@@ -1137,10 +1278,8 @@ pub fn run() {
                             scheme,
                             host
                         );
+                        false
                     }
-                    allow
-                } else {
-                    true
                 }
             })
             .build(),
@@ -1161,12 +1300,21 @@ pub fn run() {
                 }
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
 
             // Startup diagnostic banner (issue #244): version, OS/arch, build
             // channel, session id, and resolved log path on a single line.
             logging::log_startup_banner(&handle);
+            for key in &engine_scrub.changed {
+                log::warn!("[perimeter] removed engine debug setting from the environment: {key}");
+            }
+            #[cfg(debug_assertions)]
+            if engine_scrub.engine_debug_kept {
+                log::warn!(
+                    "[perimeter] WebView2 debug port left enabled by the dev opt-in; any local process can drive this app. Debug builds only."
+                );
+            }
 
             // AD-14: one host per durable path. Lock `app_data_dir` (and the
             // stores a server could be pointed at inside it) BEFORE any store
@@ -1307,8 +1455,8 @@ pub fn run() {
             let cwd_tracker = Arc::new(CwdTracker::new(terminal_events.clone()));
             app.manage(cwd_tracker.clone());
 
-            let git_tracker = Arc::new(GitTracker::new(
-                Some(handle.clone()),
+            let git_tracker = Arc::new(GitTracker::with_cwd_tracker(
+                cwd_tracker.clone(),
                 terminal_events.clone(),
             ));
             app.manage(git_tracker.clone());
@@ -1360,14 +1508,10 @@ pub fn run() {
                 let db_path = agentation::db_path(&app_data);
                 match tauri::async_runtime::block_on(agentation::AgentationService::start(&db_path)) {
                     Ok(service) => {
-                        let port = service.http_port();
-                        let endpoint = format!("http://127.0.0.1:{port}");
-
-                        // Wire the endpoint into the browser tab manager
                         if let Some(bt_manager) =
                             app.try_state::<Arc<browser_tab_manager::BrowserTabManager>>()
                         {
-                            bt_manager.set_agentation_endpoint(endpoint);
+                            bt_manager.set_agentation_endpoint(service.endpoint().to_string());
                         }
 
                         app.manage(service);
@@ -1490,6 +1634,15 @@ pub fn run() {
                 acp_catalog_service.clone(),
             ));
 
+            let mcp_catalog_root = handle
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("failed to resolve app data directory: {error}"))?
+                .join("mcp-catalog");
+            tauri::async_runtime::spawn(crate::mcp_catalog::McpCatalogService::run(
+                mcp_catalog_root,
+            ));
+
             // CAP-6 / Story 9: open the host-owned verified-atomic ACP install
             // root. The desktop owns its own root under
             // `<app_data_dir>/acp-registry-binaries` (NEVER shared with a
@@ -1580,6 +1733,7 @@ pub fn run() {
                     (relay, manager)
                 }
             };
+            host_perimeter::claim_for_process(acp_manager.host_plan_server_port());
             // Attach the permission and question rendezvous: every `/ws` client
             // (the desktop renderer's channel, a phone, a browser) answers
             // `acp:permission_request` and structured questions through them.
@@ -1587,6 +1741,14 @@ pub fn run() {
             // makes the first answer win. Tickets have no timer, so no runtime
             // handle is needed here.
             let rendezvous = Arc::new(PermissionRendezvous::new(Arc::clone(&acp_manager)));
+            // Host-originated browser consent tickets: answerable from the
+            // desktop command or a qualified `/ws` client, raised only while
+            // someone is subscribed to the session.
+            let host_tickets = Arc::new(acp::host_ticket::HostTickets::for_relay(Arc::clone(
+                &ws_relay,
+            )));
+            rendezvous.set_host_tickets(Arc::clone(&host_tickets));
+            app.manage(Arc::clone(&host_tickets));
             ws_relay.set_rendezvous(rendezvous);
             let question_rendezvous = Arc::new(QuestionRendezvous::new(Arc::clone(&acp_manager)));
             ws_relay.set_question_rendezvous(question_rendezvous);
@@ -1607,20 +1769,123 @@ pub fn run() {
                 tauri::async_runtime::handle().inner(),
             )));
 
+            // The automation engine runs next to the reaper, never from
+            // `serve_router`. Every transport reaches the service through
+            // `automation::service::installed`; a store that cannot open
+            // leaves automations unavailable without blocking startup.
+            let project_roots: automation::engine::ProjectRoots = {
+                let registry = Arc::clone(&project_registry);
+                Arc::new(move |project_id| registry.canonical_root(project_id))
+            };
+            // `mcp_tool` nodes call the desktop's one MCP server list, kept in
+            // the web store; the project file is only its mirror.
+            let mcp_servers = automation::mcp::desktop_store_servers(
+                handle.state::<remote::SharedLiveData>().store.clone(),
+                project_roots.clone(),
+            );
+            match automation::service::AutomationService::open(
+                &app_data_dir,
+                Arc::clone(&acp_manager),
+                project_roots,
+                mcp_servers,
+            ) {
+                Ok(service) => {
+                    let service = Arc::new(service);
+                    app.manage(Arc::new(
+                        service
+                            .engine()
+                            .start(tauri::async_runtime::handle().inner()),
+                    ));
+                    // Changes reach the desktop renderer through its own
+                    // channel carrier and every other relay client
+                    // (shared-live peers) as an `agents` watch delta.
+                    tauri::async_runtime::spawn(web::automation_api::forward_changes(
+                        service.subscribe(),
+                        Arc::clone(&ws_relay),
+                    ));
+                    automation::service::install(service);
+                }
+                Err(error) => log::error!("[Automation] unavailable: {error}"),
+            }
+
+            // Host-owned browser policy (allow-list, pre-approvals, global
+            // profile switch). The relay sink carries `browser_policy_changed`
+            // to the desktop renderer and every remote client; the web router
+            // reaches the same service through `browser_policy::installed`.
+            // The browser host clears the global agent profile and applies
+            // narrowing edits; it is built after the service it reads.
+            let profile_control = Arc::new(acp::browser_policy::LateProfileControl::default());
+            let policy_service = {
+                let policy_root = handle
+                    .path()
+                    .app_data_dir()
+                    .map_err(|e| format!("browser policy: app_data_dir: {e}"))?
+                    .join("browser-policy");
+                let policy_service = Arc::new(acp::browser_policy::BrowserPolicyService::new(
+                    policy_root,
+                    Arc::new(host_perimeter::owned_ports),
+                    vec![ws_relay.clone()],
+                    profile_control.clone(),
+                ));
+                acp::browser_policy::install(Arc::clone(&policy_service));
+                app.manage(Arc::clone(&policy_service));
+                policy_service
+            };
+
             // Desktop browser-automation host: drives the visible browser
             // pane via BrowserTabManager; registered globally so host_mcp
             // FrameKind::Browser frames dispatch here. Without registration
             // (termul-server, tests) the tool fails closed.
-            browser_automation::set_browser_host(
-                browser_automation::DesktopBrowserHost::new(
-                    handle.clone(),
-                    browser_tab_manager.clone(),
-                    // Same sink the ACP manager uses: the relay carries the
-                    // consent prompt and tab open/close to every `/ws` client
-                    // (the desktop renderer's channel, phones, browsers).
-                    vec![ws_relay.clone()],
-                ),
+            if tauri::is_dev() {
+                if let Some(port) = handle
+                    .config()
+                    .build
+                    .dev_url
+                    .as_ref()
+                    .and_then(tauri::Url::port_or_known_default)
+                {
+                    host_perimeter::claim_for_process(port);
+                }
+            }
+            let project_of: browser_automation::core::ProjectResolver = {
+                let persistence = session_persistence.clone();
+                Arc::new(move |session_id| {
+                    persistence
+                        .as_ref()
+                        .and_then(|p| p.metadata(session_id).ok())
+                        .and_then(|m| m.project_id)
+                        .unwrap_or_else(|| acp::session_persistence::UNASSIGNED_PROJECT_ID.to_string())
+                })
+            };
+            let root_of: browser_automation::core::RootResolver = {
+                let persistence = session_persistence.clone();
+                let registry = Arc::clone(&project_registry);
+                Arc::new(move |session_id| {
+                    let meta = persistence.as_ref()?.metadata(session_id).ok()?;
+                    // A session of a project uploads from the project folder,
+                    // wherever its shell started.
+                    match meta.project_id {
+                        Some(project_id) => registry.canonical_root(&project_id),
+                        None => Some(std::path::PathBuf::from(meta.cwd)).filter(|cwd| cwd.is_absolute()),
+                    }
+                })
+            };
+            let browser_host = browser_automation::DesktopBrowserHost::new(
+                handle.clone(),
+                browser_tab_manager.clone(),
+                // Same sink the ACP manager uses: the relay carries tab
+                // open/close and Stop state to every `/ws` client (the
+                // desktop renderer's channel, phones, browsers).
+                vec![ws_relay.clone()],
+                browser_automation::HostServices {
+                    permissions: host_tickets,
+                    policy: policy_service,
+                    project_of,
+                    root_of,
+                },
             );
+            profile_control.attach(browser_host.profile_control());
+            browser_automation::set_browser_host(browser_host);
 
             app.manage(Arc::clone(&acp_manager));
             app.manage(Arc::clone(&ws_relay));
@@ -1786,7 +2051,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(host_perimeter::main_webview_only(tauri::generate_handler![
             // OS notification with click-to-focus (issue #865)
             commands::notification_show,
             // Desktop `/ws` carrier over a Tauri `ipc::Channel`
@@ -1811,6 +2076,10 @@ pub fn run() {
             commands::terminal_rotate_claim,
             commands::terminal_revoke_claim,
             commands::terminal_write,
+            commands::command_editor_submit,
+            commands::command_editor_restore_prompt,
+            commands::command_editor_request_completion,
+            commands::command_editor_cancel_completion,
             commands::terminal_resize,
             commands::terminal_kill,
             commands::terminal_get_cwd,
@@ -1824,6 +2093,32 @@ pub fn run() {
             commands::fs_scope_grant,
             // Browser tab commands
             commands::browser_tab_create,
+            commands::browser_policy_get_project,
+            commands::browser_policy_get_app,
+            commands::browser_policy_apply_project,
+            commands::browser_policy_apply_app,
+            // Automations (main webview only)
+            commands::automation_list,
+            commands::automation_get,
+            commands::automation_create,
+            commands::automation_apply_ops,
+            commands::automation_delete,
+            commands::automation_set_enabled,
+            commands::automation_approve,
+            commands::automation_run_now,
+            commands::automation_cancel_run,
+            commands::automation_list_runs,
+            commands::automation_run_steps,
+            commands::automation_mark_seen,
+            commands::automation_preview_schedule,
+            commands::automation_list_agents,
+            commands::automation_list_secrets,
+            commands::automation_set_secret,
+            commands::automation_delete_secret,
+            commands::automation_list_suggestions,
+            commands::automation_match_suggestion,
+            commands::automation_dismiss_suggestion,
+            commands::automation_accept_suggestion,
             commands::browser_tab_navigate,
             commands::browser_tab_resize,
             commands::browser_tab_show,
@@ -1833,15 +2128,11 @@ pub fn run() {
             commands::browser_tab_go_forward,
             commands::browser_tab_reload,
             commands::browser_tab_open_devtools,
-            // Browser tab URL sync commands (called by injected JS)
-            commands::browser_tab_report_url,
-            commands::browser_tab_report_loaded,
-            commands::browser_tab_report_title,
             // Agentation toolbar injection (on-demand)
             commands::browser_tab_inject_agentation,
-            // Agent browser automation (eval bridge reply + consent respond)
-            commands::browser_agent_eval_result,
-            commands::browser_consent_respond,
+            // Agent browser automation (host consent tickets, Stop)
+            commands::browser_ticket_respond,
+            commands::browser_stop,
             // Worktree commands
             commands::worktree_list,
             commands::worktree_create,
@@ -1867,8 +2158,7 @@ pub fn run() {
             commands::search_content_cancel,
             commands::search_file_names_stream,
             commands::search_file_names_cancel,
-            // Attachment binary reads (brokered; fs:allow-read-file is not granted)
-            commands::read_attachment_bytes,
+            commands::read_media_bytes,
             // SSH commands
             commands::ssh_list_profiles,
             commands::ssh_save_profile,
@@ -1907,6 +2197,18 @@ pub fn run() {
             commands::git_get_status,
             commands::git_get_diff,
             commands::git_get_diff_stat,
+            commands::github_get_context,
+            commands::github_list_items,
+            commands::github_get_item,
+            commands::github_get_checks,
+            commands::github_get_check_log,
+            commands::github_merge,
+            commands::github_comment,
+            commands::github_checkout_pr,
+            commands::github_repo_meta,
+            commands::github_create_label,
+            commands::github_edit_item,
+            commands::github_set_item_state,
             commands::git_stage,
             commands::git_unstage,
             commands::git_stage_hunk,
@@ -1936,18 +2238,15 @@ pub fn run() {
             secure_storage::secure_storage_delete,
             // ACP host-local commands. Agent, session, prompt, permission,
             // catalog and install requests travel over the `/ws` channel carrier
-            // (`ws_channel_*`), not a per-domain command. Claude Account
-            // add, sign-in, rename and remove stay here; list and selection
-            // also travel over `/ws`.
+            // (`ws_channel_*`), not a per-domain command. The Claude browser
+            // login stays here; every other Claude Account operation also
+            // travels over `/ws`.
             acp::commands::claude_accounts_list,
             acp::commands::claude_accounts_usage,
-            acp::commands::claude_accounts_add,
             acp::commands::claude_accounts_login,
-            acp::commands::claude_accounts_login_cancel,
-            acp::commands::claude_accounts_rename,
-            acp::commands::claude_accounts_remove,
             acp::commands::claude_accounts_set_default,
             acp::commands::claude_accounts_set_project,
+            acp::commands::claude_accounts_set_auto_switch,
             acp::commands::acp_factory_key_status,
             acp::commands::acp_factory_key_save,
             acp::commands::codex_cli_auth_status,
@@ -1967,9 +2266,11 @@ pub fn run() {
             // Desktop updater: channel manifest fetch (CSP/CORS-free server-side
             // reqwest for the insider/nightly paths).
             updater_api::updater_fetch_channel_manifest,
+            updater_api::updater_check_channel,
             // Agent Skills (Zed-compatible SKILL.md packages)
             skills::commands::list_agent_skills_cmd,
             skills::commands::read_agent_skill_cmd,
+            skills::commands::list_skill_files_cmd,
             // Remote server commands
             commands::remote_server_start,
             commands::remote_server_stop,
@@ -1989,6 +2290,10 @@ pub fn run() {
             commands::acp_history_get_legacy,
             // Frontend error forwarding (issue #244)
             commands::log_frontend_error,
+            // Bug-report diagnostics + host-side `gh` submit
+            // (spec-bug-report-dialog); mirrors the `/log/*` web routes.
+            commands::collect_bug_report_context,
+            commands::submit_bug_report,
             // Agentation annotation service (issue #451, Epic 1)
             agentation::agentation_create_session,
             agentation::agentation_list_sessions,
@@ -2012,8 +2317,8 @@ pub fn run() {
             commands::canvas_disk_changed,
             commands::canvas_resolve_conflict,
             commands::canvas_crashed,
-        ])
-        .build(tauri::generate_context!())
+        ]))
+        .build(app_context())
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
@@ -2058,6 +2363,9 @@ pub fn run() {
             let agent_reaper = app_handle
                 .try_state::<Arc<web::agent_reaper::AgentReaperHandle>>()
                 .map(|state| state.inner().clone());
+            let automation_engine = app_handle
+                .try_state::<Arc<automation::engine::EngineHandle>>()
+                .map(|state| state.inner().clone());
             // The desktop's Channel connections: drained (`channel_closed`
             // 1001) before PTYs and agents are killed.
             let ws_channel_host = app_handle
@@ -2090,6 +2398,9 @@ pub fn run() {
                     // does not take this path.
                     if let Some(agent_reaper) = &agent_reaper {
                         agent_reaper.stop().await;
+                    }
+                    if let Some(automation_engine) = &automation_engine {
+                        automation_engine.stop().await;
                     }
                     acp_manager.kill_all().await;
                     if let Err(error) = acp_manager.shutdown_persistence().await {
@@ -2125,6 +2436,9 @@ pub fn run() {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) mod test_support;
 
 #[cfg(test)]
 mod fs_watch_wire_tests;

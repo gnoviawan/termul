@@ -66,3 +66,43 @@ impl agent_client_protocol::JsonRpcMessage for AskUserQuestionRequest {
 impl agent_client_protocol::JsonRpcRequest for AskUserQuestionRequest {
     type Response = Value;
 }
+
+/// Cursor's `cursor/task` request, which reports a finished subagent task
+/// (`crate::acp::subagents::apply_cursor_task`). Cursor sends it with
+/// `extMethod`, so it is a request; the reply is `{}`. Raw JSON: the host
+/// reads only the fields it needs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(super) struct CursorTaskRequest(pub(super) Value);
+
+const CURSOR_TASK_METHOD: &str = "cursor/task";
+
+impl agent_client_protocol::JsonRpcMessage for CursorTaskRequest {
+    fn matches_method(method: &str) -> bool {
+        method == CURSOR_TASK_METHOD
+    }
+
+    fn method(&self) -> &str {
+        CURSOR_TASK_METHOD
+    }
+
+    fn to_untyped_message(
+        &self,
+    ) -> Result<agent_client_protocol::UntypedMessage, agent_client_protocol::Error> {
+        agent_client_protocol::UntypedMessage::new(CURSOR_TASK_METHOD, &self.0)
+    }
+
+    fn parse_message(
+        method: &str,
+        params: &impl serde::Serialize,
+    ) -> Result<Self, agent_client_protocol::Error> {
+        if method != CURSOR_TASK_METHOD {
+            return Err(agent_client_protocol::Error::method_not_found());
+        }
+        agent_client_protocol::util::json_cast_params(params)
+    }
+}
+
+impl agent_client_protocol::JsonRpcRequest for CursorTaskRequest {
+    type Response = Value;
+}

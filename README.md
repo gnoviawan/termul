@@ -37,7 +37,7 @@ Termul treats workspaces as first-class citizens, allowing you to organize termi
 
 | Feature                | Description                                                                                                                                                                                 |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Agent Chat**         | Chat with ACP agents such as Claude Agent, Codex, Gemini CLI, Cursor, and OpenCode in any pane, with a model picker, slash commands, `@` file mentions, permission prompts, and a plan view |
+| **Agent Chat**         | Chat with ACP agents such as Claude Agent, Codex, Gemini CLI, Cursor, and OpenCode in any pane, with a model picker, slash commands, `@` mentions of files and other chats, permission prompts, and a plan view |
 | **Saved Chats**        | Termul saves chats per project and lists them in the sidebar. Reopen a chat when its agent can reload a past session                                                                        |
 | **Agent Launcher**     | Start a chat from a prompt in the active pane (`Ctrl+T`), pick the agent and model, and optionally isolate the chat in a new Git worktree                                                   |
 | **Custom ACP Agents**  | Add your own ACP agents in Settings, or paste a Zed-style `agent_servers` config                                                                                                            |
@@ -219,6 +219,8 @@ sudo apt install libwebkit2gtk-4.1-dev \
     librsvg2-dev patchelf
 ```
 
+The agent browser needs WebKitGTK 2.40 or later at runtime, because it calls `webkit_web_view_call_async_javascript_function`. On an older WebKitGTK, such as an Ubuntu 22.04 install without updates, the app can fail to load. Debian 12, Ubuntu 24.04 and an updated Ubuntu 22.04 meet it.
+
 </details>
 
 <details>
@@ -230,6 +232,8 @@ sudo dnf install webkit2gtk4.1-devel \
     appindicator-devel librsvg2-devel \
     patchelf
 ```
+
+The agent browser also needs WebKitGTK 2.40 or later at runtime on Fedora.
 
 </details>
 
@@ -419,6 +423,8 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 - [Tauri](https://tauri.app/) — Desktop app framework
 - [FigCraft](https://github.com/storytold/figcraft) — Canvas based on FigCraft by the ArtCraft team (MIT OR Apache-2.0)
 - [Inter](https://github.com/rsms/inter) — Font embedded in the canvas, Copyright (c) 2016 The Inter Project Authors, SIL Open Font License 1.1 ([licence](canvas/licenses/OFL-inter.txt))
+- [Noto Sans Georgian](https://github.com/notofonts/georgian) — Font embedded in the canvas, Copyright 2022 The Noto Project Authors, SIL Open Font License 1.1 ([licence](canvas/licenses/OFL-noto-sans-georgian.txt)). The canvas bundle also ships the SIL OFL 1.1 licence of each family in FigCraft's font catalog as `OFL-<family>.txt`
+- [Ubuntu](https://design.ubuntu.com/font), [Hack](https://github.com/source-foundry/Hack), [Noto Emoji](https://github.com/googlefonts/noto-emoji) and [emoji-icon-font](https://github.com/jslegers/emoji-icon-font) — egui's interface fonts, embedded in the canvas editor: Ubuntu Light, Copyright 2011 Canonical Ltd., Ubuntu Font Licence 1.0 ([licence](canvas/licenses/UFL-ubuntu.txt)); Hack, Copyright 2018 Source Foundry Authors, MIT, with Bitstream Vera Sans Mono, Copyright 2003 Bitstream Inc., Bitstream Vera License ([licence](canvas/licenses/LICENSE-hack.txt)); Noto Emoji, Copyright 2013 Google Inc., SIL Open Font License 1.1 ([licence](canvas/licenses/OFL-noto-emoji.txt)); emoji-icon-font, Copyright (c) 2014 John Slegers, MIT ([licence](canvas/licenses/MIT-emoji-icon-font.txt))
 
 ---
 

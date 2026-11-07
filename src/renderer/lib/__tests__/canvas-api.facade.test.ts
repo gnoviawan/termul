@@ -46,7 +46,8 @@ const WEB_INFO: CanvasOpenInfo = {
   pinTag: 'termul-v1',
   docKey: DOC,
   mountSeq: 1,
-  evicted: []
+  evicted: [],
+  fallbackFonts: []
 }
 
 describe('canvasApi (web vs desktop branch)', () => {
@@ -254,6 +255,13 @@ describe('canvasApi (web vs desktop branch)', () => {
       command: 'canvas_disk_changed',
       route: '/canvas/disk-changed',
       args: { projectId: PROJECT, mountSeq: 3 }
+    },
+    {
+      name: 'diskChanged after a failed reload',
+      call: () => canvasApi.diskChanged(PROJECT, 3, true),
+      command: 'canvas_disk_changed',
+      route: '/canvas/disk-changed',
+      args: { projectId: PROJECT, mountSeq: 3, reloadFailed: true }
     },
     {
       name: 'resolveConflict',

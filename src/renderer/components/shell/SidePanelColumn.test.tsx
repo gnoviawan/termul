@@ -22,6 +22,12 @@ vi.mock('./WorkspaceSwitcher', () => ({
   )
 }))
 
+vi.mock('@/components/github/GithubPanel', () => ({
+  GithubPanel: ({ cwd, projectId }: { cwd: string; projectId: string }) => (
+    <div data-testid="github-panel" data-cwd={cwd} data-project={projectId} />
+  )
+}))
+
 vi.mock('./ChangesPanel', () => ({
   ChangesPanel: ({ cwd }: { cwd: string }) => <div data-testid="changes-panel" data-cwd={cwd} />
 }))
@@ -78,15 +84,13 @@ beforeEach(() => {
 })
 
 describe('SidePanelColumn', () => {
-  it('renders the header, the three tabs and the Chats list by default', () => {
+  it('renders the header, the four tabs and the Chats list by default', () => {
     renderPanel(makeProject())
     expect(screen.getByTestId('workspace-switcher')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'New chat' })).toBeInTheDocument()
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
-      'Chats',
-      'Explorer',
-      'Changes'
-    ])
+    expect(
+      screen.getAllByRole('tab').map((t) => t.getAttribute('aria-label') ?? t.textContent)
+    ).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
     expect(screen.getByRole('tab', { name: 'Chats' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByLabelText('Search chats')).toBeInTheDocument()
   })
@@ -161,6 +165,22 @@ describe('SidePanelColumn', () => {
       'data-cwd',
       '/repo/.termul/worktrees/feature'
     )
+  })
+
+  it('replaces the body with the GitHub panel for the picked working copy', async () => {
+    useShellLayoutStore.setState({
+      worktreePickByProject: { p1: '/repo/.termul/worktrees/feature' }
+    })
+    renderPanel(makeProject())
+    fireEvent.click(screen.getByRole('tab', { name: 'GitHub' }))
+
+    expect(useShellLayoutStore.getState().lastColumnTabByProject).toEqual({ p1: 'github' })
+    expect(screen.queryByLabelText('Search chats')).toBeNull()
+    expect(await screen.findByTestId('github-panel')).toHaveAttribute(
+      'data-cwd',
+      '/repo/.termul/worktrees/feature'
+    )
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'side-panel-panel-github')
   })
 
   it('uses the project path for Changes when nothing is picked', () => {
@@ -260,23 +280,21 @@ describe('SidePanelColumn', () => {
       expect(header().style.paddingLeft).toBe('')
     })
 
-    it('hides the Column tabs while the Rail is collapsed and labels the tabpanel by name', () => {
-      useShellLayoutStore.setState({ railExpanded: false })
-      renderOn(null)
-      expect(screen.queryByRole('tablist')).toBeNull()
-      const panel = screen.getByRole('tabpanel')
-      expect(panel).toHaveAttribute('aria-label', 'Chats')
-      expect(panel).not.toHaveAttribute('aria-labelledby')
-
-      act(() => useShellLayoutStore.getState().setLastColumnTab('p1', 'changes'))
-      expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-label', 'Changes')
-    })
-
-    it('keeps aria-labelledby on the tabpanel while the Rail is expanded', () => {
-      renderOn(null)
-      const panel = screen.getByRole('tabpanel')
-      expect(panel).toHaveAttribute('aria-labelledby', 'side-panel-tab-chats')
-      expect(panel).not.toHaveAttribute('aria-label')
+    it('keeps the Column tabs and aria-labelledby in both Rail states', () => {
+      for (const railExpanded of [true, false]) {
+        useShellLayoutStore.setState({ railExpanded })
+        const view = renderOn(null)
+        expect(screen.getAllByRole('tab').map((t) => t.getAttribute('aria-label'))).toEqual([
+          'Chats',
+          'Explorer',
+          'Changes',
+          'GitHub'
+        ])
+        const panel = screen.getByRole('tabpanel')
+        expect(panel).toHaveAttribute('aria-labelledby', 'side-panel-tab-chats')
+        expect(panel).not.toHaveAttribute('aria-label')
+        view.unmount()
+      }
     })
   })
 })

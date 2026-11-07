@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Permission fixture</title>
+</head>
+<body>
+<main>
+<h1>Permission fixture</h1>
+<p id="camera">camera: asking</p>
+<p id="microphone">microphone: asking</p>
+<p id="geolocation">geolocation: asking</p>
+<p id="done"></p>
+</main>
+<script>
+// Every request settles as granted, denied with the error name, or
+// pending: unanswered when the page stops waiting (an engine prompt
+// nobody answered, or a capture device that never responded).
+var WAIT_MS = 8000;
+function settle(id, promise) {
+  var line = document.getElementById(id);
+  var timer = new Promise(function (resolve) {
+    setTimeout(function () { resolve('pending'); }, WAIT_MS);
+  });
+  return Promise.race([promise, timer]).then(function (state) {
+    line.textContent = id + ': ' + state;
+  });
+}
+function media(constraints) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return Promise.resolve('denied unsupported');
+  }
+  return navigator.mediaDevices.getUserMedia(constraints).then(function (stream) {
+    stream.getTracks().forEach(function (t) { t.stop(); });
+    return 'granted';
+  }, function (e) {
+    return 'denied ' + (e && e.name ? e.name : 'error');
+  });
+}
+function geo() {
+  return new Promise(function (resolve) {
+    if (!navigator.geolocation) return resolve('denied unsupported');
+    navigator.geolocation.getCurrentPosition(function () {
+      resolve('granted');
+    }, function (e) {
+      resolve('denied code ' + e.code);
+    }, { timeout: WAIT_MS - 1000 });
+  });
+}
+Promise.all([
+  settle('camera', media({ video: true })),
+  settle('microphone', media({ audio: true })),
+  settle('geolocation', geo())
+]).then(function () {
+  document.getElementById('done').textContent = 'Permissions settled';
+});
+</script>
+</body>
+</html>

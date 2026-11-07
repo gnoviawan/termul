@@ -27,8 +27,10 @@ import {
   setCachedSessionPayload,
   unpinSessionPayload
 } from '@/lib/acp-history-persistence'
+import { splitReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { logFrontendError } from '@/lib/log-api'
 import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
+import { forgetComposerSession } from '../composer-options'
 import {
   acceptsSessionTranscriptEvents,
   cacheOptionsFromSession,
@@ -49,8 +51,11 @@ import {
   withCommands
 } from '../helpers'
 import { useAcpStore } from '../index'
+import { withRateLimit } from '../rate-limit'
+import { forgetRegistryMcpServers } from '../registry-mcp-fingerprints'
 import {
   activeWirePromptTurns,
+  bugReportCollectors,
   commitMessageCollectors,
   echoedWirePromptTurns,
   handoffOnlyTurnIds,
@@ -59,15 +64,21 @@ import {
   isHistoryCoveredToolEvent,
   liveSwitchSources,
   liveTurnReplaySeq,
+  MAX_BUG_REPORT_RESPONSE_CHARS,
   MAX_COMMIT_MESSAGE_RESPONSE_CHARS,
   MAX_TERMINAL_ASSIST_RESPONSE_CHARS,
   nextSeq,
   persistSession,
+  rejectBugReportCollector,
   rejectCommitMessageCollector,
   rejectTerminalAssistCollector,
   terminalAssistCollectors
 } from '../shared-state'
-import { withSubagentUsage } from '../subagent-usage'
+import {
+  appendSubagentChunk,
+  MAX_SUBAGENT_TEXT_CHARS,
+  withSubagentIngest
+} from '../subagent-transcript'
 import type {
   AcpSession,
   AcpState,
@@ -334,6 +345,8 @@ const MAX_LIVE_TOOL_CALL_CONTENT_CHARS = 256 * 1024
  * subset — the same contract the durable mirror applies.
  */
 const MAX_LIVE_TOOL_CALL_TOTAL_CHARS = 384 * 1024
+/** Bound for the canonical subagent record in the degraded subset. */
+const MAX_SUBAGENT_RECORD_CHARS = 16 * 1024
 
 /** Agent-controlled titles are unbounded strings — bound them like the durable path. */
 const MAX_LIVE_TOOL_CALL_TITLE_CHARS = 1024
@@ -546,9 +559,24 @@ export function clampLiveToolCallFields<T extends LiveToolCallShape>(
     reduced.locations = next.locations
   }
   if (next.rawOutput !== undefined) reduced.rawOutput = next.rawOutput
-  // Three scalars from the ingest extractor: tiny and bounded.
-  if (next.subagentUsage !== undefined && serializedLength(next.subagentUsage) <= 256) {
-    reduced.subagentUsage = next.subagentUsage
+  // The host bounds the record's prompt (8000 chars) and other strings.
+  if (next.subagent !== undefined && serializedLength(next.subagent) <= MAX_SUBAGENT_RECORD_CHARS) {
+    reduced.subagent = next.subagent
+  }
+  if (
+    next.subagentControl !== undefined &&
+    serializedLength(next.subagentControl) <= MAX_SUBAGENT_RECORD_CHARS
+  ) {
+    reduced.subagentControl = next.subagentControl
+  }
+  if (typeof next.parentToolCallId === 'string' && next.parentToolCallId.length <= 512) {
+    reduced.parentToolCallId = next.parentToolCallId
+  }
+  if (
+    typeof next.subagentText === 'string' &&
+    next.subagentText.length <= MAX_SUBAGENT_TEXT_CHARS
+  ) {
+    reduced.subagentText = next.subagentText
   }
   if (
     typeof next.terminalOutput === 'string' &&
@@ -705,6 +733,8 @@ export function dropSessionBookkeeping(
   historySeqWatermarks.delete(sessionId)
   inFlightDurabilityProbes.delete(sessionId)
   untrimmableSessions.delete(sessionId)
+  forgetRegistryMcpServers(sessionId)
+  forgetComposerSession(sessionId)
   // A close that keeps the transcript for an open tab keeps the links too: a
   // later history reopen re-splices the pre-switch conversation through them.
   if (opts.keepLiveSwitchLinks) return
@@ -1131,7 +1161,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
     // appended message use the same chip-rendering display blocks.
     // F-2 sibling: bound non-text block payloads (attachment/resource data)
     // at ingest — the echo path carries the same unbounded wire blocks.
-    const content = [...wireBlocksToDisplay(e.content)].map(clampLiveContentBlock)
+    const guarded = splitReadOnlyGuard(e.content ?? [])
+    const content = [...wireBlocksToDisplay(guarded.blocks)].map(clampLiveContentBlock)
     // spec-agent-switch-separator-redesign: a framed `# Conversation
     // handoff` echo persisted by an OLD-format sender (queued flush on a
     // stale build, another client) arrives verbatim — strip the preamble
@@ -1185,7 +1216,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         streaming: false,
         timestamp: Date.now(),
         seq: nextSeq(),
-        hostSeq: eventSeq
+        hostSeq: eventSeq,
+        ...(guarded.guard ? { readOnlyGuard: guarded.guard } : {})
       }
       if (duplicate) return {}
       return {
@@ -1229,13 +1261,36 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       }
       return
     }
-    // CAP-3 replay contract: drop chunks the installed payload already covers.
-    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
+    const bugReportCollector = bugReportCollectors.get(e.sessionId)
+    if (bugReportCollector) {
+      if (e.role === 'agent' && e.content.type === 'text' && typeof e.content.text === 'string') {
+        bugReportCollector.length += e.content.text.length
+        if (bugReportCollector.length > MAX_BUG_REPORT_RESPONSE_CHARS) {
+          bugReportCollector.reject(new Error('The ACP agent response was too large'))
+        } else {
+          bugReportCollector.chunks.push(e.content.text)
+        }
+      }
+      return
+    }
     // Replay mode replaces the transcript with an immediate set (not a
     // per-token storm). Normal streaming is coalesced via rAF so ≤1 set()
     // fires per animation frame.
     const session = get().sessions[e.sessionId]
     const useCoalesce = !session?.replaying
+    const parentToolCallId = e.parentToolCallId
+    if (parentToolCallId) {
+      // Subagent text belongs to its dispatch card, which the open turn's
+      // attach replay rebuilds, so it follows the tool-event coverage rule.
+      if (isHistoryCoveredToolEvent(e.sessionId, eventSeq)) return
+      const applyChild = (s: AcpState): Partial<AcpState> =>
+        appendSubagentChunk(s, { ...e, parentToolCallId })
+      if (useCoalesce) coalesceSet(e.sessionId, applyChild)
+      else set(applyChild)
+      return
+    }
+    // CAP-3 replay contract: drop chunks the installed payload already covers.
+    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
     const apply = (s: AcpState): Partial<AcpState> => {
       const sess = s.sessions[e.sessionId]
       // Drop chunks for unknown or already-closed sessions (no orphan state) —
@@ -1383,11 +1438,13 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
   _onToolCall: (e, eventSeq) => {
     const hadCommit = commitMessageCollectors.has(e.sessionId)
     const hadAssist = terminalAssistCollectors.has(e.sessionId)
+    const hadBugReport = bugReportCollectors.has(e.sessionId)
     if (hadCommit)
       rejectCommitMessageCollector(e.sessionId, 'The ACP agent attempted to use a tool')
     if (hadAssist)
       rejectTerminalAssistCollector(e.sessionId, 'The ACP agent attempted to use a tool')
-    if (hadCommit || hadAssist) return
+    if (hadBugReport) rejectBugReportCollector(e.sessionId, 'The ACP agent attempted to use a tool')
+    if (hadCommit || hadAssist || hadBugReport) return
     if (terminalAssistCollectors.has(e.sessionId)) {
       rejectTerminalAssistCollector(e.sessionId, 'The ACP agent attempted to use a tool')
       return
@@ -1413,7 +1470,7 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       )
       const stream = boundTerminalStream(applyTerminalStream(prior, e.toolCall))
       const stamped = clampLiveToolCallFields(e.sessionId, {
-        ...withSubagentUsage(e.toolCall),
+        ...withSubagentIngest(e.toolCall),
         ...stream,
         timestamp: typeof e.toolCall.timestamp === 'number' ? e.toolCall.timestamp : Date.now(),
         seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : (replaySeq ?? nextSeq())
@@ -1431,7 +1488,10 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       const idx = list.findIndex((t) => t.toolCallId === e.toolCall.toolCallId)
       if (idx === -1) {
         return {
-          toolCalls: { ...s.toolCalls, [e.sessionId]: [...list, stamped] }
+          toolCalls: {
+            ...s.toolCalls,
+            [e.sessionId]: [...list, stamped]
+          }
         }
       }
       // Preserve the original timeline placement: a replay (reconnect overlap)
@@ -1481,7 +1541,7 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       // carrying different fields would otherwise accumulate past the bound.
       const stream = boundTerminalStream(applyTerminalStream(list[idx], e.update))
       const clampedUpdate = clampLiveToolCallFields(e.sessionId, {
-        ...withSubagentUsage(e.update),
+        ...withSubagentIngest(e.update),
         ...stream
       })
       if (!clampedUpdate) return {}
@@ -1496,8 +1556,14 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         seq: list[idx].seq ?? nextSeq()
       })
       if (!merged) return {}
+      // An update without `locations` keeps the stored ones: they were
+      // bounded when stored, and a file-change summary may claim more paths
+      // than the live bound (every file of a multi-file edit).
       const next = [...list]
-      next[idx] = merged
+      next[idx] =
+        clampedUpdate.locations === undefined && list[idx].locations !== undefined
+          ? { ...merged, locations: list[idx].locations }
+          : merged
       return { toolCalls: { ...s.toolCalls, [e.sessionId]: next } }
     }
     if (useCoalesce) {
@@ -1652,14 +1718,20 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
   },
 
   _onUsageUpdate: (e) => {
-    if (!Number.isFinite(e.used) || !Number.isFinite(e.size) || e.size <= 0 || e.used <= 0) {
-      return
-    }
+    const reportsTokens =
+      Number.isFinite(e.used) && Number.isFinite(e.size) && e.size > 0 && e.used > 0
+    const reportedLimit = e.rateLimit
+    if (!reportsTokens && !reportedLimit) return
     set((s) => {
       // Closed shells remain in `sessions` after eviction — still reject usage.
       if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       const prev = s.sessionUsage[e.sessionId]
-      const baselineUsed = prev?.baselineUsed ?? e.used
+      if (!reportsTokens && reportedLimit) {
+        return {
+          sessionUsage: { ...s.sessionUsage, [e.sessionId]: withRateLimit(prev, reportedLimit) }
+        }
+      }
+      const baselineUsed = prev && prev.used > 0 ? prev.baselineUsed : e.used
       const next: SessionUsage = {
         used: e.used,
         size: e.size,

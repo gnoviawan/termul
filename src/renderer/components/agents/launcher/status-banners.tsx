@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react'
-import type { AuthMethod } from '@/lib/acp-api'
+import type { AuthenticateInput, AuthMethod } from '@/lib/acp-api'
 import { agentPolicy } from '@/lib/agents/acp-registry'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import type {
@@ -39,7 +39,7 @@ export function LauncherStatusBanners({
   authMethods,
   signingInMethodId,
   handleAuthMethod,
-  handleGatewayAuth,
+  handleAuthenticateWith,
   handleRetryPrepare,
   factoryKeyAuth,
   inlineKeyMethodId
@@ -62,7 +62,7 @@ export function LauncherStatusBanners({
   authMethods: AuthMethod[]
   signingInMethodId: string | null
   handleAuthMethod: (method: AuthMethod) => void
-  handleGatewayAuth: (method: AuthMethod, gateway: { baseUrl: string; apiKey?: string }) => void
+  handleAuthenticateWith: (method: AuthMethod, input: AuthenticateInput) => void
   handleRetryPrepare: () => void
   factoryKeyAuth: FactoryKeyAuth
   inlineKeyMethodId: string | undefined
@@ -119,7 +119,7 @@ export function LauncherStatusBanners({
             authMethods={authMethods}
             signingInMethodId={signingInMethodId}
             onAuthenticate={handleAuthMethod}
-            onGatewayAuth={handleGatewayAuth}
+            onAuthenticateWith={handleAuthenticateWith}
             onRetry={handleRetryPrepare}
           />
         )}

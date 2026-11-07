@@ -19,6 +19,61 @@ const ENOENT_PATTERN =
 // file it names.
 const RESOLVER_FAILURE_PATTERN = /program not found(?: or not executable| on PATH)?: (.+)$/i
 
+// A damaged ~/.npm/_npx entry surfaces while npx itself still launches: the
+// cached package's child executable is missing (exit 127), or the tree lacks
+// files the package needs at runtime (a skipped optional/platform dependency
+// or an absent module). dash writes `sh: 1: <bin>: not found` where bash
+// writes "command not found"; both are the same corruption.
+const SH_NOT_FOUND_PATTERN = /\bsh:\s+(?:\d+:\s+)?([^\s:'"]+):\s*(?:command )?not found\b/
+const NPM_MISSING_DEP_PATTERN =
+  /missing optional dependency|cannot find module|err_module_not_found|module_not_found/i
+
+/** Name of the package executable an npx child could not find, if reported. */
+function npxDamagedCacheBin(message: string): string | null {
+  if (!/exit status:\s*127\b/.test(message)) return null
+  return SH_NOT_FOUND_PATTERN.exec(message)?.[1] ?? null
+}
+
+/** True when the error looks like a damaged npx cache rather than a dead npx. */
+function isNpxCacheDamage(message: string, command?: string): boolean {
+  return (
+    command === 'npx' &&
+    (npxDamagedCacheBin(message) !== null || NPM_MISSING_DEP_PATTERN.test(message))
+  )
+}
+
+const NPX_CACHE_REPAIR_GUIDANCE =
+  'The npx cache may be incomplete. Run `npm config get cache`, rename the `_npx` directory there as a backup, then retry.'
+
+/** Server/client rate-limit or HTTP/2 "slow down" (e.g. NGHTTP2_ENHANCE_YOUR_CALM). */
+const RATE_LIMIT_PATTERN =
+  /ENHANCE_YOUR_CALM|enhance[\s_-]?your[\s_-]?calm|rate[\s_-]?limit|too many requests|\b429\b/i
+
+/**
+ * Mid-turn stream / connection drops. Checked after rate-limit so
+ * `Stream closed … NGHTTP2_ENHANCE_YOUR_CALM` maps to the rate-limit copy.
+ */
+const STREAM_INTERRUPT_PATTERN =
+  /RetriableError|NGHTTP2_|destroyed|stream (?:closed|ended|destroyed|error)|broken pipe|e?pipe\b|econnreset|econnrefused|disconnected|connection (?:closed|lost|reset|refused|aborted)|connection.*timed out|agent thread (?:is no longer running|dropped)/i
+
+export const ACP_RATE_LIMIT_MESSAGE =
+  'Connection was rate-limited by the agent service. Wait a moment, then retry.'
+
+export const ACP_STREAM_INTERRUPT_MESSAGE =
+  'Agent connection was interrupted. Wait a moment, then retry.'
+
+/**
+ * Turn a raw agent turn/setup error into a user-facing message. Known
+ * rate-limit and stream/connection failures are rewritten into short
+ * actionable copy; everything else is passed through verbatim.
+ */
+export function formatAcpAgentError(raw: unknown): string {
+  const message = raw instanceof Error ? raw.message : String(raw)
+  if (RATE_LIMIT_PATTERN.test(message)) return ACP_RATE_LIMIT_MESSAGE
+  if (STREAM_INTERRUPT_PATTERN.test(message)) return ACP_STREAM_INTERRUPT_MESSAGE
+  return message
+}
+
 /**
  * Turn a raw spawn/setup error into a user-facing message. Only ENOENT-style
  * failures (a missing/unresolvable command) are rewritten into actionable
@@ -29,7 +84,29 @@ export function formatAcpSpawnError(raw: unknown, config?: Pick<AgentConfig, 'co
   // The desktop host's `ACP_AGENT_UNAVAILABLE:` / `ACP_INVALID_AGENT_CONFIG:`
   // transport prefixes are not user-visible text.
   const message = definiteSpawnRejectionMessage(raw)
-  if (!ENOENT_PATTERN.test(message)) return message
+  const npxCacheDamage = isNpxCacheDamage(message, config?.command)
+  if (!ENOENT_PATTERN.test(message) && !npxCacheDamage) return message
+
+  // npx itself can start successfully while a cached package's executable is
+  // missing (exit 127). Don't tell users to reinstall Node.js: the launcher
+  // exists, but its child command could not be resolved. In particular, a
+  // damaged ~/.npm/_npx entry can produce "sh: codex-acp: command not found".
+  // The same partial tree can instead fail inside the package — a missing
+  // optional/platform dependency or an absent module — where the vendor's own
+  // "npm install -g" advice would not repair the cache npx reuses.
+  if (config?.command === 'npx') {
+    const missingBin = npxDamagedCacheBin(message)
+    if (missingBin) {
+      return `npx started, but its package executable "${missingBin}" was not found. ${NPX_CACHE_REPAIR_GUIDANCE}`
+    }
+    const missingDep = /missing optional dependency ([^\s"'(]+)/i.exec(message)?.[1]
+    if (missingDep) {
+      return `npx started, but the package is missing its "${missingDep}" dependency. ${NPX_CACHE_REPAIR_GUIDANCE}`
+    }
+    if (NPM_MISSING_DEP_PATTERN.test(message)) {
+      return `npx started, but the package failed to load a module it needs. ${NPX_CACHE_REPAIR_GUIDANCE}`
+    }
+  }
 
   // Resolver-level failures name the file they could not prepare (e.g.
   // `program not found or not executable: C:\…\npm\claude.cmd`). When that
@@ -313,9 +390,9 @@ const TIMEOUT_PATTERN = /timed out|timeout/i
  * Transport is checked before auth (so connection/stream wording wins when both
  * are present) and before timeout (so "connection timed out" evicts rather than
  * being treated as a benign slow setup). The category is always derived from the
- * RAW error message; only the `spawn` category rewrites `detail` into friendly
- * ENOENT guidance so the user-facing text stays actionable without losing the
- * diagnostic for other categories.
+ * RAW error message; `spawn` rewrites
+ * `detail` via {@link formatAcpSpawnError}, and `transport` / `unknown` run
+ * {@link formatAcpAgentError} so rate-limit and stream drops stay actionable.
  */
 export function classifySetupError(
   raw: unknown,
@@ -374,7 +451,7 @@ export function classifySetupError(
       providerCode
     }
   }
-  if (ENOENT_PATTERN.test(message)) {
+  if (ENOENT_PATTERN.test(message) || isNpxCacheDamage(message, config?.command)) {
     return {
       category: 'spawn',
       label: SETUP_ERROR_LABELS.spawn,
@@ -382,7 +459,11 @@ export function classifySetupError(
     }
   }
   if (TRANSPORT_PATTERN.test(message)) {
-    return { category: 'transport', label: SETUP_ERROR_LABELS.transport, detail: message }
+    return {
+      category: 'transport',
+      label: SETUP_ERROR_LABELS.transport,
+      detail: formatAcpAgentError(raw)
+    }
   }
   if (AUTH_PATTERN.test(message)) {
     return { category: 'auth', label: SETUP_ERROR_LABELS.auth, detail: message }
@@ -390,5 +471,9 @@ export function classifySetupError(
   if (TIMEOUT_PATTERN.test(message)) {
     return { category: 'timeout', label: SETUP_ERROR_LABELS.timeout, detail: message }
   }
-  return { category: 'unknown', label: SETUP_ERROR_LABELS.unknown, detail: message }
+  return {
+    category: 'unknown',
+    label: SETUP_ERROR_LABELS.unknown,
+    detail: formatAcpAgentError(raw)
+  }
 }

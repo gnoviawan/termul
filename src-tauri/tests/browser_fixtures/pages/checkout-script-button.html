@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Checkout script button fixture</title>
+</head>
+<body>
+<main>
+<h1>Checkout script button fixture</h1>
+<form id="card" autocomplete="off" onsubmit="return false">
+<input id="number" autocomplete="cc-number" aria-label="Card number">
+<input id="cvc" name="cvc" aria-label="Security code">
+</form>
+<form id="address" action="/form-done.html" method="get">
+<input name="street" type="text" aria-label="Street">
+<button type="button" id="locate">Use my location</button>
+<button type="submit">Save address</button>
+</form>
+<form id="order" onsubmit="return false">
+<input name="coupon" type="text" aria-label="Coupon">
+<button type="button" id="place">Place order</button>
+<div role="button" tabindex="0" id="express">Express checkout</div>
+</form>
+<p id="status">Status: idle</p>
+</main>
+<script>
+function charge() { location.href = '/form-done.html?charged=1'; }
+document.getElementById('place').addEventListener('click', charge);
+document.getElementById('express').addEventListener('click', charge);
+document.getElementById('locate').addEventListener('click', function () {
+  document.getElementById('status').textContent = 'Status: located';
+});
+</script>
+</body>
+</html>

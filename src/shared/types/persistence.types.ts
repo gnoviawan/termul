@@ -86,6 +86,8 @@ export const PersistenceKeys = {
   // The composer's unsent message per chat session (device scope).
   chatDraft: (projectId: string, sessionId: string): string =>
     `chat-draft/${projectId}/${sessionId}`,
+  // Chats started from a GitHub issue or PR, per project (device scope).
+  githubChatLinks: (projectId: string): string => `github/chat-links/${projectId}`,
   // ACP agent configuration (shared between devices, merged per field).
   acpAgents: 'acp/agents',
   acpAuthMethods: 'acp/auth-methods',
@@ -117,6 +119,13 @@ export const PersistenceKeys = {
   // composer selector shows another agent's models from it before that agent
   // runs in this app session.
   agentModelCatalog: (configId: string): string => `agents/model-catalog/${configId}`,
+  // Config-option values the agent itself REJECTED on set (e.g. a tool
+  // advertised as a segment, #1480), per agent-config-id. Value shape is
+  // `PersistedRejectedOptionValues` keyed by option id. The composer hides
+  // these on panel open so users see only values the agent accepts; entries
+  // for options the agent no longer advertises are dropped on load.
+  agentRejectedOptionValues: (configId: string): string =>
+    `agents/rejected-option-values/${configId}`,
   // Mobile file explorer: last folder the user navigated into, per project.
   // Restored on drawer reopen across close/reopen and page reloads (web only).
   mobileFileExplorerFolder: (projectId: string): string => `mobile-file-explorer/${projectId}`,
@@ -195,10 +204,22 @@ export interface LastSelectedAgent {
 // launcher (pre-launch pending options + worktree isolation) and the store
 // setters (running-chatbox model/mode/config changes). Restored on launcher
 // mount. All fields optional — an absent field means "use agent default".
+/** Option values the agent rejected, per option id (#1480/#1489). */
+export interface PersistedRejectedOptionValues {
+  [optionId: string]: string[]
+}
+
 export interface PersistedComposerOptions {
   modelId?: string
   modeId?: string
+  /** The last value of every option, the model option included (pre-`modelValues` shape). */
   configValues?: Record<string, string>
+  /**
+   * Non-model option values (effort, Fast, ...) per model id: a model brings
+   * back its own values. Absent on records written before it existed; those
+   * restore the flat `configValues`.
+   */
+  modelValues?: Record<string, Record<string, string>>
   isolationMode?: 'current' | 'worktree'
   baseBranch?: string | null
 }

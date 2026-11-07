@@ -111,8 +111,9 @@ async fn the_wire_frame_has_the_canvas_call_shape() {
     let call =
         tokio::spawn(async move { caller.call("proj-1", "engine.commands", "{}".into()).await });
     let frame = renderer.received(1).await.remove(0);
+    let wire = serde_json::to_value(&frame).unwrap();
     assert_eq!(
-        serde_json::to_value(&frame).unwrap(),
+        wire,
         serde_json::json!({
             "type": "canvas_call",
             "callId": frame.call_id,
@@ -120,7 +121,15 @@ async fn the_wire_frame_has_the_canvas_call_shape() {
             "mountSeq": 1,
             "method": "engine.commands",
             "params": "{}",
+            "timeoutMs": wire["timeoutMs"],
         })
+    );
+    let left = wire["timeoutMs"]
+        .as_u64()
+        .expect("the call carries its time left");
+    assert!(
+        left > 0 && left <= 10_000,
+        "the host's own remaining wait: {left}"
     );
     router.reply("conn-a", frame.call_id, 1, Ok("[]".into()));
     assert_eq!(call.await.unwrap(), Ok("[]".to_string()));
@@ -327,8 +336,10 @@ fn errors_an_agent_can_recover_from_tell_it_the_next_step() {
             CanvasErrorCode::CanvasOpenElsewhere,
             "another Termul window",
         ),
-        (CanvasErrorCode::CanvasTimeout, "retry once"),
+        (CanvasErrorCode::CanvasTimeout, "do not retry it blindly"),
         (CanvasErrorCode::UnsupportedInKiosk, "save_file"),
+        (CanvasErrorCode::NoActiveTurn, "do not ask the user to open it"),
+        (CanvasErrorCode::AmbiguousSession, "more than one chat"),
     ];
     for (code, step) in actionable {
         let encoded = CanvasError::new(code, "no canvas is mounted").to_backend_string();
@@ -345,6 +356,30 @@ fn errors_an_agent_can_recover_from_tell_it_the_next_step() {
     for code in [CanvasErrorCode::UnknownMethod, CanvasErrorCode::EngineError] {
         let encoded = CanvasError::new(code, "bad").to_backend_string();
         assert!(encoded.ends_with(r#""message":"bad"}"#), "{encoded}");
+    }
+}
+
+#[test]
+fn a_timeout_advises_by_tool_and_only_reads_are_retried_as_is() {
+    let late = CanvasError::new(CanvasErrorCode::CanvasTimeout, "late");
+    let advice = [
+        ("export", "smaller `scale` or `size`"),
+        ("screenshot", "smaller `maxSize` or `scale`"),
+        ("batch", "read the current state"),
+        ("create_node", "read the current state"),
+        ("set_properties", "read the current state"),
+        ("run_command", "read the current state"),
+        ("get_node", "retry once"),
+        ("inspect_document", "retry once"),
+        ("list_issues", "retry once"),
+        ("wait_for_changes", "retry once"),
+    ];
+    for (tool, hint) in advice {
+        let encoded = late.to_backend_string_for(Some(tool));
+        assert!(encoded.contains(hint), "{tool}: {encoded}");
+        if hint != "retry once" {
+            assert!(!encoded.contains("retry once"), "{tool}: {encoded}");
+        }
     }
 }
 

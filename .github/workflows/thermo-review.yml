@@ -1,0 +1,104 @@
+name: Thermo Review
+
+# One-shot PR review with the Cursor SDK (local runtime, Grok 4.7 high 500k).
+# Model turns bill to the owner of secrets.CURSOR_API_KEY.
+
+on:
+  pull_request:
+    branches: [dev]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: thermo-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    # Skip drafts and fork PRs. Fork PRs get no secrets on pull_request.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Check secret
+        id: secret
+        env:
+          HAS_KEY: ${{ secrets.CURSOR_API_KEY != '' }}
+        run: |
+          if [ "$HAS_KEY" != "true" ]; then
+            echo "::notice::CURSOR_API_KEY is not set. Skipping review."
+          fi
+          echo "ok=$HAS_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout PR head
+        if: steps.secret.outputs.ok == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          # Full history so the reviewer can diff against the merge base
+          # with wide context and list callers locally.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        if: steps.secret.outputs.ok == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      # Run the reviewer from the base branch copy, so a PR cannot change
+      # the reviewer code or prompt that runs with the secret.
+      - name: Checkout reviewer from base
+        if: steps.secret.outputs.ok == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .reviewer-base
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: .github/reviewer
+          sparse-checkout-cone-mode: false
+
+      - name: Install reviewer
+        id: reviewer
+        if: steps.secret.outputs.ok == 'true'
+        run: |
+          src=".reviewer-base/.github/reviewer"
+          if [ ! -f "$src/review.mjs" ]; then
+            echo "::notice::Reviewer is not on the base branch yet. Skipping."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/reviewer"
+          cp -R "$src/." "$RUNNER_TEMP/reviewer/"
+          rm -rf .reviewer-base
+          cd "$RUNNER_TEMP/reviewer"
+          npm ci --no-audit --no-fund --ignore-scripts
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      - name: Review
+        if: steps.reviewer.outputs.ok == 'true'
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          WORKSPACE: ${{ github.workspace }}
+          MODEL_FAST: "1"
+          REVIEW_TIMEOUT_MS: "1500000"
+          TOOL_BUDGET: "0"
+        run: node "$RUNNER_TEMP/reviewer/review.mjs"

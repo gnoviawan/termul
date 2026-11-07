@@ -2,17 +2,16 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { type ComponentProps, type MutableRefObject, useEffect, useRef, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AskUserQuestion } from '@/components/chat/AskUserQuestion'
-import { RECONNECT_GRACE_MS } from '@/hooks/use-delayed-flag'
 import { logFrontendError } from '@/lib/log-api'
 import { _resetSheetFocusReturnForTests, recordSheetOpener } from '@/lib/sheet-focus-return'
 import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
+import { resetChatActivity, seedChatActivity } from '@/lib/test-utils/chat-activity'
 import {
   _resetEphemeralSessionIdsForTesting,
   type PendingQuestion,
   useAcpStore
 } from '@/stores/acp-store'
 import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
-import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -87,6 +86,24 @@ vi.mock('@/stores/workspace-store', () => ({
       })
     ),
     { getState: () => workspaceRef.current }
+  )
+}))
+
+vi.mock('@/components/github/GithubPanel', () => ({
+  GithubPanel: ({
+    cwd,
+    projectId,
+    onNavigate
+  }: {
+    cwd: string
+    projectId: string
+    onNavigate?: () => void
+  }) => (
+    <div data-testid="github-panel" data-cwd={cwd} data-project={projectId}>
+      <button type="button" onClick={onNavigate}>
+        Open issue
+      </button>
+    </div>
   )
 }))
 
@@ -341,7 +358,7 @@ beforeEach(async () => {
   browserTabsRef.current = new Map()
   useAcpStore.setState(FRESH)
   _resetEphemeralSessionIdsForTesting()
-  useAgentChatUnreadStore.setState({ unread: {} })
+  resetChatActivity()
   useShellLayoutStore.setState({ worktreePickByProject: {} })
   useConnectionStatusStore.setState({ controlChannel: 'connected', terminalChannel: 'connected' })
   useSettingsModalStore.setState({ view: null })
@@ -374,9 +391,9 @@ describe('MobileShellDrawer shell', () => {
         within(dialog).getByRole('navigation', { name: 'Sections' })
       ) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
-    expect(within(dialog).getByText('Browse and open chats, terminals and editors')).toHaveClass(
-      'sr-only'
-    )
+    expect(
+      within(dialog).getByText('Browse and open chats, terminals, editors and GitHub issues')
+    ).toHaveClass('sr-only')
   })
 
   it('orders project row, section tabs, search, Recents, footer and the New chat pill on Chats', async () => {
@@ -397,14 +414,13 @@ describe('MobileShellDrawer shell', () => {
       within(nav).getByRole('button', { name: 'Editors' }),
       within(dialog).getByRole('textbox', { name: 'Search chats' }),
       within(dialog).getByRole('heading', { level: 2, name: 'Recents' }),
-      within(dialog).getByRole('heading', { level: 3, name: 'Today' }),
-      within(dialog).getByRole('button', { name: 'Chat one' }),
+      within(dialog).getByRole('heading', { level: 3, name: 'Active' }),
+      within(dialog).getByRole('button', { name: /^Chat one(,|$)/ }),
       within(dialog).getByRole('button', { name: /^Past chat/ }),
       within(dialog).getByRole('button', { name: 'Settings' }),
       within(dialog).getByRole('button', { name: 'Snapshots' }),
       within(dialog).getByRole('button', { name: 'Git history' }),
-      within(dialog).getByRole('button', { name: 'New chat' }),
-      within(dialog).getByText(`Connected · ${window.location.host}`)
+      within(dialog).getByRole('button', { name: 'New chat' })
     ]
     for (let i = 1; i < inOrder.length; i++) {
       expect(
@@ -430,7 +446,7 @@ describe('MobileShellDrawer shell', () => {
 
     const recents = within(dialog).getByRole('heading', { level: 2, name: 'Recents' })
     expect(recents).toHaveAttribute('tabindex', '-1')
-    expect(within(dialog).getByRole('group', { name: 'Today' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('group', { name: 'Active' })).toBeInTheDocument()
     for (const name of ['Open', 'Terminals', 'Tabs', 'History']) {
       expect(within(dialog).queryByRole('heading', { name }), name).not.toBeInTheDocument()
     }
@@ -493,7 +509,7 @@ describe('MobileShellDrawer shell', () => {
     expect(within(dialog).queryByRole('button', { name: 'New project' })).not.toBeInTheDocument()
   })
 
-  it('keeps Settings and Snapshots on Tauri but drops the web-only rows and the connection indicator', async () => {
+  it('keeps Settings and Snapshots on Tauri but drops the web-only rows', async () => {
     tauriRef.current = true
     const { dialog } = await openDrawer({ onOpenGitHistory: vi.fn() })
 
@@ -536,7 +552,7 @@ describe('MobileShellDrawer section nav', () => {
       name
     })
 
-  it('shows Chats, Terminals and Editors as one row of equal 44px tabs, the preselected one current', async () => {
+  it('shows Chats, Terminals, Editors and GitHub as one row of equal 44px icon tabs, the preselected one current', async () => {
     seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1')
     terminalsRef.current = [{ id: 't1', name: 'zsh' }]
     const { dialog } = await openDrawer({ section: 'terminals', activeTabId: 'term-t1' })
@@ -544,16 +560,18 @@ describe('MobileShellDrawer section nav', () => {
     const rows = within(within(dialog).getByRole('navigation', { name: 'Sections' })).getAllByRole(
       'button'
     )
-    expect(rows.map((row) => row.textContent)).toEqual(['Chats', 'Terminals', 'Editors'])
-    // One line: the three tabs are siblings in one horizontal flex track,
-    // each taking an equal share.
+    expect(rows.map((row) => row.textContent)).toEqual(['Chats', 'Terminals', 'Editors', 'GitHub'])
+    // One line: the four tabs are siblings in one horizontal flex track.
     const track = rows[0].parentElement
     expect(track).toHaveClass('flex', 'rounded-full', 'bg-secondary')
     expect(track?.className).not.toContain('flex-col')
     for (const row of rows) {
       expect(row.parentElement).toBe(track)
-      expect(row).toHaveClass('min-h-11', 'flex-1', 'rounded-full')
+      expect(row).toHaveClass('min-h-11', 'rounded-full')
       expect(row).toHaveAttribute('data-section-nav')
+      expect(row).toHaveClass('flex-1')
+      expect(row.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+      expect(within(row).getByText(row.textContent ?? '')).toHaveClass('sr-only')
     }
     expect(navButton(dialog, 'Terminals')).toHaveAttribute('aria-current', 'true')
     expect(navButton(dialog, 'Terminals')).toHaveClass('bg-background')
@@ -633,6 +651,78 @@ describe('MobileShellDrawer section nav', () => {
     expect(within(dialog).queryByTestId('drawer-attention-badge')).not.toBeInTheDocument()
   })
 
+  it('lists the project GitHub items in the GitHub section and closes once one opens', async () => {
+    seedProject(makeProject())
+    const { dialog } = await openDrawer({ section: 'chats' })
+
+    fireEvent.click(navButton(dialog, 'GitHub'))
+    expect(navButton(dialog, 'GitHub')).toHaveAttribute('aria-current', 'true')
+    // Every section heading is screen-reader only; the selected section tab marks the list.
+    expect(
+      within(dialog).getByRole('heading', { level: 2, name: 'Issues and pull requests' })
+    ).toHaveClass('sr-only')
+    const panel = await within(dialog).findByTestId('github-panel')
+    expect(panel).toHaveAttribute('data-cwd', '/work')
+    expect(panel).toHaveAttribute('data-project', 'p1')
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Open issue' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
+  })
+
+  it('gives the GitHub section no primary pill, so the footer icons fill the row', async () => {
+    const { dialog } = await openDrawer({
+      section: 'github',
+      onNewTerminal: vi.fn(),
+      onOpenFiles: vi.fn()
+    })
+
+    for (const name of ['New chat', 'New terminal', 'Browse files']) {
+      expect(within(dialog).queryByRole('button', { name }), name).toBeNull()
+    }
+    const settings = within(dialog).getByRole('button', { name: 'Settings' })
+    expect(settings.parentElement?.lastElementChild).toHaveClass('flex-1')
+  })
+
+  it('keeps open GitHub tabs reachable and closable above the list', async () => {
+    seedProject(makeProject())
+    seedTabs(
+      [
+        {
+          type: 'github-item',
+          id: 'github-item-/work-origin-4',
+          cwd: '/work',
+          repo: 'origin',
+          kind: 'issue',
+          number: 4,
+          title: 'Closed long ago'
+        }
+      ],
+      null
+    )
+    const { dialog } = await openDrawer({ section: 'github' })
+
+    const group = within(dialog).getByRole('group', { name: 'Issues and pull requests' })
+    expect(
+      group.compareDocumentPosition(await within(dialog).findByTestId('github-panel')) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    fireEvent.click(within(group).getByRole('button', { name: 'Close #4 Closed long ago' }))
+    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('github-item-/work-origin-4')
+
+    fireEvent.click(within(group).getByRole('button', { name: '#4 Closed long ago' }))
+    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith(
+      'pane-1',
+      'github-item-/work-origin-4'
+    )
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
+  })
+
+  it('preselects GitHub when a GitHub item tab is on screen', async () => {
+    seedProject(makeProject())
+    const { dialog } = await openDrawer({ section: 'github' })
+    expect(navButton(dialog, 'GitHub')).toHaveAttribute('aria-current', 'true')
+  })
+
   it('preselects again on the next open after a nav switch', async () => {
     const { dialog, menu } = await openDrawer({ section: 'chats' })
     fireEvent.click(navButton(dialog, 'Editors'))
@@ -663,7 +753,7 @@ describe('MobileShellDrawer search', () => {
     seedHistory(['alpha plan', 'beta plan'])
     const { dialog } = await openDrawer({ activeTabId: 'tab-1', activeSessionId: 's1' })
     expect(within(dialog).getByText('alpha plan')).toBeInTheDocument()
-    expect(within(dialog).getByRole('button', { name: 'Open chat' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: /^Open chat(,|$)/ })).toBeInTheDocument()
 
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Search chats' }), {
       target: { value: 'alpha' }
@@ -671,7 +761,9 @@ describe('MobileShellDrawer search', () => {
 
     expect(within(dialog).getByText('alpha plan')).toBeInTheDocument()
     expect(within(dialog).queryByText('beta plan')).not.toBeInTheDocument()
-    expect(within(dialog).queryByRole('button', { name: 'Open chat' })).not.toBeInTheDocument()
+    expect(
+      within(dialog).queryByRole('button', { name: /^Open chat(,|$)/ })
+    ).not.toBeInTheDocument()
 
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Search chats' }), {
       target: { value: 'zzz' }
@@ -711,6 +803,16 @@ describe('MobileShellDrawer New chat', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
   })
 
+  it('gives way on a narrow drawer: the pill shrinks and truncates, the icons keep 44px', async () => {
+    const { dialog } = await openDrawer({ section: 'editors', onOpenFiles: vi.fn() })
+
+    const pill = within(dialog).getByRole('button', { name: 'Browse files' })
+    expect(pill).toHaveClass('min-w-0')
+    expect(pill).not.toHaveClass('shrink-0')
+    expect(within(pill).getByText('Browse files')).toHaveClass('truncate')
+    expect(within(dialog).getByRole('button', { name: 'Settings' })).toHaveClass('min-w-11')
+  })
+
   it('is disabled when a chat cannot be started', async () => {
     const onNewChat = vi.fn()
     const { dialog } = await openDrawer({ canNewChat: false, onNewChat })
@@ -723,13 +825,14 @@ describe('MobileShellDrawer New chat', () => {
 })
 
 describe('MobileShellDrawer footer', () => {
-  it('has 44px Settings, Snapshots and Git history buttons', async () => {
+  it('spreads 44px Settings, Snapshots and Git history buttons evenly over the footer row', async () => {
     const { dialog } = await openDrawer({ onOpenGitHistory: vi.fn() })
 
+    const settings = within(dialog).getByRole('button', { name: 'Settings' })
     for (const name of ['Settings', 'Snapshots', 'Git history']) {
       const button = within(dialog).getByRole('button', { name })
-      expect(button, name).toHaveClass('size-11')
-      expect(button.className, name).not.toMatch(/\bsize-9\b/)
+      expect(button, name).toHaveClass('h-11', 'min-w-11', 'flex-1')
+      expect(button.parentElement, name).toBe(settings.parentElement)
     }
   })
 
@@ -799,53 +902,12 @@ describe('MobileShellDrawer footer', () => {
     expect(within(dialog).getByRole('button', { name: 'Git history' })).toBeDisabled()
   })
 
-  it('shows the connection summary as visible text in the footer', async () => {
-    const { dialog } = await openDrawer()
-
-    const status = within(dialog).getByRole('status')
-    expect(status).toHaveTextContent(`Connected · ${window.location.host}`)
-    expect(status).toHaveClass('text-2xs', 'text-muted-foreground')
-    expect(status).not.toHaveAttribute('aria-label')
-    expect(status.querySelector('svg')?.getAttribute('class')).toContain('text-connection')
-  })
-
-  it('names the host this client talks to, one text node that may wrap', async () => {
-    const { dialog } = await openDrawer()
-
-    const label = within(dialog).getByText(`Connected · ${window.location.host}`)
-    expect(window.location.host).not.toBe('')
-    expect(label.childNodes).toHaveLength(1)
-    expect(label).toHaveClass('min-w-0', 'break-words')
-  })
-
-  it('shows no connection status on Tauri, as before', async () => {
-    tauriRef.current = true
+  it('shows no connection status in the footer, even when the host is offline', async () => {
+    useConnectionStatusStore.setState({ controlChannel: 'host-offline' })
     const { dialog } = await openDrawer()
 
     expect(within(dialog).queryByRole('status')).not.toBeInTheDocument()
-    expect(within(dialog).queryByText(/Connected/)).not.toBeInTheDocument()
-  })
-
-  it('names the degraded channel and warns', async () => {
-    vi.useFakeTimers()
-    useConnectionStatusStore.setState({ controlChannel: 'reconnecting' })
-    vi.advanceTimersByTime(RECONNECT_GRACE_MS)
-    vi.useRealTimers()
-    const { dialog } = await openDrawer()
-
-    const status = within(dialog).getByRole('status')
-    expect(status).toHaveTextContent('Control channel: reconnecting')
-    expect(status).not.toHaveTextContent(window.location.host)
-    expect(status.querySelector('svg')?.getAttribute('class')).toContain('text-warning')
-  })
-
-  it('turns destructive when the terminal channel is disconnected', async () => {
-    useConnectionStatusStore.setState({ terminalChannel: 'disconnected' })
-    const { dialog } = await openDrawer()
-
-    const status = within(dialog).getByRole('status')
-    expect(status).toHaveTextContent('Terminal channel: disconnected')
-    expect(status.querySelector('svg')?.getAttribute('class')).toContain('text-destructive')
+    expect(within(dialog).queryByText(/Host offline|Connected/)).not.toBeInTheDocument()
   })
 })
 
@@ -1112,24 +1174,22 @@ describe('MobileShellDrawer project row', () => {
 })
 
 describe('MobileShellDrawer unread rows', () => {
-  it('renders a chat with a banked unread entry as New activity (the shell tracker owns the flag)', async () => {
+  it('renders a chat the host calls unread as New activity', async () => {
     seedTabs([CHAT_TAB, { type: 'agent-chat', id: 'tab-2', sessionId: 's2' }], 'tab-1')
     seedOptionsSession('s1', 'agent-1', { title: 'Chat one' })
     seedOptionsSession('s2', 'agent-1', { title: 'Chat two' })
-    // The drawer no longer mounts a tracker: Done is banked by the shell-level
-    // tracker in WorkspaceLayout, so the drawer only reads the store.
-    act(() => useAgentChatUnreadStore.getState().markUnread('s2'))
+    seedChatActivity({ s2: { unread: true, turnEnd: { seq: 3, logEpoch: 'e1' } } })
     render(<Harness activeTabId="tab-1" activeSessionId="s1" />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
     const dialog = await screen.findByRole('dialog', { name: 'Termul' })
     expect(
-      within(dialog).getByRole('button', { name: 'Chat two, New activity' })
+      within(dialog).getByRole('button', { name: /^Chat two, New activity(,|$)/ })
     ).toBeInTheDocument()
-    expect(within(dialog).getByRole('button', { name: 'Chat one' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: /^Chat one(,|$)/ })).toBeInTheDocument()
   })
 
-  it('does not bank New activity itself when a turn finishes (no drawer-mounted tracker)', () => {
+  it('shows no dot for a turn this renderer saw end until the host says it is unread', async () => {
     seedTabs([CHAT_TAB, { type: 'agent-chat', id: 'tab-2', sessionId: 's2' }], 'tab-1')
     seedOptionsSession('s1', 'agent-1', { title: 'Chat one' })
     seedOptionsSession('s2', 'agent-1', { title: 'Chat two', activeTurn: true, openTurnId: 't1' })
@@ -1144,7 +1204,9 @@ describe('MobileShellDrawer unread rows', () => {
         }
       })
     })
-    expect(useAgentChatUnreadStore.getState().unread).toEqual({})
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Termul' })
+    expect(within(dialog).getByRole('button', { name: /^Chat two(,|$)/ })).toBeInTheDocument()
   })
 })
 
@@ -1270,7 +1332,7 @@ describe('MobileShellDrawer focus', () => {
     it('lands on the active Recents row, not the search', async () => {
       const { dialog } = await openDrawer({ activeTabId: 'tab-1', activeSessionId: 's1' })
 
-      const row = within(dialog).getByRole('button', { name: 'Chat one' })
+      const row = within(dialog).getByRole('button', { name: /^Chat one(,|$)/ })
       expect(row).toHaveAttribute('aria-current', 'page')
       await waitFor(() => expect(row).toHaveFocus())
       expect(within(dialog).getByRole('textbox', { name: 'Search chats' })).not.toHaveFocus()
@@ -1371,7 +1433,7 @@ describe('MobileShellDrawer focus', () => {
       [
         'an open chat row',
         'chats',
-        (d) => fireEvent.click(within(d).getByRole('button', { name: 'Chat one' }))
+        (d) => fireEvent.click(within(d).getByRole('button', { name: /^Chat one(,|$)/ }))
       ],
       [
         'a history row',
@@ -1439,7 +1501,7 @@ describe('MobileShellDrawer focus', () => {
 
   describe('after a navigation close with a chat pane behind the drawer', () => {
     const tapChatRow = (dialog: HTMLElement): void => {
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Chat one' }))
+      fireEvent.click(within(dialog).getByRole('button', { name: /^Chat one(,|$)/ }))
     }
     const drawerClosed = (): Promise<void> =>
       waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
@@ -1667,7 +1729,7 @@ describe('MobileShellDrawer opened from the real header', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
     const dialog = await screen.findByRole('dialog', { name: 'Termul' })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Chat one' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Chat one(,|$)/ }))
 
     await drawerClosed()
     const title = screen.getByRole('heading', { level: 1, name: 'Chat one' })

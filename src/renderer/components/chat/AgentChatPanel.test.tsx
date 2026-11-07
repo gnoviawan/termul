@@ -6,10 +6,12 @@ import {
   resetNativeWebviewOcclusionForTests
 } from '@/hooks/use-native-webview-occlusion'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
-import { commandToken } from '@/lib/skill-tokens'
+import { commandToken, conversationToken, fileToken } from '@/lib/skill-tokens'
 import { mockAcpSession } from '@/lib/test-utils/acp'
+import { endedState, subagentToolCall } from '@/lib/test-utils/subagent'
 import type { AcpSession } from '@/stores/acp-store'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
+import { useBrowserControlStore } from '@/stores/browser-control-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 
 const {
@@ -27,6 +29,7 @@ const {
   mockSetConfigOption,
   mockSetMode,
   mockSetModel,
+  mockPickModel,
   sessionsMapRef,
   agentsRef,
   commandsRef,
@@ -45,7 +48,8 @@ const {
   oskRef,
   transportReconnectingRef,
   promptCommandStatesRef,
-  changedFilesPanelPropsRef,
+  changedFilesArgsRef,
+  changedFilePathsRef,
   discoveredContextRef,
   messagesRef,
   toolCallsRef,
@@ -94,6 +98,7 @@ const {
   mockSetConfigOption: vi.fn(),
   mockSetMode: vi.fn(),
   mockSetModel: vi.fn(),
+  mockPickModel: vi.fn(async () => {}),
   // Extra sessions addressable by id (e.g. the switch target's prepared warm
   // session) so useAcpSession('s-warm') resolves in armed-switch tests.
   sessionsMapRef: { current: {} as Record<string, object> },
@@ -137,14 +142,10 @@ const {
   oskRef: { current: { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 } },
   transportReconnectingRef: { current: false },
   promptCommandStatesRef: { current: {} as Record<string, unknown> },
-  changedFilesPanelPropsRef: {
-    current: [] as Array<{
-      cwd: string
-      toolCalls: unknown[]
-      forceCollapsed?: boolean
-      onOpenGitChanges?: (opener: HTMLElement) => void
-    }>
+  changedFilesArgsRef: {
+    current: [] as Array<{ cwd: string; toolCalls: unknown[]; turnActive: boolean }>
   },
+  changedFilePathsRef: { current: [] as string[] },
   discoveredContextRef: {
     current: {} as Record<string, { agentId: string; cwd: string; projectId: string }>
   },
@@ -205,6 +206,16 @@ const {
   }
 }))
 
+vi.mock('@/components/automations/ChatAutomationSuggestion', () => ({
+  ChatAutomationSuggestion: () => null
+}))
+
+vi.mock('@/lib/conversation-transcript', () => ({
+  resolveConversationContexts: vi.fn(async () => ({
+    blocks: [{ type: 'text', text: '<conversation transcript>' }],
+    gaps: new Map()
+  }))
+}))
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn()
 }))
@@ -272,6 +283,7 @@ vi.mock('@/stores/acp-store', () => {
     setConfigOption: mockSetConfigOption,
     setMode: mockSetMode,
     setModel: mockSetModel,
+    pickModel: mockPickModel,
     setSwitchPendingOption: mockSetSwitchPendingOption
   })
   return {
@@ -367,17 +379,23 @@ vi.mock('./ChatErrorNotice', () => ({
     return null
   }
 }))
-vi.mock('./ChatChangedFilesPanel', () => ({
-  ChatChangedFilesPanel: (props: {
-    cwd: string
-    toolCalls: unknown[]
-    forceCollapsed?: boolean
-    onOpenGitChanges?: (opener: HTMLElement) => void
-  }) => {
-    changedFilesPanelPropsRef.current.push(props)
-    // A marker, so the dock tests can assert the bar sits inside the dock wrapper.
-    return <div data-testid="changed-files-stub" />
+// The status pill renders for real; only its changed-files read is stubbed
+// (no git), listing `changedFilePathsRef` as modified files.
+vi.mock('./use-chat-changed-files', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./use-chat-changed-files')>()),
+  useChatChangedFiles: (cwd: string, toolCalls: unknown[], turnActive: boolean) => {
+    changedFilesArgsRef.current.push({ cwd, toolCalls, turnActive })
+    const files = changedFilePathsRef.current.map((path) => ({
+      path,
+      status: 'modified' as const,
+      added: 1,
+      removed: 0
+    }))
+    return { files, rowBase: cwd, source: 'git', totalAdded: files.length, totalRemoved: 0 }
   }
+}))
+vi.mock('./claude-account/ClaudeLimitNotice', () => ({
+  ClaudeLimitNotice: () => <div data-testid="claude-limit-notice-stub" />
 }))
 const { chatInputBarPropsRef } = vi.hoisted(() => ({
   chatInputBarPropsRef: {
@@ -401,7 +419,7 @@ const { chatInputBarPropsRef } = vi.hoisted(() => ({
       modes?: unknown
       onSetConfig?: (configId: string, valueId: string) => Promise<void>
       onSetMode?: (modeId: string) => Promise<void>
-      onSetModel?: (modelId: string) => Promise<void>
+      onSetModel?: (modelId: string, values?: Record<string, string>) => Promise<void>
     }>
   }
 }))
@@ -487,6 +505,13 @@ import {
   AUTO_RESUME_FAILED_REASON
 } from './use-idle-stop-auto-resume'
 
+/** The chat pane root: the `@container` the subagent surface wraps. */
+function chatRoot(container: HTMLElement): HTMLElement {
+  const root = container.querySelector<HTMLElement>('.\\@container')
+  if (!root) throw new Error('chat pane root not rendered')
+  return root
+}
+
 function seedLiveSession(id: string, lastError: string | null = null): void {
   sessionRef.current = mockAcpSession({ id, cwd: '/w', status: 'closed', lastError })
 }
@@ -559,8 +584,8 @@ describe('AgentChatPanel restored-tab rehydration', () => {
   it('marks the live chat pane root as a pane-scoped @container (Story 5.1)', () => {
     seedLiveSession('s1')
     const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(container.firstElementChild?.className).toContain('@container')
-    expect(container.firstElementChild?.className).toMatch(/flex h-full flex-col/)
+    // The subagent surface wraps the pane root so its panel can dock beside it.
+    expect(chatRoot(container).className).toMatch(/flex h-full flex-col/)
   })
 
   it('does not rehydrate a hidden tab (no background cold spawns)', () => {
@@ -1184,15 +1209,13 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
     seedLiveSession('s1')
     oskRef.current = { isOskOpen: true, keyboardHeight: 300, height: 500, offsetTop: 300 }
     const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
-    const root = container.firstElementChild as HTMLElement
-    expect(root.style.paddingBottom).toContain('300px')
+    expect(chatRoot(container).style.paddingBottom).toContain('300px')
   })
 
   it('does not apply OSK padding when the OSK is closed (desktop non-regression)', () => {
     seedLiveSession('s1')
     const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
-    const root = container.firstElementChild as HTMLElement
-    expect(root.style.paddingBottom).toBe('')
+    expect(chatRoot(container).style.paddingBottom).toBe('')
   })
 
   describe('reconnect grace period', () => {
@@ -1252,16 +1275,15 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
       seedLiveSession('s1')
       toolCallsRef.current = {
         s1: [
-          {
-            toolCallId: 'a1',
-            status: 'completed',
-            rawInput: { description: 'Audit code', prompt: 'p', subagent_type: 'general-purpose' }
-          }
+          subagentToolCall(
+            { role: 'general-purpose', state: endedState('completed') },
+            { toolCallId: 'a1', status: 'completed' }
+          )
         ] as unknown as Array<{ id: string; kind: string }>
       }
       try {
         const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
-        const pill = screen.getByRole('button', { name: /^Subagents:/ })
+        const pill = screen.getByRole('button', { name: /^Session status:/ })
         // jsdom never finishes framer's exit spring, so read the pill's live
         // region, which follows whether the pill is shown.
         const liveRegion = pill.closest('.absolute')?.querySelector('[aria-live]')
@@ -1547,30 +1569,43 @@ describe('AgentChatPanel failed-launch retry (story 5)', () => {
   })
 })
 
-describe('AgentChatPanel ChatChangedFilesPanel mounting', () => {
+describe('AgentChatPanel changed files', () => {
   beforeEach(() => {
-    changedFilesPanelPropsRef.current = []
+    changedFilesArgsRef.current = []
   })
 
-  it('always mounts ChatChangedFilesPanel with cwd and toolCalls for an active session', () => {
+  it('reads the changed files of the session cwd and tool calls', () => {
     sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
-    render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(changedFilesPanelPropsRef.current.length).toBeGreaterThan(0)
-    expect(changedFilesPanelPropsRef.current[0]).toMatchObject({ cwd: '/w' })
-    expect(Array.isArray(changedFilesPanelPropsRef.current[0].toolCalls)).toBe(true)
+    toolCallsRef.current = { s1: [{ id: 'tc1', kind: 'edit' }] }
+    try {
+      render(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(changedFilesArgsRef.current.at(-1)).toEqual({
+        cwd: '/w',
+        toolCalls: [{ id: 'tc1', kind: 'edit' }],
+        turnActive: false
+      })
+    } finally {
+      toolCallsRef.current = {}
+    }
   })
 
-  it('mounts ChatChangedFilesPanel even for a closed session (renders null internally)', () => {
+  it('passes the agent turn state so a finished turn refreshes git changes', () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w', activeTurn: true })
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(changedFilesArgsRef.current.at(-1)).toMatchObject({ turnActive: true })
+  })
+
+  it('still reads changed files for a closed session', () => {
     sessionRef.current = mockAcpSession({ id: 's2', cwd: '/w', status: 'closed' })
     render(<AgentChatPanel sessionId="s2" isVisible />)
-    expect(changedFilesPanelPropsRef.current.length).toBeGreaterThan(0)
+    expect(changedFilesArgsRef.current.at(-1)).toMatchObject({ cwd: '/w' })
   })
 })
 
 // Web/desktop parity: `filePathContext` drives the `termul-file-path`
 // open-in-editor links in agent markdown — the open chain (`/fs/info` →
 // `openFile` → `addEditorTab`) is transport-agnostic, so the context must be
-// built on web too (the ChatChangedFilesPanel file-open path is proof it works).
+// built on web too (the changed-files list's file-open path is proof it works).
 describe('AgentChatPanel filePathContext parity', () => {
   beforeEach(() => {
     chatMessageListPropsRef.current = null
@@ -1713,7 +1748,7 @@ describe('AgentChatPanel live-turn retry wire rebuild', () => {
     messagesRef.current = []
   })
 
-  it('retries a command-token turn with the /name wire prefix and no sentinel leaks', () => {
+  it('retries a command-token turn with the /name wire prefix and no sentinel leaks', async () => {
     sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
     const displayBlocks = [{ type: 'text', text: `${commandToken('compact')} hello` }]
     messagesRef.current = [{ id: 'm1', role: 'user', blocks: displayBlocks }]
@@ -1721,7 +1756,9 @@ describe('AgentChatPanel live-turn retry wire rebuild', () => {
 
     const onRetry = chatMessageListPropsRef.current?.onRetry
     expect(onRetry).toBeDefined()
-    onRetry?.()
+    await act(async () => {
+      onRetry?.()
+    })
 
     // The re-sent wire text is `/compact hello` (byte-identical to a fresh
     // send of the same composer value) while the display keeps the token.
@@ -1739,6 +1776,98 @@ describe('AgentChatPanel live-turn retry wire rebuild', () => {
     // The live-turn path never routes through the crashed/failed relaunches.
     expect(mockRetryCrashed).not.toHaveBeenCalled()
     expect(mockRetryFailed).not.toHaveBeenCalled()
+  })
+
+  it('retries a conversation mention with its wire label and the re-read transcript', async () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    const displayBlocks = [
+      { type: 'text', text: `see ${conversationToken('Fix login', 'chat-7')} please` }
+    ]
+    messagesRef.current = [{ id: 'm1', role: 'user', blocks: displayBlocks }]
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await act(async () => {
+      chatMessageListPropsRef.current?.onRetry?.()
+    })
+
+    expect(mockSendPromptBlocks).toHaveBeenCalledWith(
+      's1',
+      [
+        { type: 'text', text: 'see (conversation: Fix login [termul-chat:chat-7]) please' },
+        { type: 'text', text: '<conversation transcript>' }
+      ],
+      { displayBlocks }
+    )
+  })
+
+  it('re-sends the resource_link of a mentioned file', async () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    const displayBlocks = [{ type: 'text', text: `read ${fileToken('a.ts', '/w/a.ts')} now` }]
+    messagesRef.current = [{ id: 'm1', role: 'user', blocks: displayBlocks }]
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await act(async () => {
+      chatMessageListPropsRef.current?.onRetry?.()
+    })
+
+    const [, wireBlocks] = mockSendPromptBlocks.mock.calls[0] as unknown as [
+      string,
+      Array<{ type: string; uri?: string }>
+    ]
+    expect(wireBlocks.map((b) => b.type)).toEqual(['text', 'resource_link'])
+    expect(wireBlocks[1]?.uri).toContain('/w/a.ts')
+  })
+
+  it('ignores a second Retry while the first is still reading a conversation', async () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    messagesRef.current = [
+      {
+        id: 'm1',
+        role: 'user',
+        blocks: [{ type: 'text', text: `see ${conversationToken('Fix login', 'chat-7')}` }]
+      }
+    ]
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await act(async () => {
+      chatMessageListPropsRef.current?.onRetry?.()
+      chatMessageListPropsRef.current?.onRetry?.()
+    })
+
+    expect(mockSendPromptBlocks).toHaveBeenCalledOnce()
+  })
+
+  it('does not relaunch a crashed chat while a live Retry is still pending', async () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    messagesRef.current = [
+      {
+        id: 'm1',
+        role: 'user',
+        blocks: [{ type: 'text', text: `see ${conversationToken('Fix login', 'chat-7')}` }]
+      }
+    ]
+    const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    // No await between the steps: the first Retry is still reading the
+    // conversation when the chat crashes and Retry is pressed again.
+    act(() => {
+      chatMessageListPropsRef.current?.onRetry?.()
+    })
+    sessionRef.current = mockAcpSession({
+      id: 's1',
+      cwd: '/w',
+      status: 'error',
+      lastError: 'agent crashed'
+    })
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(errorNoticePropsRef.current?.onRetry).toBeDefined()
+    act(() => {
+      errorNoticePropsRef.current?.onRetry?.()
+    })
+    await act(async () => {})
+
+    expect(mockRetryCrashed).not.toHaveBeenCalled()
+    expect(mockSendPromptBlocks).toHaveBeenCalledOnce()
   })
 })
 
@@ -1810,7 +1939,7 @@ describe('AgentChatPanel hidden-panel render gate (multi-project perf)', () => {
     expect(lastArgs?.messages[2]).toMatchObject({ id: 'm3' })
   })
 
-  it('tool calls recorded while hidden reach ChatChangedFilesPanel after restore', () => {
+  it('tool calls recorded while hidden reach the changed files after restore', () => {
     seedLiveSession('s1')
     messagesRef.current = [{ id: 'm1', role: 'user', blocks: [] }]
     const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
@@ -1821,11 +1950,11 @@ describe('AgentChatPanel hidden-panel render gate (multi-project perf)', () => {
     }
     rerender(<AgentChatPanel sessionId="s1" isVisible={false} />)
     // Hidden render: gate holds the OLD (empty) tool-call snapshot.
-    expect(changedFilesPanelPropsRef.current.at(-1)?.toolCalls).toHaveLength(0)
+    expect(changedFilesArgsRef.current.at(-1)?.toolCalls).toHaveLength(0)
 
-    // Restore: the new tool-call array flows to the changed-files panel.
+    // Restore: the new tool-call array flows to the changed files.
     rerender(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(changedFilesPanelPropsRef.current.at(-1)?.toolCalls).toEqual([
+    expect(changedFilesArgsRef.current.at(-1)?.toolCalls).toEqual([
       { id: 'tc1', kind: 'edit', cwd: '/w' }
     ])
   })
@@ -2047,6 +2176,96 @@ describe('AgentChatPanel armed-switch composer scoping', () => {
     expect(mockSetMode).not.toHaveBeenCalled()
     expect(mockSetModel).not.toHaveBeenCalled()
   })
+
+  it("arms a pick in the target's model option list as the model", async () => {
+    seedArmedSession()
+    sessionsMapRef.current['s-warm'] = mockAcpSession({
+      id: 's-warm',
+      agentId: 'agent-new',
+      cwd: '/w',
+      modes: targetModes,
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'm1',
+          options: [
+            { value: 'm1', name: 'M1' },
+            { value: 'm2', name: 'M2' }
+          ]
+        },
+        ...targetConfigOptions
+      ]
+    })
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await chatInputBarPropsRef.current.at(-1)?.onSetConfig?.('model', 'm2')
+
+    expect(mockSetSwitchPendingOption).toHaveBeenCalledWith('s1', {
+      modelId: 'm2',
+      configValues: { model: 'm2' }
+    })
+    expect(mockSetConfigOption).not.toHaveBeenCalled()
+  })
+
+  it("arms a favorite's model with its snapshot values", async () => {
+    seedArmedSession()
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await chatInputBarPropsRef.current.at(-1)?.onSetModel?.('m2', { thought_level: 'max' })
+
+    expect(mockSetSwitchPendingOption).toHaveBeenCalledWith('s1', {
+      modelId: 'm2',
+      configValues: { thought_level: 'max' }
+    })
+  })
+})
+
+describe('AgentChatPanel live model picks', () => {
+  const modelOption = {
+    id: 'model',
+    name: 'Model',
+    category: 'model',
+    type: 'select',
+    currentValue: 'm1',
+    options: [
+      { value: 'm1', name: 'M1' },
+      { value: 'm2', name: 'M2' }
+    ]
+  }
+
+  beforeEach(() => {
+    mockPickModel.mockReset().mockResolvedValue(undefined)
+    mockSetConfigOption.mockReset()
+    mockSetModel.mockReset()
+    sessionsMapRef.current = {}
+    sessionRef.current = mockAcpSession({
+      id: 's1',
+      agentId: 'agent-1',
+      cwd: '/w',
+      configOptions: [modelOption]
+    })
+  })
+
+  it("a favorite pick sends the model with the favorite's values", async () => {
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await chatInputBarPropsRef.current.at(-1)?.onSetModel?.('m2', { effort: 'high' })
+
+    expect(mockPickModel).toHaveBeenCalledWith('s1', 'm2', { effort: 'high' })
+    expect(mockSetModel).not.toHaveBeenCalled()
+  })
+
+  it("a pick in the model option's list restores that model's values", async () => {
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await chatInputBarPropsRef.current.at(-1)?.onSetConfig?.('model', 'm2')
+
+    expect(mockPickModel).toHaveBeenCalledWith('s1', 'm2', undefined)
+    expect(mockSetConfigOption).not.toHaveBeenCalled()
+  })
 })
 
 describe('AgentChatPanel worktree progress row injection', () => {
@@ -2197,14 +2416,30 @@ describe('AgentChatPanel browser consent card mounting (CAP-5)', () => {
     expect(browserConsentCardPropsRef.current).toBeNull()
   })
 
-  it('mounts no card outside Tauri (remote clients never see the prompt)', () => {
+  it('mounts the card on a remote client too, which has no browser pane', () => {
     runtimeState.tauri = false
     seedActiveSession('s1')
     pendingBrowserConsentsRef.current = {
       'req-1': { requestId: 'req-1', sessionId: 's1' }
     }
     render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(browserConsentCardPropsRef.current).toBeNull()
+    expect(browserConsentCardPropsRef.current?.consent).toMatchObject({ requestId: 'req-1' })
+  })
+
+  it('shows the agent-control indicator with Stop only while the session drives a tab', () => {
+    seedActiveSession('s1')
+    useBrowserControlStore.setState({ tabSessions: {}, stoppedSessions: {} })
+    const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.queryByTestId('browser-agent-indicator')).not.toBeInTheDocument()
+
+    useBrowserControlStore.setState({ tabSessions: { 'agent-1': 's1' } })
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.getByTestId('browser-agent-indicator')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stop agent browsing' })).toBeInTheDocument()
+
+    useBrowserControlStore.setState({ tabSessions: { 'agent-1': 's-other' } })
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.queryByTestId('browser-agent-indicator')).not.toBeInTheDocument()
   })
 
   it('registers a visible card host for the session and unregisters on unmount', () => {
@@ -2259,7 +2494,6 @@ describe('AgentChatPanel mobile dock wiring', () => {
     }
   }
   const lastPlan = () => planPanelPropsRef.current.at(-1)
-  const lastChangedFiles = () => changedFilesPanelPropsRef.current.at(-1)
 
   beforeEach(() => {
     mobileRef.current = true
@@ -2276,7 +2510,7 @@ describe('AgentChatPanel mobile dock wiring', () => {
     pendingElicitationsRef.current = {}
     plansRef.current = {}
     planPanelPropsRef.current = []
-    changedFilesPanelPropsRef.current = []
+    changedFilePathsRef.current = []
     askQuestionPropsRef.current = []
     elicitationPropsRef.current = []
     chatInputBarPropsRef.current = []
@@ -2293,28 +2527,29 @@ describe('AgentChatPanel mobile dock wiring', () => {
 
   describe('plan bar and Git action', () => {
     it('starts the plan collapsed and wires the changed-files Git action to the chat cwd', () => {
+      changedFilePathsRef.current = ['/repo/.worktrees/a/src/a.ts']
       render(<AgentChatPanel sessionId="s1" isVisible />)
 
       expect(lastPlan()).toMatchObject({ defaultCollapsed: true, forceCollapsed: false })
-      expect(lastChangedFiles()).toMatchObject({ cwd: '/repo/.worktrees/a', forceCollapsed: false })
-      expect(typeof lastChangedFiles()?.onOpenGitChanges).toBe('function')
-
-      // The tapped Git button is forwarded, so the sheet can return focus to it.
-      const gitButton = document.createElement('button')
-      lastChangedFiles()?.onOpenGitChanges?.(gitButton)
+      const pill = screen.getByRole('button', { name: /^Session status:/ })
+      fireEvent.click(pill)
+      fireEvent.click(screen.getByRole('button', { name: 'Open Git changes' }))
+      // The pill is the opener, so the Git sheet returns focus to it.
       expect(openGitSheetRef.current).toHaveBeenCalledTimes(1)
-      expect(openGitSheetRef.current).toHaveBeenCalledWith('/repo/.worktrees/a', gitButton)
+      expect(openGitSheetRef.current).toHaveBeenCalledWith('/repo/.worktrees/a', pill)
     })
 
     it('keeps the baseline props on the desktop shell', () => {
       mobileRef.current = false
       oskRef.current = OSK_OPEN
       seedPermission()
+      changedFilePathsRef.current = ['/repo/.worktrees/a/src/a.ts']
       render(<AgentChatPanel sessionId="s1" isVisible />)
 
       expect(lastPlan()).toMatchObject({ defaultCollapsed: false, forceCollapsed: false })
-      expect(lastChangedFiles()?.forceCollapsed).toBe(false)
-      expect(lastChangedFiles()?.onOpenGitChanges).toBeUndefined()
+      fireEvent.click(screen.getByRole('button', { name: /^Session status:/ }))
+      expect(screen.getByRole('dialog', { name: 'Changed files' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Open Git changes' })).toBeNull()
     })
   })
 
@@ -2328,13 +2563,6 @@ describe('AgentChatPanel mobile dock wiring', () => {
       seed()
       render(<AgentChatPanel sessionId="s1" isVisible />)
       expect(lastPlan()?.forceCollapsed).toBe(true)
-    })
-
-    it('forces the changed-files bar collapsed too', () => {
-      oskRef.current = OSK_OPEN
-      seedPermission()
-      render(<AgentChatPanel sessionId="s1" isVisible />)
-      expect(lastChangedFiles()?.forceCollapsed).toBe(true)
     })
 
     it('does not collapse without the keyboard, without an approval, or for a closed session', () => {
@@ -2550,7 +2778,7 @@ describe('AgentChatPanel mobile dock wiring', () => {
     it('writes the distance to the composer dock top for a visible mobile chat', () => {
       const { container, unmount } = render(<AgentChatPanel sessionId="s1" isVisible />)
 
-      // The composer and the changed-files bar are the wrapper's children.
+      // The composer is the wrapper's child.
       expect(screen.getByTestId('composer-stub').parentElement).toBe(dockOf(container))
       expect(dockVar()).toBe('136px')
 
@@ -2573,12 +2801,11 @@ describe('AgentChatPanel mobile dock wiring', () => {
     // The wrapper's rect is only worth measuring if everything that sits on the
     // dock is inside it: a child outside would be uncounted and a toast could
     // cover it.
-    it('holds the changed-files bar and the composer in the composer branch', () => {
+    it('holds the composer in the composer branch', () => {
       const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
       const dock = dockOf(container)
 
       expect(dock).not.toBeNull()
-      expect(screen.getByTestId('changed-files-stub').closest('[data-chat-dock="true"]')).toBe(dock)
       expect(screen.getByTestId('composer-stub').closest('[data-chat-dock="true"]')).toBe(dock)
     })
 

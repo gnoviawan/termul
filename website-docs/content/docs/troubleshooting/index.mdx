@@ -28,7 +28,7 @@ xattr -dr com.apple.quarantine "/Applications/Termul Manager.app"
 
 ## Linux: the termul-manager command is not found
 
-The install script puts the AppImage at `~/.local/bin/termul-manager` and adds **Termul Manager** to your app menu. If the script warns that `~/.local/bin` is not in `PATH`, your shell cannot find the command. Add the folder to `PATH` in your shell profile, for example in `~/.bashrc`:
+The install script adds the `~/.local/bin/termul-manager` command, which starts the AppImage at `~/.local/bin/termul-manager.AppImage`. It also adds **Termul Manager** to your app menu. If the script warns that `~/.local/bin` is not in `PATH`, your shell cannot find the command. Add the folder to `PATH` in your shell profile, for example in `~/.bashrc`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -36,9 +36,25 @@ export PATH="$HOME/.local/bin:$PATH"
 
 The install script supports only x86_64 Linux. On other processors it stops with **Unsupported Linux architecture**.
 
+## Linux: the window is blank on Wayland
+
+On a Wayland desktop with Mesa 25 or later, the AppImage can open an empty window. The terminal output shows **Could not create default EGL display: EGL_BAD_PARAMETER**. The library that the AppImage includes for Wayland does not work with the newer Mesa.
+
+Start Termul with the `termul-manager` command or the **Termul Manager** menu entry from the install script. The command loads the `libwayland-client` library from your system instead. Install or update with the script if you do not have the command.
+
+If you start the `.AppImage` file yourself, give the path to your system's library. The path is different on each distribution, for example `/usr/lib/libwayland-client.so.0` on Arch or `/usr/lib64/libwayland-client.so.0` on Fedora:
+
+```bash
+LD_PRELOAD=/usr/lib/libwayland-client.so.0 ./Termul.Manager_<version>_amd64.AppImage
+```
+
+With this command, the terminals in Termul also load that library. The `termul-manager` command does not have this side effect.
+
+If the library is in a folder that the command does not check, set `TERMUL_WAYLAND_CLIENT_LIB` to its path before you run `termul-manager`.
+
 ## An agent shows "Needs Node.js" or "Install"
 
-Many agents run with Node.js or with uv, a Python tool. Termul shows the state of each agent in **Settings** > **AI Agents** and in the agent picker of a new chat.
+Many agents run with Node.js or with uv, a Python tool. Termul shows the state of each agent in **Settings** > **Agent chats** and in the agent picker of a new chat.
 
 - **Needs Node.js** or **Needs Node** means Termul cannot find `npx`. Install [Node.js](https://nodejs.org). In a new chat, the **Runtime required** message has an **Install Node.js** button that opens the download page.
 - **Needs uv** means Termul cannot find `uvx`. Install uv. The **Install uv** button opens its install page.

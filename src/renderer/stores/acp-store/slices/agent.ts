@@ -8,7 +8,6 @@ import {
   type AgentId,
   type AuthMethod,
   acpApi,
-  browserConsentRespond,
   parseAcpErrorDetail,
   type SessionId
 } from '@/lib/acp-api'
@@ -18,18 +17,14 @@ import {
   describeProviderFailure,
   isAmbiguousAuthError
 } from '@/lib/agents/acp-spawn-errors'
+import { answerBrowserConsent } from '@/lib/browser-consent-api'
 import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
-import { isTauriContext } from '@/lib/tauri-runtime'
-import { useBrowserSessionStore } from '@/stores/browser-session-store'
+import { useBrowserControlStore } from '@/stores/browser-control-store'
 import { useProjectStore } from '@/stores/project-store'
-import {
-  agentChatTabId,
-  findPaneContainingTab,
-  useWorkspaceStore,
-  browserTabId as workspaceBrowserTabId
-} from '@/stores/workspace-store'
+import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
 import { isDetachedReuseKey, parseReuseKey } from '../../acp-reuse-keys'
+import { applyBrowserAgentTab, applyBrowserTabClosed } from '../browser-agent-tabs'
 import { stoppingAgentIds } from '../ephemeral-ids'
 import {
   authPickerUnavailableError,
@@ -44,16 +39,20 @@ import {
   liveInlineKeyAuthPolicy
 } from '../helpers'
 import { useAcpStore } from '../index'
+import { rejectedRateLimit, withRateLimit } from '../rate-limit'
 import {
   activeWirePromptTurns,
+  bugReportCollectors,
   commitMessageCollectors,
   echoedWirePromptTurns,
   ephemeralSessionIds,
   persistSession,
+  rejectBugReportCollector,
   rejectCommitMessageCollector,
   rejectTerminalAssistCollector,
   terminalAssistCollectors
 } from '../shared-state'
+import { cancelRunningSubagents } from '../subagent-lifecycle'
 import type { AcpState, AgentStatus, SessionStatus } from '../types'
 import { clearPromptReconcile } from './prompt-reconcile'
 import {
@@ -186,8 +185,8 @@ export function forgetAuthMethodForConfig(configId: string): void {
  * Validated `browser_open_request` URLs received BEFORE the agent registers
  * (`ShimWatcher` starts before `agent_spawned` reaches the renderer — an
  * early browser call would otherwise be dropped and the OAuth URL lost).
- * Promoted into `pendingBrowserOpen` by `_onAgentSpawned`; cleared on
- * teardown via `clearPendingBrowserOpen`.
+ * Promoted into `pendingSignIn` by `_onAgentSpawned`; cleared on
+ * teardown via `clearPendingSignIn`.
  */
 const earlyBrowserOpen = new Map<AgentId, string>()
 
@@ -391,7 +390,7 @@ async function authenticateBeforeSession(get: () => AcpState, agentId: AgentId):
     // Auth succeeded — a pending browser-open request for this agent is
     // resolved; drop it so the dialog dismisses. Module-scope helper: the
     // store exists by the time any auth flow runs.
-    useAcpStore.getState().clearPendingBrowserOpen(agentId)
+    useAcpStore.getState().clearPendingSignIn(agentId)
     return true
   })()
   inFlightAuth.set(flightKey, task)
@@ -534,13 +533,14 @@ type AgentSliceState = Pick<
   AcpState,
   | 'agents'
   | 'agentStatus'
-  | 'pendingBrowserOpen'
+  | 'pendingSignIn'
   | 'autoOpenBrowserUrl'
   | 'pendingBrowserConsents'
   | 'pendingRestartVersions'
   | 'spawnAgent'
   | 'killAgent'
-  | 'clearPendingBrowserOpen'
+  | 'clearPendingSignIn'
+  | 'respondAgentSignIn'
   | 'completeBrowserAuth'
   | 'authenticateAgent'
   | 'logoutAgent'
@@ -549,8 +549,13 @@ type AgentSliceState = Pick<
   | '_onAgentCrashed'
   | '_onAgentDisconnected'
   | '_onBrowserOpenRequest'
+  | '_onAgentSignInRequest'
+  | '_onAgentSignInResolved'
   | '_onBrowserAgentTab'
-  | '_onBrowserConsentRequest'
+  | '_onBrowserTabClosed'
+  | '_onBrowserConsentTicket'
+  | '_onBrowserTicketClosed'
+  | '_onBrowserStopChanged'
   | 'respondBrowserConsent'
 >
 
@@ -583,7 +588,7 @@ function endPromptTrackingForAgentFailure(
 export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> = (set, get) => ({
   agents: {},
   agentStatus: {},
-  pendingBrowserOpen: {},
+  pendingSignIn: {},
   autoOpenBrowserUrl: {},
   pendingBrowserConsents: {},
 
@@ -696,19 +701,42 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     })
     // A killed agent can never finish its browser-open flow — drop the
     // captured URL so the dialog dismisses.
-    get().clearPendingBrowserOpen(agentId)
+    get().clearPendingSignIn(agentId)
   },
 
-  clearPendingBrowserOpen: (agentId) => {
+  clearPendingSignIn: (agentId) => {
     earlyBrowserOpen.delete(agentId)
     set((s) => {
-      if (!(agentId in s.pendingBrowserOpen) && !(agentId in s.autoOpenBrowserUrl)) return {}
-      const pendingBrowserOpen = { ...s.pendingBrowserOpen }
+      if (!(agentId in s.pendingSignIn) && !(agentId in s.autoOpenBrowserUrl)) return {}
+      const pendingSignIn = { ...s.pendingSignIn }
       const autoOpenBrowserUrl = { ...s.autoOpenBrowserUrl }
-      delete pendingBrowserOpen[agentId]
+      delete pendingSignIn[agentId]
       delete autoOpenBrowserUrl[agentId]
-      return { pendingBrowserOpen, autoOpenBrowserUrl }
+      return { pendingSignIn, autoOpenBrowserUrl }
     })
+  },
+
+  respondAgentSignIn: async (agentId, action) => {
+    const prompt = get().pendingSignIn[agentId]
+    if (prompt?.kind !== 'elicitation') return
+    // An accepted prompt stays up: the user still needs its code until the
+    // host reports the sign-in finished. A cancelled one is over.
+    if (action === 'cancel') get().clearPendingSignIn(agentId)
+    void logFrontendError({
+      level: 'info',
+      message: `[acp] sign-in prompt ${action} (agentId=${agentId}, requestId=${prompt.requestId})`,
+      source: 'acp-store:respondAgentSignIn'
+    })
+    try {
+      await acpApi.respondElicitation(agentId, prompt.requestId, action)
+    } catch (err) {
+      void logFrontendError({
+        level: 'warn',
+        message: `[acp] sign-in prompt response failed (agentId=${agentId}, requestId=${prompt.requestId})`,
+        source: 'acp-store:respondAgentSignIn'
+      })
+      throw err
+    }
   },
 
   completeBrowserAuth: (agentId) => {
@@ -730,7 +758,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
         rememberAuthMethodForConfig(configId, attempted)
       }
     }
-    get().clearPendingBrowserOpen(agentId)
+    get().clearPendingSignIn(agentId)
     // Re-prepare chats that failed on auth so their banners clear on their
     // own. `configToLiveAgent` keys are `configId\0cwd`; prepareChatError
     // keys append `\0mcpKey` (empty when no MCP selection), so a prefix
@@ -775,7 +803,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     authenticatedAgents.delete(agentId)
   },
 
-  authenticateAgent: async (agentId, methodId, gateway) => {
+  authenticateAgent: async (agentId, methodId, input) => {
     // Normalize and validate BEFORE the dedup check (P5 parity with
     // `authenticateBeforeSession`): an empty/whitespace method id is unusable
     // and must be rejected up front instead of being sent to the agent, and an
@@ -815,7 +843,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
         // redirect lands out-of-band without an authenticate reply) can
         // persist the winning method id per config.
         lastAuthAttempt.set(agentId, normalizedMethodId)
-        if (gateway) await acpApi.authenticate(agentId, normalizedMethodId, gateway)
+        if (input) await acpApi.authenticate(agentId, normalizedMethodId, input)
         else await acpApi.authenticate(agentId, normalizedMethodId)
       } catch (err) {
         // Redacted (see `authenticateBeforeSession`): no method id, no raw
@@ -835,13 +863,15 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       // method can auto-run again: a terminal/env_var login is interactive-
       // only and remembering it would wedge auto-auth on a dead pick. A
       // method missing from the advertised list carries no type → treated as
-      // untyped legacy → eligible.
+      // untyped legacy → eligible. A sign-in that carried a gateway or a key
+      // cannot run again without it.
       const configId = configIdForAgentId(get(), agentId)
       const method = (get().agents[agentId]?.authMethods ?? []).find(
         (m) => m.id.trim() === normalizedMethodId
       )
       if (
         configId &&
+        !input &&
         normalizedMethodId !== 'gateway' &&
         (method?.type === 'agent' || method?.type == null)
       ) {
@@ -849,7 +879,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       }
       // Auth succeeded — a pending browser-open request for this agent is
       // resolved; drop it so the dialog dismisses.
-      get().clearPendingBrowserOpen(agentId)
+      get().clearPendingSignIn(agentId)
       return true
     })().finally(() => {
       // Identity guard (see `authenticateBeforeSession`): a late cleanup must
@@ -892,7 +922,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
           [e.agentId]: 'connected'
         },
         ...(early !== undefined
-          ? { pendingBrowserOpen: { ...s.pendingBrowserOpen, [e.agentId]: early } }
+          ? { pendingSignIn: { ...s.pendingSignIn, [e.agentId]: { kind: 'browser', url: early } } }
           : {})
       }
     }),
@@ -901,11 +931,14 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     const sessionId = e.sessionId
     const hadCommit = sessionId ? commitMessageCollectors.has(sessionId) : false
     const hadAssist = sessionId ? terminalAssistCollectors.has(sessionId) : false
+    const hadBugReport = sessionId ? bugReportCollectors.has(sessionId) : false
     if (hadCommit && sessionId)
       rejectCommitMessageCollector(sessionId, e.message || 'The ACP agent reported an error')
     if (hadAssist && sessionId)
       rejectTerminalAssistCollector(sessionId, e.message || 'The ACP agent reported an error')
-    if (hadCommit || hadAssist) return
+    if (hadBugReport && sessionId)
+      rejectBugReportCollector(sessionId, e.message || 'The ACP agent reported an error')
+    if (hadCommit || hadAssist || hadBugReport) return
     // The turn ends here (below) — a prompt still waiting to confirm must stop
     // resending; the host's `error`/`timeout` terminator follows.
     endPromptTrackingForAgentFailure(get(), e.agentId, sessionId)
@@ -921,6 +954,17 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
           // reuse pool, and Retry restarts it (AgentChatPanel).
           ...(detail.code === ACP_AUTH_REQUIRED_RPC_CODE
             ? { agentStatus: { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus } }
+            : {}),
+          ...(detail.providerCode === 'provider_quota_exceeded' && session.agentId === e.agentId
+            ? {
+                sessionUsage: {
+                  ...s.sessionUsage,
+                  [e.sessionId]: withRateLimit(
+                    s.sessionUsage[e.sessionId],
+                    rejectedRateLimit(e.message)
+                  )
+                }
+              }
             : {}),
           // Finalize streaming markers: the turn is over (errored), and the
           // persist below must not capture a message mid-shimmer.
@@ -978,11 +1022,14 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     const sessionId = e.sessionId
     const hadCommit = sessionId ? commitMessageCollectors.has(sessionId) : false
     const hadAssist = sessionId ? terminalAssistCollectors.has(sessionId) : false
+    const hadBugReport = sessionId ? bugReportCollectors.has(sessionId) : false
     if (hadCommit && sessionId)
       rejectCommitMessageCollector(sessionId, e.message || 'The ACP agent crashed')
     if (hadAssist && sessionId)
       rejectTerminalAssistCollector(sessionId, e.message || 'The ACP agent crashed')
-    if (hadCommit || hadAssist) return
+    if (hadBugReport && sessionId)
+      rejectBugReportCollector(sessionId, e.message || 'The ACP agent crashed')
+    if (hadCommit || hadAssist || hadBugReport) return
     // A crashed agent can never complete an accepted prompt: stop waiting to
     // confirm / resending it (the host closes the turn with a `crashed`
     // terminator and the Retry path starts a new intent with a new id).
@@ -1044,6 +1091,15 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       }
       return { agentStatus, launchingSessionIds, preparedSessions, sessions }
     })
+    const endedAt = Date.now()
+    const crashedSessions = Object.entries(get().sessions)
+      .filter(([, session]) => session.agentId === e.agentId)
+      .map(([id]) => id)
+    if (e.sessionId && !crashedSessions.includes(e.sessionId)) crashedSessions.push(e.sessionId)
+    set((s) => {
+      const toolCalls = cancelRunningSubagents(s, crashedSessions, endedAt)
+      return toolCalls === s.toolCalls ? {} : { toolCalls }
+    })
     if (
       e.sessionId &&
       get().sessions[e.sessionId] &&
@@ -1064,6 +1120,11 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
         rejectTerminalAssistCollector(sessionId, 'The ACP agent disconnected')
       }
     }
+    for (const [sessionId, collector] of bugReportCollectors) {
+      if (collector.agentId === e.agentId) {
+        rejectBugReportCollector(sessionId, 'The ACP agent disconnected')
+      }
+    }
     // Flush coalesced updates so the disconnect reflects the final transcript state.
     flushCoalescedSync()
     // The process is gone — drop its cached auth so a re-spawn re-authenticates
@@ -1071,6 +1132,9 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     // a same-id re-spawn would skip `authenticate` and a stopped agent would
     // accumulate a stale auth entry).
     authenticatedAgents.delete(e.agentId)
+    const goneSessionIds = Object.entries(get().sessions)
+      .filter(([, session]) => session.agentId === e.agentId)
+      .map(([id]) => id)
     dropInFlightAuthForAgent(e.agentId)
     lastAuthAttempt.delete(e.agentId)
     autoOpenGrantedFlight.delete(e.agentId)
@@ -1110,7 +1174,16 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
           // truly-empty pooled (ephemeral) session is dropped to avoid orphan
           // "Untitled Chat" entries.
           const hasContent = (s.messages[id]?.length ?? 0) > 0
-          if (ephemeralSessionIds.has(id) && !hasContent) {
+          // A one-shot collector session (commit message, terminal assist,
+          // bug-report draft) stays ephemeral even when the echoed prompt
+          // gave it transcript content: its reject above runs synchronously
+          // while the collector's own map cleanup happens in a later
+          // microtask, so the map check is the only reliable marker here.
+          const oneShot =
+            commitMessageCollectors.has(id) ||
+            terminalAssistCollectors.has(id) ||
+            bugReportCollectors.has(id)
+          if (oneShot || (ephemeralSessionIds.has(id) && !hasContent)) {
             delete sessions[id]
             ephemeralSessionIds.delete(id)
             dropTranscriptIds.push(id)
@@ -1170,7 +1243,12 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     })
     // A dead process can never finish its browser-open flow — drop the
     // captured URL so the dialog dismisses.
-    get().clearPendingBrowserOpen(e.agentId)
+    get().clearPendingSignIn(e.agentId)
+    const endedAt = Date.now()
+    set((s) => {
+      const toolCalls = cancelRunningSubagents(s, goneSessionIds, endedAt)
+      return toolCalls === s.toolCalls ? {} : { toolCalls }
+    })
     // Persist closed status + transcript while maps still hold content, then
     // free WebView heap for every session this disconnect retired.
     for (const id of affected) {
@@ -1234,44 +1312,45 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       if (firstOfFlight) autoOpenBrowserUrl[e.agentId] = e.url
       else if (autoOpenBrowserUrl[e.agentId] !== e.url) delete autoOpenBrowserUrl[e.agentId]
       return {
-        pendingBrowserOpen: { ...s.pendingBrowserOpen, [e.agentId]: e.url },
+        pendingSignIn: { ...s.pendingSignIn, [e.agentId]: { kind: 'browser', url: e.url } },
         autoOpenBrowserUrl
       }
     })
   },
 
-  _onBrowserAgentTab: (e) => {
-    // Host-mediated agent tab lifecycle (spec-acp-browser-pane-automation).
-    // "open": create the session record + mount a workspace tab — mounting
-    // runs `browserTabCreate`, which resolves the host's pending open waiter.
-    // "close": drop the workspace tab + session record (the host already
-    // destroyed the native webview; the unmount's destroy is a benign miss).
-    // Remote/web clients have no native browser pane — the event is
-    // informational there; only the desktop host opens the tab.
-    if (!isTauriContext()) return
-    if (typeof e.tabId !== 'string' || e.tabId.length === 0) return
-    if (e.action === 'open') {
-      const url = typeof e.url === 'string' && /^https?:\/\//i.test(e.url) ? e.url : undefined
-      useBrowserSessionStore.getState().createTab(e.tabId, url)
-      useWorkspaceStore.getState().openAgentBrowserTab(e.tabId, url)
-      void logFrontendError({
-        level: 'info',
-        message: `[acp] agent browser tab opened (tabId=${e.tabId})`,
-        source: 'acp-store:_onBrowserAgentTab'
-      })
-      return
-    }
-    if (e.action === 'close') {
-      useWorkspaceStore.getState().removeTab(workspaceBrowserTabId(e.tabId))
-      useBrowserSessionStore.getState().removeTab(e.tabId)
+  _onAgentSignInRequest: (e) => {
+    // The host refuses a URL that is not safe to open remotely before it
+    // emits; this mirrors it so a malformed payload never reaches Open.
+    if (typeof e.agentId !== 'string' || !(e.agentId in get().agents)) return
+    if (typeof e.requestId !== 'string' || typeof e.message !== 'string') return
+    if (typeof e.url !== 'string' || !/^https:\/\//i.test(e.url)) return
+    void logFrontendError({
+      level: 'info',
+      message: `[acp] sign-in prompt received (agentId=${e.agentId}, requestId=${e.requestId})`,
+      source: 'acp-store:_onAgentSignInRequest'
+    })
+    set((s) => ({
+      pendingSignIn: {
+        ...s.pendingSignIn,
+        [e.agentId]: { kind: 'elicitation', requestId: e.requestId, url: e.url, message: e.message }
+      }
+    }))
+  },
+
+  _onAgentSignInResolved: (e) => {
+    const prompt = get().pendingSignIn[e.agentId]
+    if (prompt?.kind === 'elicitation' && prompt.requestId === e.requestId) {
+      get().clearPendingSignIn(e.agentId)
     }
   },
 
-  _onBrowserConsentRequest: (e) => {
-    if (typeof e.requestId !== 'string' || e.requestId.length === 0) return
-    if (typeof e.sessionId !== 'string' || e.sessionId.length === 0) return
+  _onBrowserAgentTab: (e, eventSeq) => applyBrowserAgentTab(e, eventSeq),
+
+  _onBrowserTabClosed: (e) => applyBrowserTabClosed(e),
+
+  _onBrowserConsentTicket: (ticket) => {
     set((s) => ({
-      pendingBrowserConsents: { ...s.pendingBrowserConsents, [e.requestId]: e }
+      pendingBrowserConsents: { ...s.pendingBrowserConsents, [ticket.requestId]: ticket }
     }))
     // CAP-5 reachability: the in-chat consent card is CSS-invisible while the
     // session's chat tab is hidden behind another tab in its pane. When a
@@ -1281,56 +1360,66 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     // can ever show it (non-workspace routes, SSH mode, sessions without a
     // mounted chat tab) are covered by the root-level BrowserConsentCardHost.
     const ws = useWorkspaceStore.getState()
-    const id = agentChatTabId(e.sessionId)
+    const id = agentChatTabId(ticket.sessionId)
     const pane = findPaneContainingTab(ws.root, id)
     if (pane && pane.activeTabId !== id) {
-      ws.addAgentChatTab(e.sessionId)
+      ws.addAgentChatTab(ticket.sessionId)
       void logFrontendError({
         level: 'info',
-        message: `[acp] browser consent request activated chat tab (requestId=${e.requestId}, sessionId=${e.sessionId})`,
-        source: 'acp-store:_onBrowserConsentRequest'
+        message: `[acp] browser consent ticket activated chat tab (requestId=${ticket.requestId}, sessionId=${ticket.sessionId})`,
+        source: 'acp-store:_onBrowserConsentTicket'
       })
     }
   },
 
-  respondBrowserConsent: (requestId, allowed) => {
+  _onBrowserTicketClosed: (e) => {
+    if (typeof e.requestId !== 'string') return
+    set((s) => {
+      if (!s.pendingBrowserConsents[e.requestId]) return s
+      const next = { ...s.pendingBrowserConsents }
+      delete next[e.requestId]
+      return { pendingBrowserConsents: next }
+    })
+  },
+
+  _onBrowserStopChanged: (e) => {
+    if (typeof e.sessionId !== 'string' || e.sessionId.length === 0) return
+    useBrowserControlStore.getState().setStopped(e.sessionId, e.stopped === true)
+  },
+
+  respondBrowserConsent: (requestId, optionId) => {
     const original = get().pendingBrowserConsents[requestId]
+    if (!original) return
     set((s) => {
       const next = { ...s.pendingBrowserConsents }
       delete next[requestId]
       return { pendingBrowserConsents: next }
     })
-    // A failed respond restores the pending entry so the user can retry —
-    // the card remounts enabled (no one-response flag). The Rust-side
-    // timeout still auto-denies fail-closed; warn-log for field diagnosis.
-    const restore = (): void => {
-      if (!original) return
+    // A refused answer restores the entry so the user can answer again; an
+    // answer that lost to another surface (or a withdrawn ticket) stays gone.
+    const restore = (message: string): void => {
       set((s) =>
         s.pendingBrowserConsents[requestId]
           ? s
           : { pendingBrowserConsents: { ...s.pendingBrowserConsents, [requestId]: original } }
       )
-      toast.error('Could not send the consent response. Try again.')
+      toast.error(message)
     }
-    void browserConsentRespond(requestId, allowed)
-      .then((ok) => {
-        if (!ok) {
-          restore()
-          void logFrontendError({
-            level: 'warn',
-            message: `browser consent respond failed: requestId=${requestId} allowed=${allowed}`,
-            source: 'acp-store:respondBrowserConsent'
-          })
-        }
-      })
-      // The wrapper never rejects today; stay safe if it ever does.
-      .catch(() => {
-        restore()
+    const agentId = get().sessions[original.sessionId]?.agentId ?? ''
+    void answerBrowserConsent(original, optionId, agentId)
+      .then((result) => {
+        if (result === 'ok' || result === 'stale') return
+        restore(
+          result === 'too_early'
+            ? 'That was too quick. Check the request, then choose again.'
+            : 'Could not send the browser consent answer. Try again.'
+        )
         void logFrontendError({
           level: 'warn',
-          message: `browser consent respond threw: requestId=${requestId} allowed=${allowed}`,
+          message: `browser consent answer refused: requestId=${requestId} result=${result}`,
           source: 'acp-store:respondBrowserConsent'
         })
       })
+      .catch(() => restore('Could not send the browser consent answer. Try again.'))
   }
 })

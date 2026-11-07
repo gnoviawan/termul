@@ -1,19 +1,12 @@
 import { openerApi } from '@/lib/api'
-import { randomUUID } from '@/lib/uuid'
+import { newUserBrowserTabId } from '@/lib/browser-api'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
-export const TERMINAL_DEDICATED_BROWSER_TAB_ID = 'terminal-link-browser'
-
-function createTerminalBrowserTabId(): string {
-  return `${TERMINAL_DEDICATED_BROWSER_TAB_ID}-${randomUUID()}`
-}
-
 export async function openTerminalUrlInDedicatedBrowser(url: string): Promise<void> {
-  const targetTabId = createTerminalBrowserTabId()
-
-  useBrowserSessionStore.getState().ensureTab(targetTabId, url)
+  const targetTabId = newUserBrowserTabId()
+  useBrowserSessionStore.getState().createTab(targetTabId, url)
   useWorkspaceStore.getState().addBrowserTab(targetTabId)
 }
 

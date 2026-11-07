@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Formless login fixture</title>
+</head>
+<body>
+<main>
+<h1>Formless login fixture</h1>
+<div id="login">
+<input id="user" type="text" aria-label="User">
+<input id="secret" type="password" aria-label="Password">
+<button id="go" type="button">Sign in</button>
+</div>
+</main>
+<script>
+document.getElementById('go').addEventListener('click', function () {
+  location.href = '/form-done.html?user=' + encodeURIComponent(document.getElementById('user').value);
+});
+</script>
+</body>
+</html>

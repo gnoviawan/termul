@@ -11,3 +11,7 @@ export async function writeText(_text: string): Promise<never> {
 export async function readImage(): Promise<never> {
   return tauriUnavailable('clipboard.readImage')
 }
+
+export async function writeImage(_image: unknown): Promise<never> {
+  return tauriUnavailable('clipboard.writeImage')
+}

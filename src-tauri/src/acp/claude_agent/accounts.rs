@@ -8,13 +8,10 @@ use std::time::Duration;
 use super::{claude_cli_command, AccountResolution, ClaudeAccountStore, ClaudeAgentService};
 use crate::acp::claude_accounts::{ClaudeAccount, ClaudeAccountsSnapshot, BUILTIN_ACCOUNT_ID};
 
-/// Upper bound for one browser login; `claude auth login` waits for the
-/// browser callback until then.
-const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// Upper bound for one sign-in; `claude auth login` waits for the browser
+/// callback or the pasted code until then.
+pub(super) const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const LOGOUT_TIMEOUT: Duration = Duration::from_secs(20);
-/// Cancel handle of each running browser login, by Account id.
-pub(super) type LoginCancels =
-    parking_lot::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>;
 
 /// Whether choosing an Account first checks that its login is confirmed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +128,15 @@ impl ClaudeAgentService {
             .add(name)
     }
 
+    pub fn has_account(&self, id: &str) -> Result<bool, String> {
+        Ok(self
+            .account_store()?
+            .snapshot()?
+            .profiles
+            .iter()
+            .any(|row| row.id == id))
+    }
+
     pub fn rename_account(&self, id: &str, name: &str) -> Result<(), String> {
         self.account_store()?.rename(id, name)
     }
@@ -143,15 +149,37 @@ impl ClaudeAgentService {
         store.set_default(id)
     }
 
+    pub fn set_auto_switch(&self, enabled: bool) -> Result<(), String> {
+        self.account_store()?.set_auto_switch(enabled)
+    }
+
     /// `account_id: None` returns the Project to the Default Account, so the
-    /// check probes the Default Account.
+    /// check probes the Default Account. `expected` makes the choice a
+    /// compare-and-set on the Account the Project uses; returns whether the
+    /// choice applied.
     pub async fn set_project_account(
         &self,
         project_id: &str,
         account_id: Option<&str>,
+        expected: Option<&str>,
         check: SignInCheck,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let store = self.account_store()?;
+        if let Some(expected) = expected {
+            // A stale expectation loses before the sign-in probe, so the losing
+            // client is not asked to sign in to an Account it no longer needs.
+            let snapshot = store.snapshot()?;
+            let current = snapshot
+                .project_profiles
+                .get(project_id.trim())
+                .unwrap_or(&snapshot.default_account_id);
+            if current != expected {
+                log::info!(
+                    "[claude-accounts] project profile unchanged: the project no longer uses the expected profile"
+                );
+                return Ok(false);
+            }
+        }
         if check == SignInCheck::Required {
             match account_id {
                 Some(id) => self.ensure_signed_in(store, id, Choice::Account).await?,
@@ -162,7 +190,7 @@ impl ClaudeAgentService {
                 }
             }
         }
-        store.set_project_account(project_id, account_id)
+        store.set_project_account(project_id, account_id, expected)
     }
 
     /// The spawn gate's rule, applied before an Account is chosen: only a
@@ -212,7 +240,14 @@ impl ClaudeAgentService {
     /// still removed. Returns the Projects that moved to the default.
     pub async fn remove_account(&self, id: &str) -> Result<Vec<String>, String> {
         let store = self.account_store()?;
-        if let Some(dir) = store.config_dir(id) {
+        // A sign-in still running would write a login into the removed folder.
+        if self.logins.stop(id).await {
+            log::info!("[claude-accounts] stopped the running sign-in before removal");
+        }
+        // Sign out even when the folder is gone: on macOS the login lives in
+        // the keychain. An id that is already removed has nothing to sign out.
+        let known = self.has_account(id)?;
+        if let Some(dir) = store.config_dir(id).filter(|_| known) {
             match run_cli(&["auth", "logout"], Some(dir), LOGOUT_TIMEOUT, None).await {
                 Ok(true) => log::info!("[claude-accounts] signed out before removal"),
                 Ok(false) => log::warn!("[claude-accounts] sign-out did not succeed"),
@@ -224,24 +259,24 @@ impl ClaudeAgentService {
         store.remove(id)
     }
 
-    /// Stop a running [`login_account`](Self::login_account) for `id`.
-    /// Returns `false` when no login for that Account is running.
-    pub fn cancel_login(&self, id: &str) -> bool {
-        let Some(cancel) = self.login_cancels.lock().remove(id) else {
-            return false;
-        };
-        log::info!("[claude-accounts] login cancelled");
-        cancel.send(()).is_ok()
+    /// Stop the running browser or link sign-in of `id` and wait until its
+    /// CLI is gone. Returns `false` when no sign-in for that Account is
+    /// running.
+    pub async fn cancel_login(&self, id: &str) -> bool {
+        let cancelled = self.logins.stop(id).await;
+        if cancelled {
+            log::info!("[claude-accounts] login cancelled");
+        }
+        cancelled
     }
 
     /// Run Anthropic's interactive `claude auth login` for one Account in the
     /// caller's terminal (headless `termul-server claude account login`).
     pub fn run_account_cli_login(&self, id: &str) -> Result<(), String> {
-        let store = self.account_store()?;
-        if !store.snapshot()?.profiles.iter().any(|row| row.id == id) {
+        if !self.has_account(id)? {
             return Err("That Claude account does not exist".to_string());
         }
-        let dir = store.config_dir(id);
+        let dir = self.account_store()?.config_dir(id);
         log::info!("[claude-accounts] terminal login started");
         self.run_cli_login_in(dir.as_deref())
     }
@@ -250,21 +285,14 @@ impl ClaudeAgentService {
     /// CLI opens the browser and stores the login itself; Termul never sees
     /// the token. Resolves when the login finishes, fails, or times out.
     pub async fn login_account(&self, id: &str) -> Result<(), String> {
-        let store = self.account_store()?;
-        let dir = if id == BUILTIN_ACCOUNT_ID {
-            None
-        } else {
-            let known = store.snapshot()?.profiles.iter().any(|row| row.id == id);
-            if !known {
-                return Err("That Claude account does not exist".to_string());
-            }
-            store.config_dir(id)
-        };
+        let dir = self.sign_in_dir(id)?;
         log::info!("[claude-accounts] login started");
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
-        self.login_cancels.lock().insert(id.to_string(), cancel_tx);
+        let ticket = self
+            .logins
+            .begin(id, super::logins::LoginKind::Browser { _cancel: cancel_tx });
         let result = run_cli(&["auth", "login"], dir, LOGIN_TIMEOUT, Some(cancel_rx)).await;
-        self.login_cancels.lock().remove(id);
+        self.logins.end(id, ticket);
         match result {
             Ok(true) => {
                 log::info!("[claude-accounts] login finished");
@@ -280,13 +308,27 @@ impl ClaudeAgentService {
             }
         }
     }
+
+    /// The Claude config dir a sign-in of `id` writes to (`None` = the
+    /// host's own, for the built-in Account).
+    pub(super) fn sign_in_dir(&self, id: &str) -> Result<Option<PathBuf>, String> {
+        let store = self.account_store()?;
+        if id == BUILTIN_ACCOUNT_ID {
+            return Ok(None);
+        }
+        if !store.snapshot()?.profiles.iter().any(|row| row.id == id) {
+            return Err("That Claude account does not exist".to_string());
+        }
+        Ok(store.config_dir(id))
+    }
 }
 
 /// Run `claude <args>` with no terminal and discarded output. `Ok(true)` on
 /// exit code 0. The CLI output can hold account details, so it is never read.
 /// Stdin is an open pipe that is never written: `auth login` exits at stdin
-/// EOF before the browser callback can finish the login. A message on
-/// `cancel` stops the CLI.
+/// EOF before the browser callback can finish the login. `cancel` resolving
+/// (a message, or its sender dropped) stops the CLI. Returns once the CLI is
+/// gone.
 async fn run_cli(
     args: &[&str],
     config_dir: Option<PathBuf>,
@@ -307,7 +349,7 @@ async fn run_cli(
     let waited = match cancel {
         Some(cancel) => tokio::select! {
             waited = tokio::time::timeout(timeout, child.wait()) => Some(waited),
-            Ok(()) = cancel => None,
+            _ = cancel => None,
         },
         None => Some(tokio::time::timeout(timeout, child.wait()).await),
     };
@@ -318,7 +360,10 @@ async fn run_cli(
     match waited {
         Ok(Ok(status)) => Ok(status.success()),
         Ok(Err(_)) => Err("The Claude CLI stopped unexpectedly".to_string()),
-        Err(_) => Err("Claude sign-in timed out".to_string()),
+        Err(_) => {
+            let _ = child.kill().await;
+            Err("Claude sign-in timed out".to_string())
+        }
     }
 }
 

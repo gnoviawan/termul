@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ProjectSwitcherDrawer } from '@/components/chat/ProjectSwitcherDrawer'
+import { githubItemTabLabel } from '@/components/github/github-status'
 import {
   describeProjectSubtitle,
   useChatIsolationContext
@@ -25,6 +26,7 @@ import { returnToWorkspaceRoute } from '@/lib/workspace-route'
 import { reportUnknownTabKind } from '@/lib/workspace-tab-kinds'
 import { useAcpStore } from '@/stores/acp-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
+import { githubItemKey, useGithubStore } from '@/stores/github-store'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
 import { useShellAnnouncerStore } from '@/stores/shell-announcer-store'
@@ -82,6 +84,8 @@ interface MobileChatShellProps {
   onRestartTerminal?: (terminalId: string) => void
   /** Opens Project settings (header ⋯ sheet). */
   onOpenProjectSettings?: () => void
+  /** Opens the Report a Bug dialog (both ⋯ sheets; spec-bug-report-dialog). */
+  onReportBug?: () => void
   /** Opens the command history modal (terminal ⋯ sheet). */
   onOpenCommandHistory?: () => void
   /**
@@ -116,6 +120,7 @@ export function MobileChatShell({
   onOpenGitChanges,
   onRestartTerminal,
   onOpenProjectSettings,
+  onReportBug,
   onOpenCommandHistory,
   onNewProject,
   onOpenGitHistory,
@@ -205,6 +210,12 @@ export function MobileChatShell({
   const activeBrowserTab = useBrowserSessionStore((s) =>
     activeTab?.type === 'browser' ? s.tabs.get(activeTab.browserTabId) : undefined
   )
+  // As on the desktop tab, the loaded title wins over the one stored at open.
+  const githubItemTitle = useGithubStore((s) =>
+    activeTab?.type === 'github-item'
+      ? s.items[githubItemKey(activeTab.cwd, activeTab.repo, activeTab.number)]?.data?.item.title
+      : undefined
+  )
 
   // An empty terminal name falls back like a missing one (the old header
   // tested truthiness), so the title and the terminal sheet are never blank.
@@ -225,6 +236,8 @@ export function MobileChatShell({
         return 'Git Changes'
       case 'git-history':
         return 'Git History'
+      case 'github-item':
+        return githubItemTabLabel(activeTab.number, githubItemTitle ?? activeTab.title)
       case 'diff':
         return basename(activeTab.path)
       case 'commit-diff':
@@ -233,6 +246,8 @@ export function MobileChatShell({
         return browserTabLabel(activeBrowserTab)
       case 'canvas':
         return basename(activeTab.docPath)
+      case 'automations':
+        return 'Automations'
       default:
         reportUnknownTabKind(activeTab, 'MobileChatShell.headerTitle', 'using default title')
         return 'Termul'
@@ -305,6 +320,13 @@ export function MobileChatShell({
   const openGitHistory = onOpenGitHistory
     ? (): void => {
         onOpenGitHistory()
+        returnToWorkspace()
+      }
+    : undefined
+  const automationsProjectId = activeProject?.id
+  const openAutomations = automationsProjectId
+    ? (): void => {
+        useWorkspaceStore.getState().addAutomationsTab(automationsProjectId)
         returnToWorkspace()
       }
     : undefined
@@ -436,7 +458,7 @@ export function MobileChatShell({
           to 0 in engines that treat flex-resolved sizes as indefinite. */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
       {showTerminalControls && activeTerminal?.ptyId ? (
-        <MobileTerminalControls terminalId={activeTerminal.ptyId} />
+        <MobileTerminalControls terminalId={activeTerminal.id} />
       ) : null}
 
       <MobileShellDrawer
@@ -453,6 +475,7 @@ export function MobileChatShell({
         onRenameTerminal={onRenameTerminal}
         onCloseEditorTab={onCloseEditorTab}
         onOpenGitHistory={openGitHistory}
+        onOpenAutomations={openAutomations}
         onOpenProjects={openProjectSheet}
         onOpenFiles={openFilesFrom ? () => openFilesFrom(menuButtonRef.current) : undefined}
       />
@@ -492,6 +515,7 @@ export function MobileChatShell({
         onOpenCommandPalette={openCommandPalette}
         onNewTerminal={newTerminal}
         onOpenProjectSettings={handOffToModal('header-more-sheet', openProjectSettings)}
+        onReportBug={handOffToModal('header-more-sheet', onReportBug)}
         onCloseChat={activeTab?.type === 'agent-chat' ? closeActiveChat : undefined}
         onReloadChat={activeTab?.type === 'agent-chat' ? chatReload.reload : undefined}
         reloadChatDisabled={chatReload.disabled}
@@ -516,6 +540,7 @@ export function MobileChatShell({
           onOpenFiles={openFilesFromSheet}
           onOpenCommandPalette={openCommandPalette}
           onOpenProjectSettings={handOffToModal('terminal-actions-sheet', openProjectSettings)}
+          onReportBug={handOffToModal('terminal-actions-sheet', onReportBug)}
           onCloseTerminal={onCloseTerminal}
         />
       )}

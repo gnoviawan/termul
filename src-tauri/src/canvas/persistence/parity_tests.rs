@@ -67,6 +67,7 @@ async fn open(project_id: &str, dir: &tempfile::TempDir) -> u64 {
         OpenRequest {
             client_instance_id: "parity-tab".into(),
             autosave_ms: Some(100),
+            autosave_max_ms: None,
             lease_grace_ms: None,
             max_mounted: Some(16),
             crash_timeouts: None,
@@ -179,7 +180,9 @@ async fn tauri_call(route: &'static str, body: Value) -> Value {
             )
             .await,
         ),
-        "disk-changed" => tauri(canvas_disk_changed(project_id, mount_seq).await),
+        "disk-changed" => {
+            tauri(canvas_disk_changed(project_id, mount_seq, body["reloadFailed"].as_bool()).await)
+        }
         "resolve-conflict" => tauri(
             canvas_resolve_conflict(
                 project_id,
@@ -447,6 +450,7 @@ where
     std::fs::write(&doc, b"again").unwrap();
     step("disk-changed", id(json!({}))).await;
     step("resolve-conflict", id(json!({"choice": "takeDisk"}))).await;
+    step("disk-changed", id(json!({"reloadFailed": true}))).await;
     step("crashed", id(json!({"reason": "wasm panic"}))).await;
     step("crashed", id(json!({"reason": "wasm panic"}))).await;
     replies
@@ -488,10 +492,15 @@ async fn desktop_and_web_handle_disk_changes_and_crashes_alike() {
     );
     assert_eq!(desktop[7]["data"]["reload"], json!(BASE64.encode(b"again")));
     assert_eq!(desktop[7]["data"]["view"]["conflict"], Value::Null);
-    assert_eq!(desktop[8]["data"]["lost"]["count"], json!(1));
     assert_eq!(
-        desktop[8]["data"]["reason"],
+        desktop[8]["data"]["kind"],
+        json!("conflict"),
+        "a reload the editor did not take is a conflict"
+    );
+    assert_eq!(desktop[9]["data"]["lost"]["count"], json!(1));
+    assert_eq!(
+        desktop[9]["data"]["reason"],
         "the editor crashed: wasm panic"
     );
-    assert_eq!(desktop[8], desktop[9], "one crash, one remount");
+    assert_eq!(desktop[9], desktop[10], "one crash, one remount");
 }

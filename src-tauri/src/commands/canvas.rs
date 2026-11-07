@@ -42,7 +42,7 @@ fn persistence_result<T>(
     }
 }
 
-/// `canvas_open { docPath, projectId, request: { clientInstanceId, autosaveMs?,
+/// `canvas_open { docPath, projectId, request: { clientInstanceId, autosaveMs?, autosaveMaxMs?,
 /// leaseGraceMs?, maxMounted?, crashTimeouts? } }` — the loopback bundle base
 /// plus a minted `ct` token and a new `mountSeq` for the project's canvas,
 /// leased to this window (AD-30). Typed `BUNDLE_LISTENER_DOWN` while the
@@ -238,15 +238,24 @@ fn log_write_outcome(project_id: &str, outcome: &WriteOutcome) {
     }
 }
 
-/// `canvas_disk_changed { projectId, mountSeq }` — Termul's file watcher saw
-/// the mounted document change: `unchanged` (Termul's own write), `reload`
-/// with the bytes for a clean editor, or `conflict` (AD-27).
+/// `canvas_disk_changed { projectId, mountSeq, reloadFailed? }` — Termul's
+/// file watcher saw the mounted document change: `unchanged` (Termul's own
+/// write), `reload` with the bytes for a clean editor, or `conflict`
+/// (AD-27). `reloadFailed`: the editor did not load the bytes a `reload`
+/// handed it, which makes the change a `conflict`.
 #[tauri::command]
 pub async fn canvas_disk_changed(
     project_id: String,
     mount_seq: u64,
+    reload_failed: Option<bool>,
 ) -> Result<IpcResult<DiskOutcome>, String> {
-    let result = canvas_mounts().disk_changed(&project_id, mount_seq).await;
+    let result = crate::canvas::persistence::disk_changed(
+        canvas_mounts(),
+        &project_id,
+        mount_seq,
+        reload_failed.unwrap_or(false),
+    )
+    .await;
     if let Ok(outcome) = &result {
         log_disk_outcome(&project_id, outcome);
     }

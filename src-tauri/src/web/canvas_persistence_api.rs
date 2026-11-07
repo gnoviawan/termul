@@ -10,8 +10,8 @@
 //!   the user-visibility half of the mount cap's activity ranking;
 //! - `POST /canvas/write-snapshot` `{projectId, mountSeq, snapshot}` →
 //!   `{view, markSaved}`;
-//! - `POST /canvas/disk-changed` `{projectId, mountSeq}` → `unchanged |
-//!   reload | conflict` (AD-27);
+//! - `POST /canvas/disk-changed` `{projectId, mountSeq, reloadFailed?}` →
+//!   `unchanged | reload | conflict` (AD-27);
 //! - `POST /canvas/resolve-conflict` `{projectId, mountSeq, choice,
 //!   snapshot?}` → `{view, reload, copyPath}`;
 //! - `POST /canvas/crashed` `{projectId, mountSeq, reason}` → the remount
@@ -53,41 +53,50 @@ pub const PERSISTENCE_ROUTES: &[&str] = &[
 /// A snapshot is a whole `.figcraft` file as base64 inside JSON.
 const MAX_SNAPSHOT_BODY_BYTES: usize = 256 * 1024 * 1024;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct MountRequest {
+pub(crate) struct MountRequest {
     project_id: String,
     mount_seq: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct LoadedRequest {
+pub(crate) struct DiskRequest {
+    project_id: String,
+    mount_seq: u64,
+    #[serde(default)]
+    reload_failed: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LoadedRequest {
     project_id: String,
     mount_seq: u64,
     ack: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct DirtyRequest {
+pub(crate) struct DirtyRequest {
     project_id: String,
     mount_seq: u64,
     dirty: bool,
     content_version: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct VisibleRequest {
+pub(crate) struct VisibleRequest {
     project_id: String,
     mount_seq: u64,
     visible: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct ResolveRequest {
+pub(crate) struct ResolveRequest {
     project_id: String,
     mount_seq: u64,
     choice: ConflictChoice,
@@ -95,17 +104,17 @@ struct ResolveRequest {
     snapshot: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct CrashedRequest {
+pub(crate) struct CrashedRequest {
     project_id: String,
     mount_seq: u64,
     reason: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct SnapshotRequest {
+pub(crate) struct SnapshotRequest {
     project_id: String,
     mount_seq: u64,
     snapshot: String,
@@ -239,14 +248,18 @@ async fn write_snapshot(
 async fn disk_changed(
     State(state): State<CanvasState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    Json(req): Json<MountRequest>,
+    Json(req): Json<DiskRequest>,
 ) -> Json<IpcBody<DiskOutcome>> {
     if let Some(forbidden) = check_canvas_write(&state, peer, "/canvas/disk-changed") {
         return Json(forbidden);
     }
-    let result = canvas_mounts()
-        .disk_changed(&req.project_id, req.mount_seq)
-        .await;
+    let result = persistence::disk_changed(
+        canvas_mounts(),
+        &req.project_id,
+        req.mount_seq,
+        req.reload_failed,
+    )
+    .await;
     if let Ok(outcome) = &result {
         crate::commands::log_disk_outcome(&req.project_id, outcome);
     }

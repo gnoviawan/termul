@@ -23,6 +23,7 @@ import {
   useAcpTurnIdleTimeout,
   useAcpTurnTimeout,
   useAgentIdleWindow,
+  useAutomaticCompletionRefresh,
   useConfirmTerminalClose,
   useDefaultProjectColor,
   useDefaultShell,
@@ -45,6 +46,7 @@ import type { ProjectColor } from '@/types/project'
 import { TERMINAL_URL_OPEN_MODE_OPTIONS, type TerminalUrlOpenMode } from '@/types/settings'
 import { AiAgentsSection } from './app-preferences/ai-agents-section'
 import { AppearanceSection } from './app-preferences/appearance-section'
+import { BrowserSection } from './app-preferences/browser-section'
 import { appPrefCategories, appPrefSearchIndex } from './app-preferences/categories'
 import { DiagnosticsSection } from './app-preferences/diagnostics-section'
 import { EditorSection } from './app-preferences/editor-section'
@@ -53,6 +55,7 @@ import { McpServersSection } from './app-preferences/mcp-servers-section'
 import { NotificationsSection } from './app-preferences/notifications-section'
 import { ProviderSection } from './app-preferences/provider-section'
 import { ResetSection } from './app-preferences/reset-section'
+import { ServerSection } from './app-preferences/server-section'
 import { ShellSection } from './app-preferences/shell-section'
 import { ShortcutsSection } from './app-preferences/shortcuts-section'
 import { SkillsSection } from './app-preferences/skills-section'
@@ -73,6 +76,7 @@ export function AppPreferencesModal(): React.JSX.Element {
   const bufferSize = useTerminalBufferSize()
   const terminalRenderer = useTerminalRenderer()
   const terminalScreenReaderMode = useTerminalScreenReaderMode()
+  const automaticCompletionRefresh = useAutomaticCompletionRefresh()
   const defaultShell = useDefaultShell()
   const defaultProjectColor = useDefaultProjectColor() as ProjectColor
   const _confirmTerminalClose = useConfirmTerminalClose()
@@ -109,11 +113,17 @@ export function AppPreferencesModal(): React.JSX.Element {
     autoUpdateEnabled,
     skippedVersion,
     error: updateError,
+    errorSource: updateErrorSource,
     isManualUpdateMode,
     updateChannel
   } = useUpdaterState()
-  const { checkForUpdates, installAndRestart, setAutoUpdateEnabled, setUpdateChannel } =
-    useUpdaterActions()
+  const {
+    checkForUpdates,
+    downloadUpdate,
+    installAndRestart,
+    setAutoUpdateEnabled,
+    setUpdateChannel
+  } = useUpdaterActions()
 
   // Load available shells
   useEffect(() => {
@@ -156,6 +166,17 @@ export function AppPreferencesModal(): React.JSX.Element {
       level: 'info',
       source: 'AppPreferences.terminalScreenReaderMode',
       message: `Terminal screen reader mode ${enabled ? 'enabled' : 'disabled'}; applies to new terminals only (can repeat typed characters, xterm.js #3467 / repo #267)`
+    })
+  }
+
+  const handleAutomaticCompletionRefreshChange = async (enabled: boolean) => {
+    await updateSetting('automaticCompletionRefresh', enabled)
+    void logFrontendError({
+      level: 'info',
+      source: 'AppPreferences.automaticCompletionRefresh',
+      // The scheduler reads the setting live (see bind-session.ts), so the
+      // flip is immediate — unlike xterm options, which need a new terminal.
+      message: `Automatic completion refresh ${enabled ? 'enabled' : 'disabled'}; applies immediately`
     })
   }
 
@@ -303,11 +324,13 @@ export function AppPreferencesModal(): React.JSX.Element {
             bufferSize={bufferSize}
             terminalRenderer={terminalRenderer}
             screenReaderMode={terminalScreenReaderMode}
+            automaticCompletionRefresh={automaticCompletionRefresh}
             terminalUrlOpenMode={terminalUrlOpenMode}
             handleFontSizeChange={handleFontSizeChange}
             handleBufferSizeChange={handleBufferSizeChange}
             handleRendererChange={handleRendererChange}
             handleScreenReaderModeChange={handleScreenReaderModeChange}
+            handleAutomaticCompletionRefreshChange={handleAutomaticCompletionRefreshChange}
             handleTerminalUrlOpenModeChange={handleTerminalUrlOpenModeChange}
           />
           <ShellSection
@@ -331,6 +354,7 @@ export function AppPreferencesModal(): React.JSX.Element {
           <SkillsSection />
           <ProviderSection />
           <McpServersSection />
+          <BrowserSection />
           <ShortcutsSection
             shortcuts={shortcuts}
             updateShortcut={updateShortcut}
@@ -346,13 +370,16 @@ export function AppPreferencesModal(): React.JSX.Element {
             autoUpdateEnabled={autoUpdateEnabled}
             skippedVersion={skippedVersion}
             updateError={updateError}
+            updateErrorSource={updateErrorSource}
             isManualUpdateMode={isManualUpdateMode}
             updateChannel={updateChannel}
             checkForUpdates={checkForUpdates}
+            downloadUpdate={downloadUpdate}
             installAndRestart={installAndRestart}
             handleAutoUpdateToggle={handleAutoUpdateToggle}
             setUpdateChannel={setUpdateChannel}
           />
+          <ServerSection />
           <DiagnosticsSection />
           <ResetSection setIsResetDialogOpen={setIsResetDialogOpen} />
         </SettingsLayout>

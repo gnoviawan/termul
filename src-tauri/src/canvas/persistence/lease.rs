@@ -78,6 +78,8 @@ pub struct MountRequest {
     pub renderer: RendererId,
     pub doc_path: PathBuf,
     pub autosave: Duration,
+    /// `canvas.autosave_max_ms` ([`super::autosave_max_wait`]).
+    pub autosave_max: Duration,
     pub lease_grace: Duration,
     /// `canvas.crash_timeouts` ([`super::crash_timeouts`]).
     pub crash_timeouts: u32,
@@ -90,6 +92,7 @@ impl MountRequest {
             renderer: super::test_renderer(),
             doc_path,
             autosave,
+            autosave_max: super::autosave_max_wait(None),
             lease_grace: lease_grace(None),
             crash_timeouts: super::DEFAULT_CRASH_TIMEOUTS,
         }
@@ -169,28 +172,54 @@ impl CanvasPersistence {
         }
         let _admitting = self.admission.lock().await;
         let mut evicted = Vec::new();
-        let opened = match self.make_room(project_id, cap, &mut evicted).await {
-            Ok(()) => self.lease(project_id, &request).await,
+        let host_cap = self.host_cap(cap);
+        let opened = match self.make_room(project_id, host_cap, &mut evicted).await {
+            Ok(()) => self.lease(project_id, &request, cap).await,
             Err(error) => Err(error),
         };
         Admitted { evicted, opened }
     }
 
-    async fn lease(&self, project_id: &str, request: &MountRequest) -> Result<Opened, CanvasError> {
+    async fn lease(
+        &self,
+        project_id: &str,
+        request: &MountRequest,
+        cap: usize,
+    ) -> Result<Opened, CanvasError> {
         loop {
             let current = self.mounts.lock().get(project_id).cloned();
             let (lease, expected) = match &current {
                 None => (LeaseChange::Granted, None),
-                Some(mount) if mount.holder == request.renderer => (
-                    LeaseChange::Remounted {
-                        previous: mount.mount_seq,
-                    },
-                    Some(mount),
-                ),
-                Some(mount) => (self.take_over(project_id, mount).await?, None),
+                // The same renderer id with its page gone (reloaded) remounts
+                // without a save. A page still attached is another live tab
+                // that copied the id (a duplicated tab copies sessionStorage):
+                // it is taken over like any other holder.
+                Some(mount)
+                    if mount.holder == request.renderer
+                        && mount.state.lock().link.connection().is_none() =>
+                {
+                    (
+                        LeaseChange::Remounted {
+                            previous: mount.mount_seq,
+                        },
+                        Some(mount),
+                    )
+                }
+                Some(mount) => match self.take_over(project_id, mount).await {
+                    Ok(lease) => (lease, None),
+                    // The same renderer's page went away during the save: it
+                    // was a reload that got here first, remounted next pass.
+                    Err(_)
+                        if mount.holder == request.renderer
+                            && mount.state.lock().link.connection().is_none() =>
+                    {
+                        continue
+                    }
+                    Err(error) => return Err(error),
+                },
             };
             let mount_seq = self.next_mount_seq();
-            let mount = Mount::new(mount_seq, self.tick(), request.clone(), None);
+            let mount = Mount::new(mount_seq, self.tick(), request.clone(), cap, None);
             if self.install(project_id, expected, mount) {
                 return Ok(Opened { mount_seq, lease });
             }
@@ -212,7 +241,9 @@ impl CanvasPersistence {
             .link
             .connection()
             .map(|connection| connection.holder().clone());
-        let closed = self.close(project_id, CloseMode::Save).await?;
+        let closed = self
+            .close_mount(project_id, mount.mount_seq, CloseMode::Save)
+            .await?;
         if let Some(renderer) = connected.filter(|_| closed.unmounted) {
             renderer.tell_lease_lost(project_id, mount.mount_seq, reason);
         }

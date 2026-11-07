@@ -581,7 +581,8 @@ describe('WorkspaceLayout - Empty States', () => {
       pinTag: 'termul-v1',
       docKey: '/workspace/p/design.figcraft',
       mountSeq: 3,
-      evicted: []
+      evicted: [],
+      fallbackFonts: []
     }
     useCanvasStore.setState({
       sessions: {

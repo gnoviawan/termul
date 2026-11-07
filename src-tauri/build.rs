@@ -15,8 +15,27 @@ const RELEASE_WITHOUT_CUSTOM_PROTOCOL_CFG: &str = "termul_release_without_custom
 /// `tauri` crate's build script, `true` whenever `tauri/custom-protocol` is
 /// off). The escape hatch `1` / `true` disables the guard.
 fn release_without_custom_protocol(profile: &str, dev: bool, allow_override: &str) -> bool {
-    let allowed = matches!(allow_override.trim(), "1" | "true");
-    profile == "release" && dev && !allowed
+    profile == "release" && dev && !is_override_on(allow_override)
+}
+
+/// Cfg set when a release-profile build would embed no figcraft canvas
+/// bundle. A `compile_error!` in `src/web/assets.rs` turns it into a build
+/// failure for the library, so the desktop app and `termul-server` both stop.
+const CANVAS_BUNDLE_MISSING_CFG: &str = "canvas_bundle_missing";
+
+/// Escape hatch for a release build that deliberately ships without the
+/// canvas (`1` / `true`), for example an offline build or `cargo test
+/// --release`.
+const ALLOW_MISSING_CANVAS_BUNDLE_ENV: &str = "TERMUL_ALLOW_MISSING_CANVAS_BUNDLE";
+
+fn is_override_on(value: &str) -> bool {
+    matches!(value.trim(), "1" | "true")
+}
+
+/// Whether a release-profile build lacks `canvas/bundle/index.html` and the
+/// operator has not opted out with [`ALLOW_MISSING_CANVAS_BUNDLE_ENV`].
+fn release_without_canvas_bundle(profile: &str, has_bundle: bool, allow_override: &str) -> bool {
+    profile == "release" && !has_bundle && !is_override_on(allow_override)
 }
 
 fn main() {
@@ -29,15 +48,28 @@ fn main() {
     // The figcraft web bundle (`canvas/bundle/`, fetched by
     // `scripts/canvas/fetch-figcraft-bundle.mjs`) is embedded the same way.
     // A missing bundle must not fail dev/CI, but a release build without it
-    // would ship a canvas that answers BUNDLE_MISSING, so say so loudly.
+    // ships a canvas that answers BUNDLE_MISSING, so the release path hits the
+    // `compile_error!` in `web/assets.rs` unless the operator opts out.
     println!("cargo:rerun-if-changed=../canvas/bundle");
     println!("cargo:rerun-if-changed=../canvas/figcraft.pin");
-    if std::env::var("PROFILE").as_deref() == Ok("release")
-        && !Path::new("../canvas/bundle/index.html").is_file()
-    {
+    println!("cargo:rustc-check-cfg=cfg({CANVAS_BUNDLE_MISSING_CFG})");
+    println!("cargo:rerun-if-env-changed={ALLOW_MISSING_CANVAS_BUNDLE_ENV}");
+    // Non-empty, as the CI `test -s` checks require: an empty index.html
+    // would embed a canvas that loads a blank page.
+    let has_canvas_bundle = std::fs::metadata("../canvas/bundle/index.html")
+        .is_ok_and(|meta| meta.is_file() && meta.len() > 0);
+    let allow_missing_canvas_bundle =
+        std::env::var(ALLOW_MISSING_CANVAS_BUNDLE_ENV).unwrap_or_default();
+    if release_without_canvas_bundle(
+        &std::env::var("PROFILE").unwrap_or_default(),
+        has_canvas_bundle,
+        &allow_missing_canvas_bundle,
+    ) {
+        println!("cargo:rustc-cfg={CANVAS_BUNDLE_MISSING_CFG}");
+    } else if !has_canvas_bundle && is_override_on(&allow_missing_canvas_bundle) {
         println!(
-            "cargo:warning=canvas/bundle/index.html is missing: this release build will not embed \
-             the figcraft canvas bundle (run scripts/canvas/fetch-figcraft-bundle.mjs first)"
+            "cargo:warning={ALLOW_MISSING_CANVAS_BUNDLE_ENV} is set: this build does not embed \
+             the figcraft canvas bundle, and the canvas answers BUNDLE_MISSING"
         );
     }
 

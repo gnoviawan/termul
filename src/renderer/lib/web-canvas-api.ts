@@ -107,8 +107,16 @@ export const webCanvasApi: CanvasApi = {
     })
   },
 
-  diskChanged(projectId: string, mountSeq: number): Promise<IpcResult<CanvasDiskOutcome>> {
-    return postJson<CanvasDiskOutcome>('/canvas/disk-changed', { projectId, mountSeq })
+  diskChanged(
+    projectId: string,
+    mountSeq: number,
+    reloadFailed?: boolean
+  ): Promise<IpcResult<CanvasDiskOutcome>> {
+    return postJson<CanvasDiskOutcome>('/canvas/disk-changed', {
+      projectId,
+      mountSeq,
+      ...(reloadFailed ? { reloadFailed: true } : {})
+    })
   },
 
   resolveConflict(

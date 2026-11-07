@@ -1,65 +1,70 @@
 /**
- * In-chat agent browser-automation consent card
- * (spec-acp-browser-automation-v2 CAP-5).
+ * In-chat agent browser consent card.
  *
- * Fallback surface for the once-per-session browser consent when the user's
- * focus is anywhere but the agent browser tab: the focused pane's
+ * Fallback surface for a browser consent ticket when the user's focus is
+ * anywhere but the agent browser tab: the focused pane's
  * `BrowserConsentStrip` owns the prompt while a live strip is mounted for the
  * active browser tab, and this card renders in the session's chat panel
- * otherwise (chat, terminal, or any other focus). Panes never overlap, so the
- * card cannot paint over the native browser webview — no modal, no
- * webview-hide workaround. `BrowserConsentCardHost` reuses this card as the
- * root-level fallback for states where no chat panel can show it.
+ * otherwise (chat, terminal, any other focus, and every remote client, which
+ * has no browser pane). Panes never overlap, so the card cannot paint over
+ * the native browser webview. `BrowserConsentCardHost` reuses this card as
+ * the root-level fallback for states where no chat panel can show it.
  *
  * Modeled on `PermissionPrompt`: inline card, `Button` variants, semantic
- * tokens, `aria-live`, and deliberately no dismiss or outside-click behavior —
- * the host auto-denies on timeout, and the agent stays blocked until the user
- * picks Allow or Deny. A failed respond restores the pending entry (the store
- * optimistically deletes it and puts it back on invoke failure), and the card
- * remounts enabled — no local one-response flag, which would block the retry.
+ * tokens, `aria-live`, and deliberately no dismiss or outside-click behavior.
+ * A refused answer restores the pending entry (the store optimistically
+ * deletes it), and the card remounts enabled.
  *
- * Security: the card lives in the main webview's DOM — page-injected UI is
- * never allowed to carry the consent decision, and `browser_consent_respond`
- * rejects non-`main` callers.
+ * Security: only host-supplied ticket fields are shown, never page title or
+ * text, and the agent's stated intent is labelled as the agent's. The answer
+ * buttons arm a moment after the card appears; the host refuses faster
+ * answers too.
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import {
-  BROWSER_CONSENT_TITLE,
+  browserConsentFileLine,
+  browserConsentOptionLabel,
+  browserConsentProfileLabel,
   browserConsentSummary,
-  browserConsentTitleId
+  browserConsentTargetLine,
+  browserConsentTitle,
+  browserConsentTitleId,
+  useConsentArmed
 } from '@/components/browser/consent-intent'
 import { ShieldAlert, ShieldCheck } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useAgentDisplayName } from '@/hooks/use-agent-display-name'
-import type { BrowserConsentRequestEvent } from '@/lib/acp-api'
+import type { BrowserConsentTicket } from '@/lib/browser-consent-api'
 import { logFrontendError } from '@/lib/log-api'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
 
+// Module-wide, not per card: the chat panel's card and the root host's card
+// can both mount for one ticket while the panel registers as its host.
+const loggedRequestIds = new Set<string>()
+
 interface BrowserConsentCardProps {
-  /** The pending consent belonging to this panel's session. */
-  consent: BrowserConsentRequestEvent
+  /** The pending ticket belonging to this panel's session. */
+  consent: BrowserConsentTicket
 }
 
 export function BrowserConsentCard({ consent }: BrowserConsentCardProps): React.JSX.Element | null {
   const respond = useAcpStore((s) => s.respondBrowserConsent)
-  const agentName = useAgentDisplayName(consent.agentId)
+  const agentId = useAcpStore((s) => s.sessions[consent.sessionId]?.agentId)
+  const agentName = useAgentDisplayName(agentId)
   const stripHosting = useIsConsentStripHosting()
-  const loggedRequestRef = useRef<string | null>(null)
+  const armed = useConsentArmed(consent.requestId)
 
   // The card is the fallback surface: it renders only while no live strip
-  // hosts the focused pane's active browser tab (mutual exclusion, CAP-5).
-  // Phase-1 consent is granted on the desktop host only — remote clients
-  // (WS relay) never see a prompt; the host auto-denies on timeout.
-  const hosting = isTauriContext() && !stripHosting
+  // hosts the focused pane's active browser tab (mutual exclusion).
+  const hosting = !stripHosting
 
   // Boundary log (durable): once per request, record that the in-chat card
   // owns this consent decision rather than the in-pane strip.
   useEffect(() => {
-    if (!hosting || loggedRequestRef.current === consent.requestId) return
-    loggedRequestRef.current = consent.requestId
+    if (!hosting || loggedRequestIds.has(consent.requestId)) return
+    loggedRequestIds.add(consent.requestId)
     void logFrontendError({
       level: 'info',
       message: `browser consent card hosting prompt: requestId=${consent.requestId}`,
@@ -70,9 +75,6 @@ export function BrowserConsentCard({ consent }: BrowserConsentCardProps): React.
   if (!hosting) return null
 
   const titleId = browserConsentTitleId(consent.requestId)
-  const choose = (allowed: boolean): void => {
-    respond(consent.requestId, allowed)
-  }
 
   return (
     <section
@@ -87,35 +89,61 @@ export function BrowserConsentCard({ consent }: BrowserConsentCardProps): React.
         </span>
         <div className="min-w-0 flex-1">
           <h2 id={titleId} className="text-xs font-semibold leading-5 text-foreground">
-            {BROWSER_CONSENT_TITLE}
+            {browserConsentTitle(consent.action)}
           </h2>
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-            {browserConsentSummary(agentName, consent.action, consent.element)} You'll watch it work
-            in a visible tab; closing the tab stops it.
+            {browserConsentSummary(agentName, consent)} You'll watch it work in a visible tab.
           </p>
+          <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-2xs leading-relaxed">
+            <dt className="text-muted-foreground">Site</dt>
+            <dd className="truncate font-medium text-foreground">{consent.origin}</dd>
+            <dt className="text-muted-foreground">Address</dt>
+            <dd className="break-all font-mono text-muted-foreground">
+              {browserConsentTargetLine(consent)}
+            </dd>
+            {consent.file ? (
+              <>
+                <dt className="text-muted-foreground">File</dt>
+                <dd className="break-words font-medium text-foreground">
+                  {browserConsentFileLine(consent.file)}
+                </dd>
+              </>
+            ) : null}
+            {consent.element ? (
+              <>
+                <dt className="text-muted-foreground">Agent says</dt>
+                <dd className="break-words text-muted-foreground">"{consent.element}"</dd>
+              </>
+            ) : null}
+            <dt className="text-muted-foreground">Profile</dt>
+            <dd className="text-muted-foreground">{browserConsentProfileLabel(consent.profile)}</dd>
+          </dl>
         </div>
       </div>
 
       <fieldset className="mt-2.5 flex flex-wrap items-center gap-2">
         <legend className="sr-only">Browser consent options</legend>
-        <Button
-          variant="default"
-          size="sm"
-          onClick={() => choose(true)}
-          className="h-8 min-w-0 rounded-lg px-3 text-xs font-medium whitespace-nowrap transition-[transform,color,background-color,border-color] duration-150 active:scale-[0.96]"
-        >
-          <ShieldCheck size={14} className="shrink-0" aria-hidden="true" />
-          <span className="truncate">Allow for this session</span>
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => choose(false)}
-          className="h-8 min-w-0 rounded-lg border-transparent px-3 text-xs font-medium text-muted-foreground whitespace-nowrap transition-[transform,color,background-color,border-color] duration-150 hover:border-destructive/25 hover:bg-destructive/10 hover:text-destructive active:scale-[0.96]"
-        >
-          <ShieldAlert size={14} className="shrink-0" aria-hidden="true" />
-          <span className="truncate">Deny</span>
-        </Button>
+        {consent.options.map((optionId) => (
+          <Button
+            key={optionId}
+            variant={optionId === 'allow_session' ? 'default' : 'outline'}
+            size="sm"
+            disabled={!armed}
+            onClick={() => respond(consent.requestId, optionId)}
+            className={
+              optionId === 'deny'
+                ? 'h-8 min-w-0 rounded-lg border-transparent px-3 text-xs font-medium text-muted-foreground whitespace-nowrap transition-[transform,color,background-color,border-color] duration-150 hover:border-destructive/25 hover:bg-destructive/10 hover:text-destructive active:scale-[0.96]'
+                : 'h-8 min-w-0 rounded-lg px-3 text-xs font-medium whitespace-nowrap transition-[transform,color,background-color,border-color] duration-150 active:scale-[0.96]'
+            }
+          >
+            {optionId === 'deny' ? (
+              <ShieldAlert size={14} className="shrink-0" aria-hidden="true" />
+            ) : (
+              <ShieldCheck size={14} className="shrink-0" aria-hidden="true" />
+            )}
+            <span className="truncate">{browserConsentOptionLabel(optionId, consent.action)}</span>
+          </Button>
+        ))}
       </fieldset>
     </section>
   )

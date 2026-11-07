@@ -175,4 +175,37 @@ describe('skillsApi (web vs desktop branch)', () => {
     })
     expect(mockFetch).not.toHaveBeenCalled()
   })
+
+  it('web: listSkillFiles fetches GET /skills-index with projectRoot', async () => {
+    const entry = { name: 'oc-review', path: '/home/u/.config/opencode/skills/oc-review/SKILL.md' }
+    mockIsTauriContext.mockReturnValue(false)
+    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: [entry] }))
+
+    const result = await skillsApi.listSkillFiles('/web/proj')
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${window.location.origin}/skills-index?projectRoot=${encodeURIComponent('/web/proj')}`,
+      expect.objectContaining({ method: 'GET' })
+    )
+    expect(mockInvoke).not.toHaveBeenCalled()
+    expect(result).toEqual([entry])
+  })
+
+  it('web: listSkillFiles throws on !success', async () => {
+    mockIsTauriContext.mockReturnValue(false)
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ success: false, error: 'outside', code: 'OUTSIDE_PROJECT_ROOT' })
+    )
+    await expect(skillsApi.listSkillFiles('/elsewhere')).rejects.toThrow('outside')
+  })
+
+  it('desktop: listSkillFiles invokes list_skill_files_cmd', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockInvoke.mockResolvedValueOnce([])
+
+    await skillsApi.listSkillFiles()
+
+    expect(mockInvoke).toHaveBeenCalledWith('list_skill_files_cmd', { projectRoot: null })
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
 })

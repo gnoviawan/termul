@@ -106,6 +106,7 @@ fn test_state_with_root(root: &Path) -> AppState {
         allow_remote_writes: false,
         shared_live_writes_denied: false,
         connections: Default::default(),
+        server_admin: None,
     }
 }
 

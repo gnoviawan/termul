@@ -42,3 +42,48 @@ export function formatRelativeTime(iso: string, now: number = Date.now()): strin
   if (Number.isNaN(then)) return ''
   return formatRelativeTimeFromMs(then, now)
 }
+
+/** Local midnight at the start of `now`'s day, in epoch ms. */
+export function startOfToday(now: number): number {
+  const day = new Date(now)
+  day.setHours(0, 0, 0, 0)
+  return day.getTime()
+}
+
+/**
+ * Local midnight at the start of the day before `now`'s, in epoch ms. Steps
+ * the calendar day rather than subtracting 24 h, so the boundary holds the day
+ * after a DST change (a 23 h or 25 h day).
+ */
+export function startOfYesterday(now: number): number {
+  const day = new Date(startOfToday(now))
+  day.setDate(day.getDate() - 1)
+  day.setHours(0, 0, 0, 0)
+  return day.getTime()
+}
+
+/**
+ * Format when a chat was created for the mobile Recents rows: the locale clock
+ * time (e.g. "14:05") for today, "Yesterday 14:05" for yesterday, else a short
+ * date ("Oct 28"), with the year when it is not this year. Yesterday names the
+ * day because the Active and Unassigned sections have no date heading. A
+ * missing, zero or non-finite timestamp yields an empty string so the row
+ * shows no time.
+ *
+ * The day boundaries match `groupSessionsByRecency`. `now` is injectable for
+ * deterministic tests.
+ */
+export function formatChatCreatedTime(ms: number | undefined, now: number = Date.now()): string {
+  if (ms === undefined || !Number.isFinite(ms) || ms <= 0) return ''
+  const created = new Date(ms)
+  const clock = created.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (ms >= startOfToday(now)) return clock
+  if (ms >= startOfYesterday(now)) return `Yesterday ${clock}`
+  const thisYear = created.getFullYear() === new Date(now).getFullYear()
+  return created.toLocaleDateString(
+    undefined,
+    thisYear
+      ? { month: 'short', day: 'numeric' }
+      : { year: 'numeric', month: 'short', day: 'numeric' }
+  )
+}

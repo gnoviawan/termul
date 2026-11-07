@@ -670,6 +670,7 @@ describe('WorkspaceLayout mobile branch', () => {
         'Files',
         'Command palette',
         'Project settings',
+        'Report a bug',
         'Close terminal'
       ])
     })

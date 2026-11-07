@@ -171,7 +171,7 @@ export function ModeMenuList({
                   className={cn(
                     'flex w-full items-start gap-2.5 rounded-lg px-2.5 text-left',
                     'transition-[background-color,transform] duration-150 ease-out',
-                    'hover:bg-foreground/10 focus-visible:bg-foreground/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring',
+                    'hover:bg-foreground/10 focus-visible:bg-foreground/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring',
                     'active:scale-[0.96] motion-reduce:active:scale-100',
                     touch ? 'min-h-11 py-2.5' : 'py-2'
                   )}

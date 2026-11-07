@@ -34,8 +34,12 @@ export interface CanvasGatewayTransport {
   isLive(): boolean
 }
 
-/** Runs one forwarded call in the mounted editor. Must not reject. */
-export type CanvasCallHandler = (call: WsCanvasCallFrame) => Promise<WsCanvasReplyPayload>
+/** Runs one forwarded call in the mounted editor. Must not reject.
+ * `deadline` (`Date.now()` ms) is when the host stops waiting for it. */
+export type CanvasCallHandler = (
+  call: WsCanvasCallFrame,
+  deadline?: number
+) => Promise<WsCanvasReplyPayload>
 
 /** This renderer no longer holds `projectId`'s canvas at `mountSeq`. */
 export type CanvasLeaseLostHandler = (
@@ -122,8 +126,11 @@ export class CanvasGatewayClient {
 
   handleFrame(call: WsCanvasCallFrame): void {
     const handler = this.handler
+    // The host's clock may differ from this one, so its wait is carried as
+    // time left and turned into a local deadline on arrival.
+    const deadline = call.timeoutMs === undefined ? undefined : Date.now() + call.timeoutMs
     const answer = handler
-      ? handler(call).catch((error: unknown) => ({
+      ? handler(call, deadline).catch((error: unknown) => ({
           callId: call.callId,
           mountSeq: call.mountSeq,
           ok: false as const,

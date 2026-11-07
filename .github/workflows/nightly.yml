@@ -1,7 +1,7 @@
 name: Nightly
 
 # Builds dev HEAD every night at 00:00 GMT+7 (17:00 UTC) and on manual
-# dispatch, synthesizes a `<upcoming>-nightly.<YYYYMMDD>.<shortsha>` version
+# dispatch, synthesizes a `<upcoming>-nightly.<YYYYMMDD>.<run_number>.<shortsha>` version
 # (detected from a release/v* branch, or patch-bumped from current), and
 # publishes a prerelease under the moving `nightly` tag with a per-channel
 # `latest-nightly.json` manifest covering both the desktop targets and the
@@ -53,6 +53,10 @@ jobs:
       - name: Synthesize version
         id: version
         shell: bash
+        env:
+          # Monotonic per-workflow counter: orders same-day nightlies strictly
+          # for the in-app updater (the short SHA carries no order).
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           # 00:00 GMT+7 = 17:00 UTC; use the GMT+7 (Asia/Jakarta) date so the
           # nightly version reflects the local calendar day the build ships.
@@ -62,7 +66,7 @@ jobs:
 
           # Detect the upcoming release version from a release/v* branch on the
           # remote. If release/v0.5.0 exists, the nightly version is
-          # 0.5.0-nightly.<date>.<sha> — more readable than 0.0.0-nightly.* and
+          # 0.5.0-nightly.<date>.<run>.<sha> — more readable than 0.0.0-nightly.* and
           # correctly offers the nightly to stable users (0.5.0-nightly > 0.4.8).
           # If no release branch exists, bump the patch from the current
           # package.json version as a best guess (0.4.8 -> 0.4.9-nightly.*).
@@ -78,15 +82,72 @@ jobs:
             echo "Detected release/v${RELEASE_VERSION} branch; using as nightly base."
           fi
 
-          NIGHTLY_VERSION="${RELEASE_VERSION}-nightly.${NIGHTLY_DATE}.${SHORT_SHA}"
+          # <run> (github.run_number) sits before the SHA so SemVer orders
+          # same-day builds by run, not by the unordered SHA; the in-app
+          # updater (src-tauri/src/updater_api.rs accepts_channel_update)
+          # relies on this to never re-offer or downgrade a nightly.
+          NIGHTLY_VERSION="${RELEASE_VERSION}-nightly.${NIGHTLY_DATE}.${RUN_NUMBER}.${SHORT_SHA}"
           echo "nightly_version=$NIGHTLY_VERSION" >> "$GITHUB_OUTPUT"
           echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "nightly_date=$NIGHTLY_DATE" >> "$GITHUB_OUTPUT"
           echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
 
+  # The MCP catalog snapshot (spine AD-3), fetched in its own job with no
+  # secrets exactly as release.yml does. Both build jobs swap it in for the
+  # committed dev fixture in src-tauri/resources/mcp-registry/ before cargo
+  # embeds it, so nightlies ship the live catalog rather than the fixture. If
+  # the registry is unreachable this job fails the nightly rather than ship
+  # the dev fixture; the next scheduled run or a manual dispatch retries it.
+  mcp-snapshot:
+    name: Fetch MCP registry snapshot
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      # Default ref, as in release.yml. Only the fetch script runs from this
+      # checkout, and --verify in each build job checks what it produced.
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.x
+
+      - name: Fetch the registry snapshot
+        run: bun scripts/fetch-mcp-registry-snapshot.mjs --out mcp-registry-snapshot
+
+      - name: Verify and record the snapshot sha256
+        shell: bash
+        run: |
+          bun scripts/fetch-mcp-registry-snapshot.mjs --verify mcp-registry-snapshot
+          {
+            echo '### MCP registry snapshot'
+            echo '```json'
+            cat mcp-registry-snapshot/mcp-registry-snapshot.meta.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Not named nightly-*: publish downloads that pattern as release inputs.
+      - name: Upload the snapshot
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: mcp-registry-snapshot
+          path: mcp-registry-snapshot/
+          if-no-files-found: error
+          retention-days: 1
+
   build:
     name: Build (${{ matrix.platform }})
-    needs: prepare
+    needs: [prepare, mcp-snapshot]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -177,12 +238,126 @@ jobs:
       - name: Bypass strict version alignment (nightly)
         run: bun scripts/align-version.ts --nightly
 
+      - name: Swap in the nightly MCP registry snapshot
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: mcp-registry-snapshot
+          path: src-tauri/resources/mcp-registry
+
+      - name: Verify the embedded MCP registry snapshot
+        run: bun scripts/fetch-mcp-registry-snapshot.mjs --verify src-tauri/resources/mcp-registry
+
       - name: Build web client (dist-web/)
         run: bun run build:web
 
       - name: Assert dist-web/index.html exists
         shell: bash
         run: test -f dist-web/index.html && test -s dist-web/index.html
+
+      # The figcraft canvas bundle is embedded alongside dist-web/ (spine
+      # AD-24), exactly as in release.yml: without it the canvas answers
+      # BUNDLE_MISSING. Fetched by the pin in canvas/figcraft.pin, sha256
+      # verified, and unpacked to canvas/bundle/ before the cargo build.
+      - name: Check figcraft pin
+        run: bun scripts/canvas/check-figcraft-pin.mjs
+
+      - name: Fetch and verify figcraft bundle (canvas/bundle/)
+        run: bun scripts/canvas/fetch-figcraft-bundle.mjs
+
+      - name: Assert canvas/bundle/index.html exists
+        shell: bash
+        run: test -f canvas/bundle/index.html && test -s canvas/bundle/index.html
+
+      # --- macOS signing & notarization (#1498) --------------------------------
+      # Nightlies used to ship ad-hoc signed + unnotarized, so Gatekeeper
+      # blocked them on first launch ("damaged and can't be opened"). When
+      # the Apple credentials are configured (same secrets as release.yml),
+      # port the release signing chain: import the Developer ID certificate,
+      # shadow xcrun so stapler retries transient CloudKit failures, and let
+      # tauri-action sign + notarize. Without the secrets the build proceeds
+      # exactly as before (ad-hoc) rather than killing the nightly pipeline.
+      - name: Resolve Apple signing availability
+        id: apple
+        if: startsWith(matrix.platform, 'macos-')
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_SIGNING_IDENTITY \
+            APPLE_ID \
+            APPLE_PASSWORD \
+            APPLE_TEAM_ID; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if [[ "${#missing[@]}" -eq 0 ]]; then
+            echo "apple_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            printf 'Apple signing secrets missing (%s) — nightly macOS build will be ad-hoc signed and Gatekeeper-blocked (#1498).\n' "${missing[*]}" >&2
+            echo "apple_ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import Apple Developer certificate
+        if: startsWith(matrix.platform, 'macos-') && steps.apple.outputs.apple_ok == 'true'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          keychain_password="$(openssl rand -base64 32)"
+          p12="$RUNNER_TEMP/certificate.p12"
+          keychain="$RUNNER_TEMP/build.keychain-db"
+          rm -f "$p12"
+          trap 'rm -f "$p12"' EXIT
+          printf '%s' "$APPLE_CERTIFICATE" | openssl base64 -d -A > "$p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security default-keychain -s "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -t 3600 -u "$keychain"
+          security import "$p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          if ! security find-identity -v -p codesigning "$keychain" | grep -F "$APPLE_SIGNING_IDENTITY" >/dev/null; then
+            echo "Imported keychain does not contain the configured signing identity." >&2
+            exit 1
+          fi
+
+      # Tauri ignores the stapler's exit status, so a transient CloudKit
+      # failure ships an unstapled .app (release.yml hit this as #1388).
+      # Shadow xcrun so `stapler staple` retries and logs its output.
+      - name: Retry stapler staple during the macOS build
+        if: startsWith(matrix.platform, 'macos-') && steps.apple.outputs.apple_ok == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shim_dir="$RUNNER_TEMP/xcrun-shim"
+          mkdir -p "$shim_dir"
+          cat > "$shim_dir/xcrun" <<'SH'
+          #!/bin/bash
+          set -o pipefail
+          if [[ "${1-}" == stapler && "${2-}" == staple ]]; then
+            for delay in 0 15 30 60 120; do
+              sleep "$delay"
+              /usr/bin/xcrun "$@" 2>&1 | tee -a "$RUNNER_TEMP/stapler-staple.log" && exit 0
+            done
+            exit 1
+          fi
+          exec /usr/bin/xcrun "$@"
+          SH
+          chmod +x "$shim_dir/xcrun"
+          echo "$shim_dir" >> "$GITHUB_PATH"
 
       - name: Build platform artifacts locally
         id: tauri
@@ -191,6 +366,10 @@ jobs:
           TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && steps.apple.outputs.apple_ok == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ startsWith(matrix.platform, 'macos-') && steps.apple.outputs.apple_ok == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ startsWith(matrix.platform, 'macos-') && steps.apple.outputs.apple_ok == 'true' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ startsWith(matrix.platform, 'macos-') && steps.apple.outputs.apple_ok == 'true' && secrets.APPLE_TEAM_ID || '' }}
         with:
           tauriScript: bun run tauri
           args: ${{ matrix.args }} --config src-tauri/tauri.conf.prod.json
@@ -200,6 +379,39 @@ jobs:
         env:
           ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
         run: printf '%s\n' "$ARTIFACT_PATHS" > tauri-artifact-paths.json
+
+      # tauri-action notarizes + staples the .app only; the DMG is signed but
+      # never submitted (release.yml hit this). Notarize + staple the DMG so
+      # Gatekeeper accepts it on user machines.
+      - name: Notarize and staple macOS DMG
+        if: startsWith(matrix.platform, 'macos-') && steps.apple.outputs.apple_ok == 'true'
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          if [[ ! -s "$RUNNER_TEMP/stapler-staple.log" ]]; then
+            echo "Tauri's stapler staple never reached the xcrun shim." >&2
+            exit 1
+          fi
+          echo "::group::Tauri .app staple output"
+          cat "$RUNNER_TEMP/stapler-staple.log"
+          echo "::endgroup::"
+          dmgs=("src-tauri/target/$RUST_TARGET/release/bundle/dmg"/*.dmg)
+          if [[ "${#dmgs[@]}" -ne 1 ]]; then
+            echo "Expected exactly one macOS DMG before notarization." >&2
+            exit 1
+          fi
+          xcrun notarytool submit "${dmgs[0]}" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "${dmgs[0]}"
 
       - name: Collect platform release assets and updater manifest
         shell: bash
@@ -225,7 +437,7 @@ jobs:
 
   standalone-server:
     name: Build termul-server (linux-${{ matrix.arch }})
-    needs: prepare
+    needs: [prepare, mcp-snapshot]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -308,11 +520,34 @@ jobs:
       - name: Bypass strict version alignment (nightly)
         run: bun scripts/align-version.ts --nightly
 
+      - name: Swap in the nightly MCP registry snapshot
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: mcp-registry-snapshot
+          path: src-tauri/resources/mcp-registry
+
+      - name: Verify the embedded MCP registry snapshot
+        run: bun scripts/fetch-mcp-registry-snapshot.mjs --verify src-tauri/resources/mcp-registry
+
       - name: Build web client (dist-web/)
         run: bun run build:web
 
       - name: Assert dist-web/index.html exists
         run: test -f dist-web/index.html && test -s dist-web/index.html
+
+      # The figcraft canvas bundle is embedded alongside dist-web/ (spine
+      # AD-24), exactly as in release.yml: without it the canvas answers
+      # BUNDLE_MISSING. Fetched by the pin in canvas/figcraft.pin, sha256
+      # verified, and unpacked to canvas/bundle/ before the cargo build.
+      - name: Check figcraft pin
+        run: bun scripts/canvas/check-figcraft-pin.mjs
+
+      - name: Fetch and verify figcraft bundle (canvas/bundle/)
+        run: bun scripts/canvas/fetch-figcraft-bundle.mjs
+
+      - name: Assert canvas/bundle/index.html exists
+        shell: bash
+        run: test -f canvas/bundle/index.html && test -s canvas/bundle/index.html
 
       - name: Build termul-server (linux-${{ matrix.arch }} release)
         working-directory: src-tauri
@@ -368,10 +603,15 @@ jobs:
         shell: bash
         env:
           ASSET_NAME: ${{ matrix.asset_name }}
+          ARCH: ${{ matrix.arch }}
         run: |
           mkdir -p server-collected
           cp src-tauri/target/release/termul-server "server-collected/$ASSET_NAME"
           cp src-tauri/target/release/termul-server.sig "server-collected/$ASSET_NAME.sig"
+          # The API spec is the same on every arch; the x64 build emits it.
+          if [[ "$ARCH" == "x64" ]]; then
+            src-tauri/target/release/termul-server openapi > server-collected/openapi.yaml
+          fi
 
       - name: Upload termul-server workflow artifact
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
@@ -462,6 +702,13 @@ jobs:
             manifests+=("$server_root/server-manifest.json")
           done
 
+          spec="release-inputs/nightly-standalone-server-x64/openapi.yaml"
+          if [[ ! -s "$spec" ]]; then
+            echo "Missing openapi.yaml from the x64 standalone server build" >&2
+            exit 1
+          fi
+          cp "$spec" release-assets/openapi.yaml
+
           PUB_DATE="$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
           node scripts/release/merge-updater-manifests.mjs \
             --channel nightly \
@@ -476,6 +723,41 @@ jobs:
             echo "No validated release assets were collected." >&2
             exit 1
           fi
+
+      # Versioned assets get a new name every night and are never clobbered, so
+      # without this the release hits GitHub's 1000-asset cap (#1508). Runs before
+      # the upload so a full release can still recover, and keeps the version the
+      # published latest-nightly.json points at so the updater never sees a 404.
+      - name: Prune older nightly versions from the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.nightly_version }}
+        shell: bash
+        run: |
+          err="$RUNNER_TEMP/release-view.err"
+          if ! release="$(gh release view nightly --repo "$GITHUB_REPOSITORY" --json assets 2>"$err")"; then
+            if grep -q 'release not found' "$err"; then
+              echo "No nightly release yet; nothing to prune."
+              exit 0
+            fi
+            cat "$err" >&2
+            exit 1
+          fi
+          if ! jq -e 'any(.assets[]; .name == "latest-nightly.json")' <<< "$release" >/dev/null; then
+            echo "Release has no latest-nightly.json; skipping prune so no live asset is deleted."
+            exit 0
+          fi
+          PUBLISHED="$(gh release download nightly --repo "$GITHUB_REPOSITORY" -p latest-nightly.json -O - | jq -r '.version')"
+          if [[ -z "$PUBLISHED" || "$PUBLISHED" == null ]]; then
+            echo "latest-nightly.json has no version" >&2
+            exit 1
+          fi
+          jq -r --arg current "$VERSION" --arg published "$PUBLISHED" \
+            '.assets[].name | select(test("-nightly\\.[0-9]{8}\\.") and ((contains($current) or contains($published)) | not))' <<< "$release" |
+          while IFS= read -r name; do
+            echo "Deleting $name"
+            gh release delete-asset nightly "$name" --repo "$GITHUB_REPOSITORY" --yes
+          done
 
       - name: Publish (or update) the moving nightly release
         env:

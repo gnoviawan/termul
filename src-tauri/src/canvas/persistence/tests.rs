@@ -7,8 +7,9 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 
 use super::{
-    autosave_delay, document_loaded, parse_version, read_document, write_snapshot,
-    CanvasPersistence, DirtyOutcome, MountRequest, CODE_CANVAS_NOT_READY, CODE_INVALID_PAYLOAD,
+    autosave_delay, autosave_max_wait, document_loaded, parse_version, read_document,
+    write_snapshot, CanvasPersistence, DirtyOutcome, MountRequest, CODE_CANVAS_NOT_READY,
+    CODE_INVALID_PAYLOAD,
 };
 use crate::canvas::{CODE_CANVAS_CLOSED, CODE_PATH_VALIDATION_FAILED};
 use crate::web::fs_api::{CheckedWrite, Expected};
@@ -364,4 +365,71 @@ async fn malformed_wire_payloads_are_typed() {
             "{bad}"
         );
     }
+}
+
+#[test]
+fn autosave_max_wait_defaults_to_10s_and_clamps() {
+    assert_eq!(autosave_max_wait(None), Duration::from_secs(10));
+    assert_eq!(autosave_max_wait(Some(10)), Duration::from_millis(100));
+    assert_eq!(autosave_max_wait(Some(u64::MAX)), Duration::from_secs(600));
+}
+
+#[tokio::test(start_paused = true)]
+async fn steady_edits_closer_than_the_debounce_still_save_by_the_max_wait() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mounts, seq) = mounted(doc_in(&dir));
+    let mounts = Arc::new(mounts);
+    mounts.document_loaded(PROJECT, seq, Some(1)).unwrap();
+    let notify = |cv: u64| {
+        let mounts = mounts.clone();
+        tokio::spawn(async move { mounts.dirty_changed(PROJECT, seq, true, cv).await })
+    };
+
+    let mut due_at = None;
+    let mut waiting = Vec::new();
+    for step in 0..15_u64 {
+        waiting.push((step, notify(2 + step)));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(1000)).await;
+        tokio::task::yield_now().await;
+        for (sent, task) in waiting.extract_if(.., |(_, task)| task.is_finished()) {
+            if let DirtyOutcome::SaveDue { view } = task.await.unwrap().unwrap() {
+                due_at.get_or_insert((sent, step, view.content_version));
+            }
+        }
+    }
+    let (sent, settled, version_due) = due_at.expect("a save came due while edits kept coming");
+    assert_eq!(
+        (sent, settled),
+        (9, 9),
+        "the edit reported 9 s after the first is saved by the 10 s max wait"
+    );
+    assert_eq!(version_due, version(Some("11")));
+}
+
+#[tokio::test(start_paused = true)]
+async fn after_a_save_came_due_the_next_edit_starts_a_new_max_wait() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mounts, seq) = mounted(doc_in(&dir));
+    let mounts = Arc::new(mounts);
+    mounts.document_loaded(PROJECT, seq, Some(1)).unwrap();
+    let first = mounts.dirty_changed(PROJECT, seq, true, 2).await.unwrap();
+    assert!(matches!(first, DirtyOutcome::SaveDue { .. }));
+    tokio::time::advance(Duration::from_secs(30)).await;
+    let next = {
+        let mounts = mounts.clone();
+        tokio::spawn(async move { mounts.dirty_changed(PROJECT, seq, true, 3).await })
+    };
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(1499)).await;
+    tokio::task::yield_now().await;
+    assert!(
+        !next.is_finished(),
+        "a stale window from the last save does not make the next edit due at once"
+    );
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert!(matches!(
+        next.await.unwrap().unwrap(),
+        DirtyOutcome::SaveDue { .. }
+    ));
 }

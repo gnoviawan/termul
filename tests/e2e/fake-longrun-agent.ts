@@ -65,8 +65,8 @@
  * prompt is accepted; the turn then streams as usual:
  * - `[DOCK]` pushes a 5-entry plan (3 completed) and three completed edit
  *   tool calls (src/auth.ts +10, src/session.ts +4, src/token.ts +3 -2:
- *   +17 -2 in total): the content of the chat dock's plan and
- *   changed-files bars.
+ *   +17 -2 in total): the content of the chat dock's plan bar and the
+ *   status pill's changed files.
  * - `[ASK:permission]`, `[ASK:permission-none]` (a request with no
  *   options), `[ASK:question]` or `[ASK:elicitation]` sends the matching
  *   agent-to-client request. When the client answers, the agent streams one
@@ -80,6 +80,26 @@
  * chunk lists the content the client sent, as
  * `[ANSWERED elicitation-boolean accept confirm=false]` (`notify` is absent
  * when the client left it out).
+ *
+ * `[SUBAGENTS]` / `[SUBAGENTS:<seconds>]` (subagent status QA, default 20 s):
+ * two subagents work for the whole turn, then the turn ends. The wire form
+ * follows the host's `initialize`:
+ * - Without `clientCapabilities.subagents` (legacy Claude): two background
+ *   `Agent` calls complete at once with an `async_launched` receipt, and the
+ *   subagents' tool calls and text carry `_meta.claudeCode.parentToolUseId`.
+ * - With it (Claude 0.78 native form): `subagent_spawned` on the chat, the
+ *   subagents' traffic under their own session ids, and a
+ *   `subagent_state_update` when each one ends (the first at about 45 %).
+ *
+ * `[BG_TAIL:<seconds>]` with `[SUBAGENTS]`: the RFD subagent form (Claude
+ * 0.90+), sent whether or not the host advertised the capability (the host
+ * routes subagent updates from any agent). Each subagent is announced with
+ * `subagent_update` (title, description, `capabilities.cancel`, state
+ * `running`) on the chat, works under its own session id, and keeps working
+ * after the turn ends at `n` seconds. `<seconds>` after that, each reports
+ * `subagent_update` state `idle` (`stopReason: end_turn`, with usage).
+ * `session/cancel` with a subagent's session id stops only that subagent: it
+ * reports `idle` (`stopReason: cancelled`) and clears `capabilities.cancel`.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -141,6 +161,8 @@ interface InFlight {
    * timer (the response itself ends the turn).
    */
   awaitingElicitation?: boolean
+  /** `[SUBAGENTS]` turns run on their own timers, not the chunk clock. */
+  scripted?: boolean
 }
 
 function promptText(prompt: JsonValue | undefined): string {
@@ -498,6 +520,209 @@ function pushDock(sessionId: string): void {
 /** Per-session in-flight turns — concurrent sessions stream simultaneously. */
 const inFlightBySession = new Map<string, InFlight>()
 
+/** Set from `initialize`: the host asked for the native subagent form. */
+let nativeSubagents = false
+
+function backgroundTailSeconds(prompt: JsonValue | undefined): number {
+  const match = /\[BG_TAIL:(\d+(?:\.\d+)?)\]/.exec(promptText(prompt))
+  return match ? Number(match[1]) : 0
+}
+
+function subagentSeconds(prompt: JsonValue | undefined): number | null {
+  const match = /\[SUBAGENTS(?::(\d+(?:\.\d+)?))?\]/.exec(promptText(prompt))
+  if (!match) return null
+  return match[1] ? Number(match[1]) : 20
+}
+
+const SUBAGENT_TASKS = [
+  { key: 'a', name: 'Review the store', files: ['src/store.ts', 'src/slices/chat.ts'] },
+  {
+    key: 'b',
+    name: 'Review the host',
+    files: ['src-tauri/src/acp/client.rs', 'src-tauri/src/web/ws.rs']
+  }
+] as const
+
+/** Stops for the RFD subagents still working, keyed by child session id. */
+const subagentStops = new Map<string, () => void>()
+
+/**
+ * `[SUBAGENTS]`: two subagents report activity until the turn ends, or past it
+ * with `[BG_TAIL]`. Wire form: RFD with `[BG_TAIL]`, else AIR when the host
+ * advertised subagents, else legacy `Agent` tool calls.
+ */
+function runSubagentTurn(
+  id: number | string,
+  sessionId: string,
+  seconds: number,
+  tailSeconds: number
+): void {
+  inFlightBySession.set(sessionId, {
+    id,
+    sessionId,
+    startedAt: Date.now(),
+    chunks: 0,
+    scripted: true
+  })
+  const live = (): boolean => inFlightBySession.get(sessionId)?.id === id
+  const update = (sid: string, body: Record<string, JsonValue>): void =>
+    notify('session/update', { sessionId: sid, update: body })
+  const text = (sid: string, value: string, meta?: Record<string, JsonValue>): void =>
+    update(sid, {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: value },
+      ...(meta ? { _meta: meta } : {})
+    })
+  const form: 'rfd' | 'air' | 'legacy' =
+    tailSeconds > 0 ? 'rfd' : nativeSubagents ? 'air' : 'legacy'
+  const tail = form === 'rfd' ? tailSeconds : 0
+  const tag = randomUUID().slice(0, 6)
+  const childSession = (key: string): string => `${sessionId}-sub-${key}-${tag}`
+  const dispatchId = (key: string): string => `toolu_bg_${key}_${tag}`
+
+  text(sessionId, 'I will run two reviewers in the background.\n\n')
+  for (const task of SUBAGENT_TASKS) {
+    const prompt = `Read ${task.files.join(' and ')} and report every bug you find.`
+    if (form === 'rfd') {
+      update(sessionId, {
+        sessionUpdate: 'subagent_update',
+        sessionId: childSession(task.key),
+        title: task.name,
+        description: 'general-purpose',
+        capabilities: { cancel: {} },
+        state: { state: 'running' }
+      })
+      continue
+    }
+    if (form === 'air') {
+      update(sessionId, {
+        sessionUpdate: 'subagent_spawned',
+        subagentSessionId: childSession(task.key),
+        name: task.name,
+        task: prompt,
+        capabilities: {}
+      })
+      continue
+    }
+    update(sessionId, {
+      sessionUpdate: 'tool_call',
+      toolCallId: dispatchId(task.key),
+      title: 'Agent',
+      kind: 'think',
+      status: 'pending',
+      rawInput: {
+        description: task.name,
+        prompt,
+        subagent_type: 'general-purpose',
+        run_in_background: true
+      },
+      _meta: { claudeCode: { toolName: 'Agent' } }
+    })
+    update(sessionId, {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: dispatchId(task.key),
+      status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: 'Async agent launched.' } }],
+      _meta: {
+        claudeCode: {
+          toolName: 'Agent',
+          toolResponse: {
+            status: 'async_launched',
+            isAsync: true,
+            agentId: `agent-${task.key}-${tag}`,
+            outputFile: `/tmp/agent-${task.key}-${tag}.output`
+          }
+        }
+      }
+    })
+  }
+
+  const firstEndAt = seconds * 0.45
+  const ended = new Set<string>()
+  const endSubagent = (key: string): void => {
+    if (ended.has(key)) return
+    ended.add(key)
+    if (form === 'air') {
+      update(sessionId, {
+        sessionUpdate: 'subagent_state_update',
+        subagentSessionId: childSession(key),
+        state: 'completed'
+      })
+    } else if (form === 'rfd') {
+      update(sessionId, {
+        sessionUpdate: 'subagent_update',
+        sessionId: childSession(key),
+        state: {
+          state: 'idle',
+          stopReason: 'end_turn',
+          usage: { totalTokens: 1500, inputTokens: 1200, outputTokens: 300 }
+        }
+      })
+    }
+  }
+  if (form === 'rfd') {
+    for (const task of SUBAGENT_TASKS) {
+      const child = childSession(task.key)
+      subagentStops.set(child, () => {
+        if (ended.has(task.key)) return
+        ended.add(task.key)
+        update(sessionId, {
+          sessionUpdate: 'subagent_update',
+          sessionId: child,
+          capabilities: { cancel: null },
+          state: { state: 'idle', stopReason: 'cancelled' }
+        })
+      })
+    }
+  }
+  const startedAt = Date.now()
+  let turnOpen = true
+  let step = 0
+  const work = (): void => {
+    if (turnOpen && !live()) return
+    const elapsed = (Date.now() - startedAt) / 1000
+    if (elapsed >= (tail > 0 ? seconds + tail : firstEndAt)) endSubagent('a')
+    if (turnOpen && elapsed >= seconds) {
+      turnOpen = false
+      if (tail === 0) endSubagent('b')
+      text(
+        sessionId,
+        tail === 0
+          ? 'Both reviewers finished. The store has one stale selector; the host is clean.'
+          : 'The reviewers are still running in the background. I am waiting for them.'
+      )
+      respond(id, { stopReason: 'end_turn' })
+      inFlightBySession.delete(sessionId)
+    }
+    if (ended.size === SUBAGENT_TASKS.length) return
+    if (tail > 0 && elapsed >= seconds + tail) {
+      endSubagent('b')
+      return
+    }
+    const active = SUBAGENT_TASKS.filter((task) => !ended.has(task.key))
+    const task = active[step % Math.max(1, active.length)]
+    if (task) {
+      step++
+      const file = task.files[step % task.files.length]
+      const legacy = form === 'legacy'
+      const sid = legacy ? sessionId : childSession(task.key)
+      const parent = legacy ? { claudeCode: { parentToolUseId: dispatchId(task.key) } } : undefined
+      update(sid, {
+        sessionUpdate: 'tool_call',
+        toolCallId: `toolu_child_${task.key}_${step}_${tag}`,
+        title: `Read ${file}`,
+        kind: 'read',
+        status: 'completed',
+        locations: [{ path: file }],
+        _meta: { claudeCode: { toolName: 'Read', ...(parent?.claudeCode ?? {}) } }
+      })
+      text(sid, `Checked ${file} (step ${step}). `, parent)
+    }
+    setTimeout(work, 1500)
+  }
+  setTimeout(work, 1000)
+}
+
 interface PendingElicitation {
   /** The held `session/prompt` request id for the awaiting turn. */
   promptId: number | string
@@ -562,6 +787,7 @@ const ELICIT_TIMEOUT_SEC = 60
 
 function tick(): void {
   for (const inFlight of inFlightBySession.values()) {
+    if (inFlight.scripted) continue
     // `[ELICIT]` turns wait on the client's elicitation/create response;
     // no chunk stream — only the timeout below applies.
     if (inFlight.awaitingElicitation) {
@@ -655,7 +881,9 @@ function handle(msg: JsonRpcMessage): void {
   }
   const p = (params ?? {}) as Record<string, JsonValue>
   switch (method) {
-    case 'initialize':
+    case 'initialize': {
+      const caps = p.clientCapabilities
+      nativeSubagents = caps !== null && typeof caps === 'object' && 'subagents' in caps
       respond(id, {
         protocolVersion: 1,
         // `loadSession` is a boolean on the wire — a string like 'persistent'
@@ -665,6 +893,7 @@ function handle(msg: JsonRpcMessage): void {
         authMethods: []
       })
       break
+    }
     case 'newSession':
     case 'session/new': {
       const sid = `sess-${randomUUID().slice(0, 8)}`
@@ -718,6 +947,11 @@ function handle(msg: JsonRpcMessage): void {
       }
       if (/\[RICH\]/.test(promptText(p.prompt))) {
         replyRichTurn(id, sessionId)
+        return
+      }
+      const subagentSec = subagentSeconds(p.prompt)
+      if (subagentSec !== null && id !== undefined) {
+        runSubagentTurn(id, sessionId, subagentSec, backgroundTailSeconds(p.prompt))
         return
       }
       const elicit = elicitationRequested(p.prompt)
@@ -785,6 +1019,12 @@ function handle(msg: JsonRpcMessage): void {
     case 'cancel':
     case 'session/cancel': {
       const sessionId = String(p.sessionId ?? 'unknown')
+      const stopSubagent = subagentStops.get(sessionId)
+      if (stopSubagent) {
+        subagentStops.delete(sessionId)
+        stopSubagent()
+        break
+      }
       const inFlight = inFlightBySession.get(sessionId)
       if (inFlight) {
         notify('session/update', {
