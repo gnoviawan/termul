@@ -540,6 +540,61 @@ jobs:
             --artifacts tauri-artifact-paths.json \
             --output collected
 
+      # The v0.4.60 install.sh downloads Termul.Manager_* assets from the latest
+      # release. See scripts/release/legacy-install-assets.sh.
+      - name: Add the asset names the v0.4.60 install.sh downloads
+        if: matrix.platform != 'windows-x64'
+        id: legacy_assets
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.changelog.outputs.normalized_version }}
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          source scripts/release/legacy-install-assets.sh
+          app=""
+          if [[ "$PLATFORM" == macos-* ]]; then
+            app_bundles=("src-tauri/target/$RUST_TARGET/release/bundle/macos"/*.app)
+            if [[ "${#app_bundles[@]}" -ne 1 ]]; then
+              echo "Expected exactly one macOS app for the legacy DMG." >&2
+              exit 1
+            fi
+            app="${app_bundles[0]}"
+          fi
+          legacy="$(add_legacy_install_assets "$PLATFORM" "$VERSION" collected/assets "$app")"
+          printf 'path=%s\n' "$legacy" >> "$GITHUB_OUTPUT"
+          ls -l collected/assets
+
+      - name: Sign, notarize and verify the legacy macOS DMG
+        if: startsWith(matrix.platform, 'macos-') && steps.legacy_assets.outputs.path != ''
+        shell: bash
+        env:
+          DMG: ${{ steps.legacy_assets.outputs.path }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$DMG"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$DMG"
+          codesign --verify --strict --verbose=2 "$DMG"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
+          xcrun stapler validate "$DMG"
+          mount_dir="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount_dir" "$DMG"
+          trap 'hdiutil detach "$mount_dir" >/dev/null 2>&1 || true' EXIT
+          codesign --verify --deep --strict --verbose=2 "$mount_dir/Termul Manager.app"
+          spctl --assess --type execute --verbose=4 "$mount_dir/Termul Manager.app"
+          xcrun stapler validate "$mount_dir/Termul Manager.app"
+
       - name: Upload platform workflow artifact
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
