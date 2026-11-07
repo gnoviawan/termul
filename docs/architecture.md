@@ -241,7 +241,7 @@ Primary persisted domains include:
 - command history
 - window state
 - app settings
-- host-owned ACP session logs (`SessionPersistence`), on the desktop and on `termul-server`
+- host-owned ACP session logs (`SessionPersistence`), on the desktop and on `troupe-server`
 
 ### Shared Persistence Contracts
 
@@ -345,7 +345,7 @@ CI runs:
 
 The renderer terminal seam is `terminal-api.ts`: Tauri uses typed commands and browser builds use a dedicated `/terminal/ws` socket. The terminal socket is intentionally separate from ACP `/ws`; it carries PTY requests, bounded scrollback replay/live output, and transport-neutral lifecycle/cwd/git/exit events. `ConnectedTerminal` remains the single xterm surface in both runtimes.
 
-Standalone `termul-server` owns its `PtyManager` and terminates those PTYs after graceful shutdown. Desktop shared-live mode passes the already-managed desktop `Arc<PtyManager>` into Axum, so stopping sharing detaches browser clients without killing desktop terminals. Output broadcast queues and replay scrollback remain bounded.
+Standalone `troupe-server` owns its `PtyManager` and terminates those PTYs after graceful shutdown. Desktop shared-live mode passes the already-managed desktop `Arc<PtyManager>` into Axum, so stopping sharing detaches browser clients without killing desktop terminals. Output broadcast queues and replay scrollback remain bounded.
 
 **Security boundary:** terminal authentication, authorization, TLS, and sandbox hardening are deferred. `/terminal/ws` must not be exposed to public or untrusted networks; existing server exposure controls are the only boundary in this version. Logs record lifecycle/request outcomes only and must never record terminal input, output, environment values, or secrets.
 
@@ -375,7 +375,7 @@ Agent runtime (src-tauri/src/acp)  one thread per agent        SessionPersistenc
 
 Callers reach that thread through a channel. Each call sends an `AcpCommand` variant on an unbounded `mpsc` channel. The variant carries a `oneshot` sender for the reply, and the caller awaits the `Send` receiver. `command_loop.rs` handles the variants one by one: new, load, resume and close session, send and cancel prompt, mode, model and config changes, permission, question and elicitation answers, and shutdown.
 
-The driver thread never calls into Tauri. It publishes every event through a list of `EventSink` trait objects (`src-tauri/src/web/sink/`), so the same driver serves the desktop and the standalone `termul-server`. A wedged or missing client cannot stop a driver, because `EventSink::emit` must log failures and never return them.
+The driver thread never calls into Tauri. It publishes every event through a list of `EventSink` trait objects (`src-tauri/src/web/sink/`), so the same driver serves the desktop and the standalone `troupe-server`. A wedged or missing client cannot stop a driver, because `EventSink::emit` must log failures and never return them.
 
 The host is the ACP client of record. It answers file reads and writes (`fs/read_text_file`, `fs/write_text_file`) and `terminal/*` requests itself, and it relays only the human-facing requests (permission prompts, questions and elicitations) to clients. A `/ws` request for a host-fulfilled capability is `unsupported`. The file handlers (`acp/client.rs`) serve any absolute path the agent asks for. They reject relative paths and `..` components and resolve symlinks, and they do not confine the path to the project root.
 
@@ -383,7 +383,7 @@ The host is the ACP client of record. It answers file reads and writes (`fs/read
 
 Every client talks to the host in the same protocol, the `/ws` relay. A request is `{id, type, payload}`. The host replies by `id`, and it pushes session events as `{sid, seq, type, payload}`. `src/shared/types/web-protocol.types.ts` and `src-tauri/src/web/ws/` define it. Only the carrier of the frames differs.
 
-- **Browser and phone.** A WebSocket to `/ws` on `termul-server`, or on the desktop's shared-live server (`src-tauri/src/remote/host.rs`). The connection starts with `auth_required`, and the client answers with an `authenticate` request that checks the protocol version, the client identity and, when the host has a token gate, the token.
+- **Browser and phone.** A WebSocket to `/ws` on `troupe-server`, or on the desktop's shared-live server (`src-tauri/src/remote/host.rs`). The connection starts with `auth_required`, and the client answers with an `authenticate` request that checks the protocol version, the client identity and, when the host has a token gate, the token.
 - **Desktop renderer.** A Tauri `ipc::Channel` per connection (`ws_channel_open`, `ws_channel_send`, `ws_channel_close` in `src-tauri/src/web/ws/channel/`). `ChannelCarrier` gives the unchanged relay loop the same stream-and-sink surface a WebSocket has, so dispatch, queues, the watchdog and capabilities are shared code. This path has its own `AppState` with no token gate. It never binds a network listener, and the process boundary is its authentication.
 
 Host-local operations stay as plain Tauri commands because they only make sense on the desktop host: timeout overrides, the Factory key, MCP probes and OAuth, Claude Account management, and legacy history. A few `/acp/*` HTTP routes mirror the operations a browser needs outside `/ws`. The command and event tables in `docs/api-contracts.md` mark which operation uses which path.
@@ -406,7 +406,7 @@ The relay is also the session log. `WsRelaySink` (`src-tauri/src/web/sink/`) ass
 
 `SessionPersistence` keeps a versioned `sessions.json` index and one directory per session with `metadata.json`, `messages.jsonl` and `tool-calls.jsonl`. A writer thread appends records through a bounded queue. Durable producers divert to an overflow queue instead of dropping a record or blocking the driver thread, because a blocked write would freeze that agent's reads, permission replies and timers. Startup repairs torn JSONL tails. Permission requests, `auth_required` and the agent spawn, disconnect and crash events are live only and never reach the log (`is_durable_event`).
 
-The desktop and `termul-server` each own a private sessions root (`<app data dir>/acp-sessions` and `--sessions-dir`). Two processes must never share one root. The two hosts differ when the store fails to open. `termul-server` refuses to start. The desktop continues in live-only history mode, where chats stream live and the host keeps no durable history.
+The desktop and `troupe-server` each own a private sessions root (`<app data dir>/acp-sessions` and `--sessions-dir`). Two processes must never share one root. The two hosts differ when the store fails to open. `troupe-server` refuses to start. The desktop continues in live-only history mode, where chats stream live and the host keeps no durable history.
 
 The renderer reads history through `get_session_payload`, `get_session_payload_tail` and `recover_session_snapshot`, never from its own copy. `<app data dir>/acp-chat-history` is the legacy renderer-written store. The host imports it into `SessionPersistence` at startup and after each legacy write, and the renderer's wipe migration is its only remaining writer.
 

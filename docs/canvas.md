@@ -22,7 +22,7 @@ bundle            canvas/figcraft.pin -> canvas/bundle/ (embedded, same asset se
 
 - **One document authority.** The figcraft engine inside the iframe is the only live copy of a document. Every read or write of document state, including agent tool calls, goes through that iframe.
 - **Termul owns the file.** The editor emits `event.dirtyChanged`. The host waits for `canvas.autosave_ms` of quiet, asks the editor for a `host.snapshot`, writes the `.figcraft` bytes atomically, then calls `host.markSaved`. A user save skips the debounce.
-- **Same URL shape everywhere.** The desktop app binds a loopback listener on `127.0.0.1:0` and iframes it. `termul-server` and the desktop shared-live host serve the same bundle same-origin under `/canvas/<id>/`. Remote clients only ever reach the canvas through those routes.
+- **Same URL shape everywhere.** The desktop app binds a loopback listener on `127.0.0.1:0` and iframes it. `troupe-server` and the desktop shared-live host serve the same bundle same-origin under `/canvas/<id>/`. Remote clients only ever reach the canvas through those routes.
 
 ## Documents
 
@@ -76,7 +76,7 @@ Every answered agent call also shows on the canvas as that session's cursor (`ac
 
 ## Interfaces
 
-| Surface | Desktop (Tauri command) | Web (`termul-server`) |
+| Surface | Desktop (Tauri command) | Web (`troupe-server`) |
 | --- | --- | --- |
 | Open a project canvas | `canvas_open` | `POST /canvas/open` |
 | Close, with optional discard | `canvas_close` | `POST /canvas/close` |
@@ -92,7 +92,7 @@ Both transports share the same Rust service and typed error codes. Every facade 
 - **Dev override.** Set `TERMUL_FIGCRAFT_BUNDLE` to a built bundle directory (a figcraft checkout's `dist-web`) to serve it instead of the embedded one.
 - **Missing bundle.** A release build without `canvas/bundle/index.html` fails to compile and names the fetch command. Set `TERMUL_ALLOW_MISSING_CANVAS_BUNDLE=1` (or `true`) to build without the canvas on purpose, for example offline or for `cargo test --release`. A debug build, or a release build under the override, logs a warning and answers the canvas routes with the typed `BUNDLE_MISSING` error. The rest of Termul is unaffected.
 - **Fork.** The bundle comes from `gnoviawan/figcraft` (branch `termul`). Its patches are limited to the web host API, the kiosk flag, the brand knob, the theme hook and guest presence (the agent cursor).
-- **Fallback fonts.** Design text can use two font families the bundle embeds, Inter and Noto Sans Georgian (for figcraft's Georgian interface). The editor's wasm also embeds egui's interface fonts (Ubuntu Light, Hack, Noto Emoji and emoji-icon-font), which draw only the editor's own panels and never design text. A web build cannot read system fonts. On the desktop the loopback listener lends the editor a few Windows fonts for the characters Inter lacks: Segoe UI Symbol, Microsoft YaHei, Malgun Gothic and Segoe UI Emoji, whichever are installed (`canvas/fallback_fonts.rs`). It serves them at `/canvas/<id>/<token>/host-fonts/<file>`, the open info lists their URLs, and the renderer sends them in `host.fallbackFonts` before it loads the document, so the first render and an agent's first screenshot have them. `termul-server` and the shared-live host list and serve none, because they would send this machine's fonts to another one. macOS and Linux lend none yet.
+- **Fallback fonts.** Design text can use two font families the bundle embeds, Inter and Noto Sans Georgian (for figcraft's Georgian interface). The editor's wasm also embeds egui's interface fonts (Ubuntu Light, Hack, Noto Emoji and emoji-icon-font), which draw only the editor's own panels and never design text. A web build cannot read system fonts. On the desktop the loopback listener lends the editor a few Windows fonts for the characters Inter lacks: Segoe UI Symbol, Microsoft YaHei, Malgun Gothic and Segoe UI Emoji, whichever are installed (`canvas/fallback_fonts.rs`). It serves them at `/canvas/<id>/<token>/host-fonts/<file>`, the open info lists their URLs, and the renderer sends them in `host.fallbackFonts` before it loads the document, so the first render and an agent's first screenshot have them. `troupe-server` and the shared-live host list and serve none, because they would send this machine's fonts to another one. macOS and Linux lend none yet.
 - **Licences.** The bundle embeds the design-text fonts Inter and Noto Sans Georgian, both under the SIL OFL 1.1. `canvas/licenses/` holds tracked copies of their licences (`OFL-inter.txt`, `OFL-noto-sans-georgian.txt`). The unpacked bundle carries `NOTICE` and an `OFL-<family>.txt` for each of the 29 families in figcraft's font catalog (craft-fonts), which Termul embeds and serves with it, including families the web build does not embed. The egui interface fonts the editor's wasm embeds have tracked licences there too: `UFL-ubuntu.txt` (Ubuntu Font Licence 1.0), `LICENSE-hack.txt` (MIT and the Bitstream Vera licence), `OFL-noto-emoji.txt` (SIL OFL 1.1) and `MIT-emoji-icon-font.txt` (MIT, also covering egui's five-glyph `egui-icons` subset of it). The bundle's own `NOTICE` carries only the emoji-icon-font licence text. FigCraft is MIT OR Apache-2.0. FigCraft, both design-text fonts and the interface fonts are credited in the README acknowledgments.
 
 ## Retired: the OpenPencil daemon

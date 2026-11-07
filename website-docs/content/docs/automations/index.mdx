@@ -5,7 +5,7 @@ description: Have an agent build a task that runs on a schedule, act on suggesti
 
 An automation is a task that runs on its own, on a schedule or when you start it. For example, "every weekday at 9, summarize open PRs". You do not build automations by hand. You describe one to an AI agent in a chat, the agent builds it, and you review and approve it in the **Automations** tab. It does not run until you approve it.
 
-Automations belong to a project, and they run on the machine that runs that project: your desktop, or `termul-server` when you use [Termul on a server](/docs/remote/server).
+Automations belong to a project, and they run on the machine that runs that project: your desktop, or `troupe-server` when you use [Termul on a server](/docs/remote/server).
 
 ## Open the Automations tab
 
@@ -107,4 +107,4 @@ A saved secret shows **Saved**. Click **Replace** to change it, or **Delete** to
 
 Secrets belong to the project, so every automation in the project can use them. Only web request (HTTP) steps can use a secret, and Termul never shows a saved value again.
 
-Secrets are kept on the machine that runs the project, in the system keychain. On a machine without a keychain, such as `termul-server` on a Linux server without a desktop, Termul keeps them in a file named `automation-secrets.json` in its data folder that only your user account can read.
+Secrets are kept on the machine that runs the project, in the system keychain. On a machine without a keychain, such as `troupe-server` on a Linux server without a desktop, Termul keeps them in a file named `automation-secrets.json` in its data folder that only your user account can read.

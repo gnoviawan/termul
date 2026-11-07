@@ -7,7 +7,7 @@
 
 This page covers the desktop app's **internal IPC contract** between the React renderer and the Rust/Tauri runtime.
 
-`termul-server` and the desktop shared-live host also expose an HTTP and WebSocket API. Its HTTP routes are described by an OpenAPI 3.1 spec that the server builds from the `ROUTES` table in `src-tauri/src/web/openapi/`. A running server serves it at `GET /openapi.json`, `termul-server openapi` prints it, and each release attaches it as `openapi.yaml`. The WebSocket protocol is defined in `src/shared/types/web-protocol.types.ts`. The user guide is `website-docs/content/docs/server-api.mdx`.
+`troupe-server` and the desktop shared-live host also expose an HTTP and WebSocket API. Its HTTP routes are described by an OpenAPI 3.1 spec that the server builds from the `ROUTES` table in `src-tauri/src/web/openapi/`. A running server serves it at `GET /openapi.json`, `troupe-server openapi` prints it, and each release attaches it as `openapi.yaml`. The WebSocket protocol is defined in `src/shared/types/web-protocol.types.ts`. The user guide is `website-docs/content/docs/server-api.mdx`.
 
 This contract is implemented through:
 
@@ -187,9 +187,9 @@ Tauri commands take camelCase arguments and run only from the `main` webview. Ot
 | `automation_set_secret` | `PUT /api/automation-secrets` | `projectId`, `name`, `value` | `null` |
 | `automation_delete_secret` | `DELETE /api/automation-secrets?project_id=&name=` | `projectId`, `name` | `null` |
 
-Secret values go in and never come back out. The host stores them in the OS keychain. A host whose keychain does not answer at startup, such as `termul-server` on headless Linux, stores them instead in `automation-secrets.json` in its data directory: an owner-only (`0600`) JSON object keyed like the keychain entries, `automation:<project_id>:<NAME>`. A host that already has that file keeps using it. The log names the backend once at startup and never carries a value.
+Secret values go in and never come back out. The host stores them in the OS keychain. A host whose keychain does not answer at startup, such as `troupe-server` on headless Linux, stores them instead in `automation-secrets.json` in its data directory: an owner-only (`0600`) JSON object keyed like the keychain entries, `automation:<project_id>:<NAME>`. A host that already has that file keeps using it. The log names the backend once at startup and never carries a value.
 
-The `/api/automation` prefix is bearer-gated. A host without a token gate serves only loopback peers. Every `POST`, `PUT` and `DELETE` except `preview-schedule` passes the remote-write guard: the desktop shared-live host refuses them, and `termul-server` admits a non-loopback peer only with `--allow-remote-writes`.
+The `/api/automation` prefix is bearer-gated. A host without a token gate serves only loopback peers. Every `POST`, `PUT` and `DELETE` except `preview-schedule` passes the remote-write guard: the desktop shared-live host refuses them, and `troupe-server` admits a non-loopback peer only with `--allow-remote-writes`.
 
 A failure carries the service's code. On HTTP it also sets the status:
 
@@ -228,7 +228,7 @@ Runs rollback logic for a migration.
 
 ## Desktop ACP Chat History Commands
 
-The host owns durable chat history. The desktop and `termul-server` both write every non-ephemeral session to `SessionPersistence` (`src-tauri/src/acp/session_persistence/`), and the desktop keeps it under `<app data dir>/acp-sessions`. `acp_history_list`, `acp_history_get`, `acp_history_get_tail` and `acp_history_delete` read and change that store. `SessionPayload` is `{ metadata, messages, toolCalls? }`. `toolCalls` mirrors the session's ACP tool calls so a reopened or resumed chat restores its tool cards. Persisted tool calls drop `rawOutput` and unknown fields, normalize mid-flight statuses to `failed`, keep only the most recent calls, and stay within a per-call serialized byte budget (`sanitizeToolCallsForPersistence`).
+The host owns durable chat history. The desktop and `troupe-server` both write every non-ephemeral session to `SessionPersistence` (`src-tauri/src/acp/session_persistence/`), and the desktop keeps it under `<app data dir>/acp-sessions`. `acp_history_list`, `acp_history_get`, `acp_history_get_tail` and `acp_history_delete` read and change that store. `SessionPayload` is `{ metadata, messages, toolCalls? }`. `toolCalls` mirrors the session's ACP tool calls so a reopened or resumed chat restores its tool cards. Persisted tool calls drop `rawOutput` and unknown fields, normalize mid-flight statuses to `failed`, keep only the most recent calls, and stay within a per-call serialized byte budget (`sanitizeToolCallsForPersistence`).
 
 The renderer-authored store under `<app data dir>/acp-chat-history` (`ChatHistoryStore`) is legacy. The one-shot renderer wipe migration is the only caller of `acp_history_save`, `acp_history_flush`, `acp_history_mark_legacy_import_complete`, `acp_history_list_legacy` and `acp_history_get_legacy`. Each of them is listed in the command table above. After every legacy write the host imports the new entries into `SessionPersistence` (`import_chat_history`), so a following `acp_history_list` returns what the migration saved. The migration deletes the old Tauri Store ACP keys only after `acp_history_list_legacy` and `acp_history_get_legacy` return what it wrote. Unrelated preferences stay.
 
@@ -236,7 +236,7 @@ The `/ws` requests `list_persisted_sessions`, `get_session_payload` and `get_ses
 
 ## GitHub Issues and PRs
 
-The host runs the user's `gh` CLI for every GitHub read and write. Termul stores no GitHub token. The contract is `src/shared/types/github.types.ts`, and the renderer facade is `src/renderer/lib/github-api.ts`. `GithubService` (`src-tauri/src/github/`) implements each operation once. The desktop calls it through a Tauri command, and the browser and `termul-server` call it through an HTTP route.
+The host runs the user's `gh` CLI for every GitHub read and write. Termul stores no GitHub token. The contract is `src/shared/types/github.types.ts`, and the renderer facade is `src/renderer/lib/github-api.ts`. `GithubService` (`src-tauri/src/github/`) implements each operation once. The desktop calls it through a Tauri command, and the browser and `troupe-server` call it through an HTTP route.
 
 | Facade method | Tauri command | Web route | Reply `data` |
 |---|---|---|---|
@@ -880,7 +880,7 @@ A project's open files and pane layout live only in the device's own store key `
 
 ### Project registry commands
 
-One durable `ProjectRegistry` per host owns the project list: `termul-server` keeps it in its projects file, the desktop in `<app data dir>/projects.json` (locked beside `store.json`, opened once at setup, **not** cleared by `remote_server_stop`). Every command below runs through one host command service: it validates, writes the candidate to disk (temp file, fsync, rename) and only then swaps memory, so a failed write replies an error and changes nothing; then it publishes the new state to every `projects` watcher.
+One durable `ProjectRegistry` per host owns the project list: `troupe-server` keeps it in its projects file, the desktop in `<app data dir>/projects.json` (locked beside `store.json`, opened once at setup, **not** cleared by `remote_server_stop`). Every command below runs through one host command service: it validates, writes the candidate to disk (temp file, fsync, rename) and only then swaps memory, so a failed write replies an error and changes nothing; then it publishes the new state to every `projects` watcher.
 
 | `/ws` request | HTTP | Request fields | Reply |
 | --- | --- | --- | --- |

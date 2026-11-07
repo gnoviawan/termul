@@ -11,7 +11,7 @@ Accounts apply to **Claude Agent** chats only. To set up Claude Agent itself, se
 
 Open Settings with `Ctrl+,` (`Cmd+,` on macOS) and click **Provider**. The **Claude Code** group lists every account, whether it is signed in, which projects use it, and how much of its limits it has used.
 
-![The Provider page in the browser version, with one account named Default that is signed out, and a note to add or sign in to an account from the desktop app or with termul-server claude account on the host](/screenshots/agent-setup-provider.png)
+![The Provider page in the browser version, with one account named Default that is signed out, and a note to add or sign in to an account from the desktop app or with troupe-server claude account on the host](/screenshots/agent-setup-provider.png)
 
 The first account is called **Default**. It is the Claude Code login you made with `claude auth login`. Termul shows a name you choose for each account, never its email address.
 
@@ -42,7 +42,7 @@ If Termul says the code is incomplete, copy the whole code from the Claude page 
 
 If you are already signed in to another account on claude.ai, sign out there first, or open the sign-in page in a private window. If the sign-in does not finish, the account stays in the list, signed out. Click **Try again** in the desktop app or **Start again** in the browser version, or click **Sign in** on the account later.
 
-If the server is read-only for remote clients, the browser version shows your accounts but cannot add, sign in, rename or remove them. Use the desktop app, or run `termul-server claude account` on the host.
+If the server is read-only for remote clients, the browser version shows your accounts but cannot add, sign in, rename or remove them. Use the desktop app, or run `troupe-server claude account` on the host.
 
 Each account has a **⋯** menu with these actions:
 
@@ -92,14 +92,14 @@ Project Settings shows the same warning when the project's account is at its lim
 When Termul runs as a server for the browser version, the browser can list, add, sign in to, rename, and remove accounts, make one the default, and pick one per project. To manage accounts without a browser, run these commands on the server. If the server uses `--state-dir`, add the same `--state-dir PATH` after `claude`.
 
 ```bash
-termul-server claude account list
-termul-server claude account add "Work"
-termul-server claude account login <id>
-termul-server claude account rename <id> "Office"
-termul-server claude account default <id>
-termul-server claude account project <project-id> <id>
-termul-server claude account project <project-id> default
-termul-server claude account remove <id>
+troupe-server claude account list
+troupe-server claude account add "Work"
+troupe-server claude account login <id>
+troupe-server claude account rename <id> "Office"
+troupe-server claude account default <id>
+troupe-server claude account project <project-id> <id>
+troupe-server claude account project <project-id> default
+troupe-server claude account remove <id>
 ```
 
 `list` prints each account's ID, name, and whether it is signed in. `add` prints the `login` command to run next.
@@ -107,9 +107,9 @@ termul-server claude account remove <id>
 To check the server's Claude login and install Claude Agent from the command line, run:
 
 ```bash
-termul-server claude auth status
-termul-server claude auth login
-termul-server claude install
+troupe-server claude auth status
+troupe-server claude auth login
+troupe-server claude install
 ```
 
 For more about running the server, see [Browser and phone](/docs/remote).
