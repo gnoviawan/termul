@@ -162,17 +162,12 @@ export const KEEP_PATTERNS: readonly KeepPattern[] = [
     pattern: /(?<![\w/.-])termul(?:::|\.(?!dev\b))[A-Za-z_][\w.:-]*/g
   },
   {
-    id: 'product-name-field',
-    reason: 'productName may only change together with the NSIS/deb/rpm upgrade hooks.',
-    owner: 'packaging',
-    pattern: /"productName"\s*:\s*"Termul Manager"/g
-  },
-  {
-    id: 'artifact-names',
-    reason: 'Release asset and .app bundle names derive from productName.',
-    owner: 'packaging',
+    id: 'legacy-artifact-names',
+    reason:
+      'Releases up to 0.4.60 shipped "Termul Manager.app" and Termul.Manager_* assets; install docs and upgrade code still name them.',
+    owner: 'keep forever',
     pattern:
-      /Termul(?:[ .]Manager)?(?=\.(?:app|AppImage|exe|dmg|msi|deb|rpm)\b|[_-]\d)|\bTermul\.Manager\b/g
+      /\bTermul\.Manager(?![A-Za-z])|\bTermul Manager(?=\.(?:app|AppImage|exe|dmg|msi|deb|rpm)\b|_\d)/g
   },
   {
     id: 'font-family',
@@ -280,15 +275,22 @@ export const KEEP_PATHS: readonly KeepPath[] = [
   },
   {
     id: 'packaging',
-    reason: 'Install and release scripts rename together with the binaries and artifacts.',
-    owner: 'r3/r4',
+    reason:
+      'Install and release scripts and their tests resolve both 0.4.x and 0.5 asset and app names; r6 renames their display text by hand.',
+    owner: 'r6',
     globs: [
       'scripts/install.sh',
       'scripts/release/**',
       'scripts/tests/**',
-      'scripts/proc-probe.ps1',
-      '.github/workflows/release*.yml'
+      'scripts/proc-probe.ps1'
     ]
+  },
+  {
+    id: 'legacy-upgrade-hooks',
+    reason:
+      'The NSIS hooks find and remove the "Termul Manager" install that 0.4.x left behind; that name must stay.',
+    owner: 'keep forever',
+    globs: ['src-tauri/windows/installer-hooks.nsh']
   }
 ]
 
