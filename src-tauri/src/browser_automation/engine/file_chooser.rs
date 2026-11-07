@@ -70,6 +70,27 @@ fn upload_landed(count: &serde_json::Value, want: usize, heard: bool) -> Result<
     }
 }
 
+/// One poll of the settle wait: `Ok(true)` once the upload landed,
+/// `Ok(false)` to poll again, an error once the wait is over (`expired`).
+/// The chooser opened from a file input at the path, so a path that names
+/// none now was replaced or removed, likely in a change handler whose watch
+/// answer has not arrived yet: wait for it until the deadline, and only then
+/// fail with `PageException`. Files that never arrive end in `Timeout`.
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+fn settle_poll(
+    count: &serde_json::Value,
+    want: usize,
+    heard: bool,
+    expired: bool,
+) -> Result<bool, EngineError> {
+    match upload_landed(count, want, heard) {
+        Ok(true) => Ok(true),
+        Ok(false) if expired => Err(EngineError::new(EngineErrorKind::Timeout)),
+        Err(e) if expired => Err(e),
+        _ => Ok(false),
+    }
+}
+
 /// Whether the `watch_input_files` call has answered that the input
 /// changed. False while it still watches, and when it ran out or failed.
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
@@ -93,7 +114,7 @@ mod ui {
     use tauri::webview::PlatformWebview;
     use tokio::sync::oneshot;
 
-    use super::{heard_change, release_tab, stage, upload_landed};
+    use super::{heard_change, release_tab, settle_poll, stage};
     use crate::browser_automation::budgets::{FILE_CHOOSER, UPLOAD_SETTLE};
     use crate::browser_automation::engine::string_eval::{self, CallResult, Completion};
     use crate::browser_automation::engine::{assets, EngineError, EngineErrorKind};
@@ -177,21 +198,25 @@ mod ui {
             .await?;
             // A watch answers once, so a change heard ends the wait here.
             let heard = heard_change(&mut watch);
-            if upload_landed(&count, want, heard)? {
-                if heard {
-                    log::debug!(
-                        "[browser-tab] upload landed: the file input fired input or change"
-                    );
+            let expired = tokio::time::Instant::now() >= deadline;
+            match settle_poll(&count, want, heard, expired) {
+                Ok(true) => {
+                    if heard {
+                        log::debug!(
+                            "[browser-tab] upload landed: the file input fired input or change"
+                        );
+                    }
+                    return Ok(());
                 }
-                return Ok(());
+                Ok(false) => tokio::time::sleep(SETTLE_POLL).await,
+                Err(e) => {
+                    log::warn!(
+                        "[browser-tab] upload chooser answered but the file input never held the files or changed ({:?})",
+                        e.kind
+                    );
+                    return Err(e);
+                }
             }
-            if tokio::time::Instant::now() >= deadline {
-                log::warn!(
-                    "[browser-tab] upload chooser answered but the file input never held the files or changed"
-                );
-                return Err(EngineError::new(EngineErrorKind::Timeout));
-            }
-            tokio::time::sleep(SETTLE_POLL).await;
         }
     }
 

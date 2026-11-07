@@ -82,6 +82,39 @@ fn a_path_that_names_no_file_input_and_heard_nothing_fails() {
 }
 
 #[test]
+fn a_replaced_input_waits_for_the_watch_until_the_deadline() {
+    assert_eq!(
+        settle_poll(&json!(-1), 1, false, false),
+        Ok(false),
+        "the watch may not have answered yet"
+    );
+    assert_eq!(
+        settle_poll(&json!(-1), 1, true, false),
+        Ok(true),
+        "a trusted change arrived while waiting"
+    );
+    assert_eq!(
+        settle_poll(&json!(-1), 1, true, true),
+        Ok(true),
+        "heard on the last poll"
+    );
+    assert_eq!(
+        settle_poll(&json!(-1), 1, false, true).map_err(|e| e.kind),
+        Err(EngineErrorKind::PageException)
+    );
+}
+
+#[test]
+fn files_that_never_arrive_time_out_only_at_the_deadline() {
+    assert_eq!(settle_poll(&json!(0), 1, false, false), Ok(false));
+    assert_eq!(
+        settle_poll(&json!(0), 1, false, true).map_err(|e| e.kind),
+        Err(EngineErrorKind::Timeout)
+    );
+    assert_eq!(settle_poll(&json!(1), 1, false, true), Ok(true));
+}
+
+#[test]
 fn only_a_watch_that_saw_the_input_change_counts() {
     let (tx, mut rx) = oneshot::channel();
     assert!(!heard_change(&mut rx), "still watching");
