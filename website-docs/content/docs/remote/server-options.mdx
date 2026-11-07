@@ -11,18 +11,18 @@ This page lists the `termul-server` settings you are most likely to change. Run 
 | --- | --- | --- | --- |
 | `--host <HOST>` | | `127.0.0.1` | Where the server listens. `127.0.0.1` (or `localhost`) accepts only this machine. `0.0.0.0` (or `all`) accepts other devices. |
 | `--port <PORT>` | | `8080` | The port, from 1 to 65535. |
-| `--web-auth-token <TOKEN>` | `TERMUL_WEB_AUTH_TOKEN` | None | Use this access token instead of a generated one. |
-| `--allow-remote-writes` | `TERMUL_SERVER_ALLOW_REMOTE_WRITES=true` | Off | Let other devices make changes. See [Allow changes from other devices](#allow-changes-from-other-devices). |
-| `--allowed-origins <ORIGINS>` | `TERMUL_ALLOWED_ORIGINS` | None | Extra web addresses to accept, for a reverse proxy. Separate several with commas. |
+| `--web-auth-token <TOKEN>` | `TROUPE_WEB_AUTH_TOKEN` | None | Use this access token instead of a generated one. |
+| `--allow-remote-writes` | `TROUPE_SERVER_ALLOW_REMOTE_WRITES=true` | Off | Let other devices make changes. See [Allow changes from other devices](#allow-changes-from-other-devices). |
+| `--allowed-origins <ORIGINS>` | `TROUPE_ALLOWED_ORIGINS` | None | Extra web addresses to accept, for a reverse proxy. Separate several with commas. |
 | `--state-dir <PATH>` | | `~/.local/state/termul` | The folder for the token and the server's other files. Sessions and the projects file go here too, unless you set them. |
-| `--sessions-dir <PATH>` | `TERMUL_SESSIONS_DIR` | `<state dir>/sessions` | Where chat history is kept. |
-| `--projects-file <PATH>` | `TERMUL_PROJECTS_FILE` | `<state dir>/projects.json` | The list of projects. |
-| `--store-file <PATH>` | `TERMUL_STORE_FILE` | `<state dir>/store.json` | Browser-side settings, layouts and history that the server keeps for you. |
-| `--agent-idle-window-secs <SECS>` | `TERMUL_AGENT_IDLE_REAP_SECS` | `1800` | Stop an idle agent after this many seconds. |
-| `--max-terminals-per-project <N>` | `TERMUL_MAX_TERMINALS_PER_PROJECT` | `10` | The most terminals one project can have open. The whole server allows 30. |
+| `--sessions-dir <PATH>` | `TROUPE_SESSIONS_DIR` | `<state dir>/sessions` | Where chat history is kept. |
+| `--projects-file <PATH>` | `TROUPE_PROJECTS_FILE` | `<state dir>/projects.json` | The list of projects. |
+| `--store-file <PATH>` | `TROUPE_STORE_FILE` | `<state dir>/store.json` | Browser-side settings, layouts and history that the server keeps for you. |
+| `--agent-idle-window-secs <SECS>` | `TROUPE_AGENT_IDLE_REAP_SECS` | `1800` | Stop an idle agent after this many seconds. |
+| `--max-terminals-per-project <N>` | `TROUPE_MAX_TERMINALS_PER_PROJECT` | `10` | The most terminals one project can have open. The whole server allows 30. |
 | `--check-update` | | | Check for a new server version once, then exit. See [Update the server](#update-the-server). |
 
-When you set both a flag and its environment variable, the flag wins. A `server-config.json` in the state folder — written by the setup page or by `termul-server onboard` — wins over both for the settings it holds: host, port, sessions directory, projects file, remote writes, and updates.
+When you set both a flag and its environment variable, the flag wins. The older `TERMUL_*` name of each variable still works. If you set both, the `TROUPE_*` name wins unless it is blank (empty or only spaces). A `server-config.json` in the state folder — written by the setup page or by `termul-server onboard` — wins over both for the settings it holds: host, port, sessions directory, projects file, remote writes, and updates.
 
 The state folder is `$XDG_STATE_HOME/termul` when `XDG_STATE_HOME` is set. Otherwise it is `~/.local/state/termul`.
 
@@ -53,7 +53,7 @@ To change the token, stop the server, delete the `web-auth-token` file, and star
 
 Treat the token like an SSH private key. Anyone who has it can read any file the server's user can read. With remote changes allowed, they can also run commands as that user.
 
-Prefer the file or the `TERMUL_WEB_AUTH_TOKEN` variable over `--web-auth-token`. Other users on the machine can see a flag's value in the process list.
+Prefer the file or the `TROUPE_WEB_AUTH_TOKEN` variable over `--web-auth-token`. Other users on the machine can see a flag's value in the process list.
 
 ## Allow changes from other devices
 
@@ -114,15 +114,15 @@ To update once, run:
 termul-server --check-update
 ```
 
-This uses the channel in `TERMUL_SERVER_UPDATE_CHANNEL`, or `stable` if that isn't set. It replaces the program file and keeps the old one next to it as `termul-server.old`. Restart the server to run the new version.
+This uses the channel in `TROUPE_SERVER_UPDATE_CHANNEL`, or `stable` if that isn't set. It replaces the program file and keeps the old one next to it as `termul-server.old`. Restart the server to run the new version.
 
 To check for updates in the background, set these environment variables before you start the server:
 
 | Variable | Value |
 | --- | --- |
-| `TERMUL_SERVER_UPDATE_ENABLED` | `true` |
-| `TERMUL_SERVER_UPDATE_CHANNEL` | `stable`, `insider` or `nightly`. Required. |
-| `TERMUL_SERVER_UPDATE_INTERVAL_SECS` | How often to check. The default is `21600` (6 hours). |
+| `TROUPE_SERVER_UPDATE_ENABLED` | `true` |
+| `TROUPE_SERVER_UPDATE_CHANNEL` | `stable`, `insider` or `nightly`. Required. |
+| `TROUPE_SERVER_UPDATE_INTERVAL_SECS` | How often to check. The default is `21600` (6 hours). |
 
 When the server finds a new version in the background, it installs it and restarts itself. Picking an update channel during setup — in the browser or with `termul-server onboard` — turns background checks on for you.
 

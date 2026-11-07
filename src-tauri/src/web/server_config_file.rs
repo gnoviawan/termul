@@ -312,8 +312,9 @@ pub fn save(state_dir: &Path, config: &ServerConfigFile) -> std::io::Result<()> 
 
 /// Resolved self-update settings. When the config file exists it is
 /// authoritative for `channel`/`interval` (file-wins precedence); otherwise
-/// the legacy env vars apply (`TERMUL_SERVER_UPDATE_ENABLED`,
-/// `TERMUL_SERVER_UPDATE_CHANNEL`, `TERMUL_SERVER_UPDATE_INTERVAL_SECS`).
+/// the legacy env vars apply (`TROUPE_SERVER_UPDATE_ENABLED`,
+/// `TROUPE_SERVER_UPDATE_CHANNEL`, `TROUPE_SERVER_UPDATE_INTERVAL_SECS`, each
+/// also read under its old `TERMUL_` name).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UpdateSettings {
     pub enabled: bool,
@@ -331,12 +332,10 @@ pub fn resolve_update_settings(state_dir: &Path) -> UpdateSettings {
             interval_secs: file.update_interval_secs.max(1),
         };
     }
-    let channel = std::env::var("TERMUL_SERVER_UPDATE_CHANNEL")
-        .ok()
-        .and_then(|v| UpdateChannel::parse(&v));
+    let channel =
+        crate::brand_env::value("SERVER_UPDATE_CHANNEL").and_then(|v| UpdateChannel::parse(&v));
     let enabled = crate::server_update::is_update_enabled() && channel.is_some();
-    let interval_secs = std::env::var("TERMUL_SERVER_UPDATE_INTERVAL_SECS")
-        .ok()
+    let interval_secs = crate::brand_env::value("SERVER_UPDATE_INTERVAL_SECS")
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|n| *n > 0)
         .unwrap_or(DEFAULT_UPDATE_INTERVAL_SECS);

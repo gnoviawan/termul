@@ -212,11 +212,11 @@ fn env_lines_loopback_no_updates_has_shell_home_only() {
     assert!(
         !lines
             .iter()
-            .any(|l| l.starts_with("TERMUL_SERVER_ALLOW_REMOTE_WRITES")),
+            .any(|l| l.contains("SERVER_ALLOW_REMOTE_WRITES")),
         "loopback must not emit remote-writes"
     );
     assert!(
-        !lines.iter().any(|l| l.starts_with("TERMUL_SERVER_UPDATE")),
+        !lines.iter().any(|l| l.contains("SERVER_UPDATE")),
         "no update channel must not emit update vars"
     );
     #[cfg(unix)]
@@ -242,7 +242,7 @@ fn env_lines_expose_remote_writes() {
     let lines = a.to_env_lines();
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_ALLOW_REMOTE_WRITES=true"));
+        .any(|l| l == "TROUPE_SERVER_ALLOW_REMOTE_WRITES=true"));
 }
 
 #[test]
@@ -251,13 +251,13 @@ fn env_lines_with_update_channel() {
     let lines = a.to_env_lines();
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_UPDATE_ENABLED=true"));
+        .any(|l| l == "TROUPE_SERVER_UPDATE_ENABLED=true"));
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_UPDATE_CHANNEL=stable"));
+        .any(|l| l == "TROUPE_SERVER_UPDATE_CHANNEL=stable"));
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_UPDATE_INTERVAL_SECS=21600"));
+        .any(|l| l == "TROUPE_SERVER_UPDATE_INTERVAL_SECS=21600"));
 }
 
 #[test]
@@ -390,16 +390,16 @@ fn env_lines_expose_with_update_channel_orders_remote_then_update() {
     let lines = a.to_env_lines();
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_ALLOW_REMOTE_WRITES=true"));
+        .any(|l| l == "TROUPE_SERVER_ALLOW_REMOTE_WRITES=true"));
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_UPDATE_ENABLED=true"));
+        .any(|l| l == "TROUPE_SERVER_UPDATE_ENABLED=true"));
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_UPDATE_CHANNEL=nightly"));
+        .any(|l| l == "TROUPE_SERVER_UPDATE_CHANNEL=nightly"));
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_UPDATE_INTERVAL_SECS=3600"));
+        .any(|l| l == "TROUPE_SERVER_UPDATE_INTERVAL_SECS=3600"));
 }
 
 #[test]
