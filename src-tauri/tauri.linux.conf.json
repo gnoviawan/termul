@@ -8,17 +8,26 @@
 		"linux": {
 			"deb": {
 				"files": {
-					"/usr/lib/termul-manager/rg": "bin/linux-package/rg"
-				}
+					"/usr/lib/troupe/rg": "bin/linux-package/rg",
+					"/usr/bin/termul-manager": "linux/termul-manager"
+				},
+				"conflicts": ["termul-manager"],
+				"replaces": ["termul-manager"],
+				"preInstallScript": "linux/deb-preinst.sh",
+				"postInstallScript": "linux/deb-postinst.sh"
 			},
 			"rpm": {
 				"files": {
-					"/usr/lib/termul-manager/rg": "bin/linux-package/rg"
-				}
+					"/usr/lib/troupe/rg": "bin/linux-package/rg",
+					"/usr/bin/termul-manager": "linux/termul-manager"
+				},
+				"conflicts": ["termul-manager"],
+				"obsoletes": ["termul-manager"],
+				"postInstallScript": "linux/rpm-post.sh"
 			},
 			"appimage": {
 				"files": {
-					"/usr/lib/termul-manager/rg": "bin/linux-package/rg"
+					"/usr/lib/troupe/rg": "bin/linux-package/rg"
 				}
 			}
 		}

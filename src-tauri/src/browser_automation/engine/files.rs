@@ -116,7 +116,7 @@ pub fn mark_downloaded(path: &Path, _origin: &str) -> io::Result<()> {
     let since_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let value = format!("0081;{since_epoch:08x};Termul;");
+    let value = format!("0081;{since_epoch:08x};Troupe;");
     let c_path = CString::new(path.as_os_str().as_bytes())?;
     // SAFETY: both strings are NUL-terminated and live across the call;
     // `value` is passed with its exact length.

@@ -218,10 +218,10 @@ pub(crate) fn rg_bundled_file_name() -> &'static str {
 }
 
 /// Private lib dir the Linux deb/rpm/AppImage install the bundled rg into
-/// (`/usr/lib/termul-manager/rg`, `$APPDIR/usr/lib/termul-manager/rg`).
+/// (`/usr/lib/troupe/rg`, `$APPDIR/usr/lib/troupe/rg`).
 /// Must match the `files` targets in `src-tauri/tauri.linux.conf.json`;
 /// `/usr/bin/rg` belongs to the distro `ripgrep` package (gh-1575).
-pub(crate) const LINUX_PACKAGE_RG_DIR: &str = "termul-manager";
+pub(crate) const LINUX_PACKAGE_RG_DIR: &str = "troupe";
 
 /// Sidecar locations, first match wins. The bundled name beside the running
 /// executable comes before the triple-named dev file so a packaged app does

@@ -1,5 +1,5 @@
 /**
- * The `termul` MCP server an eval agent talks to.
+ * The `troupe` MCP server an eval agent talks to.
  *
  * Instructions and tool definitions come from the real Termul child
  * (`<termul binary> --internal-mcp-plan-server`), so the agent sees what it
@@ -152,7 +152,7 @@ async function handle(message: Rpc): Promise<Rpc | undefined> {
       return reply({
         protocolVersion: params.protocolVersion ?? '2025-06-18',
         capabilities: { tools: {}, resources: {}, prompts: {} },
-        serverInfo: { name: 'termul', version: 'canvas-eval' },
+        serverInfo: { name: 'troupe', version: 'canvas-eval' },
         instructions
       })
     }
