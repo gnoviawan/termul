@@ -87,6 +87,10 @@ fn two_tool_pills_both_become_labels() {
 #[test]
 fn a_0_4_tool_pill_naming_the_termul_server_still_becomes_its_label() {
     assert_eq!(
+        title_of("(Use the browser tool from the termul MCP server) open localhost and (Use the canvas tools from the termul MCP server)"),
+        "Browser open localhost and Canvas"
+    );
+    assert_eq!(
         title_of("(Use the browser tool from the termul MCP server) open localhost and (Use the canvas tools from the troupe MCP server)"),
         "Browser open localhost and Canvas"
     );

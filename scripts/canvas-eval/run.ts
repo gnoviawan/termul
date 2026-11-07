@@ -84,7 +84,7 @@ function runOne(prompt: Prompt, mode: string, out: string): RunResult {
     mcpConfig,
     JSON.stringify({
       mcpServers: {
-        termul: {
+        troupe: {
           command: process.execPath,
           args: [router, '--mode', mode, '--termul', termul, '--figcraft', figcraft, '--out', dir]
         }
