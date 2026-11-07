@@ -10,7 +10,7 @@
 //!
 //! Mirrors the `rg` sidecar convention (`resolve_rg_path` in
 //! `crate::commands`): per-target binary name + an env override
-//! (`TERMUL_CLOUDFLARED_PATH`) + the same candidate dirs (`src-tauri/bin`,
+//! (`TROUPE_CLOUDFLARED_PATH`) + the same candidate dirs (`src-tauri/bin`,
 //! `bin`, the running exe's dir, `../Resources`, `../lib`) + a `OnceLock`
 //! cache. In dev/cloudflare-installed setups the bare `cloudflared` on PATH is
 //! the last-resort fallback (`source = "path"`); production bundles resolve via
@@ -82,7 +82,7 @@ fn cloudflared_sidecar_name() -> &'static str {
 }
 
 /// Resolve the cloudflared binary path. Mirrors `resolve_rg_path`:
-/// env override `TERMUL_CLOUDFLARED_PATH` (absolute, or relative to cwd /
+/// env override `TROUPE_CLOUDFLARED_PATH` (or `TERMUL_CLOUDFLARED_PATH`) (absolute, or relative to cwd /
 /// `src-tauri`), then the bundled sidecar under the same candidate dirs as
 /// `rg`. Returns `(path, source)`; `source = "path"` is the bare-name
 /// last-resort fallback (resolved via PATH at spawn time).
@@ -90,7 +90,7 @@ fn cloudflared_sidecar_name() -> &'static str {
 /// Keep this function pure / side-effect-free so it can be unit-tested without
 /// spawning processes.
 pub fn resolve_cloudflared_path() -> (String, String) {
-    if let Ok(env_val) = std::env::var("TERMUL_CLOUDFLARED_PATH") {
+    if let Some(env_val) = crate::brand_env::value("CLOUDFLARED_PATH") {
         let trimmed = env_val.trim();
         if !trimmed.is_empty() {
             let env_path = PathBuf::from(trimmed);

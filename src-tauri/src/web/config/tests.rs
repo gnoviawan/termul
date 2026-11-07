@@ -2,6 +2,13 @@ use super::*;
 use crate::web::origin::OriginPolicy;
 use std::net::{IpAddr, Ipv4Addr};
 
+// These tests set the legacy `TERMUL_*` names, which must keep working;
+// `brand_env_tests` covers the `TROUPE_*` precedence.
+const AGENT_IDLE_WINDOW_ENV: &str = "TERMUL_AGENT_IDLE_REAP_SECS";
+const MAX_TERMINALS_PER_PROJECT_ENV: &str = "TERMUL_MAX_TERMINALS_PER_PROJECT";
+const PARTITION_GC_AGE_ENV: &str = "TERMUL_PARTITION_GC_AGE_SECS";
+const PARTITION_BYTE_BUDGET_ENV: &str = "TERMUL_PARTITION_BYTE_BUDGET";
+
 // PR-S4: validate the project-root helper. TempDir scopes are used so
 // the tests don't depend on a specific filesystem layout outside
 // `std::env::temp_dir()`. TempDir is already a dev-dep of the workspace
@@ -708,6 +715,16 @@ const TERMUL_ENV_KEYS: &[&str] = &[
     MAX_TERMINALS_PER_PROJECT_ENV,
     PARTITION_GC_AGE_ENV,
     PARTITION_BYTE_BUDGET_ENV,
+    "TROUPE_SESSIONS_DIR",
+    "TROUPE_PROJECTS_FILE",
+    "TROUPE_STORE_FILE",
+    "TROUPE_SERVER_ALLOW_REMOTE_WRITES",
+    "TROUPE_WEB_AUTH_TOKEN",
+    "TROUPE_ALLOWED_ORIGINS",
+    "TROUPE_AGENT_IDLE_REAP_SECS",
+    "TROUPE_MAX_TERMINALS_PER_PROJECT",
+    "TROUPE_PARTITION_GC_AGE_SECS",
+    "TROUPE_PARTITION_BYTE_BUDGET",
 ];
 
 /// The platform state-dir vars. [`lock_env`] keeps their values (the
@@ -951,6 +968,19 @@ fn from_args_projects_file_env_wins_over_state_dir() {
         cfg.projects_file,
         Some(PathBuf::from("/tmp/termul-env/projects.json")),
         "$TERMUL_PROJECTS_FILE must win over the state-dir default"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn from_args_troupe_projects_file_wins_over_the_termul_name() {
+    let _g = lock_env();
+    std::env::set_var("TROUPE_PROJECTS_FILE", "/tmp/troupe-env/projects.json");
+    std::env::set_var("TERMUL_PROJECTS_FILE", "/tmp/termul-env/projects.json");
+    let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+    assert_eq!(
+        cfg.projects_file,
+        Some(PathBuf::from("/tmp/troupe-env/projects.json"))
     );
 }
 

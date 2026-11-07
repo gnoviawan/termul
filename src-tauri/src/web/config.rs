@@ -9,15 +9,16 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+use crate::brand_env;
 use crate::web::auth::WebAuthToken;
 use crate::web::origin::OriginPolicy;
 use crate::web::server_config_file;
 
-/// Non-empty, trimmed value of a path-like environment variable.
+/// Non-empty, trimmed value of a path-like `TROUPE_`/`TERMUL_` variable.
 /// Whitespace-only and unset values are ignored so resolution falls
 /// through to the next branch instead of becoming a blank path.
-fn trimmed_env_path(key: &str) -> Option<PathBuf> {
-    std::env::var(key).ok().and_then(|value| {
+fn trimmed_env_path(suffix: &str) -> Option<PathBuf> {
+    brand_env::value(suffix).and_then(|value| {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
     })
@@ -42,10 +43,10 @@ pub const DEFAULT_PARTITION_BYTE_BUDGET: u64 = 16 * 1024 * 1024;
 /// `--receipt-retention-secs` is clamped to it at startup.
 pub const MAX_RECEIPT_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
 
-const AGENT_IDLE_WINDOW_ENV: &str = "TERMUL_AGENT_IDLE_REAP_SECS";
-const MAX_TERMINALS_PER_PROJECT_ENV: &str = "TERMUL_MAX_TERMINALS_PER_PROJECT";
-const PARTITION_GC_AGE_ENV: &str = "TERMUL_PARTITION_GC_AGE_SECS";
-const PARTITION_BYTE_BUDGET_ENV: &str = "TERMUL_PARTITION_BYTE_BUDGET";
+const AGENT_IDLE_WINDOW_ENV: &str = "AGENT_IDLE_REAP_SECS";
+const MAX_TERMINALS_PER_PROJECT_ENV: &str = "MAX_TERMINALS_PER_PROJECT";
+const PARTITION_GC_AGE_ENV: &str = "PARTITION_GC_AGE_SECS";
+const PARTITION_BYTE_BUDGET_ENV: &str = "PARTITION_BYTE_BUDGET";
 
 /// Parse a strictly positive integer from a flag or env value.
 fn parse_positive<T>(source: &str, value: &str) -> Result<T, ParseCliError>
@@ -65,19 +66,19 @@ where
     Ok(parsed)
 }
 
-/// Positive integer from an env var. Unset and blank values mean "not
-/// configured". An invalid value is ignored with a queued startup warning
-/// (the pre-existing `TERMUL_AGENT_IDLE_REAP_SECS` behavior) — unlike the
-/// flags, which fail startup.
-fn positive_env<T>(key: &str, warnings: &mut Vec<String>) -> Option<T>
+/// Positive integer from a `TROUPE_`/`TERMUL_` variable. Unset and blank
+/// values mean "not configured". An invalid value is ignored with a queued
+/// startup warning (the pre-existing `AGENT_IDLE_REAP_SECS` behavior) —
+/// unlike the flags, which fail startup.
+fn positive_env<T>(suffix: &str, warnings: &mut Vec<String>) -> Option<T>
 where
     T: std::str::FromStr + PartialEq + From<u8>,
 {
-    let raw = std::env::var(key).ok()?;
+    let brand_env::EnvValue { name, value: raw } = brand_env::var(suffix)?;
     if raw.trim().is_empty() {
         return None;
     }
-    match parse_positive(&format!("${key}"), &raw) {
+    match parse_positive(&format!("${name}"), &raw) {
         Ok(value) => Some(value),
         Err(error) => {
             warnings.push(format!("{error}; ignoring it"));
@@ -195,7 +196,7 @@ fn removed_flag_warning(flag: &str, value: Option<&str>) -> String {
 /// likewise ignored (the XDG base-dir spec requires an absolute path) —
 /// the same guard as [`default_projects_file`] (issue #839).
 pub fn default_sessions_dir() -> Option<PathBuf> {
-    if let Some(path) = trimmed_env_path("TERMUL_SESSIONS_DIR") {
+    if let Some(path) = trimmed_env_path("SESSIONS_DIR") {
         return Some(path);
     }
     #[cfg(unix)]
@@ -255,7 +256,7 @@ pub fn default_sessions_dir() -> Option<PathBuf> {
 /// registry and is created on the first project mutation
 /// (`FileProjectRegistry`'s atomic save creates the parent dirs).
 pub fn default_projects_file() -> Option<PathBuf> {
-    if let Some(path) = trimmed_env_path("TERMUL_PROJECTS_FILE") {
+    if let Some(path) = trimmed_env_path("PROJECTS_FILE") {
         return Some(path);
     }
     #[cfg(unix)]
@@ -957,9 +958,9 @@ impl ServerConfig {
         // same trimmed values feed the resolution chains below AND the
         // `explicit_config` provenance flag (`--host`/`--port` have no env
         // equivalents — argv only).
-        let sessions_dir_env = trimmed_env_path("TERMUL_SESSIONS_DIR");
-        let projects_file_env = trimmed_env_path("TERMUL_PROJECTS_FILE");
-        let remote_writes_env = std::env::var("TERMUL_SERVER_ALLOW_REMOTE_WRITES").ok();
+        let sessions_dir_env = trimmed_env_path("SESSIONS_DIR");
+        let projects_file_env = trimmed_env_path("PROJECTS_FILE");
+        let remote_writes_env = brand_env::value("SERVER_ALLOW_REMOTE_WRITES");
 
         // Story 4.1 / issue #839 / #879: resolve the projects registry file.
         // `--projects-file` wins, then `$TERMUL_PROJECTS_FILE`, then
@@ -986,10 +987,7 @@ impl ServerConfig {
         // serve time".
         let store_file = match store_file {
             Some(p) => Some(p),
-            None => std::env::var("TERMUL_STORE_FILE").ok().and_then(|v| {
-                let t = v.trim();
-                (!t.is_empty()).then(|| PathBuf::from(t))
-            }),
+            None => trimmed_env_path("STORE_FILE"),
         };
 
         // Operator opt-in env fallback: only consulted when the CLI flag
@@ -1009,9 +1007,7 @@ impl ServerConfig {
         // absent. An unset/EMPTY env var is ignored (no token); only the CLI
         // flag rejects an empty value.
         let web_auth_token = web_auth_token.or_else(|| {
-            std::env::var("TERMUL_WEB_AUTH_TOKEN")
-                .ok()
-                .and_then(|v| WebAuthToken::new(&v))
+            brand_env::value("WEB_AUTH_TOKEN").and_then(|v| WebAuthToken::new(&v))
         });
         let allowed_origins =
             OriginPolicy::from_cli_or_env(allowed_origins_cli).map_err(ParseCliError::Message)?;
@@ -1033,7 +1029,7 @@ impl ServerConfig {
             .or_else(default_sessions_dir)
             .ok_or_else(|| {
                 ParseCliError::Message(
-                    "could not determine sessions directory: set --sessions-dir, --state-dir, or $TERMUL_SESSIONS_DIR"
+                    "could not determine sessions directory: set --sessions-dir, --state-dir, or $TROUPE_SESSIONS_DIR"
                         .into(),
                 )
             })?;

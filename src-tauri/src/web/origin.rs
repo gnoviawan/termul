@@ -60,15 +60,16 @@ impl OriginPolicy {
     }
 
     /// CLI list wins when `cli` is `Some`. Otherwise read
-    /// `TERMUL_ALLOWED_ORIGINS`. Unset or blank falls back to same-host only.
-    /// An invalid environment value is a startup error.
+    /// `TROUPE_ALLOWED_ORIGINS` (or `TERMUL_ALLOWED_ORIGINS`). Unset or blank
+    /// falls back to same-host only. An invalid environment value is a
+    /// startup error.
     pub fn from_cli_or_env(cli: Option<Self>) -> Result<Self, String> {
         if let Some(policy) = cli {
             return Ok(policy);
         }
-        match std::env::var("TERMUL_ALLOWED_ORIGINS") {
-            Ok(value) if !value.trim().is_empty() => Self::parse_list(&value)
-                .map_err(|error| format!("invalid TERMUL_ALLOWED_ORIGINS: {error}")),
+        match crate::brand_env::var("ALLOWED_ORIGINS") {
+            Some(found) if !found.value.trim().is_empty() => Self::parse_list(&found.value)
+                .map_err(|error| format!("invalid {}: {error}", found.name)),
             _ => Ok(Self::default()),
         }
     }

@@ -331,12 +331,10 @@ pub fn resolve_update_settings(state_dir: &Path) -> UpdateSettings {
             interval_secs: file.update_interval_secs.max(1),
         };
     }
-    let channel = std::env::var("TERMUL_SERVER_UPDATE_CHANNEL")
-        .ok()
-        .and_then(|v| UpdateChannel::parse(&v));
+    let channel =
+        crate::brand_env::value("SERVER_UPDATE_CHANNEL").and_then(|v| UpdateChannel::parse(&v));
     let enabled = crate::server_update::is_update_enabled() && channel.is_some();
-    let interval_secs = std::env::var("TERMUL_SERVER_UPDATE_INTERVAL_SECS")
-        .ok()
+    let interval_secs = crate::brand_env::value("SERVER_UPDATE_INTERVAL_SECS")
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|n| *n > 0)
         .unwrap_or(DEFAULT_UPDATE_INTERVAL_SECS);
