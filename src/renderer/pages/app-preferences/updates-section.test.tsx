@@ -92,6 +92,13 @@ describe('UpdatesSection update mode copy', () => {
     expect(screen.queryByRole('button', { name: /Open download page/ })).toBeNull()
   })
 
+  it('tells an AUR install to update the troupe package with yay', () => {
+    renderSection({ isAurUpdater: true, updateAvailable: true, version: '0.5.0' })
+
+    expect(screen.getByText(/Update through the AUR with: yay -S troupe$/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Open download page/ })).toBeNull()
+  })
+
   it('keeps insider on the manual-download copy', () => {
     renderSection({ updateChannel: 'insider' })
 
