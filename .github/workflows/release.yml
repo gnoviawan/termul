@@ -1069,7 +1069,8 @@ jobs:
 
       # Retag the stable image as `latest` without rebuilding it, under both
       # image names. A version published before the rename exists only as
-      # termul-server, so fall back to it as the source.
+      # termul-server and has no /usr/local/bin/troupe-server, so it moves only
+      # termul-server:latest.
       - name: Retag the stable container image as latest
         env:
           STABLE_VERSION: ${{ inputs.stable_version }}
@@ -1077,11 +1078,13 @@ jobs:
         run: |
           registry="ghcr.io/${OWNER,,}"
           version="${STABLE_VERSION//+/-}"
-          source="$registry/troupe-server:$version"
-          if ! docker buildx imagetools inspect "$source" > /dev/null 2>&1; then
-            source="$registry/termul-server:$version"
+          if docker buildx imagetools inspect "$registry/troupe-server:$version" > /dev/null 2>&1; then
+            docker buildx imagetools create \
+              --tag "$registry/troupe-server:latest" \
+              --tag "$registry/termul-server:latest" \
+              "$registry/troupe-server:$version"
+          else
+            docker buildx imagetools create \
+              --tag "$registry/termul-server:latest" \
+              "$registry/termul-server:$version"
           fi
-          docker buildx imagetools create \
-            --tag "$registry/troupe-server:latest" \
-            --tag "$registry/termul-server:latest" \
-            "$source"
