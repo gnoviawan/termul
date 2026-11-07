@@ -21,7 +21,7 @@ if [ "$os" = windows ]; then
 fi
 
 log="$(mktemp)"
-cargo test --no-fail-fast --features conformance 2>&1 | tee "$log"
+CARGO_LOG=cargo::core::compiler::fingerprint=info cargo test --no-fail-fast --features conformance 2>&1 | tee "$log"
 status="${PIPESTATUS[0]}"
 
 failing="$(mktemp)"
