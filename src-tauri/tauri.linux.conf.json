@@ -22,7 +22,8 @@
 					"/usr/bin/termul-manager": "linux/termul-manager"
 				},
 				"conflicts": ["termul-manager"],
-				"obsoletes": ["termul-manager"]
+				"obsoletes": ["termul-manager"],
+				"postInstallScript": "linux/rpm-post.sh"
 			},
 			"appimage": {
 				"files": {
