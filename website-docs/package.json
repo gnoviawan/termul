@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "react-router build && cp build/client/__spa-fallback.html build/client/404.html",
+    "build": "react-router build && bun scripts/finalize-build.ts",
     "dev": "react-router dev",
-    "start": "serve ./build/client --config ./serve.json",
+    "start": "serve ./build/client --config ../../serve.json",
     "types:check": "react-router typegen && fumadocs-mdx && tsc --noEmit",
     "postinstall": "fumadocs-mdx",
     "lint": "biome check",

@@ -1,22 +1,17 @@
 import { glob } from 'node:fs/promises'
 import type { Config } from '@react-router/dev/config'
-import { createGetUrl, getSlugs } from 'fumadocs-core/source'
-
-const getUrl = createGetUrl('/docs')
+import { getSlugs } from 'fumadocs-core/source'
+import { docsRoute } from './app/lib/shared'
 
 export default {
   ssr: false,
+  basename: `${docsRoute}/`,
   async prerender({ getStaticPaths }) {
-    const paths: string[] = []
-    const excluded: string[] = []
-
-    for (const path of getStaticPaths()) {
-      if (!excluded.includes(path)) paths.push(path)
-    }
+    const paths = getStaticPaths()
 
     for await (const entry of glob('**/*.mdx', { cwd: 'content/docs' })) {
       const slugs = getSlugs(entry)
-      paths.push(getUrl(slugs), `/llms.mdx/docs/${[...slugs, 'content.md'].join('/')}`)
+      paths.push(`/${slugs.join('/')}`, `/llms.mdx/${[...slugs, 'content.md'].join('/')}`)
     }
 
     return paths
