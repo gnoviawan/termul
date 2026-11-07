@@ -1381,6 +1381,20 @@ export class WsAcpTransport implements AcpTransport {
     )
   }
 
+  async importAgentSession(
+    input: {
+      sessionId: SessionId
+      agentId: AgentId
+      cwd: string
+      title?: string | null
+      updatedAt?: number
+      projectId?: string
+    },
+    options?: CommandCallOptions
+  ): Promise<PersistedSessionSummary> {
+    return this.request<PersistedSessionSummary>('import_agent_session', input, undefined, options)
+  }
+
   // CAP-2 (spec-in-chat-agent-switch): durable agent-switch marker — the
   // host records ONE durable record then fans the synthetic event.
   async recordAgentSwitch(

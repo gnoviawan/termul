@@ -1278,6 +1278,34 @@ export async function acpRegisterDiscoveredSession(input: {
 }
 
 /**
+ * Import a session another client created (such as a Claude Code chat) into
+ * the durable chat history. The host captures the history the agent replays
+ * and closes the agent session; open the chat afterwards to resume it.
+ * Rejects with an `AcpTransportError` of code `duplicate` when the session is
+ * already in the history.
+ */
+export async function acpImportAgentSession(input: {
+  sessionId: SessionId
+  agentId: AgentId
+  cwd: string
+  title?: string | null
+  updatedAt?: number
+  projectId?: string
+}): Promise<import('@shared/types/web-protocol.types').PersistedSessionSummary> {
+  const run = await ledgered(
+    'import_agent_session',
+    JSON.stringify([
+      input.agentId.trim(),
+      input.sessionId.trim(),
+      input.cwd.trim(),
+      input.projectId?.trim() ?? ''
+    ]),
+    (call) => getAcpTransport().importAgentSession(input, call)
+  )
+  return run.result
+}
+
+/**
  * CAP-2 (spec-in-chat-agent-switch): durably record an agent-switch marker.
  * Host is the sole author — the WS route (`record_agent_switch`) authors ONE
  * `agent_switch` record: the host relay numbers it, persists it and delivers the same event
@@ -1505,6 +1533,7 @@ export const acpApi = {
   disposeEphemeralSession: acpDisposeEphemeralSession,
   promoteSession: acpPromoteSession,
   listSessions: acpListSessions,
+  importAgentSession: acpImportAgentSession,
   sendPrompt: acpSendPrompt,
   sendPromptBlocks: acpSendPromptBlocks,
   cancelPrompt: acpCancelPrompt,

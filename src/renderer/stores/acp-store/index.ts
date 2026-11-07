@@ -106,6 +106,7 @@ import {
 } from './shared-state'
 import { createAgentSlice } from './slices/agent'
 import { createConfigSlice } from './slices/config'
+import { createImportSlice } from './slices/import-sessions'
 import { createLaunchSlice } from './slices/launch'
 import { createMcpSlice } from './slices/mcp'
 import { createMiscSlice } from './slices/misc'
@@ -179,7 +180,8 @@ export const useAcpStore = create<AcpState>()((...a) => ({
   ...createPromptSlice(...a),
   ...createSwitchSlice(...a),
   ...createMcpSlice(...a),
-  ...createMiscSlice(...a)
+  ...createMiscSlice(...a),
+  ...createImportSlice(...a)
 }))
 
 setLiveLaunchSessionLookup((sessionId) => {

@@ -3486,3 +3486,44 @@ describe('Subagent stop parity', () => {
     expect(read('acp', 'manager', 'command_loop.rs')).toMatch(/StopPlan::CancelSession\(child\)/)
   })
 })
+
+// Import a chat another client created (Claude Code CLI chats the agent lists):
+// desktop (Channel carrier), shared-live, `termul-server` and the browser all
+// send the `/ws` request `import_agent_session`, which reaches the one host
+// service `acp::agent_session_import`.
+describe('Agent session import parity', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const read = (...parts: string[]): string => readFileSync(join(SRC_TAURI, ...parts), 'utf-8')
+
+  it('the facade and the transport send one /ws request on every carrier', () => {
+    expect(readFileSync(join(LIB_DIR, 'acp-api.ts'), 'utf-8')).toMatch(
+      /getAcpTransport\(\)\.importAgentSession\(input, call\)/
+    )
+    expect(readFileSync(join(LIB_DIR, 'acp-transport', 'ws-transport.ts'), 'utf-8')).toMatch(
+      /'import_agent_session'/
+    )
+    expect(
+      readFileSync(join(LIB_DIR, 'acp-transport', 'desktop-transport.ts'), 'utf-8')
+    ).not.toMatch(/importAgentSession/)
+  })
+
+  it('the host routes the request to the shared service and ledgers it as a command', () => {
+    expect(read('web', 'ws', 'dispatch.rs')).toMatch(
+      /"import_agent_session" => handle_import_agent_session\(id, &req\.payload, acp, relay\)\.await/
+    )
+    expect(read('web', 'ws', 'import_session.rs')).toMatch(/import_agent_session\(/)
+    expect(read('web', 'command_ledger', 'class.rs')).toMatch(
+      /\(\s*"import_agent_session",\s*CommandClass::command\(/
+    )
+  })
+
+  it('the chat list offers the import on the desktop Chats tab and the phone drawer', () => {
+    const components = join(LIB_DIR, '..', 'components')
+    expect(readFileSync(join(components, 'shell', 'ChatsList.tsx'), 'utf-8')).toMatch(
+      /<ImportChatsButton[^>]*variant="icon"/
+    )
+    expect(readFileSync(join(components, 'mobile', 'MobileRecentsList.tsx'), 'utf-8')).toMatch(
+      /<ImportChatsButton[^>]*variant="row"/
+    )
+  })
+})

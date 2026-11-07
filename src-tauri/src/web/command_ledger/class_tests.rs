@@ -134,6 +134,7 @@ fn only_creates_and_non_prompt_commands_enter_the_ledger() {
             "dispose_ephemeral_session",
             "promote_session",
             "register_discovered_session",
+            "import_agent_session",
             "authenticate_agent",
             "respond_elicitation",
             "install_acp_agent",

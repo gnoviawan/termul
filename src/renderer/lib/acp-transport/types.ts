@@ -412,6 +412,24 @@ export interface AcpTransport {
     options?: CommandCallOptions
   ): Promise<PersistedSessionSummary>
   /**
+   * Copy a session another client created (for example a Claude Code chat)
+   * into the durable chat history: the host registers it, captures the
+   * history the agent replays and closes the agent session. WS:
+   * `import_agent_session`. Rejects with code `duplicate` when the session is
+   * already in the history.
+   */
+  importAgentSession(
+    input: {
+      sessionId: SessionId
+      agentId: AgentId
+      cwd: string
+      title?: string | null
+      updatedAt?: number
+      projectId?: string
+    },
+    options?: CommandCallOptions
+  ): Promise<PersistedSessionSummary>
+  /**
    * CAP-2 (spec-in-chat-agent-switch): durably record an agent-switch
    * marker. Host is the sole author — one `agent_switch` record that the
    * relay numbers, persists and delivers live under the same seq. WS:

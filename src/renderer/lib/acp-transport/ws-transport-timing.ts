@@ -59,6 +59,7 @@ export function jitteredBackoffMs(
 const INSTALL_TIMEOUT_MS = 330_000 // host: 120 s download + 180 s child (+ margin)
 const CATALOG_TIMEOUT_MS = 90_000 // host refresh/network fetch bound 60 s (+ margin)
 const SESSION_OPEN_TIMEOUT_MS = 90_000 // host session new/reopen cap 60 s (+ grace)
+const IMPORT_SESSION_TIMEOUT_MS = 150_000 // host: 60 s replay + 30 s agent close (+ persistence, grace)
 
 const FIXED_REQUEST_TIMEOUTS_MS: Partial<Record<WsRequestType, number>> = {
   install_acp_agent: INSTALL_TIMEOUT_MS,
@@ -66,6 +67,7 @@ const FIXED_REQUEST_TIMEOUTS_MS: Partial<Record<WsRequestType, number>> = {
   create_session: SESSION_OPEN_TIMEOUT_MS,
   load_session: SESSION_OPEN_TIMEOUT_MS,
   resume_session: SESSION_OPEN_TIMEOUT_MS,
+  import_agent_session: IMPORT_SESSION_TIMEOUT_MS,
   authenticate: HANDSHAKE_TIMEOUT_MS
 }
 

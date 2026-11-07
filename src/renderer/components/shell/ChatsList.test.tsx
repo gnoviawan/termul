@@ -34,6 +34,9 @@ vi.mock('@/lib/api', () => ({
   openerApi: { revealInFileManager: mocks.revealInFileManager }
 }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: mocks.logFrontendError }))
+vi.mock('@/hooks/use-server-admits-remote-writes', () => ({
+  useServerAdmitsRemoteWrites: () => true
+}))
 vi.mock('@/hooks/use-pane-dnd', () => ({
   usePaneDnd: () => ({ startChatDrag: mocks.startChatDrag })
 }))
@@ -145,6 +148,29 @@ describe('ChatsList scope and order', () => {
     useShellLayoutStore.setState({ worktreePickByProject: { p1: '/repo/.termul/worktrees/gone' } })
     render(<ChatsList project={project} />)
     expect(cardButtons()).toHaveLength(2)
+  })
+
+  it('opens the import dialog for the picked working copy', async () => {
+    const listImportableSessions = vi.fn(async () => ({ status: 'unsupported' as const }))
+    useAcpStore.setState({
+      agentConfigs: [{ id: 'cfg', name: 'Claude', command: 'x', args: [], env: {} }] as never,
+      listImportableSessions
+    })
+    useShellLayoutStore.setState({
+      worktreePickByProject: { p1: '/repo/.termul/worktrees/feature' }
+    })
+    render(<ChatsList project={project} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Import chats' }))
+
+    expect(screen.getByRole('dialog', { name: 'Import chats' })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(listImportableSessions).toHaveBeenCalledWith(
+        'cfg',
+        '/repo/.termul/worktrees/feature',
+        'p1'
+      )
+    )
   })
 
   it('shows the empty line when the project has no chats', () => {
