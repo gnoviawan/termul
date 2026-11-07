@@ -70,7 +70,7 @@ describe('ServerSetupGate', () => {
         <p>the app</p>
       </ServerSetupGate>
     )
-    await waitFor(() => expect(screen.getByText('Set up Termul')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Set up Troupe')).toBeInTheDocument())
     expect(screen.queryByText('the app')).not.toBeInTheDocument()
   })
 })

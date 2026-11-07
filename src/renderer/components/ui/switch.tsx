@@ -8,7 +8,7 @@ import { FOCUS_RING_CLASS } from './panel-styles'
  * On/off switch. Track and thumb colors come from per-theme `--switch-*`
  * tokens (`.switch-track`, `.switch-thumb` in index.css). Most themes keep
  * the neutral switch: foreground track + background thumb when checked,
- * input track + muted thumb when not. Termul themes use the brand blue.
+ * input track + muted thumb when not. Troupe themes use the brand blue.
  */
 export type SwitchSize = 'default' | 'sm'
 

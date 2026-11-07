@@ -25,7 +25,7 @@ const HOST_FAILURE_TEXT: Record<string, string> = {
     'The review expired before it was approved, so nothing was saved. Start over to review it again.',
   MCP_PLAN_CONSUMED: 'This review was already used. Start over to install it again.',
   MCP_PLAN_NOT_FOUND:
-    'Termul lost track of this install, for example after a reconnect. Start over to review it again.',
+    'Troupe lost track of this install, for example after a reconnect. Start over to review it again.',
   MCP_PLAN_WRONG_CALLER:
     'This install was started from another connection. Start over to review it here.',
   MCP_PLAN_MISMATCH:
@@ -41,9 +41,9 @@ function mcpInstallFailureText(failure: McpInstallFailure): string {
     case 'unsupported':
       return mcpCatalogReasonText(failure.reason)
     case 'save':
-      return "Termul couldn't save the server after you approved it. Start over to try again."
+      return "Troupe couldn't save the server after you approved it. Start over to try again."
     case 'host':
-      return HOST_FAILURE_TEXT[failure.code] ?? "Termul couldn't install this server. Try again."
+      return HOST_FAILURE_TEXT[failure.code] ?? "Troupe couldn't install this server. Try again."
   }
 }
 
@@ -55,8 +55,8 @@ function mcpInstallProbeText(probe: McpInstallProbe): string {
       return 'It needs you to sign in before agents can use it.'
     case 'disconnected':
       return probe.error
-        ? `Termul couldn't reach it yet: ${probe.error}`
-        : "Termul couldn't reach it yet. Check it in the MCP servers list."
+        ? `Troupe couldn't reach it yet: ${probe.error}`
+        : "Troupe couldn't reach it yet. Check it in the MCP servers list."
   }
 }
 

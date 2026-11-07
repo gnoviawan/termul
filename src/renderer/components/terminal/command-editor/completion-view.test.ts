@@ -396,7 +396,7 @@ function assertTooltipStyles(rules: CSSStyleRule[], prefix: string) {
   expect(fontFamily).toContain('Paper Mono')
 }
 
-it('completion picker inherits the active Termul theme', () => {
+it('completion picker inherits the active Troupe theme', () => {
   const source: CompletionViewSource = {
     rows: () => [{ text: 'status', from: 4, to: 7 }],
     request: () => {}

@@ -222,9 +222,9 @@ export function MobileChatShell({
   const terminalName = activeTerminal?.name || 'Terminal'
 
   // Header title: the tab on screen's own name; an empty section's name; else
-  // "Termul" when no tab is open.
+  // "Troupe" when no tab is open.
   const headerTitle = ((): string => {
-    if (!activeTab) return 'Termul'
+    if (!activeTab) return 'Troupe'
     switch (activeTab.type) {
       case 'terminal':
         return terminalName
@@ -250,7 +250,7 @@ export function MobileChatShell({
         return 'Automations'
       default:
         reportUnknownTabKind(activeTab, 'MobileChatShell.headerTitle', 'using default title')
-        return 'Termul'
+        return 'Troupe'
     }
   })()
 
