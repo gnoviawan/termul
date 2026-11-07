@@ -503,6 +503,29 @@ describe('ShellRail', () => {
       }
     })
 
+    it('keeps the Column tabs until the pointer leaves the Rail when the Side panel opens', () => {
+      // #1725: a tab icon click opens the Side panel. Dropping the track at
+      // once moved Search, Canvas and Automations up under the pointer.
+      useShellLayoutStore.setState({ sidePanelVisible: false })
+      renderRail()
+      const track = () => screen.queryByTestId('rail-column-tab-track')
+      const rail = screen.getByTestId('rail-top-band').parentElement as HTMLElement
+      expect(track()).toBeInTheDocument()
+
+      fireEvent.pointerEnter(rail)
+      act(() => useShellLayoutStore.setState({ sidePanelVisible: true }))
+      expect(track()).toBeInTheDocument()
+
+      fireEvent.pointerLeave(rail)
+      expect(track()).not.toBeInTheDocument()
+
+      // Opened from elsewhere (keyboard, Side panel toggle): no hold.
+      act(() => useShellLayoutStore.setState({ sidePanelVisible: false }))
+      expect(track()).toBeInTheDocument()
+      act(() => useShellLayoutStore.setState({ sidePanelVisible: true }))
+      expect(track()).not.toBeInTheDocument()
+    })
+
     it('puts the mark / toggle swap below the empty top band under the macOS traffic lights', () => {
       tauriRef.current = true
       macRef.current = true
