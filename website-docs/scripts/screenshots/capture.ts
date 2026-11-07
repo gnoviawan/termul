@@ -6,7 +6,7 @@ import { startDemoServer } from './demo-server'
 import type { Shot } from './shot'
 
 // Usage: bun scripts/screenshots/capture.ts [id-substring ...]
-// Starts an isolated termul-server with demo projects, runs every shot in
+// Starts an isolated troupe-server with demo projects, runs every shot in
 // shots/*.ts, and writes PNGs to public/screenshots/.
 
 const here = dirname(fileURLToPath(import.meta.url))

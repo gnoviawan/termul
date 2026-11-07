@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 // Produces the per-channel server platform-manifest fragment consumed by
-// `merge-updater-manifests.mjs`. It defaults to the x64 asset (`termul-server`,
+// `merge-updater-manifests.mjs`. It defaults to the x64 asset (`troupe-server`,
 // key `linux-x86_64-server`); the arm64 build passes
-// `--binary-name termul-server-linux-aarch64 --platform-key linux-aarch64-server`.
-// The standalone `termul-server` binary is a plain `cargo build` artifact (not
+// `--binary-name troupe-server-linux-aarch64 --platform-key linux-aarch64-server`.
+// The standalone `troupe-server` binary is a plain `cargo build` artifact (not
 // a Tauri bundle), so it is not collected by `prepare-platform-artifacts.mjs`
 // (which reads tauri-action's desktop bundle output). This helper reads the
 // binary's minisign signature
@@ -21,8 +21,8 @@ const SERVER_PLATFORM_KEY = 'linux-x86_64-server'
 // Known server platform keys and the release asset each one must point at. A
 // mismatched pair would send one architecture's updater to the other's binary.
 const SERVER_ASSET_BY_PLATFORM_KEY = {
-  'linux-x86_64-server': 'termul-server',
-  'linux-aarch64-server': 'termul-server-linux-aarch64'
+  'linux-x86_64-server': 'troupe-server',
+  'linux-aarch64-server': 'troupe-server-linux-aarch64'
 }
 
 function fail(message) {
@@ -49,7 +49,7 @@ function readArguments(argv) {
 }
 
 export async function prepareServerArtifacts({
-  binaryName = 'termul-server',
+  binaryName = 'troupe-server',
   signaturePath,
   tag,
   version,
@@ -70,6 +70,8 @@ export async function prepareServerArtifacts({
   const signature = (await readFile(signaturePath, 'utf8')).trim()
   assertNonEmptyString(signature, 'signature content')
 
+  // Keep the `gnoviawan/termul` path even after the repo rename: 0.4.x servers
+  // only download from that prefix, and GitHub redirects it to the new name.
   const url = `https://github.com/gnoviawan/termul/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(binaryName)}`
   const manifest = {
     platform: 'standalone-server',
@@ -89,7 +91,7 @@ export async function prepareServerArtifacts({
 async function runCli() {
   const options = readArguments(process.argv.slice(2))
   await prepareServerArtifacts({
-    binaryName: options['binary-name'] ?? 'termul-server',
+    binaryName: options['binary-name'] ?? 'troupe-server',
     signaturePath: options.signature,
     tag: options.tag,
     version: options.version,

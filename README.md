@@ -69,7 +69,7 @@ Troupe treats workspaces as first-class citizens, allowing you to organize termi
 | Feature             | Description                                                                                                                                                                                               |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Remote Access**   | Turn on remote access from the desktop status bar to open a cloudflared quick tunnel, then scan the QR code to drive your live agent chats from a phone. Requires `cloudflared` on your `PATH`            |
-| **termul-server**   | Standalone Linux server that serves the Troupe web client from a headless host, with token auth and opt-in self-update. See [Installing termul-server](docs/deployment-guide.md#installing-termul-server) |
+| **troupe-server**   | Standalone Linux server that serves the Troupe web client from a headless host, with token auth and opt-in self-update. See [Installing troupe-server](docs/deployment-guide.md#installing-troupe-server) |
 | **Mobile UI & PWA** | Phone-width layout with a chat drawer, a file explorer, and extra terminal keys. Install the web client as a PWA over HTTPS or `localhost`                                                                |
 
 ### 📝 Editor & File Management

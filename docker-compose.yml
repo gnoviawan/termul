@@ -1,4 +1,4 @@
-# termul-server in a container. Guide: docs/deployment-guide.md, "Run in Docker".
+# troupe-server in a container. Guide: docs/deployment-guide.md, "Run in Docker".
 #
 #   mkdir -p workspace
 #   docker compose up -d
@@ -12,11 +12,14 @@
 # TROUPE_UID, and TROUPE_GID. The old TERMUL_* names still work; a TROUPE_*
 # name wins when both are set.
 
+# The project, service, and volume keep their termul names: renaming them would
+# start a second container next to a running one and leave the server state in
+# the old termul_termul-home volume.
 name: termul
 
 services:
   termul-server:
-    image: ${TROUPE_IMAGE:-${TERMUL_IMAGE:-ghcr.io/gnoviawan/termul-server:latest}}
+    image: ${TROUPE_IMAGE:-${TERMUL_IMAGE:-ghcr.io/gnoviawan/troupe-server:latest}}
     build:
       context: .
       args:

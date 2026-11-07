@@ -272,12 +272,12 @@ pub async fn serve(
     // path and does not write that marker.
     if let Err(e) = acp.kill_all_checked().await {
         let e: Box<dyn std::error::Error + Send + Sync> = e.into();
-        log::error!("[termul-server] ACP kill_all failed during shutdown: {e}");
+        log::error!("[troupe-server] ACP kill_all failed during shutdown: {e}");
         cleanup_errors.push(e);
     }
     if let Err(e) = acp.shutdown_persistence().await {
         let e: Box<dyn std::error::Error + Send + Sync> = e.into();
-        log::error!("[termul-server] ACP persistence shutdown failed: {e}");
+        log::error!("[troupe-server] ACP persistence shutdown failed: {e}");
         cleanup_errors.push(e);
     }
     // PTY cleanup always runs — never skip terminal process-tree kill.
@@ -289,11 +289,11 @@ pub async fn serve(
 
     match serve_result {
         Ok(()) => {
-            info!("termul-server stopped");
+            info!("troupe-server stopped");
             Ok(())
         }
         Err(join_err) if join_err.is_cancelled() => {
-            warn!("termul-server serve task cancelled");
+            warn!("troupe-server serve task cancelled");
             Ok(())
         }
         Err(join_err) => Err(Box::new(join_err)),
@@ -487,7 +487,7 @@ pub async fn serve_router(
 /// instead.
 async fn shutdown_signal_future() {
     match shutdown_signal().await {
-        Ok(()) => info!("termul-server shutting down…"),
+        Ok(()) => info!("troupe-server shutting down…"),
         Err(e) => {
             warn!("shutdown signal setup failed ({e}); serving until process exit");
             // Do not complete the shutdown future — that would stop the

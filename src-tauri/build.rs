@@ -89,7 +89,7 @@ fn main() {
     // every static route — a silent deploy bug. Emit a `web_embed_missing` cfg
     // so the release path (NOT debug) hits a `compile_error!` in `assets.rs`
     // telling the operator to run `bun run build:web` first. The Vite build
-    // MUST run before `cargo build --bin termul-server` (rust-embed embeds at
+    // MUST run before `cargo build --bin troupe-server` (rust-embed embeds at
     // build time) — CI enforces this ordering (`.github/workflows/*`).
     // `index.html` alone is not sufficient: a stale `dist-web/` that predates
     // the PWA files would compile cleanly yet ship an `index.html` linking a

@@ -1,11 +1,12 @@
-//! Guided setup + background launch for the standalone `termul-server`.
+//! Guided setup + background launch for the standalone `troupe-server`.
 //!
-//! `termul-server onboard` interactively asks for each supported config,
+//! `troupe-server onboard` interactively asks for each supported config,
 //! validates answers by reusing the existing validators (`BindMode::parse`,
 //! `UpdateChannel::parse`, …), then
 //! auto-detects the host's service manager and launches the server detached
 //! so it survives SSH logout: systemd hosts install + enable + start a
-//! `termul-server.service` unit; non-systemd Linux hosts detach via `setsid`
+//! `troupe-server.service` unit (or rewrite an existing `termul-server.service`
+//! in place); non-systemd Linux hosts detach via `setsid`
 //! with stdio to a log file + a PID file.
 //!
 //! The wizard logic (validation, synthesis, detection predicate, unit-text
@@ -88,7 +89,7 @@ impl OnboardAnswers {
     /// keep it. Retries on validation error with the validator's message.
     /// Only called when stdin is a TTY — the non-TTY path uses [`Self::defaults`].
     pub fn collect<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> Self {
-        writeln!(stdout, "=== termul-server onboard ===").ok();
+        writeln!(stdout, "=== troupe-server onboard ===").ok();
         writeln!(
             stdout,
             "Press Enter to accept the [default] for each prompt.\n"
@@ -366,30 +367,46 @@ pub enum SystemdScope {
 /// The auto-detected background-launch mechanism.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceManager {
-    Systemd { scope: SystemdScope },
+    Systemd {
+        scope: SystemdScope,
+        unit: &'static str,
+    },
     Setsid,
 }
+
+/// systemd unit name for new installs.
+pub const SERVICE_UNIT: &str = "troupe-server";
+/// Unit name written by 0.4.x onboarding. Re-running onboard on such a host
+/// rewrites that unit instead of adding a second one that fights it for the
+/// port and the state-dir lock.
+pub const LEGACY_SERVICE_UNIT: &str = "termul-server";
 
 impl ServiceManager {
     /// Auto-detect the mechanism. systemd = `/run/systemd/system` exists AND
     /// `systemctl --version` succeeds; scope by uid (root → system, else user).
     /// Fallback: `Setsid`.
     pub fn detect() -> Self {
-        detect_from(systemd_is_present(), is_root())
+        match detect_from(systemd_is_present(), is_root()) {
+            Self::Systemd { scope, .. } => Self::Systemd {
+                scope,
+                unit: service_unit_in(&unit_dir(&scope)),
+            },
+            Self::Setsid => Self::Setsid,
+        }
     }
 
     /// A short management tip for the non-TTY display path.
     fn tip(&self) -> String {
         match self {
-            Self::Systemd { scope } => {
+            Self::Systemd { scope, unit } => {
                 let u = if matches!(scope, SystemdScope::User) {
                     " --user"
                 } else {
                     ""
                 };
                 format!(
-                    "Mechanism: systemd. Manage: journalctl{u} -u termul-server -f; \
-                     systemctl{u} stop termul-server."
+                    "Mechanism: systemd. Manage: journalctl{u} -u {unit} -f; \
+                     systemctl{u} stop {unit}."
                 )
             }
             Self::Setsid => "Mechanism: setsid (no systemd). Detached background process \
@@ -413,8 +430,8 @@ impl ServiceManager {
         user: &str,
     ) -> Result<(), String> {
         match self {
-            Self::Systemd { scope } => {
-                let unit_path = unit_path(scope);
+            Self::Systemd { scope, unit } => {
+                let unit_path = unit_dir(scope).join(format!("{unit}.service"));
                 if let Some(parent) = unit_path.parent() {
                     std::fs::create_dir_all(parent)
                         .map_err(|e| format!("create {}: {e}", parent.display()))?;
@@ -451,7 +468,7 @@ impl ServiceManager {
                 if user_flag {
                     enable.arg("--user");
                 }
-                enable.args(["enable", "--now", "termul-server"]);
+                enable.args(["enable", "--now", *unit]);
                 let st = enable
                     .status()
                     .map_err(|e| format!("systemctl enable --now failed: {e}"))?;
@@ -540,6 +557,7 @@ fn detect_from(systemd_present: bool, is_root: bool) -> ServiceManager {
             } else {
                 SystemdScope::User
             },
+            unit: SERVICE_UNIT,
         }
     } else {
         ServiceManager::Setsid
@@ -567,15 +585,28 @@ fn is_root() -> bool {
     false
 }
 
-fn unit_path(scope: &SystemdScope) -> PathBuf {
+fn unit_dir(scope: &SystemdScope) -> PathBuf {
     match scope {
-        SystemdScope::System => PathBuf::from("/etc/systemd/system/termul-server.service"),
+        SystemdScope::System => PathBuf::from("/etc/systemd/system"),
         SystemdScope::User => {
             let home = std::env::var_os("HOME")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
-            home.join(".config/systemd/user/termul-server.service")
+            home.join(".config/systemd/user")
         }
+    }
+}
+
+/// The unit to write in `unit_dir`: the 0.4.x `termul-server` unit when one is
+/// installed there, else `troupe-server`.
+fn service_unit_in(unit_dir: &Path) -> &'static str {
+    if unit_dir
+        .join(format!("{LEGACY_SERVICE_UNIT}.service"))
+        .exists()
+    {
+        LEGACY_SERVICE_UNIT
+    } else {
+        SERVICE_UNIT
     }
 }
 
@@ -681,15 +712,15 @@ fn write_access_info<W: Write>(
     }
     writeln!(stdout, "Open that URL in a browser to use the web client.").ok();
     match mechanism {
-        ServiceManager::Systemd { scope } => {
+        ServiceManager::Systemd { scope, unit } => {
             // Scope-aware commands: user units must be addressed via
             // `--user` or the commands hit the (empty) system instance.
             let u = match scope {
                 SystemdScope::User => " --user",
                 SystemdScope::System => "",
             };
-            writeln!(stdout, "Logs: journalctl{u} -u termul-server -f").ok();
-            writeln!(stdout, "Stop:  systemctl{u} stop termul-server").ok();
+            writeln!(stdout, "Logs: journalctl{u} -u {unit} -f").ok();
+            writeln!(stdout, "Stop:  systemctl{u} stop {unit}").ok();
             writeln!(
                 stdout,
                 "Note: survives logout + reboot (systemd manages auto-start)."
@@ -719,7 +750,7 @@ fn write_access_info<W: Write>(
     let exe_name = exe
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("termul-server");
+        .unwrap_or("troupe-server");
     writeln!(
         stdout,
         "For a foreground run: {exe_name} {}",
@@ -843,14 +874,14 @@ fn run_non_tty<W: Write>(stdout: &mut W) -> ExitCode {
     let answers = OnboardAnswers::defaults();
     let args = answers.to_command_args();
     let mechanism = ServiceManager::detect();
-    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("termul-server"));
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("troupe-server"));
     let exe_name = exe
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("termul-server");
+        .unwrap_or("troupe-server");
     writeln!(
         stdout,
-        "termul-server onboard: stdin is not a TTY; using defaults — re-run in a terminal to launch."
+        "troupe-server onboard: stdin is not a TTY; using defaults — re-run in a terminal to launch."
     )
     .ok();
     writeln!(stdout, "Default command: {exe_name} {}", args.join(" ")).ok();
@@ -941,7 +972,7 @@ fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitC
     let mut args = answers.to_command_args();
     args.push("--state-dir".into());
     args.push(state_dir.display().to_string());
-    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("termul-server"));
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("troupe-server"));
 
     // Optional env-file write. The env file is used ONLY by systemd's
     // `EnvironmentFile=` directive — the setsid child always receives the

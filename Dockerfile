@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # The runtime base matches the release runner (ubuntu-22.04) that builds the
-# termul-server assets, so the binary loads the same library versions it was
+# troupe-server assets, so the binary loads the same library versions it was
 # linked against.
 ARG UBUNTU_VERSION=22.04
 
@@ -17,10 +17,11 @@ RUN apt-get update \
 	&& rm -rf /var/lib/apt/lists/*
 COPY src-tauri/tauri.conf.json /tmp/tauri.conf.json
 WORKDIR /fetch
+# Releases before 0.5.0 name the asset termul-server, so fall back to that name.
 RUN set -eu; \
 	case "$TARGETARCH" in \
-		amd64) asset=termul-server ;; \
-		arm64) asset=termul-server-linux-aarch64 ;; \
+		amd64) suffix= ;; \
+		arm64) suffix=-linux-aarch64 ;; \
 		*) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
 	esac; \
 	if [ "$TROUPE_RELEASE" = latest ]; then \
@@ -28,12 +29,16 @@ RUN set -eu; \
 	else \
 		base="https://github.com/gnoviawan/termul/releases/download/$TROUPE_RELEASE"; \
 	fi; \
-	curl -fsSL --proto '=https' --retry 3 -o termul-server "$base/$asset"; \
-	curl -fsSL --proto '=https' --retry 3 -o termul-server.sig "$base/$asset.sig"; \
+	for asset in "troupe-server$suffix" "termul-server$suffix"; do \
+		if curl -fsSL --proto '=https' --retry 3 -o troupe-server "$base/$asset"; then break; fi; \
+		rm -f troupe-server; \
+	done; \
+	test -s troupe-server || { echo "no server asset in release $TROUPE_RELEASE" >&2; exit 1; }; \
+	curl -fsSL --proto '=https' --retry 3 -o troupe-server.sig "$base/$asset.sig"; \
 	sed -n 's/.*"pubkey": *"\([^"]*\)".*/\1/p' /tmp/tauri.conf.json | base64 -d > minisign.pub; \
-	base64 -d termul-server.sig > termul-server.minisig; \
-	minisign -V -m termul-server -x termul-server.minisig -p minisign.pub; \
-	chmod 0755 termul-server
+	base64 -d troupe-server.sig > troupe-server.minisig; \
+	minisign -V -m troupe-server -x troupe-server.minisig -p minisign.pub; \
+	chmod 0755 troupe-server
 
 FROM ubuntu:${UBUNTU_VERSION}
 ARG TERMUL_RELEASE=latest
@@ -43,13 +48,13 @@ ARG TROUPE_RELEASE=${TERMUL_RELEASE}
 ARG TROUPE_UID=${TERMUL_UID}
 ARG TROUPE_GID=${TERMUL_GID}
 
-LABEL org.opencontainers.image.title="termul-server" \
+LABEL org.opencontainers.image.title="troupe-server" \
 	org.opencontainers.image.description="Standalone Troupe server: browser terminals, git, and ACP agents over HTTP and WebSocket" \
 	org.opencontainers.image.source="https://github.com/gnoviawan/termul" \
 	org.opencontainers.image.licenses="MIT" \
 	org.opencontainers.image.version="${TROUPE_RELEASE}"
 
-# termul-server links WebKitGTK and GTK through the shared Tauri crate even
+# troupe-server links WebKitGTK and GTK through the shared Tauri crate even
 # though the server never opens a window. The ldd check below fails the build
 # if a linked library is missing.
 RUN apt-get update \
@@ -69,8 +74,11 @@ RUN apt-get update \
 	&& mkdir -p /home/termul/.local/bin /home/termul/.local/state/termul /workspace \
 	&& chown -R termul:termul /home/termul /workspace
 
-COPY --from=fetch /fetch/termul-server /usr/local/bin/termul-server
-RUN if ldd /usr/local/bin/termul-server | grep 'not found'; then exit 1; fi
+# termul-server stays as a link so compose files and scripts that name the old
+# binary keep working.
+COPY --from=fetch /fetch/troupe-server /usr/local/bin/troupe-server
+RUN ln -s troupe-server /usr/local/bin/termul-server \
+	&& if ldd /usr/local/bin/troupe-server | grep 'not found'; then exit 1; fi
 
 ENV HOME=/home/termul \
 	PATH=/home/termul/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
@@ -85,5 +93,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 # A public bind with no TROUPE_WEB_AUTH_TOKEN makes the server generate a token
 # into <state dir>/web-auth-token and refuse unauthenticated clients.
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/termul-server"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/troupe-server"]
 CMD ["--host", "0.0.0.0", "--port", "8080", "--state-dir", "/home/termul/.local/state/termul"]

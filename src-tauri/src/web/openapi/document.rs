@@ -15,7 +15,7 @@ const ENVELOPE: &str = "IpcEnvelope";
 const INPUT_SUFFIX: &str = "Input";
 
 const API_DESCRIPTION: &str = "\
-The HTTP API of a Troupe host: the standalone `termul-server` or the desktop \
+The HTTP API of a Troupe host: the standalone `troupe-server` or the desktop \
 app's shared-live remote access.
 
 **Envelope.** JSON routes answer `{ success, data?, error?, code? }`. A refusal \

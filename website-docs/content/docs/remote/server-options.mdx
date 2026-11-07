@@ -1,9 +1,9 @@
 ---
 title: Server options
-description: Flags, the access token, remote changes, reverse proxies and updates for termul-server.
+description: Flags, the access token, remote changes, reverse proxies and updates for troupe-server.
 ---
 
-This page lists the `termul-server` settings you are most likely to change. Run `termul-server --help` for the full list.
+This page lists the `troupe-server` settings you are most likely to change. Run `troupe-server --help` for the full list.
 
 ## Main flags
 
@@ -22,7 +22,7 @@ This page lists the `termul-server` settings you are most likely to change. Run 
 | `--max-terminals-per-project <N>` | `TROUPE_MAX_TERMINALS_PER_PROJECT` | `10` | The most terminals one project can have open. The whole server allows 30. |
 | `--check-update` | | | Check for a new server version once, then exit. See [Update the server](#update-the-server). |
 
-When you set both a flag and its environment variable, the flag wins. The older `TERMUL_*` name of each variable still works. If you set both, the `TROUPE_*` name wins unless it is blank (empty or only spaces). A `server-config.json` in the state folder — written by the setup page or by `termul-server onboard` — wins over both for the settings it holds: host, port, sessions directory, projects file, remote writes, and updates.
+When you set both a flag and its environment variable, the flag wins. The older `TERMUL_*` name of each variable still works. If you set both, the `TROUPE_*` name wins unless it is blank (empty or only spaces). A `server-config.json` in the state folder — written by the setup page or by `troupe-server onboard` — wins over both for the settings it holds: host, port, sessions directory, projects file, remote writes, and updates.
 
 The state folder is `$XDG_STATE_HOME/termul` when `XDG_STATE_HOME` is set. Otherwise it is `~/.local/state/termul`.
 
@@ -70,7 +70,7 @@ A browser on the same machine as the server can always make changes. So can a re
 To let other devices make changes, start the server with `--allow-remote-writes`:
 
 ```bash
-termul-server --host 0.0.0.0 --allow-remote-writes
+troupe-server --host 0.0.0.0 --allow-remote-writes
 ```
 
 With this flag, other devices can do everything. File changes from other devices stay inside your registered projects. The token is still required.
@@ -81,7 +81,7 @@ The default is view-only because changes from another device run with your user'
 
 A reverse proxy such as Caddy or nginx can add HTTPS in front of Termul. HTTPS keeps the token private on the network. It also lets phones [install Termul as an app](/docs/remote/install-app) and show notifications.
 
-1. Start the server on `127.0.0.1`, for example `termul-server --host 127.0.0.1 --port 8080`.
+1. Start the server on `127.0.0.1`, for example `troupe-server --host 127.0.0.1 --port 8080`.
 2. Point the proxy at `127.0.0.1:8080`. Turn on WebSocket support in the proxy. Termul keeps a live connection open to the browser, and WebSocket is the kind of connection it uses.
 
 With Caddy, this is the whole configuration:
@@ -95,7 +95,7 @@ termul.example.com {
 The server checks that browser requests come from its own address. A proxy that passes the public host name through, as Caddy does by default, needs nothing more. If your proxy changes the host name to the upstream address, the browser gets refused. List the public address with `--allowed-origins`:
 
 ```bash
-termul-server --host 127.0.0.1 --port 8080 --allowed-origins https://termul.example.com
+troupe-server --host 127.0.0.1 --port 8080 --allowed-origins https://termul.example.com
 ```
 
 ## Update the server
@@ -111,10 +111,12 @@ There are three update channels:
 To update once, run:
 
 ```bash
-termul-server --check-update
+troupe-server --check-update
 ```
 
-This uses the channel in `TROUPE_SERVER_UPDATE_CHANNEL`, or `stable` if that isn't set. It replaces the program file and keeps the old one next to it as `termul-server.old`. Restart the server to run the new version.
+On a server installed before 0.5.0 the program file is still called `termul-server`, so run `termul-server --check-update` there.
+
+This uses the channel in `TROUPE_SERVER_UPDATE_CHANNEL`, or `stable` if that isn't set. It replaces the program file and keeps the old one next to it with `.old` added to its name, for example `troupe-server.old`. Restart the server to run the new version.
 
 To check for updates in the background, set these environment variables before you start the server:
 
@@ -124,6 +126,6 @@ To check for updates in the background, set these environment variables before y
 | `TROUPE_SERVER_UPDATE_CHANNEL` | `stable`, `insider` or `nightly`. Required. |
 | `TROUPE_SERVER_UPDATE_INTERVAL_SECS` | How often to check. The default is `21600` (6 hours). |
 
-When the server finds a new version in the background, it installs it and restarts itself. Picking an update channel during setup — in the browser or with `termul-server onboard` — turns background checks on for you.
+When the server finds a new version in the background, it installs it and restarts itself. Picking an update channel during setup — in the browser or with `troupe-server onboard` — turns background checks on for you.
 
 Docker images don't update themselves. Pull a new image instead. See [Install the server](/docs/remote/server#install-the-server).

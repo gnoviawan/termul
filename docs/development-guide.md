@@ -94,11 +94,11 @@ bun scripts/canvas/fetch-figcraft-bundle.mjs
 bun run build:tauri --no-bundle
 ```
 
-Every release-profile build, desktop or `termul-server`, needs `canvas/bundle/` from the fetch script. Without it the build fails with a message that names the script. To build without the design canvas on purpose, set `TERMUL_ALLOW_MISSING_CANVAS_BUNDLE=1` (or `true`). The canvas in that binary answers `BUNDLE_MISSING`.
+Every release-profile build, desktop or `troupe-server`, needs `canvas/bundle/` from the fetch script. Without it the build fails with a message that names the script. To build without the design canvas on purpose, set `TERMUL_ALLOW_MISSING_CANVAS_BUNDLE=1` (or `true`). The canvas in that binary answers `BUNDLE_MISSING`.
 
 To install the desktop binary with cargo, enable the feature the same way: `cargo install --path src-tauri --features custom-protocol`.
 
-A release-profile build that lacks `custom-protocol` fails to compile the desktop binary and prints these fixes: `src-tauri/build.rs` sets a cfg, and a `compile_error!` in the desktop entry point (`src-tauri/src/main.rs`) enforces it. The check reads Tauri's own computed dev state, so it passes whenever `tauri/custom-protocol` is on, however it was enabled. Because the error lives in the desktop entry point, it blocks only the desktop binary, whatever features are on: debug-profile builds, the library, and the `termul-server` binary (`cargo build --release --bin termul-server --features standalone-server`) are never blocked.
+A release-profile build that lacks `custom-protocol` fails to compile the desktop binary and prints these fixes: `src-tauri/build.rs` sets a cfg, and a `compile_error!` in the desktop entry point (`src-tauri/src/main.rs`) enforces it. The check reads Tauri's own computed dev state, so it passes whenever `tauri/custom-protocol` is on, however it was enabled. Because the error lives in the desktop entry point, it blocks only the desktop binary, whatever features are on: debug-profile builds, the library, and the `troupe-server` binary (`cargo build --release --bin troupe-server --features standalone-server`) are never blocked.
 
 For `cargo test --release` and `cargo clippy --release`, which compile the desktop entry point but never ship it, set `TERMUL_ALLOW_RELEASE_WITHOUT_CUSTOM_PROTOCOL=1` (or `true`) to skip the check. Never use the override for a command that installs or distributes a binary (`cargo build`, `cargo install`): a binary built under it loads `devUrl`.
 
@@ -125,12 +125,12 @@ bun run test:watch
 
 ### Web end-to-end suite
 
-`tests/e2e` holds Playwright specs that drive a release `termul-server` and the built web client against a fake ACP agent (`tests/e2e/fake-longrun-agent.ts`). The suite starts its own server on `127.0.0.1:8188`, so it needs the web build, the canvas bundle and a release server build first:
+`tests/e2e` holds Playwright specs that drive a release `troupe-server` and the built web client against a fake ACP agent (`tests/e2e/fake-longrun-agent.ts`). The suite starts its own server on `127.0.0.1:8188`, so it needs the web build, the canvas bundle and a release server build first:
 
 ```bash
 bun run build:web
 bun scripts/canvas/fetch-figcraft-bundle.mjs
-cargo build --release --bin termul-server --features standalone-server   # run in src-tauri
+cargo build --release --bin troupe-server --features standalone-server   # run in src-tauri
 bun run playwright install chromium
 bun run test:e2e
 ```
@@ -209,7 +209,7 @@ Browser tab work spans:
 
 The app keeps its state in the host store on every surface; the desktop reaches it
 over its Tauri channel connection, and the store file is `store.json` in the app data
-directory (`termul-server`: its state directory). Keys are logical, for example
+directory (`troupe-server`: its state directory). Keys are logical, for example
 `projects`, `terminals/{projectId}`, `snapshots/{projectId}` and `window-state`; the
 host scopes them per device or shares them (see `docs/api-contracts.md`).
 
@@ -241,7 +241,7 @@ The file explorer and editor support live file watching through the filesystem A
 - `cargo clippy --all-targets -- -D warnings`
 - frontend Tauri build verification
 
-`.github/workflows/e2e.yml` builds `dist-web/` and a release `termul-server`, then runs the Playwright suite. It runs the ACP lifecycle specs on a pull request that changes ACP, relay, protocol or e2e files, and daily. A manual dispatch takes a `specs` input to run other specs. The job uploads Playwright traces when it fails.
+`.github/workflows/e2e.yml` builds `dist-web/` and a release `troupe-server`, then runs the Playwright suite. It runs the ACP lifecycle specs on a pull request that changes ACP, relay, protocol or e2e files, and daily. A manual dispatch takes a `specs` input to run other specs. The job uploads Playwright traces when it fails.
 
 ### Releases
 

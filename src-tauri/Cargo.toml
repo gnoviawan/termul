@@ -10,10 +10,10 @@ edition = "2021"
 # (crates/pathops), which 1.95 lacks; 1.97.1 is the oldest toolchain checked.
 rust-version = "1.97"
 # Two binaries live in this crate: the desktop app (`termul-manager`, the
-# implicit src/main.rs) and the standalone headless server (`termul-server`).
+# implicit src/main.rs) and the standalone headless server (`troupe-server`).
 # Pin `cargo run` / `tauri dev` to the desktop app so Cargo doesn't error on
 # ambiguity. The standalone binary is built explicitly via
-# `cargo build --bin termul-server --features standalone-server`.
+# `cargo build --bin troupe-server --features standalone-server`.
 default-run = "termul-manager"
 
 [lib]
@@ -24,15 +24,15 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # build` do NOT build or bundle it (Tauri bundler copies every [[bin]] it
 # discovers — see tauri#15325). Source lives OUTSIDE `src/bin/` so stage-2
 # disk scan cannot re-add it. Build with:
-#   cargo build --bin termul-server --features standalone-server
+#   cargo build --bin troupe-server --features standalone-server
 [[bin]]
-name = "termul-server"
+name = "troupe-server"
 path = "src/server_main.rs"
 required-features = ["standalone-server"]
 
 [features]
 default = []
-# Enables the termul-server binary entry (server_main.rs, required-features on
+# Enables the troupe-server binary entry (server_main.rs, required-features on
 # the [[bin]] target). rust-embed is always-on (the desktop's in-process
 # shared-live server serves the SAME embedded bundle in a release install
 # without dist-web/ on disk).
@@ -88,7 +88,7 @@ serde_json = { version = "1", features = ["raw_value"] }
 # Derives JSON Schemas from the serde types for the OpenAPI spec (web::openapi);
 # already in the tree via rmcp.
 schemars = "1"
-# YAML for `termul-server openapi` (web::openapi::cli). The maintained fork of
+# YAML for `troupe-server openapi` (web::openapi::cli). The maintained fork of
 # the archived serde_yaml, with the same API.
 serde_norway = "0.9"
 chrono = { version = "0.4", features = ["serde"] }
@@ -221,13 +221,13 @@ futures-util = { version = "0.3", default-features = false }
 async-trait = "0.1"
 
 # Embed the Vite web bundle (dist-web/) into the binary so the standalone
-# termul-server AND the desktop's in-process shared-live server serve the web
+# troupe-server AND the desktop's in-process shared-live server serve the web
 # client without dist-web/ on disk. #[allow_missing] keeps dev/CI-compile
 # green when the bundle is absent; the release build fails clearly via
 # build.rs when it is missing.
 rust-embed = { version = "8.12", features = ["mime-guess"] }
 
-# Standalone `termul-server` self-update (opt-in, default off): verifies
+# Standalone `troupe-server` self-update (opt-in, default off): verifies
 # downloaded binary signatures against the same minisign keypair the desktop
 # updater uses. Non-optional so the `server_update` module + its tests (incl.
 # signature verification) compile and run under default `cargo test`, per the
