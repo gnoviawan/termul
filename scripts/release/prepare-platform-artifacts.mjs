@@ -157,6 +157,7 @@ export async function preparePlatformArtifacts({
     }
     const signature = (await readFile(signatureArtifact.path, 'utf8')).trim()
     assertNonEmptyString(signature, `${platform} ${bundle} signature`)
+    // Same pinned repo path as prepare-server-artifacts.mjs; the manifest merge rejects any other.
     return {
       url: `https://github.com/gnoviawan/termul/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(updaterAssetName)}`,
       signature

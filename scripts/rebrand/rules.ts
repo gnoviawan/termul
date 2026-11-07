@@ -198,6 +198,15 @@ export const KEEP_PATTERNS: readonly KeepPattern[] = [
     owner: 'keep until a migration exists',
     pattern:
       /%LOCALAPPDATA%[\\/]Termul\b|\.join\(\s*"Termul"\s*\)|AppData[\\/]+(?:Local|Roaming)[\\/]+Termul(?: Manager)?/g
+  },
+  {
+    id: 'server-binary-url-allowlist',
+    reason:
+      '0.4.x servers download only from https://github.com/gnoviawan/termul/, so release manifests keep that path after the repo rename. 0.5+ servers must keep accepting it, and the tests that prove it must keep naming it.',
+    owner: 'keep while 0.4.x servers update',
+    pattern:
+      /https:\/\/github\.com\/gnoviawan\/termul\/(?="|releases\/download\/[\w.-]+\/(?:troupe|termul)-server)/g,
+    include: ['src-tauri/src/server_update.rs', 'src-tauri/src/server_update/tests.rs']
   }
 ]
 
@@ -279,6 +288,17 @@ export const KEEP_PATHS: readonly KeepPath[] = [
     reason: 'Binary assets are not text.',
     owner: 'tooling',
     globs: [`**/*.{${BINARY_EXTENSIONS.join(',')}}`]
+  },
+  {
+    id: 'release-url-pins',
+    reason:
+      'Release manifests pin https://github.com/gnoviawan/termul/releases/download/<tag>/ because 0.4.x servers reject any other binary URL, and merge-updater-manifests.mjs enforces the pin. GitHub redirects the old path after the repo rename.',
+    owner: 'keep while 0.4.x servers update',
+    globs: [
+      'scripts/release/prepare-platform-artifacts.*',
+      'scripts/release/prepare-server-artifacts.*',
+      'scripts/release/merge-updater-manifests.*'
+    ]
   },
   {
     id: 'packaging',

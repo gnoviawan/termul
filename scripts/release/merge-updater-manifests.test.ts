@@ -151,6 +151,32 @@ describe('mergeUpdaterManifests', () => {
     ).rejects.toThrow(error)
   })
 
+  test.each([
+    'linux-x86_64',
+    'linux-x86_64-server'
+  ])('rejects a %s URL under the renamed repo, which 0.4.x servers refuse', async (key) => {
+    const dir = await fixtureDir()
+    const platforms = completePlatforms()
+    platforms[key] = {
+      ...record(key),
+      url: `https://github.com/gnoviawan/troupe/releases/download/v${version}/${assetName(key)}`
+    }
+    const input = join(dir, 'manifest.json')
+    await writeManifest(input, platforms, version, completeAssetNames())
+
+    await expect(
+      mergeUpdaterManifests({
+        inputPaths: [input],
+        outputPath: join(dir, 'latest.json'),
+        version,
+        notes: 'notes',
+        pubDate: '2026-01-01T00:00:00.000Z'
+      })
+    ).rejects.toThrow(
+      `Updater record ${key} url must target the current v1.2.3 GitHub release under https://github.com/gnoviawan/termul/ (0.4.x servers reject any other path)`
+    )
+  })
+
   test('rejects a manifest without the collected signature asset', async () => {
     const dir = await fixtureDir()
     const input = join(dir, 'manifest.json')
