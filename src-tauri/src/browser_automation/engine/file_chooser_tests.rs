@@ -84,34 +84,77 @@ fn a_path_that_names_no_file_input_and_heard_nothing_fails() {
 #[test]
 fn a_replaced_input_waits_for_the_watch_until_the_deadline() {
     assert_eq!(
-        settle_poll(&json!(-1), 1, false, false),
+        settle_poll(Ok(json!(-1)), 1, false, false),
         Ok(false),
         "the watch may not have answered yet"
     );
     assert_eq!(
-        settle_poll(&json!(-1), 1, true, false),
+        settle_poll(Ok(json!(-1)), 1, true, false),
         Ok(true),
         "a trusted change arrived while waiting"
     );
     assert_eq!(
-        settle_poll(&json!(-1), 1, true, true),
+        settle_poll(Ok(json!(-1)), 1, true, true),
         Ok(true),
         "heard on the last poll"
     );
     assert_eq!(
-        settle_poll(&json!(-1), 1, false, true).map_err(|e| e.kind),
+        settle_poll(Ok(json!(-1)), 1, false, true).map_err(|e| e.kind),
         Err(EngineErrorKind::PageException)
     );
 }
 
 #[test]
 fn files_that_never_arrive_time_out_only_at_the_deadline() {
-    assert_eq!(settle_poll(&json!(0), 1, false, false), Ok(false));
+    assert_eq!(settle_poll(Ok(json!(0)), 1, false, false), Ok(false));
     assert_eq!(
-        settle_poll(&json!(0), 1, false, true).map_err(|e| e.kind),
+        settle_poll(Ok(json!(0)), 1, false, true).map_err(|e| e.kind),
         Err(EngineErrorKind::Timeout)
     );
-    assert_eq!(settle_poll(&json!(1), 1, false, true), Ok(true));
+    assert_eq!(settle_poll(Ok(json!(1)), 1, false, true), Ok(true));
+}
+
+#[test]
+fn a_change_heard_while_the_count_call_failed_still_landed() {
+    for kind in [EngineErrorKind::Timeout, EngineErrorKind::PageException] {
+        assert_eq!(
+            settle_poll(Err(EngineError::new(kind)), 1, true, false),
+            Ok(true),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn a_failed_count_call_with_nothing_heard_fails_at_once_with_its_error() {
+    assert_eq!(
+        settle_poll(
+            Err(EngineError::new(EngineErrorKind::Timeout)),
+            1,
+            false,
+            false
+        )
+        .map_err(|e| e.kind),
+        Err(EngineErrorKind::Timeout),
+        "no reason to wait out the deadline"
+    );
+    assert_eq!(
+        settle_poll(
+            Err(EngineError::new(EngineErrorKind::TabNotFound)),
+            1,
+            false,
+            true
+        )
+        .map_err(|e| e.kind),
+        Err(EngineErrorKind::TabNotFound)
+    );
+}
+
+#[test]
+fn every_upload_watch_gets_its_own_id() {
+    let first = next_watch_id();
+    let second = next_watch_id();
+    assert_ne!(first, second);
 }
 
 #[test]

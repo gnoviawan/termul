@@ -76,14 +76,22 @@ fn upload_landed(count: &serde_json::Value, want: usize, heard: bool) -> Result<
 /// none now was replaced or removed, likely in a change handler whose watch
 /// answer has not arrived yet: wait for it until the deadline, and only then
 /// fail with `PageException`. Files that never arrive end in `Timeout`.
+/// A count call that failed or timed out (`count` is its result) ends the
+/// wait with its error, unless the change was heard meanwhile: that alone
+/// proves the files landed.
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
 fn settle_poll(
-    count: &serde_json::Value,
+    count: Result<serde_json::Value, EngineError>,
     want: usize,
     heard: bool,
     expired: bool,
 ) -> Result<bool, EngineError> {
-    match upload_landed(count, want, heard) {
+    let count = match count {
+        Ok(count) => count,
+        Err(_) if heard => return Ok(true),
+        Err(e) => return Err(e),
+    };
+    match upload_landed(&count, want, heard) {
         Ok(true) => Ok(true),
         Ok(false) if expired => Err(EngineError::new(EngineErrorKind::Timeout)),
         Err(e) if expired => Err(e),
@@ -103,6 +111,15 @@ fn heard_change(watch: &mut oneshot::Receiver<CallResult>) -> bool {
     })
 }
 
+/// A fresh id for one upload's `input`/`change` watch, so ending it can
+/// never end another upload's watch in the same document.
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+fn next_watch_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub use ui::set_input_files;
 
@@ -114,7 +131,7 @@ mod ui {
     use tauri::webview::PlatformWebview;
     use tokio::sync::oneshot;
 
-    use super::{heard_change, release_tab, settle_poll, stage};
+    use super::{heard_change, next_watch_id, release_tab, settle_poll, stage};
     use crate::browser_automation::budgets::{FILE_CHOOSER, UPLOAD_SETTLE, UPLOAD_WATCH};
     use crate::browser_automation::engine::string_eval::{self, CallResult, Completion};
     use crate::browser_automation::engine::{assets, EngineError, EngineErrorKind};
@@ -122,7 +139,8 @@ mod ui {
 
     /// Set `files` on the file input at `path`: stage them, have the input
     /// open its chooser through the adapter's `eval`, and wait for the
-    /// adapter's chooser hook to take them.
+    /// adapter's chooser hook to take them. The `input`/`change` watch
+    /// issued alongside ends once this returns or is dropped.
     pub async fn set_input_files<F>(
         tabs: &BrowserTabManager,
         tab: &str,
@@ -136,7 +154,14 @@ mod ui {
         let script = assets::open_file_chooser(path);
         let body = string_eval::call_body(&script);
         let params = string_eval::params_json(&script);
-        let watch = assets::watch_input_files(path, UPLOAD_WATCH);
+        let watch_id = next_watch_id();
+        let _end_watch = EndWatch {
+            tabs,
+            tab,
+            id: watch_id,
+            eval,
+        };
+        let watch = assets::watch_input_files(path, watch_id, UPLOAD_WATCH);
         let watch_body = string_eval::call_body(&watch);
         let watch_params = string_eval::params_json(&watch);
         let (watch_tx, watch_rx) = oneshot::channel();
@@ -191,31 +216,79 @@ mod ui {
         let params = string_eval::params_json(&script);
         let deadline = tokio::time::Instant::now() + UPLOAD_SETTLE;
         loop {
+            // A watch answers once, so a change heard ends the wait here,
+            // before another count call, and again after one: a change
+            // heard while it ran wins even when that call failed.
+            if heard_change(&mut watch) {
+                log_heard();
+                return Ok(());
+            }
             let (body, params) = (body.clone(), params.clone());
             let count = string_eval::call(tabs, tab, move |platform, done| {
                 eval(platform, &body, &params, done)
             })
-            .await?;
-            // A watch answers once, so a change heard ends the wait here.
+            .await;
             let heard = heard_change(&mut watch);
             let expired = tokio::time::Instant::now() >= deadline;
-            match settle_poll(&count, want, heard, expired) {
+            match settle_poll(count, want, heard, expired) {
                 Ok(true) => {
                     if heard {
-                        log::debug!(
-                            "[browser-tab] upload landed: the file input fired input or change"
-                        );
+                        log_heard();
                     }
                     return Ok(());
                 }
                 Ok(false) => tokio::time::sleep(SETTLE_POLL).await,
                 Err(e) => {
                     log::warn!(
-                        "[browser-tab] upload chooser answered but the file input never held the files or changed ({:?})",
+                        "[browser-tab] upload chooser answered but neither the file count nor a change confirmed the files ({:?})",
                         e.kind
                     );
                     return Err(e);
                 }
+            }
+        }
+    }
+
+    fn log_heard() {
+        log::debug!("[browser-tab] upload landed: the file input fired input or change");
+    }
+
+    /// Ends an upload's `input`/`change` watch when the upload settles, as
+    /// it succeeds, fails, or is dropped by a caller whose budget ran out,
+    /// so the watch's listeners and timer last no longer than the upload.
+    /// The end call is queued on the UI thread and nobody waits for its
+    /// answer: the upload's outcome is already decided.
+    struct EndWatch<'a, F>
+    where
+        F: Fn(&PlatformWebview, &str, &str, Completion) + Copy + Send + 'static,
+    {
+        tabs: &'a BrowserTabManager,
+        tab: &'a str,
+        id: u64,
+        eval: F,
+    }
+
+    impl<F> Drop for EndWatch<'_, F>
+    where
+        F: Fn(&PlatformWebview, &str, &str, Completion) + Copy + Send + 'static,
+    {
+        fn drop(&mut self) {
+            // A closed tab took its page, and the watch, with it.
+            let Ok(webview) = self.tabs.webview(self.tab) else {
+                return;
+            };
+            let script = assets::end_input_watch(self.id);
+            let body = string_eval::call_body(&script);
+            let params = string_eval::params_json(&script);
+            let eval = self.eval;
+            let queued = webview.with_webview(move |platform| {
+                let (done, _) = oneshot::channel();
+                eval(&platform, &body, &params, done);
+            });
+            if queued.is_err() {
+                log::debug!(
+                    "[browser-tab] upload watch end not queued; the watch ends on its own budget"
+                );
             }
         }
     }
