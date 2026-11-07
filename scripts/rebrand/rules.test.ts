@@ -236,26 +236,34 @@ describe('keep patterns block rules that would otherwise fire', () => {
     })
   })
 
-  it('product-name-field keeps productName', () => {
-    const text = '{ "productName": "Termul Manager", "title": "Termul Manager" }'
-    expect(rewrite('src-tauri/tauri.conf.json', text, off)).toEqual({
-      output: '{ "productName": "Termul Manager", "title": "Troupe" }',
+  it('renames productName now that the app ships as Troupe', () => {
+    expect(rewrite('package.json', '{ "productName": "Termul Manager" }', off)).toEqual({
+      output: '{ "productName": "Troupe" }',
       hits: [{ ruleId: 'display-termul-manager', line: 1 }],
-      kept: { 'product-name-field': 2 }
+      kept: {}
     })
   })
 
   it.each([
-    ['Termul Manager.app', 2],
-    ['Termul.Manager_1.2.3_x64.dmg', 1],
-    ['Termul-1.0.0.AppImage', 1],
-    ['Termul.exe', 1]
-  ])('artifact-names keeps %s', (text, blocked) => {
+    ['/Applications/Termul Manager.app', 2],
+    ['Termul.Manager_0.4.60_aarch64.dmg', 1],
+    ['Termul.Manager-0.4.60-1.x86_64.rpm', 1],
+    ['Termul Manager_0.4.10_x64-setup.exe', 1]
+  ])('legacy-artifact-names keeps %s', (text, blocked) => {
     expect(rewrite('docs/a.md', text, off)).toEqual({
       output: text,
       hits: [],
-      kept: { 'artifact-names': blocked }
+      kept: { 'legacy-artifact-names': blocked }
     })
+  })
+
+  it.each([
+    ['/home/u/Termul.AppImage', '/home/u/Troupe.AppImage'],
+    ['Termul-1.0.0.AppImage', 'Troupe-1.0.0.AppImage'],
+    ['Termul.exe', 'Troupe.exe'],
+    ['Install Termul Manager 0.4.60', 'Install Troupe 0.4.60']
+  ])('renames %s, which no release shipped', (text, renamed) => {
+    expect(out('docs/a.md', text)).toBe(renamed)
   })
 
   it.each([
@@ -314,7 +322,10 @@ describe('keep paths', () => {
     'src-tauri/gen/x.json',
     'scripts/install.sh',
     'scripts/release/notes.md',
-    '.github/workflows/release-nightly.yml',
+    'scripts/tests/install.bats',
+    'src-tauri/windows/installer-hooks.nsh',
+    'src-tauri/linux/deb-preinst.sh',
+    'src-tauri/linux/termul-manager',
     '_bmad-output/plan.md',
     'design.figcraft'
   ])('%s is returned unchanged', (path) => {
@@ -323,6 +334,12 @@ describe('keep paths', () => {
       hits: [],
       kept: {}
     })
+  })
+
+  it('renames the release title in the release workflow', () => {
+    expect(out('.github/workflows/release.yml', 'name: `Termul Manager ${tagName}`')).toBe(
+      'name: `Troupe ${tagName}`'
+    )
   })
 
   it('the same text outside a keep path is rewritten', () => {
