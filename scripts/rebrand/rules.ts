@@ -288,9 +288,9 @@ export const KEEP_PATHS: readonly KeepPath[] = [
   {
     id: 'legacy-upgrade-hooks',
     reason:
-      'The NSIS hooks find and remove the "Termul Manager" install that 0.4.x left behind; that name must stay.',
+      'The NSIS hooks and the deb/rpm scripts find and replace the "Termul Manager" install that 0.4.x left behind; they name the old product on purpose.',
     owner: 'keep forever',
-    globs: ['src-tauri/windows/installer-hooks.nsh']
+    globs: ['src-tauri/windows/installer-hooks.nsh', 'src-tauri/linux/**']
   }
 ]
 

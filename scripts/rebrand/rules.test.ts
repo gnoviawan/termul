@@ -324,6 +324,8 @@ describe('keep paths', () => {
     'scripts/release/notes.md',
     'scripts/tests/install.bats',
     'src-tauri/windows/installer-hooks.nsh',
+    'src-tauri/linux/deb-preinst.sh',
+    'src-tauri/linux/termul-manager',
     '_bmad-output/plan.md',
     'design.figcraft'
   ])('%s is returned unchanged', (path) => {
