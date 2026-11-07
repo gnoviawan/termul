@@ -1,5 +1,14 @@
 import { execFileSync } from 'node:child_process'
-import { lstatSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  ftruncateSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+  writeSync
+} from 'node:fs'
 import { join } from 'node:path'
 import {
   areaOf,
@@ -68,23 +77,39 @@ export function parseArgs(argv: readonly string[]): Cli | { error: string } {
 }
 
 type Loaded =
-  | { kind: 'text'; text: string }
+  | { kind: 'text'; text: string; fd: number }
   | { kind: 'kept'; keepId: string }
   | { kind: 'binary' }
   | { kind: 'skipped' }
 
-const SNIFF_BYTES = 8192
-
-function load(root: string, path: string): Loaded {
+// One no-follow descriptor serves the type check, the read and (for --apply) the
+// write, so a path swapped for a symlink mid-run is never followed out of the repo.
+function open(root: string, path: string, flags: number): Loaded {
   const keepId = keptPathOf(path)
   if (keepId) return { kind: 'kept', keepId }
-  const abs = join(root, path)
-  // git ls-files also lists deleted files, symlinks and submodule gitlinks.
-  const stat = lstatSync(abs, { throwIfNoEntry: false })
-  if (!stat?.isFile()) return { kind: 'skipped' }
-  const bytes = readFileSync(abs)
-  if (bytes.subarray(0, SNIFF_BYTES).includes(0)) return { kind: 'binary' }
-  return { kind: 'text', text: bytes.toString('utf8') }
+  let fd: number
+  try {
+    fd = openSync(join(root, path), flags | (constants.O_NOFOLLOW ?? 0))
+  } catch {
+    // git ls-files also lists deleted files, symlinks and submodule gitlinks.
+    return { kind: 'skipped' }
+  }
+  if (!fstatSync(fd).isFile()) {
+    closeSync(fd)
+    return { kind: 'skipped' }
+  }
+  const bytes = readFileSync(fd)
+  if (bytes.includes(0)) {
+    closeSync(fd)
+    return { kind: 'binary' }
+  }
+  return { kind: 'text', text: bytes.toString('utf8'), fd }
+}
+
+function load(root: string, path: string): Loaded {
+  const loaded = open(root, path, constants.O_RDONLY)
+  if (loaded.kind === 'text') closeSync(loaded.fd)
+  return loaded
 }
 
 function git(cwd: string, args: string[]): string {
@@ -315,11 +340,15 @@ function runApply(root: string, files: readonly string[], opts: Options): void {
   let changed = 0
   let replacements = 0
   for (const path of files) {
-    const loaded = load(root, path)
+    const loaded = open(root, path, constants.O_RDWR)
     if (loaded.kind !== 'text') continue
     const { output, hits } = rewrite(path, loaded.text, opts)
+    if (output !== loaded.text) {
+      ftruncateSync(loaded.fd, 0)
+      writeSync(loaded.fd, output, 0)
+    }
+    closeSync(loaded.fd)
     if (output === loaded.text) continue
-    writeFileSync(join(root, path), output)
     changed += 1
     replacements += hits.length
     console.log(`${path}: ${hits.length} hits`)
@@ -369,4 +398,4 @@ function main(argv: readonly string[]): number {
   return 0
 }
 
-if (import.meta.main) process.exit(main(process.argv.slice(2)))
+if (import.meta.main) process.exitCode = main(process.argv.slice(2))

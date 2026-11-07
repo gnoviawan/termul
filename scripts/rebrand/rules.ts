@@ -58,7 +58,7 @@ export const RULES: readonly Rule[] = [
     id: 'docs-url-docs-path',
     category: 'url',
     description: 'docs.termul.dev/docs/... moves under usetroupe.dev/docs.',
-    pattern: /\bdocs\.termul\.dev\/docs(?=\/|\b)/g,
+    pattern: /(?<![\w.-])docs\.termul\.dev\/docs(?![\w-]|\.\w)/g,
     replacement: 'usetroupe.dev/docs',
     include: ['**'],
     exclude: [],
@@ -68,7 +68,7 @@ export const RULES: readonly Rule[] = [
     id: 'docs-url-host',
     category: 'url',
     description: 'Any other docs.termul.dev link lands on the docs root.',
-    pattern: /\bdocs\.termul\.dev\b/g,
+    pattern: /(?<![\w.-])docs\.termul\.dev(?![\w-]|\.\w)/g,
     replacement: 'usetroupe.dev/docs',
     include: ['**'],
     exclude: [],
@@ -78,7 +78,7 @@ export const RULES: readonly Rule[] = [
     id: 'site-url',
     category: 'url',
     description: 'The marketing site host. Must not touch the storage key termul.deviceId.',
-    pattern: /(?<![\w.-])(?:www\.)?termul\.dev\b(?![\w-])/g,
+    pattern: /(?<![\w.-])(?:www\.)?termul\.dev(?![\w-]|\.\w)/g,
     replacement: 'usetroupe.dev',
     include: ['**'],
     exclude: [],
@@ -88,7 +88,7 @@ export const RULES: readonly Rule[] = [
     id: 'repo-url',
     category: 'repo',
     description: 'GitHub repo links, only once the repository itself is renamed.',
-    pattern: /\bgithub\.com\/gnoviawan\/termul\b(?![\w-])/g,
+    pattern: /(?<![\w.-])github\.com\/gnoviawan\/termul(?![\w-]|\.(?!git\b)\w)/g,
     replacement: 'github.com/gnoviawan/troupe',
     include: ['**'],
     exclude: [],
@@ -157,7 +157,7 @@ export const KEEP_PATTERNS: readonly KeepPattern[] = [
     reason:
       'Storage keys (termul.webAuthToken, termul.deviceId) and log targets (termul::web) carry user state and log filters.',
     owner: 'keep until a migration exists',
-    pattern: /\btermul(?:::|\.(?!dev\b))[A-Za-z_][\w.:-]*/g
+    pattern: /(?<![\w/.-])termul(?:::|\.(?!dev\b))[A-Za-z_][\w.:-]*/g
   },
   {
     id: 'product-name-field',

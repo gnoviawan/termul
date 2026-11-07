@@ -111,13 +111,18 @@ function keepSpans(path: string, text: string): KeepSpan[] {
   )
 }
 
-const FENCE_OPEN = /^[ \t]*(`{3,}|~{3,})/
-const FENCE_CLOSE = /^[ \t]*(`{3,}|~{3,})[ \t]*\r?$/
+// Container prefixes (blockquote markers, list bullets) may precede a fence on its line.
+const CONTAINER = '[ \\t]*(?:>[ \\t]*|(?:[-*+]|\\d+[.)])[ \\t]+)*'
+const FENCE_OPEN = new RegExp(`^${CONTAINER}(\x60{3,}|~{3,})`)
+const FENCE_CLOSE = new RegExp(`^${CONTAINER}(\x60{3,}|~{3,})[ \\t]*\\r?$`)
 const BLANK_LINE = /\n[ \t]*\r?\n/
 const LINK_DESTINATION = /\]\([^)\n]*\)/g
 const AUTOLINK = /<https?:\/\/[^>\s]*>/g
 const BARE_URL = /https?:\/\/[^\s)>\]]+/g
 const MDX_IMPORT_EXPORT = /^(?:import|export)\s.*$/gm
+// Indented code blocks; also protects indented list continuations, which errs safe.
+const INDENTED_LINE = /^(?: {4}|\t).*$/gm
+const HTML_TAG = /<\/?[A-Za-z][^<>]*>/g
 
 function fenceSpans(text: string): Span[] {
   const spans: Span[] = []
@@ -170,6 +175,8 @@ function markdownCodeSpans(path: string, text: string): Span[] {
     ...spansOf(text, LINK_DESTINATION),
     ...spansOf(text, AUTOLINK),
     ...spansOf(text, BARE_URL),
+    ...spansOf(text, INDENTED_LINE),
+    ...spansOf(text, HTML_TAG),
     ...(path.endsWith('.mdx') ? spansOf(text, MDX_IMPORT_EXPORT) : [])
   ]
 }

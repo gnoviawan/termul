@@ -85,6 +85,27 @@ describe('URL rules', () => {
     const text = 'https://github.com/gnoviawan/termul-docs'
     expect(out('README.md', text, { repoRenamed: true })).toBe(text)
   })
+  it('leaves hosts and paths that only contain the old host', () => {
+    const text =
+      'https://my-docs.termul.dev https://termul.dev.example.com https://docs.termul.dev.evil.io'
+    expect(out('docs/a.md', text)).toBe(text)
+    expect(out('docs/a.md', 'https://docs.termul.dev/docs-extra')).toBe(
+      'https://usetroupe.dev/docs/docs-extra'
+    )
+    expect(out('docs/a.md', 'See https://docs.termul.dev/docs. Or termul.dev.')).toBe(
+      'See https://usetroupe.dev/docs. Or usetroupe.dev.'
+    )
+  })
+
+  it('renames the .git clone URL but not a dotted sibling repo', () => {
+    const on = { repoRenamed: true }
+    expect(out('README.md', 'github.com/gnoviawan/termul.git', on)).toBe(
+      'github.com/gnoviawan/troupe.git'
+    )
+    expect(out('README.md', 'github.com/gnoviawan/termul.wiki', on)).toBe(
+      'github.com/gnoviawan/termul.wiki'
+    )
+  })
 })
 
 describe('prose rule', () => {
@@ -140,6 +161,22 @@ describe('prose rule', () => {
       'import termul from "x"\n\ntroupe'
     )
     expect(out('docs/a.md', 'import termul from "x"')).toBe('import troupe from "x"')
+  })
+
+  it('skips fences behind blockquote and list markers', () => {
+    expect(out('docs/a.md', '> ```sh\n> termul up\n> ```\ntermul')).toBe(
+      '> ```sh\n> termul up\n> ```\ntroupe'
+    )
+    expect(out('docs/a.md', '1. ```sh\n   termul up\n   ```\n')).toBe(
+      '1. ```sh\n   termul up\n   ```\n'
+    )
+  })
+
+  it('skips indented code blocks and raw HTML tags', () => {
+    expect(out('docs/a.md', 'Run:\n\n    termul up\n\ntermul')).toBe(
+      'Run:\n\n    termul up\n\ntroupe'
+    )
+    expect(out('docs/a.md', '<div id="termul">termul</div>')).toBe('<div id="termul">troupe</div>')
   })
 
   it('does not touch lowercase termul outside Markdown', () => {

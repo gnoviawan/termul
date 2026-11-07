@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -71,6 +71,20 @@ describe('CLI against a git repo', () => {
     expect(read('src/b.ts')).toBe("const title = 'Termul'\n")
     expect(read('CHANGELOG.md')).toBe('Termul 1.0\n')
     expect(read('bin.dat')).toBe('Termul\0binary')
+  })
+
+  it('never follows a tracked symlink and catches a NUL past the first 8 KiB', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'rebrand-outside-'))
+    writeFileSync(join(outside, 'target.md'), 'Termul outside\n')
+    const lateNul = `${'x'.repeat(10_000)}Termul\0`
+    setup({ 'big.dat': lateNul, 'docs/a.md': 'Termul\n' })
+    symlinkSync(join(outside, 'target.md'), join(repo, 'link.md'))
+    spawnSync('git', ['add', '-A'], { cwd: repo })
+    const result = run('--apply', '--paths', '**')
+    expect(result.stdout).toBe('docs/a.md: 1 hits\n\n1 files changed, 1 replacements\n')
+    expect(readFileSync(join(outside, 'target.md'), 'utf8')).toBe('Termul outside\n')
+    expect(read('big.dat')).toBe(lateNul)
+    rmSync(outside, { recursive: true, force: true })
   })
 
   it('--check exits 1 while the word remains and 0 once applied', () => {
