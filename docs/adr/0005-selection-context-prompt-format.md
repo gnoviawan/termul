@@ -11,7 +11,7 @@
 The user can select text in any message of an Agent chat and add it to the
 composer as a Selection context chip (see `CONTEXT.md`, "Agent chats"). The
 agent must receive the selected text and know where each chip sits in the
-user's sentence. Termul talks to every agent through ACP, and ACP has no
+user's sentence. Troupe talks to every agent through ACP, and ACP has no
 content block for "quoted conversation text", so the context must travel as
 prompt text.
 

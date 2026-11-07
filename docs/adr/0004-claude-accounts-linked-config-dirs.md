@@ -29,7 +29,7 @@ directory. A session that another config directory wrote is not visible.
 
 ## Decision
 
-Each Account gets its own config directory, and Termul starts the Claude
+Each Account gets its own config directory, and Troupe starts the Claude
 agent for that Account with `CLAUDE_CONFIG_DIR` set to it. The Default
 Account uses `~/.claude` itself.
 
@@ -38,7 +38,7 @@ The shared parts of the account directory are symbolic links to `~/.claude`:
 `file-history`, `agents`, `commands`, and `CLAUDE.md`. The login and
 `.claude.json` stay per Account.
 
-Termul never refreshes or writes Claude OAuth tokens. Claude Code owns them.
+Troupe never refreshes or writes Claude OAuth tokens. Claude Code owns them.
 
 ## Spike results
 
@@ -68,18 +68,18 @@ not known; another process that refreshed the same token is likely.
   handoff is only the fallback.
 - Settings, skills, plugins, and history are the same on every Account.
 - Login stays the normal `claude auth login` browser flow; no token is pasted
-  or stored by Termul.
+  or stored by Troupe.
 
 **Negative**
 
-- User-scope MCP servers in `.claude.json` are per Account. Termul Global MCP
+- User-scope MCP servers in `.claude.json` are per Account. Troupe Global MCP
   (sent in ACP `session/new`) covers this.
 - The first turn after a switch costs more usage because the prompt cache is
   rebuilt. The switch prompt must tell the user.
 - Links depend on Claude Code following symbolic links. Windows needs a
   separate check (directory junctions, and file links that may need Developer
   Mode).
-- `auth status` does not prove that a login works. Termul must check an
+- `auth status` does not prove that a login works. Troupe must check an
   Account with a real request before it suggests that Account, and show
   "Sign in again" when the login is gone.
 
@@ -93,10 +93,10 @@ not known; another process that refreshed the same token is likely.
   history, skills, settings, and MCP servers are separate, so a switch cannot
   resume the session.
 - *Swap the credentials in the default Keychain entry*: one directory, but
-  Termul would have to write Claude Code's credentials and race its token
+  Troupe would have to write Claude Code's credentials and race its token
   refresh.
 
 ## Validation note
 
-Spike scripts were run by hand in `~/.termul-spike/` (not committed). Termul
+Spike scripts were run by hand in `~/.termul-spike/` (not committed). Troupe
 code was not changed for this decision.

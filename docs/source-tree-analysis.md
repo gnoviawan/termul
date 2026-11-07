@@ -1,10 +1,10 @@
-# Termul Manager - Source Tree Analysis
+# Troupe - Source Tree Analysis
 
 **Date:** 2026-05-09
 
 ## Overview
 
-Termul Manager is organized as a single desktop application repository with a clear split between renderer code, shared contracts, and the Tauri/Rust runtime. The dominant implementation surface is in `src/renderer/`, while `src-tauri/` provides native capabilities and packaging assets.
+Troupe is organized as a single desktop application repository with a clear split between renderer code, shared contracts, and the Tauri/Rust runtime. The dominant implementation surface is in `src/renderer/`, while `src-tauri/` provides native capabilities and packaging assets.
 
 ## Complete Directory Structure
 

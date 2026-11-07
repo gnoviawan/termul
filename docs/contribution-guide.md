@@ -1,4 +1,4 @@
-# Termul Manager - Contribution Guide
+# Troupe - Contribution Guide
 
 **Date:** 2026-05-09
 

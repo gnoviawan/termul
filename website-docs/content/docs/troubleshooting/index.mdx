@@ -1,15 +1,15 @@
 ---
 title: Troubleshooting
-description: Fixes for common problems with installing Termul, starting agents, and using the browser version.
+description: Fixes for common problems with installing Troupe, starting agents, and using the browser version.
 ---
 
-This page lists problems that Termul users run into, and how to fix them. If your problem is not here, see [Report a problem](/docs/troubleshooting/report-a-problem).
+This page lists problems that Troupe users run into, and how to fix them. If your problem is not here, see [Report a problem](/docs/troubleshooting/report-a-problem).
 
-## macOS does not open Termul after a DMG download
+## macOS does not open Troupe after a DMG download
 
 If you download the `.dmg` file in a web browser and install from it, macOS Gatekeeper can stop the app from opening. Gatekeeper is the macOS check for apps from the internet.
 
-Install Termul with Homebrew or the install script instead. Both install the same app without this problem:
+Install Troupe with Homebrew or the install script instead. Both install the same app without this problem:
 
 ```bash
 brew tap gnoviawan/termul
@@ -23,12 +23,18 @@ curl -fsSL https://raw.githubusercontent.com/gnoviawan/termul/v0.4.60/scripts/in
 If you already installed from the DMG, you can remove the download mark from the app yourself. The install script runs this same command:
 
 ```bash
+xattr -dr com.apple.quarantine "/Applications/Troupe.app"
+```
+
+Releases up to 0.4.60 installed the app as `/Applications/Termul Manager.app`. An update from inside the app keeps that path. If your app is there, use that path instead:
+
+```bash
 xattr -dr com.apple.quarantine "/Applications/Termul Manager.app"
 ```
 
 ## Linux: the termul-manager command is not found
 
-The install script adds the `~/.local/bin/termul-manager` command, which starts the AppImage at `~/.local/bin/termul-manager.AppImage`. It also adds **Termul Manager** to your app menu. If the script warns that `~/.local/bin` is not in `PATH`, your shell cannot find the command. Add the folder to `PATH` in your shell profile, for example in `~/.bashrc`:
+The install script adds the `~/.local/bin/termul-manager` command, which starts the AppImage at `~/.local/bin/termul-manager.AppImage`. It also adds **Troupe** to your app menu. If the script warns that `~/.local/bin` is not in `PATH`, your shell cannot find the command. Add the folder to `PATH` in your shell profile, for example in `~/.bashrc`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -40,29 +46,31 @@ The install script supports only x86_64 Linux. On other processors it stops with
 
 On a Wayland desktop with Mesa 25 or later, the AppImage can open an empty window. The terminal output shows **Could not create default EGL display: EGL_BAD_PARAMETER**. The library that the AppImage includes for Wayland does not work with the newer Mesa.
 
-Start Termul with the `termul-manager` command or the **Termul Manager** menu entry from the install script. The command loads the `libwayland-client` library from your system instead. Install or update with the script if you do not have the command.
+Start Troupe with the `termul-manager` command or the **Troupe** menu entry from the install script. The command loads the `libwayland-client` library from your system instead. Install or update with the script if you do not have the command.
 
 If you start the `.AppImage` file yourself, give the path to your system's library. The path is different on each distribution, for example `/usr/lib/libwayland-client.so.0` on Arch or `/usr/lib64/libwayland-client.so.0` on Fedora:
 
 ```bash
-LD_PRELOAD=/usr/lib/libwayland-client.so.0 ./Termul.Manager_<version>_amd64.AppImage
+LD_PRELOAD=/usr/lib/libwayland-client.so.0 ./Troupe_<version>_amd64.AppImage
 ```
 
-With this command, the terminals in Termul also load that library. The `termul-manager` command does not have this side effect.
+Releases up to 0.4.60 name the file `Termul.Manager_<version>_amd64.AppImage`.
+
+With this command, the terminals in Troupe also load that library. The `termul-manager` command does not have this side effect.
 
 If the library is in a folder that the command does not check, set `TROUPE_WAYLAND_CLIENT_LIB` to its path before you run `termul-manager`. A `termul-manager` command installed by an older script reads only the older name, `TERMUL_WAYLAND_CLIENT_LIB`. The current command reads both.
 
 ## An agent shows "Needs Node.js" or "Install"
 
-Many agents run with Node.js or with uv, a Python tool. Termul shows the state of each agent in **Settings** > **Agent chats** and in the agent picker of a new chat.
+Many agents run with Node.js or with uv, a Python tool. Troupe shows the state of each agent in **Settings** > **Agent chats** and in the agent picker of a new chat.
 
-- **Needs Node.js** or **Needs Node** means Termul cannot find `npx`. Install [Node.js](https://nodejs.org). In a new chat, the **Runtime required** message has an **Install Node.js** button that opens the download page.
-- **Needs uv** means Termul cannot find `uvx`. Install uv. The **Install uv** button opens its install page.
+- **Needs Node.js** or **Needs Node** means Troupe cannot find `npx`. Install [Node.js](https://nodejs.org). In a new chat, the **Runtime required** message has an **Install Node.js** button that opens the download page.
+- **Needs uv** means Troupe cannot find `uvx`. Install uv. The **Install uv** button opens its install page.
 - The Claude agent needs Node.js 22 or newer, with npm.
 - **Install from Agent Chat**, or **Install required** in a new chat, means the agent is not installed yet. Open a new chat with that agent and select **Install**.
 - **Manual install** means you must install the agent from its maker. Then make sure its command is on your `PATH`.
 
-Termul reads your `PATH` once, when it starts. On macOS and Linux it reads it from your login shell. After you install Node.js or uv, quit Termul completely and open it again. A new window is not enough.
+Troupe reads your `PATH` once, when it starts. On macOS and Linux it reads it from your login shell. After you install Node.js or uv, quit Troupe completely and open it again. A new window is not enough.
 
 In the browser version, the agents run on the computer with the server. Install Node.js or uv on that computer, then restart the server.
 
@@ -72,7 +80,7 @@ For more about agents, see [Agent setup](/docs/agent-setup).
 
 <Callout type="info">This works in the browser version only.</Callout>
 
-A server that other devices can reach asks for an access token. If your browser does not have the token, or the token changed, Termul shows **Server access token required**.
+A server that other devices can reach asks for an access token. If your browser does not have the token, or the token changed, Troupe shows **Server access token required**.
 
 ![The Server access token required screen with the message Invalid token, check and try again](/screenshots/settings-troubleshooting-token.png)
 
@@ -85,7 +93,7 @@ A server that other devices can reach asks for an access token. If your browser 
 
 **Invalid token** means the token is wrong or the server has a new one. **Could not reach the server** means the browser cannot connect. Check the address and that the server runs.
 
-On an iPhone or iPad, a Termul icon on the home screen keeps its own storage. Enter the token there once, even if Safari already has it.
+On an iPhone or iPad, a Troupe icon on the home screen keeps its own storage. Enter the token there once, even if Safari already has it.
 
 For setting up the server, see [Browser and phone](/docs/remote).
 
@@ -93,19 +101,19 @@ For setting up the server, see [Browser and phone](/docs/remote).
 
 <Callout type="info">This works in the browser version only.</Callout>
 
-**Host offline** means the server stopped, for example for a restart or an update. Termul keeps checking. When the server answers again, Termul reconnects by itself.
+**Host offline** means the server stopped, for example for a restart or an update. Troupe keeps checking. When the server answers again, Troupe reconnects by itself.
 
 - Start the server again if it does not come back on its own.
 - To check right away, select the status light at the bottom of the window, or **Retry**.
-- A terminal shows **Host offline** and says that input is buffered. Termul keeps what you type, up to a limit, and sends it when the server is back.
+- A terminal shows **Host offline** and says that input is buffered. Troupe keeps what you type, up to a limit, and sends it when the server is back.
 
-**Reconnecting…** is different. It means the connection dropped, for example on a bad network, and Termul is trying again.
+**Reconnecting…** is different. It means the connection dropped, for example on a bad network, and Troupe is trying again.
 
 ## A shortcut opens a browser action instead
 
 <Callout type="info">This works in the browser version only.</Callout>
 
-Browsers keep some keys for themselves, such as `Ctrl+T` for a new tab and `Ctrl+W` to close one. The browser version of Termul uses `Alt` for these shortcuts: `Alt+T` for the agent launcher, `Alt+W` to close a tab, and `Alt+,` for settings. See the full list in [Keyboard shortcuts](/docs/settings/keyboard-shortcuts#shortcuts-in-the-browser-version).
+Browsers keep some keys for themselves, such as `Ctrl+T` for a new tab and `Ctrl+W` to close one. The browser version of Troupe uses `Alt` for these shortcuts: `Alt+T` for the agent launcher, `Alt+W` to close a tab, and `Alt+,` for settings. See the full list in [Keyboard shortcuts](/docs/settings/keyboard-shortcuts#shortcuts-in-the-browser-version).
 
 If a shortcut still goes to your browser or to your operating system, give it other keys in **Settings** > **Keyboard Shortcuts**.
 

@@ -13,7 +13,7 @@ Use one of these:
 - Select the gear icon next to the project in the sidebar.
 - Press `Ctrl+K` and choose **Project Settings**. That opens the settings of the project you have open.
 
-When you open the settings from the sidebar, you don't have to switch to the project first. The window opens for the project you right-clicked, and Termul stays on the project you were working in.
+When you open the settings from the sidebar, you don't have to switch to the project first. The window opens for the project you right-clicked, and Troupe stays on the project you were working in.
 
 The **Project settings** window shows the project name at the top and lists its pages on the left, in two groups. **Project** has **General**, **Shell**, **Environment variables**, and **Worktree symlinks**. **Agents** has **Accounts** and **Browser**. To find a setting, type in **Search settings**.
 
@@ -26,7 +26,7 @@ Project settings are not saved until you save them. When you change something, a
 - Select **Save changes** to keep your changes.
 - Select **Discard** to drop them. Every field goes back to its saved value.
 
-If you close the window with unsaved changes, Termul asks you to confirm. Select **Leave** to close without saving. Your edits are dropped, so they don't come back the next time you open the window.
+If you close the window with unsaved changes, Troupe asks you to confirm. Select **Leave** to close without saving. Your edits are dropped, so they don't come back the next time you open the window.
 
 ## General
 
@@ -50,19 +50,19 @@ To add a variable:
 
 To remove a variable, select the **X** at the end of its row.
 
-To copy the variables from a `.env` file, select **Import from .env**. Termul reads the `.env` file in the project's root folder. A variable from the file replaces a variable with the same name. If some lines of the file are not valid, Termul imports the rest and lists the lines it skipped.
+To copy the variables from a `.env` file, select **Import from .env**. Troupe reads the `.env` file in the project's root folder. A variable from the file replaces a variable with the same name. If some lines of the file are not valid, Troupe imports the rest and lists the lines it skipped.
 
 ## Worktree symlinks
 
 A worktree is a second working folder of the same git repository, often on another branch. See [Worktrees](/docs/git/worktrees). A new worktree does not have folders that git ignores, such as `node_modules`. Without them, you must install your dependencies again in each worktree.
 
-This page lists folders that Termul links from the project folder into each new worktree. A linked folder is shared, so the worktree uses the same `node_modules` as the project.
+This page lists folders that Troupe links from the project folder into each new worktree. A linked folder is shared, so the worktree uses the same `node_modules` as the project.
 
 - **Sync from .gitignore** adds every folder that your `.gitignore` file lists and that exists in the project. It works only in a git project.
 - **Add directory** adds an empty row. Type a folder name, such as `node_modules`.
 - The **X** at the end of a row removes the folder from the list.
 
-When the list of a git project is empty, Termul fills it from `.gitignore` the first time you open project settings. Select **Save changes** to keep that list.
+When the list of a git project is empty, Troupe fills it from `.gitignore` the first time you open project settings. Select **Save changes** to keep that list.
 
 When you create a worktree, the **Symlink Directories** part of the new worktree window lists these folders. Clear a folder's checkbox to skip it for that worktree.
 

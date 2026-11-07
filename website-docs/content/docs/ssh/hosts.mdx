@@ -17,7 +17,7 @@ A host is a saved server: its address, the username you sign in with, and how yo
 6. Optional: fill in **Label**, **Group**, and **Tags**. See [Organize your hosts](#organize-your-hosts).
 7. Click **Save and connect** to save the host and open a session at once. Click **Save** to save it without connecting.
 
-Only the address and the username are required. You can also paste `user@host:port` into **Address**. Termul fills in **Username** and **Port** from it.
+Only the address and the username are required. You can also paste `user@host:port` into **Address**. Troupe fills in **Username** and **Port** from it.
 
 The line under the dialog title shows where you will sign in, for example `deploy@example.com:2222`. Check it before you save.
 
@@ -25,24 +25,24 @@ The line under the dialog title shows where you will sign in, for example `deplo
 
 **Authentication** has three choices.
 
-- **Password.** Type the password in **Password**, or leave it empty. If you leave it empty, Termul asks for the password each time you connect.
-- **Private key.** Choose a key file. If Termul finds keys in your `~/.ssh` folder, pick one from the list. You can also type the path, or click **Browse**. Termul tells you the key type and whether a passphrase protects it. If the key has a passphrase, a **Key passphrase** field appears. Leave it empty to be asked when you connect.
-- **SSH agent.** Termul uses the keys loaded in your SSH agent: ssh-agent, Pageant, or the Windows OpenSSH agent. Termul stores no secret for this method.
+- **Password.** Type the password in **Password**, or leave it empty. If you leave it empty, Troupe asks for the password each time you connect.
+- **Private key.** Choose a key file. If Troupe finds keys in your `~/.ssh` folder, pick one from the list. You can also type the path, or click **Browse**. Troupe tells you the key type and whether a passphrase protects it. If the key has a passphrase, a **Key passphrase** field appears. Leave it empty to be asked when you connect.
+- **SSH agent.** Troupe uses the keys loaded in your SSH agent: ssh-agent, Pageant, or the Windows OpenSSH agent. Troupe stores no secret for this method.
 
-Termul reads keys in OpenSSH and PEM format. Your key file stays where it is. Termul only stores its path.
+Troupe reads keys in OpenSSH and PEM format. Your key file stays where it is. Troupe only stores its path.
 
-If you pick the wrong file, Termul shows a message under the key field:
+If you pick the wrong file, Troupe shows a message under the key field:
 
 - **This is the public key.** You chose the `.pub` file. Choose the matching file without `.pub`.
 - **This file is not a private key.** Choose another file.
 - **No file at this path.** Check the path.
-- **Termul cannot read this file.** Check the file's permissions.
+- **Troupe cannot read this file.** Check the file's permissions.
 
-## Where Termul keeps your passwords
+## Where Troupe keeps your passwords
 
-Termul saves passwords and key passphrases in your system keychain. That is Keychain on macOS, Credential Manager on Windows, and Secret Service on Linux. Termul does not write them to a file.
+Troupe saves passwords and key passphrases in your system keychain. That is Keychain on macOS, Credential Manager on Windows, and Secret Service on Linux. Troupe does not write them to a file.
 
-When you edit a host that has a saved password, the **Password** field says so. Leave the field empty to keep the saved password, or type a new one to replace it. When you delete a host, Termul also removes its saved password or passphrase from the keychain.
+When you edit a host that has a saved password, the **Password** field says so. Leave the field empty to keep the saved password, or type a new one to replace it. When you delete a host, Troupe also removes its saved password or passphrase from the keychain.
 
 If you type a password when you connect, you choose whether to save it. See [Sign in with a password](/docs/ssh/connect#sign-in-with-a-password).
 
@@ -50,7 +50,7 @@ If you type a password when you connect, you choose whether to save it. See [Sig
 
 Use the fields under **Organize** to find hosts faster.
 
-- **Label** is the name in the host list and on session tabs. If you leave it empty, Termul uses the address.
+- **Label** is the name in the host list and on session tabs. If you leave it empty, Troupe uses the address.
 - **Group** puts the host under a heading in the **Hosts** tab. Type a new group name, or pick a group you used before.
 - **Tags** are short words, separated by commas, for example `prod, web`. They show under the host name, and search finds them.
 
@@ -77,7 +77,7 @@ Right-click a host in the sidebar or in the **Hosts** tab, then click one of the
 
 - **Edit** opens the host's settings. Changes apply to new sessions. Sessions that are already open keep running.
 - **Duplicate** makes a copy of the host. Use it for servers that share most settings.
-- **Delete** removes the host after you confirm. If the host has open sessions, Termul closes them. You can't undo a delete.
+- **Delete** removes the host after you confirm. If the host has open sessions, Troupe closes them. You can't undo a delete.
 
 You can also click the pencil button on a host's row to edit it.
 
@@ -86,6 +86,6 @@ You can also click the pencil button on a host's row to edit it.
 If you already list your servers in `~/.ssh/config`, import them instead of typing them again.
 
 1. Click **Import from ~/.ssh/config** in the **SSH** section of the sidebar, or **Import** at the top of the **Hosts** tab.
-2. Termul adds each `Host` entry as a host and shows how many it imported.
+2. Troupe adds each `Host` entry as a host and shows how many it imported.
 
-The import reads each entry's `HostName`, `Port`, `User`, and `IdentityFile`. An entry with an `IdentityFile` uses **Private key**. Other entries use **Password**. Termul skips entries with wildcards, such as `Host *`. It also skips a server you already saved with the same address, port, and username. Run the import again any time to pick up new entries.
+The import reads each entry's `HostName`, `Port`, `User`, and `IdentityFile`. An entry with an `IdentityFile` uses **Private key**. Other entries use **Password**. Troupe skips entries with wildcards, such as `Host *`. It also skips a server you already saved with the same address, port, and username. Run the import again any time to pick up new entries.
