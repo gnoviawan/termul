@@ -380,9 +380,11 @@ describe('server-binary-url-allowlist keep', () => {
 describe('release-url-pins keep path', () => {
   it.each([
     'scripts/release/prepare-platform-artifacts.mjs',
+    'scripts/release/prepare-platform-artifacts.test.ts',
     'scripts/release/prepare-server-artifacts.mjs',
     'scripts/release/prepare-server-artifacts.test.ts',
-    'scripts/release/merge-updater-manifests.mjs'
+    'scripts/release/merge-updater-manifests.mjs',
+    'scripts/release/merge-updater-manifests.test.ts'
   ])('%s keeps the pinned old repo URL after the rename', (path) => {
     const text =
       'const url = `https://github.com/gnoviawan/termul/releases/download/${tag}/${name}`'
