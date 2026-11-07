@@ -503,6 +503,71 @@ describe('ShellRail', () => {
       }
     })
 
+    describe('Column tab hold after a Rail tab click (#1725)', () => {
+      // A Rail tab click opens the Side panel. Dropping the track at once moved
+      // Search, Canvas and Automations up under the pointer.
+      const track = () => screen.queryByTestId('rail-column-tab-track')
+      const rail = () => screen.getByTestId('rail-top-band').parentElement as HTMLElement
+      const openSidePanel = () =>
+        act(() => useShellLayoutStore.setState({ sidePanelVisible: true }))
+      const clickTab = (name: string) =>
+        fireEvent.click(within(track() as HTMLElement).getByRole('button', { name, exact: true }))
+
+      beforeEach(() => {
+        useShellLayoutStore.setState({ sidePanelVisible: false })
+        renderRail()
+      })
+
+      it('keeps the tabs until the pointer leaves the Rail', () => {
+        fireEvent.pointerEnter(rail(), { pointerId: 1 })
+        clickTab('Explorer')
+        openSidePanel()
+        expect(track()).toBeInTheDocument()
+        fireEvent.pointerLeave(rail(), { pointerId: 1 })
+        expect(track()).not.toBeInTheDocument()
+      })
+
+      it('removes the tabs at once when the Side panel opens without a Rail tab click', () => {
+        // Keyboard shortcut or Side panel toggle, with the pointer resting on the Rail.
+        fireEvent.pointerEnter(rail(), { pointerId: 1 })
+        openSidePanel()
+        expect(track()).not.toBeInTheDocument()
+      })
+
+      it('keeps the tabs while another pointer is still in the Rail', () => {
+        fireEvent.pointerEnter(rail(), { pointerId: 1 })
+        clickTab('Changes')
+        openSidePanel()
+        fireEvent.pointerEnter(rail(), { pointerId: 2 })
+        fireEvent.pointerLeave(rail(), { pointerId: 2 })
+        expect(track()).toBeInTheDocument()
+        fireEvent.pointerLeave(rail(), { pointerId: 1 })
+        expect(track()).not.toBeInTheDocument()
+      })
+
+      it('keeps the tabs after a touch tap until a press lands outside the Rail', () => {
+        // A tap fires pointerleave before click.
+        fireEvent.pointerEnter(rail(), { pointerId: 7 })
+        fireEvent.pointerLeave(rail(), { pointerId: 7 })
+        clickTab('Explorer')
+        openSidePanel()
+        expect(track()).toBeInTheDocument()
+        fireEvent.pointerDown(within(rail()).getByRole('button', { name: 'Search' }))
+        expect(track()).toBeInTheDocument()
+        fireEvent.pointerDown(document.body)
+        expect(track()).not.toBeInTheDocument()
+      })
+
+      it('drops the hold when the Side panel closes', () => {
+        fireEvent.pointerEnter(rail(), { pointerId: 1 })
+        clickTab('Explorer')
+        openSidePanel()
+        act(() => useShellLayoutStore.setState({ sidePanelVisible: false }))
+        act(() => useShellLayoutStore.setState({ sidePanelVisible: true }))
+        expect(track()).not.toBeInTheDocument()
+      })
+    })
+
     it('puts the mark / toggle swap below the empty top band under the macOS traffic lights', () => {
       tauriRef.current = true
       macRef.current = true

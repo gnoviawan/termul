@@ -351,9 +351,13 @@ test('Journey 1: three chats on one project, side by side, next to the diff', as
       await railTabs.getByRole('button', { name: 'Explorer', exact: true }).click()
       const explorer = page.getByRole('tabpanel', { name: 'Explorer' })
       await expect(explorer).toBeVisible()
-      // The Rail icon unmounts, so focus moves to the panel's Explorer tab.
+      // Focus moves to the panel's Explorer tab.
       await expect(columnTab(page, /^Explorer/)).toBeFocused()
       await expect(explorer).toContainText('notes.txt')
+      // #1725: the Rail keeps its tabs while the pointer is still on it, so the
+      // buttons below them do not move under the pointer; they go once it leaves.
+      await expect(railTabs).toHaveCount(1)
+      await page.mouse.move(800, 400)
       await expect(railTabs).toHaveCount(0)
     } finally {
       // The Rail state is a persisted setting shared with later specs.
