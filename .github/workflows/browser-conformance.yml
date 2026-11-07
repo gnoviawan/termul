@@ -60,35 +60,15 @@ jobs:
 
       # The runner starts with 16 GB of RAM and a 3 GB pagefile that Windows
       # grows on demand. Building the termul-manager test targets in parallel
-      # needs more commit than that, faster than the pagefile grows, and rustc
+      # commits up to about 34 GB, faster than the pagefile grows, and rustc
       # then fails with "The paging file is too small" (os error 1455).
       - name: Enlarge the pagefile
         if: runner.os == 'Windows'
         uses: al-cheb/configure-pagefile-action@9b6da52fb72a3c6147c1aad2df22d8d905681adc # v1.5
         with:
-          minimum-size: 16GB
-          maximum-size: 24GB
+          minimum-size: 24GB
+          maximum-size: 32GB
           disk-root: "D:"
-
-      - name: Sample memory (diagnostic)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $script = @'
-          while ($true) {
-            $os = Get-CimInstance Win32_OperatingSystem
-            $pf = Get-CimInstance Win32_PageFileUsage | Measure-Object -Property CurrentUsage -Sum
-            "$(Get-Date -Format HH:mm:ss),$($os.FreePhysicalMemory),$($os.FreeVirtualMemory),$($os.TotalVirtualMemorySize),$($pf.Sum)" | Add-Content "$env:RUNNER_TEMP\mem.csv"
-            Start-Sleep -Seconds 5
-          }
-          '@
-          Set-Content "$env:RUNNER_TEMP\mem.ps1" $script
-          Get-CimInstance Win32_ComputerSystem | Format-List TotalPhysicalMemory, NumberOfLogicalProcessors, AutomaticManagedPagefile
-          Get-CimInstance Win32_PageFileSetting | Format-List *
-          Get-CimInstance Win32_PageFileUsage | Format-List *
-          Get-CimInstance Win32_OperatingSystem | Format-List TotalVisibleMemorySize, TotalVirtualMemorySize, FreeVirtualMemory
-          Get-PSDrive -PSProvider FileSystem | Format-Table Name, Used, Free
-          Start-Process pwsh -ArgumentList '-NoProfile', '-File', "$env:RUNNER_TEMP\mem.ps1" -WindowStyle Hidden
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -143,20 +123,6 @@ jobs:
           else
             cargo test --features conformance --test browser_conformance -- --nocapture
           fi
-
-      - name: Memory report (diagnostic)
-        if: always() && runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $rows = Get-Content "$env:RUNNER_TEMP\mem.csv" | ForEach-Object { $f = $_ -split ','; [pscustomobject]@{ t = $f[0]; freePhysMB = [int]($f[1] / 1024); freeCommitMB = [int]($f[2] / 1024); commitLimitMB = [int]($f[3] / 1024); pagefileUsedMB = [int]$f[4] } }
-          "samples: $($rows.Count)"
-          "lowest free commit:"
-          $rows | Sort-Object freeCommitMB | Select-Object -First 5 | Format-Table
-          "commit limit range MB: $(($rows | Measure-Object commitLimitMB -Minimum -Maximum | ForEach-Object { "$($_.Minimum)-$($_.Maximum)" }))"
-          "every 12th sample:"
-          $i = 0
-          $rows | Where-Object { ($i++ % 12) -eq 0 } | Format-Table
-          Get-CimInstance Win32_PageFileUsage | Format-List *
 
       - name: Upload conformance summary
         if: always()
