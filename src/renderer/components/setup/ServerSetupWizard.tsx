@@ -3,7 +3,7 @@
  *
  * A fresh `termul-server` boots a minimal setup mode (health + `/setup/*` +
  * this SPA — no app stack). This wizard is the friendly front of it: plain-
- * language questions ("Where can Termul be reached?" rather than "bind
+ * language questions ("Where can Troupe be reached?" rather than "bind
  * host"), server-provided defaults, and per-field errors inline so nothing
  * is saved until every answer is valid.
  *
@@ -115,7 +115,7 @@ const CHANNEL_OPTIONS: Array<{ value: 'none' | ServerUpdateChannel; label: strin
 ]
 
 const CHANNEL_HINTS: Record<'none' | ServerUpdateChannel, string> = {
-  none: 'Termul will not look for new versions.',
+  none: 'Troupe will not look for new versions.',
   stable: 'Recommended — finished, tested releases.',
   insider: 'New features a little earlier, with occasional rough edges.',
   nightly: 'The very latest changes every day — expect breakage.'
@@ -315,7 +315,7 @@ export function ServerSetupWizard({
     answers === null ? null : (
       <>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="server-setup-host">Where can Termul be reached?</Label>
+          <Label htmlFor="server-setup-host">Where can Troupe be reached?</Label>
           <Select value={answers.host} onValueChange={handleHostChange} disabled={submitting}>
             <SelectTrigger
               id="server-setup-host"
@@ -458,7 +458,7 @@ export function ServerSetupWizard({
                 spellCheck={false}
               />
               <p id="server-setup-sessions-dir-hint" className="text-xs text-muted-foreground">
-                Where Termul keeps terminal sessions.
+                Where Troupe keeps terminal sessions.
               </p>
               <FieldError
                 id={fieldErrorId('server-setup-sessions-dir')}
@@ -482,7 +482,7 @@ export function ServerSetupWizard({
                 spellCheck={false}
               />
               <p id="server-setup-projects-file-hint" className="text-xs text-muted-foreground">
-                Where Termul stores your project list.
+                Where Troupe stores your project list.
               </p>
               <FieldError
                 id={fieldErrorId('server-setup-projects-file')}
@@ -528,7 +528,7 @@ export function ServerSetupWizard({
 
         <Button type="submit" disabled={submitting}>
           {submitting ? <Spinner size={16} decorative className="mr-2" /> : null}
-          {submitting ? 'Saving…' : mode === 'setup' ? 'Start Termul' : 'Save and restart'}
+          {submitting ? 'Saving…' : mode === 'setup' ? 'Start Troupe' : 'Save and restart'}
         </Button>
       </>
     )
@@ -548,14 +548,14 @@ export function ServerSetupWizard({
           ) : (
             <form
               className="flex w-full max-w-md flex-col gap-5"
-              aria-label="Set up Termul"
+              aria-label="Set up Troupe"
               noValidate
               onSubmit={(event) => {
                 void handleSubmit(event)
               }}
             >
               <div className="flex flex-col gap-1.5 text-center">
-                <h1 className="text-lg font-semibold text-foreground">Set up Termul</h1>
+                <h1 className="text-lg font-semibold text-foreground">Set up Troupe</h1>
                 <p className="text-sm text-muted-foreground">
                   A few questions and you're in — the defaults work for most people.
                 </p>
@@ -568,7 +568,7 @@ export function ServerSetupWizard({
                   <AlertTriangle size={14} className="mt-0.5 shrink-0" />
                   <p>
                     A saved server configuration couldn't be used ({configError}). Answer the
-                    questions below and Termul will write a fresh one.
+                    questions below and Troupe will write a fresh one.
                   </p>
                 </div>
               ) : null}

@@ -36,7 +36,7 @@ const KINDS = [
   {
     kind: 'local',
     title: 'On this computer',
-    description: 'Termul starts the server with a command, like npx or uvx.',
+    description: 'Troupe starts the server with a command, like npx or uvx.',
     example: 'npx -y @modelcontextprotocol/server-github'
   }
 ] as const
@@ -369,8 +369,8 @@ function LocalFields({
         <p id={`${id}-command-hint`} className={HINT_CLASS}>
           What you would type in a terminal to start the server.{' '}
           {isTauriContext()
-            ? 'Termul runs it on this computer.'
-            : 'Termul runs it on the computer that hosts this workspace.'}
+            ? 'Troupe runs it on this computer.'
+            : 'Troupe runs it on the computer that hosts this workspace.'}
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <span className={HINT_CLASS}>Common:</span>
@@ -398,7 +398,7 @@ function LocalFields({
           valuePlaceholder="value"
         />
         <p id={`${id}-env-hint`} className={HINT_CLASS}>
-          API keys and settings the server reads. Values stay in Termul's app data. Write{' '}
+          API keys and settings the server reads. Values stay in Troupe's app data. Write{' '}
           <span className="font-mono">$VARIABLE</span> to read one from your shell instead.
         </p>
       </fieldset>
