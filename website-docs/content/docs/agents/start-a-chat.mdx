@@ -20,7 +20,7 @@ Use any of these:
 
 A pane with no tabs shows the launcher on its own. When the launcher opens over a tab, close it with `Esc`, with `Ctrl+T` again, or with **Close agent launcher** (the **X** in the corner).
 
-If you close the launcher by accident, your text is not lost. Termul keeps the unsent draft for each project and puts it back the next time you open the launcher.
+If you close the launcher by accident, your text is not lost. Troupe keeps the unsent draft for each project and puts it back the next time you open the launcher.
 
 ## Send your first prompt
 
@@ -38,7 +38,7 @@ Press `Enter`, or click **Start agent chat** (the arrow button).
 </Step>
 </Steps>
 
-The chat opens as a tab in the same pane, and the agent starts working. Termul remembers the agent and the options you chose. The next chat starts with the same picks.
+The chat opens as a tab in the same pane, and the agent starts working. Troupe remembers the agent and the options you chose. The next chat starts with the same picks.
 
 ## Pick an agent and a model
 
@@ -60,11 +60,11 @@ The strip under the message box decides which folder the agent works in. In a gi
 
 - **Current checkout**. The agent edits your project folder directly, on the branch shown on the right.
 - **Existing worktree**. The agent works in a worktree you already have. Pick it in the list that appears. If the project has no worktrees, this option is off and shows "No worktrees yet".
-- **New worktree**. Termul creates a new worktree for this chat before the agent starts. Pick the branch to start from in the **Base branch** list.
+- **New worktree**. Troupe creates a new worktree for this chat before the agent starts. Pick the branch to start from in the **Base branch** list.
 
 ![The workspace menu under the launcher box, open on Current checkout, Existing worktree, and New worktree.](/screenshots/agents-worktree-option.png)
 
-A worktree is a second folder for the same git repository, with its own branch. When a chat runs in its own worktree, the agent's edits stay out of the folder you work in. You can run several chats side by side without them changing the same files. Termul names the new branch `chat/` followed by a short id. The chat shows the progress while Termul creates the worktree. If that fails, Termul shows an error, closes the chat tab, and opens the launcher again.
+A worktree is a second folder for the same git repository, with its own branch. When a chat runs in its own worktree, the agent's edits stay out of the folder you work in. You can run several chats side by side without them changing the same files. Troupe names the new branch `chat/` followed by a short id. The chat shows the progress while Troupe creates the worktree. If that fails, Troupe shows an error, closes the chat tab, and opens the launcher again.
 
 When the chat starts, its card in the **Chats** list shows the worktree's branch. The strip under the message box shows **Worktree** and the same branch.
 
@@ -75,5 +75,5 @@ To merge, switch, or remove worktrees, see [Worktrees](/docs/git/worktrees).
 A folder that is not a git repository shows **Local** in the strip. The agent always works in that folder.
 
 <Callout type="info">
-  When you use Termul in a browser and the server does not accept changes from remote clients, **New worktree** is off and shows "This server is read-only for remote clients." In a browser, **Existing worktree** is also off when every worktree is outside the project folder. It then shows "Outside the project folder; open it on the desktop app."
+  When you use Troupe in a browser and the server does not accept changes from remote clients, **New worktree** is off and shows "This server is read-only for remote clients." In a browser, **Existing worktree** is also off when every worktree is outside the project folder. It then shows "Outside the project folder; open it on the desktop app."
 </Callout>

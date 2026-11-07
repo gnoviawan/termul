@@ -3,13 +3,13 @@ title: Install an agent
 description: See which agents are ready to chat, install the ones you want, and keep them up to date.
 ---
 
-Termul knows about dozens of AI coding agents. Some are ready the moment you install Termul. Others need a download or a tool on your computer first. This page shows you how to tell which is which and how to get each one running.
+Troupe knows about dozens of AI coding agents. Some are ready the moment you install Troupe. Others need a download or a tool on your computer first. This page shows you how to tell which is which and how to get each one running.
 
 ## Where the agent list comes from
 
-Termul ships with a built-in list of agents. The list comes from the public agent registry at `cdn.agentclientprotocol.com`, the same registry the Zed editor uses. Termul reads its built-in copy, so the list works offline.
+Troupe ships with a built-in list of agents. The list comes from the public agent registry at `cdn.agentclientprotocol.com`, the same registry the Zed editor uses. Troupe reads its built-in copy, so the list works offline.
 
-Termul also checks the online registry for newer versions when it starts, and again every 24 hours. That check only compares versions. Nothing changes until you choose to update an agent. When you do, Termul switches to the online registry, so the list also shows agents that were added after your version of Termul was released.
+Troupe also checks the online registry for newer versions when it starts, and again every 24 hours. That check only compares versions. Nothing changes until you choose to update an agent. When you do, Troupe switches to the online registry, so the list also shows agents that were added after your version of Troupe was released.
 
 ## See which agents are ready
 
@@ -24,11 +24,11 @@ Each agent has a status badge. The badge tells you what to do next.
 | Badge | What it means | What to do |
 | --- | --- | --- |
 | **Available** | The agent can start now. | Start a chat with it. |
-| **Warming…**, **Warm**, **Session ready** | Termul already started the agent in the background, so your next chat opens faster. | Nothing. |
-| **Install from Agent Chat** | Termul can download the agent for you. | Install it from a new chat. See [Install an agent from a chat](#install-an-agent-from-a-chat). |
-| **Needs Node.js** | The agent runs through `npx`, which comes with Node.js. | Install Node.js, then reopen Settings. If the badge stays, restart Termul. |
-| **Needs uv** | The agent runs through `uvx`, which comes with uv. | Install uv, then reopen Settings. If the badge stays, restart Termul. |
-| **Manual install** | Termul cannot download this agent. | Install it from the vendor, then tell Termul where it is. See [Point Termul at an agent you installed](#point-termul-at-an-agent-you-installed). |
+| **Warming…**, **Warm**, **Session ready** | Troupe already started the agent in the background, so your next chat opens faster. | Nothing. |
+| **Install from Agent Chat** | Troupe can download the agent for you. | Install it from a new chat. See [Install an agent from a chat](#install-an-agent-from-a-chat). |
+| **Needs Node.js** | The agent runs through `npx`, which comes with Node.js. | Install Node.js, then reopen Settings. If the badge stays, restart Troupe. |
+| **Needs uv** | The agent runs through `uvx`, which comes with uv. | Install uv, then reopen Settings. If the badge stays, restart Troupe. |
+| **Manual install** | Troupe cannot download this agent. | Install it from the vendor, then tell Troupe where it is. See [Point Troupe at an agent you installed](#point-termul-at-an-agent-you-installed). |
 | **Unavailable** | The agent has no build for your operating system or processor. | Pick another agent. |
 
 The row also shows the agent's version. A **Latest** badge means no newer version exists in the online registry.
@@ -45,7 +45,7 @@ You install agents from the chat box of a new chat, not from Settings.
 
 ![A new chat with Amp selected. The Install required bar above the chat box has Custom path and Install buttons.](/screenshots/agent-setup-install-required.png)
 
-Termul downloads the agent and keeps it in its own folder. When the download finishes, you can type your first message.
+Troupe downloads the agent and keeps it in its own folder. When the download finishes, you can type your first message.
 
 If you already have the agent on your computer, click **Custom path** instead of **Install**. Type the path to the agent's program, or click the folder button to find it. Then click **Save**.
 
@@ -57,15 +57,15 @@ Some agents ask you to sign in the first time you use them. The chat shows the s
 
 The sign-in choices depend on the agent:
 
-- **A sign-in that runs in a terminal.** Termul opens a login terminal. Follow the steps there. When the terminal ends without an error, Termul finishes the sign-in and loads the agent's models, even if you already closed the model menu.
-- **An API key.** Some agents, such as Codex and Gemini CLI, take a key. Type it in the key field and submit it. Termul passes the key to the agent once and does not save it. If the key is already set on the computer that runs the agent, submit the field empty.
-- **A device code.** Codex can sign in to ChatGPT with a code, which works on a server without a browser, for example from a phone. Termul shows the code large, with **Copy code**, **Copy link** and **Open sign-in page**. Open the page, enter the code there, and finish the sign-in. Click **Cancel sign-in** to stop.
+- **A sign-in that runs in a terminal.** Troupe opens a login terminal. Follow the steps there. When the terminal ends without an error, Troupe finishes the sign-in and loads the agent's models, even if you already closed the model menu.
+- **An API key.** Some agents, such as Codex and Gemini CLI, take a key. Type it in the key field and submit it. Troupe passes the key to the agent once and does not save it. If the key is already set on the computer that runs the agent, submit the field empty.
+- **A device code.** Codex can sign in to ChatGPT with a code, which works on a server without a browser, for example from a phone. Troupe shows the code large, with **Copy code**, **Copy link** and **Open sign-in page**. Open the page, enter the code there, and finish the sign-in. Click **Cancel sign-in** to stop.
 
 You can also sign in to another agent from a chat. Open the model menu and pick the agent's tab. If the agent is signed out, the tab lists its sign-in choices under the error. After you sign in, the tab shows the agent's models, so you can pick one without leaving the chat. On a phone, see [Pick a model](/docs/remote/phone#pick-a-model).
 
-## Point Termul at an agent you installed
+## Point Troupe at an agent you installed
 
-Agents marked **Manual install** must come from the vendor. The agent's row in Settings shows the command Termul expects, after **Expected:**.
+Agents marked **Manual install** must come from the vendor. The agent's row in Settings shows the command Troupe expects, after **Expected:**.
 
 1. Install the agent with the vendor's instructions.
 2. Click **New chat** and pick the agent in the agent menu.
@@ -76,17 +76,17 @@ After you save a path, the agent's row in **Settings** > **Agent chats** has a p
 
 ## Set up Claude Agent
 
-Claude Agent needs three things on the computer that runs Termul:
+Claude Agent needs three things on the computer that runs Troupe:
 
 - Node.js 22 or newer, with npm.
 - The Claude Code command-line tool from Anthropic, installed as `claude`.
 - A Claude Code login. Run `claude auth login` in a terminal once.
 
-When those are in place, pick **Claude Agent** in a new chat and click **Install**. Termul installs a fixed version of Anthropic's Claude Agent package in its own folder. To use more than one Claude account, see [Claude accounts](/docs/agent-setup/claude-accounts).
+When those are in place, pick **Claude Agent** in a new chat and click **Install**. Troupe installs a fixed version of Anthropic's Claude Agent package in its own folder. To use more than one Claude account, see [Claude accounts](/docs/agent-setup/claude-accounts).
 
 ## Update an agent
 
-Termul compares your agents with the online registry when it starts and every 24 hours. To check right now, click **Check for updates** in **Settings** > **Agent chats**. The line under the button says how many updates exist and when Termul last checked.
+Troupe compares your agents with the online registry when it starts and every 24 hours. To check right now, click **Check for updates** in **Settings** > **Agent chats**. The line under the button says how many updates exist and when Troupe last checked.
 
 1. Find the agent in the list. An agent with an update shows its current and new version, for example `0.9.0 → 0.10.0`.
 2. Click **Update to** followed by the version number.
@@ -95,11 +95,11 @@ Your next chat with that agent uses the new version.
 
 In the agent menu of a new chat, an agent with a newer version shows an **Update** tag.
 
-The first update you apply also switches Termul to the online registry. From then on, the agent list includes new agents from the registry.
+The first update you apply also switches Troupe to the online registry. From then on, the agent list includes new agents from the registry.
 
 ## Run Claude Code in a terminal
 
-The command palette has a **Launch Agent** command. It opens a new terminal in the active pane and runs the `claude` command there, so you get Claude Code's own terminal screen instead of a Termul chat. Claude Code must be installed for this to work.
+The command palette has a **Launch Agent** command. It opens a new terminal in the active pane and runs the `claude` command there, so you get Claude Code's own terminal screen instead of a Troupe chat. Claude Code must be installed for this to work.
 
 1. Press `Ctrl+K` (`Cmd+K` on macOS) to open the command palette.
 2. Type `launch agent`.

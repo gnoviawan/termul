@@ -1,26 +1,26 @@
 ---
 title: Edit and save code
-description: Open a file in the editor, view images, videos, and PDFs, save by hand or automatically, and handle changes made outside Termul.
+description: Open a file in the editor, view images, videos, and PDFs, save by hand or automatically, and handle changes made outside Troupe.
 ---
 
 The editor opens your project files in tabs next to your terminals and chats. It colors the code, numbers the lines, and warns you before you lose unsaved work.
 
 ## Open a file
 
-Click a file in the explorer. The file opens as a tab in the active pane. If the file is already open, Termul switches to its tab. See [Browse and manage files](/docs/files/explorer).
+Click a file in the explorer. The file opens as a tab in the active pane. If the file is already open, Troupe switches to its tab. See [Browse and manage files](/docs/files/explorer).
 
 You can also drag a file from the explorer onto a pane to open it there or to split the pane.
 
 Images, videos, and PDFs open in a viewer tab instead of the text editor. See [View images, videos, and PDFs](#view-images-videos-and-pdfs).
 
-Other files open in a tab that says why Termul cannot show them:
+Other files open in a tab that says why Troupe cannot show them:
 
 - A text file larger than 1 MB shows "This file is too large to preview".
 - A binary file, such as a font or a program, shows "This file can't be previewed".
 
 The tab has a **Copy Path** button. In the desktop app it also has **Show in File Manager**.
 
-You can keep up to 15 files open. When you open one more, Termul closes the oldest tab that has no unsaved changes. If every open file has unsaved changes, Termul shows "Too many open tabs" and does not open the file. Save or close a file first.
+You can keep up to 15 files open. When you open one more, Troupe closes the oldest tab that has no unsaved changes. If every open file has unsaved changes, Troupe shows "Too many open tabs" and does not open the file. Save or close a file first.
 
 ## Languages
 
@@ -64,14 +64,14 @@ These files open in a viewer tab. You can look at them but not edit them.
 A larger image or video shows "This file is too large to preview" with its size and the limit. A larger PDF shows a message with the file name and the limit instead, for example "report.pdf is larger than 50 MB and can't be previewed."
 
 - **Images** fit the pane at first. Use the zoom out and zoom in buttons at the bottom, **1:1** for the actual size, and **Fit** to fit the pane again. The bar at the bottom shows the size in pixels and the file size.
-- **Videos** play with the usual video controls when Termul can decode the file's video format. A file in a format it can't decode, which can happen with some `.mov` files, opens with no picture and no error message. The bar at the bottom shows the size in pixels, the length, and the file size.
+- **Videos** play with the usual video controls when Troupe can decode the file's video format. A file in a format it can't decode, which can happen with some `.mov` files, opens with no picture and no error message. The bar at the bottom shows the size in pixels, the length, and the file size.
 - **PDFs** show their pages one under the other. The bar at the top shows the current page and the page count, with the zoom out and zoom in buttons and **Fit width** to fit the page to the pane.
 
 When the file changes on disk, the viewer shows the new version by itself.
 
 ## Save a file
 
-Press `Ctrl+S` (`Cmd+S` on macOS) while the file is open. Termul shows a "saved" message with the file name.
+Press `Ctrl+S` (`Cmd+S` on macOS) while the file is open. Troupe shows a "saved" message with the file name.
 
 When a file has unsaved changes, its tab shows a dot instead of the close button. Hover over the dot to see the close button again. After a save, the tab shows a check mark for a moment.
 
@@ -81,7 +81,7 @@ On a phone, Markdown files show a **Save** button in the toolbar above the text.
 
 ### Close a file that has unsaved changes
 
-If you close a tab that has unsaved changes, Termul asks what to do:
+If you close a tab that has unsaved changes, Troupe asks what to do:
 
 - **Save** saves the file and closes the tab.
 - **Discard** closes the tab and drops your changes.
@@ -89,7 +89,7 @@ If you close a tab that has unsaved changes, Termul asks what to do:
 
 If you close several tabs at once and some files have unsaved changes, the dialog offers **Save & Close** and **Don't Save**.
 
-In the desktop app, Termul also asks when you quit the app with unsaved files. Click **Save All** to save them, or **Don't Save** to quit without saving.
+In the desktop app, Troupe also asks when you quit the app with unsaved files. Click **Save All** to save them, or **Don't Save** to quit without saving.
 
 ## Turn on auto save
 
@@ -98,36 +98,36 @@ Auto save writes your changes to disk a short time after you stop typing. It is 
 1. Open **Settings**. Press `Ctrl+,` (`Cmd+,` on macOS) in the desktop app, or `Alt+,` in the browser version.
 2. Go to **Behavior**.
 3. Under **Editor Auto Save**, turn on **Enable auto save**.
-4. In **Auto Save Delay**, choose how long Termul waits after your last edit: **0.5 seconds**, **1 second**, **2 seconds**, or **5 seconds**.
+4. In **Auto Save Delay**, choose how long Troupe waits after your last edit: **0.5 seconds**, **1 second**, **2 seconds**, or **5 seconds**.
 
 ![The Behavior settings with Enable auto save turned on and a delay of 1 second](/screenshots/files-autosave-setting.png)
 
 Auto save does not show a message. The unsaved dot on the tab goes away when the save is done.
 
-## When a file changes outside Termul
+## When a file changes outside Troupe
 
-Another program, a terminal command, or an agent can change a file that you have open. Termul watches open files and reacts in one of these ways.
+Another program, a terminal command, or an agent can change a file that you have open. Troupe watches open files and reacts in one of these ways.
 
-**The file has no unsaved changes in Termul.** The editor loads the new version from disk. You do not have to do anything.
+**The file has no unsaved changes in Troupe.** The editor loads the new version from disk. You do not have to do anything.
 
-**The file has unsaved changes in Termul.** Termul keeps your version in the editor and shows a "File changed externally" message with the file name.
+**The file has unsaved changes in Troupe.** Troupe keeps your version in the editor and shows a "File changed externally" message with the file name.
 
 ![The File changed externally message for cart.ts with a Reload button](/screenshots/files-changed-externally.png)
 
-In the browser version, if you save after the file changed on disk, Termul does not overwrite the other version. It shows "File changed externally" again with two buttons:
+In the browser version, if you save after the file changed on disk, Troupe does not overwrite the other version. It shows "File changed externally" again with two buttons:
 
 - **Reload** drops your changes and loads the version on disk.
 - **Overwrite** saves your version over the version on disk.
 
 In the desktop app, a save writes your version over the version on disk.
 
-**The file is deleted.** Termul closes its tab. If the file has unsaved changes, the tab stays open and Termul shows "File deleted on disk" with "(unsaved edits kept)".
+**The file is deleted.** Troupe closes its tab. If the file has unsaved changes, the tab stays open and Troupe shows "File deleted on disk" with "(unsaved edits kept)".
 
 ## Get back unsaved changes after a restart
 
-Termul remembers your open tabs and their unsaved changes. When you open the app again, or reload the page in the browser version, the tabs come back with your changes still unsaved.
+Troupe remembers your open tabs and their unsaved changes. When you open the app again, or reload the page in the browser version, the tabs come back with your changes still unsaved.
 
-If the file on disk changed after you made those changes, Termul cannot tell which version you want. It shows a banner above the editor: "An unsaved draft differs from the newer file on disk." The editor shows the version on disk and does not accept typing until you choose.
+If the file on disk changed after you made those changes, Troupe cannot tell which version you want. It shows a banner above the editor: "An unsaved draft differs from the newer file on disk." The editor shows the version on disk and does not accept typing until you choose.
 
 ![The banner above checkout.ts with the Keep my draft and Use disk version buttons](/screenshots/files-draft-conflict.png)
 

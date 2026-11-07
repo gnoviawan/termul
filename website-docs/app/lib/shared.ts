@@ -1,4 +1,4 @@
-export const appName = 'Termul Docs'
+export const appName = 'Troupe Docs'
 // Site path the docs are served under. Vite `base` and the React Router
 // `basename` are both derived from it.
 export const docsRoute = '/docs'
