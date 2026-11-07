@@ -1,4 +1,6 @@
-export type RuleCategory = 'display' | 'prose' | 'url' | 'repo'
+export const RULE_CATEGORIES = ['display', 'prose', 'url', 'repo'] as const
+
+export type RuleCategory = (typeof RULE_CATEGORIES)[number]
 
 export type RuleFlag = 'repoRenamed'
 

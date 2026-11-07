@@ -23,7 +23,14 @@ import {
   selectsPath,
   type TermulHit
 } from './engine'
-import { KEEP_PATHS, KEEP_PATTERNS, RULES } from './rules'
+import {
+  KEEP_PATHS,
+  KEEP_PATTERNS,
+  RULE_CATEGORIES,
+  RULES,
+  type Rule,
+  type RuleCategory
+} from './rules'
 
 const USAGE = `Usage: bun scripts/rebrand/rebrand.ts [mode] [options]
 
@@ -36,6 +43,8 @@ Options:
   --paths <glob>          Limit to files matching a path, directory or glob (repeatable)
   --report <path>         Write the dry-run report to a file instead of stdout
   --repo-renamed          Also rewrite github.com/gnoviawan/termul links
+  --skip-category <name>  Turn off every rule in a category: display, prose, url or repo
+                          (repeatable; dry run and apply only)
   --help                  Show this message`
 
 type Mode = 'dry-run' | 'apply' | 'check'
@@ -43,13 +52,19 @@ type Mode = 'dry-run' | 'apply' | 'check'
 export interface Cli {
   mode: Mode
   paths: string[]
+  skip: RuleCategory[]
   report?: string
   opts: Options
+}
+
+function isCategory(value: string): value is RuleCategory {
+  return (RULE_CATEGORIES as readonly string[]).includes(value)
 }
 
 export function parseArgs(argv: readonly string[]): Cli | { error: string } {
   const modes: Mode[] = []
   const paths: string[] = []
+  const skip = new Set<RuleCategory>()
   let report: string | undefined
   let repoRenamed = false
   for (let i = 0; i < argv.length; i++) {
@@ -58,12 +73,14 @@ export function parseArgs(argv: readonly string[]): Cli | { error: string } {
     else if (arg === '--apply') modes.push('apply')
     else if (arg === '--check') modes.push('check')
     else if (arg === '--repo-renamed') repoRenamed = true
-    else if (arg === '--paths' || arg === '--report') {
+    else if (arg === '--paths' || arg === '--report' || arg === '--skip-category') {
       const value = argv[i + 1]
       if (value === undefined || value.startsWith('--')) return { error: `${arg} needs a value` }
       i += 1
       if (arg === '--paths') paths.push(value)
-      else report = value
+      else if (arg === '--report') report = value
+      else if (isCategory(value)) skip.add(value)
+      else return { error: `unknown category: ${value} (pick ${RULE_CATEGORIES.join(', ')})` }
     } else return { error: arg === '--help' ? '' : `unknown argument: ${arg}` }
   }
   if (modes.length > 1) return { error: `pick one mode, got ${modes.join(' and ')}` }
@@ -73,7 +90,9 @@ export function parseArgs(argv: readonly string[]): Cli | { error: string } {
   }
   if (report !== undefined && mode !== 'dry-run')
     return { error: '--report only works with --dry-run' }
-  return { mode, paths, report, opts: { repoRenamed } }
+  if (skip.size > 0 && mode === 'check')
+    return { error: '--skip-category does not apply to --check' }
+  return { mode, paths, skip: [...skip], report, opts: { repoRenamed } }
 }
 
 type Loaded =
@@ -147,7 +166,7 @@ function bump(record: Record<string, number>, key: string, by = 1): void {
   record[key] = (record[key] ?? 0) + by
 }
 
-function scan(root: string, files: readonly string[], opts: Options): Scan {
+function scan(root: string, files: readonly string[], opts: Options, rules: readonly Rule[]): Scan {
   const result: Scan = {
     scanned: 0,
     binary: 0,
@@ -163,7 +182,7 @@ function scan(root: string, files: readonly string[], opts: Options): Scan {
     if (loaded.kind === 'binary') result.binary += 1
     if (loaded.kind !== 'text') continue
     result.scanned += 1
-    const { output, hits, kept } = rewrite(path, loaded.text, opts)
+    const { output, hits, kept } = rewrite(path, loaded.text, opts, rules)
     for (const [id, count] of Object.entries(kept)) bump(result.kept, id, count)
     if (hits.length > 0) result.touched.push({ path, hits })
     for (const hit of findTermul(path, output)) result.gaps.push({ path, hit })
@@ -191,8 +210,18 @@ function batchPathArgs(batch: Batch, touchedPerDir: Map<string, number>): string
   })
 }
 
-function applyCommand(batch: Batch, touchedPerDir: Map<string, number>, opts: Options): string {
-  const flags = opts.repoRenamed ? ' --repo-renamed' : ''
+function applyCommand(
+  batch: Batch,
+  touchedPerDir: Map<string, number>,
+  opts: Options,
+  skip: readonly RuleCategory[]
+): string {
+  const flags = [
+    ...(opts.repoRenamed ? ['--repo-renamed'] : []),
+    ...skip.map((category) => `--skip-category ${category}`)
+  ]
+    .map((flag) => ` ${flag}`)
+    .join('')
   const paths = batchPathArgs(batch, touchedPerDir)
     .map((arg) => `--paths ${shellQuote(arg)}`)
     .join(' ')
@@ -211,7 +240,7 @@ function sum(values: Iterable<number>): number {
   return total
 }
 
-function renderReport(result: Scan, opts: Options): string {
+function renderReport(result: Scan, opts: Options, skip: readonly RuleCategory[]): string {
   const allHits = result.touched.flatMap((file) =>
     file.hits.map((hit) => ({ ...hit, path: file.path }))
   )
@@ -222,11 +251,15 @@ function renderReport(result: Scan, opts: Options): string {
 
   const ruleRows = RULES.map((rule) => {
     const hits = allHits.filter((hit) => hit.ruleId === rule.id)
-    const enabled = !rule.requires || opts[rule.requires]
+    const state = skip.includes(rule.category)
+      ? 'off (skipped)'
+      : rule.requires && !opts[rule.requires]
+        ? `off (needs ${rule.requires})`
+        : 'on'
     return [
       `\`${rule.id}\``,
       rule.category,
-      enabled ? 'on' : `off (needs ${rule.requires})`,
+      state,
       hits.length,
       new Set(hits.map((hit) => hit.path)).size
     ]
@@ -245,6 +278,7 @@ function renderReport(result: Scan, opts: Options): string {
     '## Options',
     '',
     `- repoRenamed: ${opts.repoRenamed}`,
+    `- skipCategories: ${skip.length > 0 ? skip.join(', ') : 'none'}`,
     '',
     '## Totals',
     '',
@@ -303,7 +337,7 @@ function renderReport(result: Scan, opts: Options): string {
       `### ${batch.id} (${batch.area}, ${batch.files.length} files)`,
       '',
       '```sh',
-      applyCommand(batch, touchedPerDir, opts),
+      applyCommand(batch, touchedPerDir, opts, skip),
       '```',
       '',
       ...batch.files.map((file) => `- ${file}`)
@@ -350,13 +384,18 @@ function overwrite(fd: number, text: string): void {
   }
 }
 
-function runApply(root: string, files: readonly string[], opts: Options): void {
+function runApply(
+  root: string,
+  files: readonly string[],
+  opts: Options,
+  rules: readonly Rule[]
+): void {
   let changed = 0
   let replacements = 0
   for (const path of files) {
     const loaded = open(root, path, constants.O_RDWR)
     if (loaded.kind !== 'text') continue
-    const { output, hits } = rewrite(path, loaded.text, opts)
+    const { output, hits } = rewrite(path, loaded.text, opts, rules)
     if (output !== loaded.text) overwrite(loaded.fd, output)
     closeSync(loaded.fd)
     if (output === loaded.text) continue
@@ -393,13 +432,15 @@ function main(argv: readonly string[]): number {
   const files =
     cli.paths.length > 0 ? tracked.filter((path) => selectsPath(path, cli.paths)) : tracked
 
+  const rules = RULES.filter((rule) => !cli.skip.includes(rule.category))
+
   if (cli.mode === 'apply') {
-    runApply(root, files, cli.opts)
+    runApply(root, files, cli.opts, rules)
     return 0
   }
   if (cli.mode === 'check') return runCheck(root, files)
 
-  const report = renderReport(scan(root, files, cli.opts), cli.opts)
+  const report = renderReport(scan(root, files, cli.opts, rules), cli.opts, cli.skip)
   if (cli.report) {
     writeFileSync(cli.report, report)
     console.error(`Report written to ${cli.report}`)
