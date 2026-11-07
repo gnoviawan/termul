@@ -270,13 +270,6 @@ impl PtyManager {
                 .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
             let mut cmd = CommandBuilder::new(&shell_path);
-            // Interactive shells: login flag so profile-sourced PATH is applied (GH-275).
-            if options.program.is_none() {
-                if let Some(login_arg) = crate::pty::env_refresh::shell_wants_login_arg(&shell_path)
-                {
-                    cmd.arg(login_arg);
-                }
-            }
             // ADR-004.2: In agent mode, append the argv tail as discrete
             // arguments. portable-pty passes argv without a shell, so the prompt
             // is delivered verbatim with no shell interpolation. In shell mode
@@ -287,6 +280,12 @@ impl PtyManager {
             for (key, value) in &env {
                 cmd.env(key, value);
             }
+            let session_integration = crate::pty::session_protocol::inject::configure_launch(
+                &shell_path,
+                options.program.as_deref(),
+                &env,
+                &mut cmd,
+            );
             cmd.env("TERM", "xterm-256color");
             cmd.env("COLORTERM", "truecolor");
             cmd.cwd(&cwd);
@@ -309,6 +308,13 @@ impl PtyManager {
 
             let writer = Arc::new(AsyncMutex::new(Some(writer)));
             let session_gate = Arc::new(SessionGate::new(writer.clone()));
+            if let crate::pty::session_protocol::inject::InjectionPlan::Inject(injection) =
+                &session_integration
+            {
+                session_gate.expect_session(injection.session_id.clone(), injection.nonce.clone());
+                session_gate.set_completion_providers(injection.providers.clone());
+                log::debug!("[session-gate] Spawn integration identity and providers registered");
+            }
             let instance = Arc::new(TerminalInstance {
                 id: id.clone(),
                 project_id: options.project_id.clone(),
