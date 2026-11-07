@@ -82,6 +82,8 @@ type Loaded =
   | { kind: 'binary' }
   | { kind: 'skipped' }
 
+const SKIPPABLE_OPEN_ERRORS = new Set(['ENOENT', 'ELOOP', 'EISDIR', 'ENOTDIR', 'EMLINK'])
+
 // One no-follow descriptor serves the type check, the read and (for --apply) the
 // write, so a path swapped for a symlink mid-run is never followed out of the repo.
 function open(root: string, path: string, flags: number): Loaded {
@@ -90,9 +92,13 @@ function open(root: string, path: string, flags: number): Loaded {
   let fd: number
   try {
     fd = openSync(join(root, path), flags | (constants.O_NOFOLLOW ?? 0))
-  } catch {
+  } catch (error) {
     // git ls-files also lists deleted files, symlinks and submodule gitlinks.
-    return { kind: 'skipped' }
+    // Anything else (a permission error) must fail the run, not pass silently.
+    if (SKIPPABLE_OPEN_ERRORS.has((error as NodeJS.ErrnoException).code ?? '')) {
+      return { kind: 'skipped' }
+    }
+    throw error
   }
   if (!fstatSync(fd).isFile()) {
     closeSync(fd)
@@ -336,6 +342,14 @@ function renderReport(result: Scan, opts: Options): string {
   return out.join('\n')
 }
 
+function overwrite(fd: number, text: string): void {
+  const bytes = Buffer.from(text, 'utf8')
+  ftruncateSync(fd, 0)
+  for (let offset = 0; offset < bytes.length; ) {
+    offset += writeSync(fd, bytes, offset, bytes.length - offset, offset)
+  }
+}
+
 function runApply(root: string, files: readonly string[], opts: Options): void {
   let changed = 0
   let replacements = 0
@@ -343,10 +357,7 @@ function runApply(root: string, files: readonly string[], opts: Options): void {
     const loaded = open(root, path, constants.O_RDWR)
     if (loaded.kind !== 'text') continue
     const { output, hits } = rewrite(path, loaded.text, opts)
-    if (output !== loaded.text) {
-      ftruncateSync(loaded.fd, 0)
-      writeSync(loaded.fd, output, 0)
-    }
+    if (output !== loaded.text) overwrite(loaded.fd, output)
     closeSync(loaded.fd)
     if (output === loaded.text) continue
     changed += 1

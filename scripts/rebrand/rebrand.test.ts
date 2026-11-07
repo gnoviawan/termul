@@ -1,5 +1,13 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -85,6 +93,15 @@ describe('CLI against a git repo', () => {
     expect(readFileSync(join(outside, 'target.md'), 'utf8')).toBe('Termul outside\n')
     expect(read('big.dat')).toBe(lateNul)
     rmSync(outside, { recursive: true, force: true })
+  })
+
+  it.skipIf(process.getuid?.() === 0)('fails instead of skipping a file it cannot open', () => {
+    setup({ 'docs/a.md': 'Termul\n' })
+    chmodSync(join(repo, 'docs/a.md'), 0o444)
+    const result = run('--apply', '--paths', '**')
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('EACCES')
+    expect(read('docs/a.md')).toBe('Termul\n')
   })
 
   it('--check exits 1 while the word remains and 0 once applied', () => {

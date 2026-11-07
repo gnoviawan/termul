@@ -105,6 +105,12 @@ describe('URL rules', () => {
     expect(out('README.md', 'github.com/gnoviawan/termul.wiki', on)).toBe(
       'github.com/gnoviawan/termul.wiki'
     )
+    expect(out('README.md', 'https://example.com/github.com/gnoviawan/termul', on)).toBe(
+      'https://example.com/github.com/gnoviawan/termul'
+    )
+    expect(out('README.md', 'git@github.com:x and https://github.com/gnoviawan/termul', on)).toBe(
+      'git@github.com:x and https://github.com/gnoviawan/troupe'
+    )
   })
 })
 

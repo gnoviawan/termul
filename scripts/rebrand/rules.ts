@@ -88,7 +88,7 @@ export const RULES: readonly Rule[] = [
     id: 'repo-url',
     category: 'repo',
     description: 'GitHub repo links, only once the repository itself is renamed.',
-    pattern: /(?<![\w.-])github\.com\/gnoviawan\/termul(?![\w-]|\.(?!git\b)\w)/g,
+    pattern: /(?<![\w.-]|[^/]\/)github\.com\/gnoviawan\/termul(?![\w-]|\.(?!git\b)\w)/g,
     replacement: 'github.com/gnoviawan/troupe',
     include: ['**'],
     exclude: [],
