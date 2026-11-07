@@ -241,7 +241,7 @@ describe('ShellRail', () => {
       expect(props.onShortcutsOpenChange).toHaveBeenCalledWith(true)
     })
 
-    it('ends the Rail header with the one 28px toggle, after the centered Termul mark', () => {
+    it('ends the Rail header with the one 28px toggle, after the centered Troupe mark', () => {
       for (const tauri of [true, false]) {
         tauriRef.current = tauri
         const { unmount } = renderRail()
@@ -265,7 +265,7 @@ describe('ShellRail', () => {
       }
     })
 
-    it('keeps the Termul mark after the traffic-light clearance on macOS', () => {
+    it('keeps the Troupe mark after the traffic-light clearance on macOS', () => {
       tauriRef.current = true
       macRef.current = true
       try {
@@ -426,7 +426,7 @@ describe('ShellRail', () => {
       const names = within(nav)
         .getAllByRole('button')
         .map((button) => button.getAttribute('aria-label'))
-      // The Rail toggle shares the top slot with the Termul mark.
+      // The Rail toggle shares the top slot with the Troupe mark.
       expect(names).toEqual([
         'Expand or collapse projects',
         'Switch project (Alpha)',
@@ -520,7 +520,7 @@ describe('ShellRail', () => {
       }
     })
 
-    it('swaps the Termul mark for the toggle in one clipped slot on hover, focus and touch', () => {
+    it('swaps the Troupe mark for the toggle in one clipped slot on hover, focus and touch', () => {
       renderRail()
       const swap = screen.getByTestId('rail-brand-swap')
       expect(swap).toHaveClass('size-9', 'overflow-hidden', 'group/swap')

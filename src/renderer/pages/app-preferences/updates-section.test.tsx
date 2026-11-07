@@ -105,20 +105,20 @@ describe('UpdatesSection error copy', () => {
   it('reports a failed check as a check failure', () => {
     renderSection({ updateError: 'network down', updateErrorSource: 'check' })
 
-    expect(screen.getByText(/Termul could not check for updates\./)).toBeTruthy()
+    expect(screen.getByText(/Troupe could not check for updates\./)).toBeTruthy()
   })
 
   it('reports a failed download as a download failure, not a check failure', () => {
     renderSection({ updateError: 'signature mismatch', updateErrorSource: 'download' })
 
-    expect(screen.getByText(/Termul could not download the update\./)).toBeTruthy()
+    expect(screen.getByText(/Troupe could not download the update\./)).toBeTruthy()
     expect(screen.queryByText(/could not check for updates/)).toBeNull()
   })
 
   it('reports a failed install as an install failure, not a check failure', () => {
     renderSection({ updateError: 'install failed', updateErrorSource: 'install' })
 
-    expect(screen.getByText(/Termul could not install the update\./)).toBeTruthy()
+    expect(screen.getByText(/Troupe could not install the update\./)).toBeTruthy()
     expect(screen.queryByText(/could not check for updates/)).toBeNull()
   })
 })

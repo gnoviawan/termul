@@ -60,7 +60,7 @@ export function insertPillAtCaret(
 const TOOL_LOG_SOURCE = 'insert-composer-tool'
 
 /**
- * Insert a Termul tool pill at the caret. Returns `false` (and logs a
+ * Insert a Troupe tool pill at the caret. Returns `false` (and logs a
  * warning) when the editor is unavailable or the insert throws.
  */
 export function insertComposerTool(editor: Editor | null, id: TermulToolId): boolean {

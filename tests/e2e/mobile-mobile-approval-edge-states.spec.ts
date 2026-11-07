@@ -217,13 +217,13 @@ async function announceBarrier(
   await page.getByRole('textbox', { name: 'Search chats' }).fill(search.query)
   await expect(liveRegion(page)).toHaveText(search.count)
   await page.keyboard.press('Escape')
-  await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'Troupe', exact: true })).toBeHidden()
 }
 
 /** Tap the shell's ☰ and wait for the drawer to be on screen. */
 async function openDrawer(page: Page): Promise<Locator> {
   await page.getByRole('button', { name: 'Open menu' }).tap()
-  const drawer = page.getByRole('dialog', { name: 'Termul', exact: true })
+  const drawer = page.getByRole('dialog', { name: 'Troupe', exact: true })
   await expect(drawer).toBeVisible()
   return drawer
 }

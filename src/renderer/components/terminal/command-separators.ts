@@ -4,9 +4,9 @@ import type { IMarker, Terminal } from '@xterm/xterm'
  * Command Separator Decorator for Terminal Scrollback
  *
  * SCOPE:
- * Separators appear only for Termul's private prompt mark (OSC 133;A;termul)
+ * Separators appear only for Troupe's private prompt mark (OSC 133;A;termul)
  * when host spacing has injected a blank row above it:
- * - Termul's integrated zsh and bash shells emit `\033]133;A;termul\007`.
+ * - Troupe's integrated zsh and bash shells emit `\033]133;A;termul\007`.
  * - The host-side prompt spacer injects blank rows before and after the mark
  *   when a completed visible line preceded it.
  * - The renderer checks that the row directly above the mark anchor is whitespace-only,

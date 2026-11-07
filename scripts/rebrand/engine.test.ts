@@ -89,7 +89,7 @@ describe('rewrite', () => {
       { ruleId: 'site-url', line: 3 },
       { ruleId: 'prose-termul', line: 3 }
     ])
-    expect(result.kept).toEqual({ 'artifact-names': 2, 'mcp-name': 1 })
+    expect(result.kept).toEqual({ 'legacy-artifact-names': 2, 'mcp-name': 1 })
   })
 
   it('is idempotent', () => {

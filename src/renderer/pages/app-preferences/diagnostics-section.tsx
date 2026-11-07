@@ -73,7 +73,7 @@ export function DiagnosticsSection(): React.JSX.Element {
               />
               <ActionRow
                 label="Log folder"
-                description="Open the folder that holds the Termul logs."
+                description="Open the folder that holds the Troupe logs."
                 action="Show folder"
                 actionLabel="Show log folder"
                 icon={<FolderOpen size={13} />}

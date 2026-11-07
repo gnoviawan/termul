@@ -7,6 +7,8 @@ mod agentation;
 // Chat-authored automations: model, validation, schedules and store.
 // Tauri-free so the desktop and `termul-server` share it.
 pub mod automation;
+// TROUPE_* environment variables with the TERMUL_* names as a fallback.
+pub mod brand_env;
 mod browser_automation;
 mod browser_tab_manager;
 mod browser_tab_permissions;
@@ -1306,6 +1308,7 @@ pub fn run() {
             // Startup diagnostic banner (issue #244): version, OS/arch, build
             // channel, session id, and resolved log path on a single line.
             logging::log_startup_banner(&handle);
+            brand_env::flush_deprecations();
             for key in &engine_scrub.changed {
                 log::warn!("[perimeter] removed engine debug setting from the environment: {key}");
             }

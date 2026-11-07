@@ -4,7 +4,7 @@ use super::*;
 // `session/update`/`tool_call` notification) for this long, the turn is
 // considered wedged and is cancelled. The default is **unlimited** (`None` —
 // see `turn_idle_timeout`): a silent/wedged turn is NOT killed by default;
-// only an explicit `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS` env var or an App
+// only an explicit `TROUPE_ACP_TURN_IDLE_TIMEOUT_SECS` env var or an App
 // Preferences value imposes an idle bound. Reset on every inbound notification
 // via `DriverState::signal_idle`.
 //
@@ -14,21 +14,20 @@ use super::*;
 // operator/user to cancel (or to bound explicitly via the env var).
 // The default hard wall-clock cap for a single agent turn is **unlimited**
 // (`None` — see `resolved_turn_timeout`): no last-resort backstop is imposed
-// unless the operator sets `TERMUL_ACP_TURN_TIMEOUT_SECS` or the user picks a
+// unless the operator sets `TROUPE_ACP_TURN_TIMEOUT_SECS` or the user picks a
 // bounded value in App Preferences. The per-turn *idle* timeout
 // (`turn_idle_timeout`) is also unlimited by default, so neither a chatty
 // nor a silent agent is killed by default — the hard cap is an opt-in
 // diagnostic backstop. On either idle or hard timeout → cancel +
 // `CANCEL_GRACE` → an `agent_error` and a `timeout` terminator for the turn.
 
-/// `session/new` timeout. Precedence: `TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS`
+/// `session/new` timeout. Precedence: `TROUPE_ACP_SESSION_NEW_TIMEOUT_SECS`
 /// (env, operator/diagnostic; seconds, must be > 0) → in-process UI override
 /// ([`set_session_new_timeout_override`]) → [`SESSION_NEW_TIMEOUT`]. Useful
 /// when an agent needs longer to fetch its model list on a cold start; the
 /// default stays strict so a wedged agent still fails fast in normal use.
 pub(super) fn session_new_timeout() -> Duration {
-    std::env::var("TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS")
-        .ok()
+    crate::brand_env::value("ACP_SESSION_NEW_TIMEOUT_SECS")
         .and_then(|v| v.parse().ok())
         .filter(|secs: &u64| *secs > 0)
         .map(Duration::from_secs)
@@ -41,14 +40,13 @@ pub(super) fn session_new_timeout() -> Duration {
 }
 
 /// `session/load` / `session/resume` timeout. Precedence:
-/// `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS` (env, operator/diagnostic;
+/// `TROUPE_ACP_SESSION_REOPEN_TIMEOUT_SECS` (env, operator/diagnostic;
 /// seconds, must be > 0) → in-process UI override
 /// ([`set_session_reopen_timeout_override`]) → [`SESSION_REOPEN_TIMEOUT`]. A
 /// load replays the full conversation before responding, so very large
 /// histories may need a longer budget.
 pub(super) fn session_reopen_timeout() -> Duration {
-    std::env::var("TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS")
-        .ok()
+    crate::brand_env::value("ACP_SESSION_REOPEN_TIMEOUT_SECS")
         .and_then(|v| v.parse().ok())
         .filter(|secs: &u64| *secs > 0)
         .map(Duration::from_secs)
@@ -60,7 +58,7 @@ pub(super) fn session_reopen_timeout() -> Duration {
         .unwrap_or(SESSION_REOPEN_TIMEOUT)
 }
 
-/// Per-turn idle timeout. Precedence: `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS`
+/// Per-turn idle timeout. Precedence: `TROUPE_ACP_TURN_IDLE_TIMEOUT_SECS`
 /// (env, operator/diagnostic; seconds, must be > 0) → in-process UI override
 /// ([`set_turn_idle_timeout_override`]) → `None` (**unlimited** default). `None`
 /// means a silent/wedged turn is NOT killed by the idle timer — only completion,
@@ -68,8 +66,7 @@ pub(super) fn session_reopen_timeout() -> Duration {
 /// set, is the duration with no agent activity after which a turn is considered
 /// wedged.
 pub fn turn_idle_timeout() -> Option<Duration> {
-    std::env::var("TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS")
-        .ok()
+    crate::brand_env::value("ACP_TURN_IDLE_TIMEOUT_SECS")
         .and_then(|v| v.parse().ok())
         .filter(|secs: &u64| *secs > 0)
         .map(Duration::from_secs)
@@ -85,7 +82,7 @@ pub fn turn_idle_timeout() -> Option<Duration> {
 /// use the env var / default. Consulted by [`resolved_turn_timeout`] so a UI
 /// change takes effect on the next turn without a restart. Desktop-only: the
 /// standalone server has no settings surface and configures via
-/// `TERMUL_ACP_TURN_TIMEOUT_SECS` (the operator env var still wins — see the
+/// `TROUPE_ACP_TURN_TIMEOUT_SECS` (the operator env var still wins — see the
 /// precedence in [`resolved_turn_timeout`]).
 pub(super) static TURN_TIMEOUT_OVERRIDE: LazyLock<parking_lot::Mutex<Option<u64>>> =
     LazyLock::new(|| parking_lot::Mutex::new(None));
@@ -151,7 +148,7 @@ pub(super) fn session_reopen_timeout_override() -> Option<u64> {
     *SESSION_REOPEN_TIMEOUT_OVERRIDE.lock()
 }
 
-/// Hard wall-clock cap per turn. Precedence: `TERMUL_ACP_TURN_TIMEOUT_SECS`
+/// Hard wall-clock cap per turn. Precedence: `TROUPE_ACP_TURN_TIMEOUT_SECS`
 /// (env, operator/diagnostic; seconds, must be > 0) → in-process UI override
 /// ([`set_turn_timeout_override`]) → `None` (**unlimited** default). `None`
 /// means no hard backstop is imposed — the per-turn *idle* timeout
@@ -159,8 +156,7 @@ pub(super) fn session_reopen_timeout_override() -> Option<u64> {
 /// that stays active is not killed by default. An operator who wants a bounded
 /// hard cap sets the env var, or the user picks a value in App Preferences.
 pub fn resolved_turn_timeout() -> Option<Duration> {
-    std::env::var("TERMUL_ACP_TURN_TIMEOUT_SECS")
-        .ok()
+    crate::brand_env::value("ACP_TURN_TIMEOUT_SECS")
         .and_then(|v| v.parse().ok())
         .filter(|secs: &u64| *secs > 0)
         .map(Duration::from_secs)

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // Mobile shell drawer token/copy contract (story 12 QA F7/F12, retargeted at the
 // drawer-as-home revamp):
 //   - full-screen drawer: full width, safe-area padded
-//   - Claude-style borderless header: the Termul wordmark
+//   - Claude-style borderless header: the Troupe wordmark
 //   - one muted "Recents" heading over the merged chat list (open chats and
 //     history together), below the search
 //   - semantic tokens and size tokens only inside the drawer
@@ -133,7 +133,7 @@ describe('MobileShellDrawer token sweep', () => {
   it('drawer top row is the borderless project row, the title only naming the dialog', () => {
     const drawer = renderDrawer()
 
-    const title = screen.getByRole('heading', { level: 2, name: 'Termul' })
+    const title = screen.getByRole('heading', { level: 2, name: 'Troupe' })
     expect(title).toHaveClass('sr-only')
     expect(title.parentElement).toContainElement(screen.getByRole('button', { name: /Demo/ }))
     // The header, the section tabs and the search sit on the sheet without rules.
@@ -144,7 +144,7 @@ describe('MobileShellDrawer token sweep', () => {
     const drawer = renderDrawer()
 
     const headings = Array.from(drawer.querySelectorAll('h2')).map((el) => el.textContent)
-    expect(headings).toEqual(['Termul', 'Recents'])
+    expect(headings).toEqual(['Troupe', 'Recents'])
     const search = screen.getByRole('textbox', { name: 'Search chats' })
     const recents = screen.getByRole('heading', { level: 2, name: 'Recents' })
     expect(recents).toHaveClass('sr-only')

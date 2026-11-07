@@ -7,12 +7,12 @@ aggregates glyphs from several icon projects, each under its own license, so the
 licenses and attribution notices that apply to the bundled file are collected
 here.
 
-Changes made for Termul
+Changes made for Troupe
 -----------------------
 
 * Subset to the code points in the table below. Glyphs outside them were removed.
 * Glyphs from the Font Logos set (U+F300 to U+F384) were removed. Nerd Fonts
-  records that set as Unlicensed in its license-audit.md, so Termul does not
+  records that set as Unlicensed in its license-audit.md, so Troupe does not
   redistribute it.
 * U+EFCF and U+F385 were removed as well: no upstream glyph set claims either
   code point.
@@ -62,7 +62,7 @@ Creative Commons Attribution 4.0 notices
 
 Both sets below are licensed under Creative Commons Attribution 4.0
 International (CC BY 4.0), https://creativecommons.org/licenses/by/4.0/.
-Termul modified them by recoding the glyphs to the Nerd Fonts private use
+Troupe modified them by recoding the glyphs to the Nerd Fonts private use
 areas, subsetting them, and rescaling the outlines to Paper Mono's metrics.
 
   Codicons, Microsoft Corporation.

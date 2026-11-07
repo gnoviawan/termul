@@ -192,7 +192,7 @@ describe('McpCatalogBrowser', () => {
     expect(blocked.getByText('Deprecated')).toBeInTheDocument()
     expect(
       blocked.getByText(
-        'It sets NODE_OPTIONS, an environment variable Termul blocks because it can change what runs.'
+        'It sets NODE_OPTIONS, an environment variable Troupe blocks because it can change what runs.'
       )
     ).toBeInTheDocument()
 
@@ -276,7 +276,7 @@ describe('McpCatalogBrowser', () => {
       .mockResolvedValueOnce(page([installable]))
     render(<McpCatalogBrowser />)
 
-    expect(await screen.findByText("Termul couldn't load the MCP catalog.")).toBeInTheDocument()
+    expect(await screen.findByText("Troupe couldn't load the MCP catalog.")).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
 
     expect(await screen.findByText('1 server')).toBeInTheDocument()
@@ -343,7 +343,7 @@ describe('McpCatalogBrowser catalog source', () => {
     render(<McpCatalogBrowser />)
 
     expect(
-      await screen.findByText("Termul couldn't check where the catalog comes from.")
+      await screen.findByText("Troupe couldn't check where the catalog comes from.")
     ).toBeInTheDocument()
     expect(screen.queryByTestId('mcp-catalog-source-placeholder')).toBeNull()
   })

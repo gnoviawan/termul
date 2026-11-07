@@ -144,10 +144,10 @@
 @layer base {
   :root {
     /* Color tokens are OKLCH "L C H" components, read as oklch(var(--token)).
-       These match Termul dark `applyColorTheme('termul')` so first paint
+       These match Troupe dark `applyColorTheme('termul')` so first paint
        equals runtime. applyColorTheme overwrites them at startup. */
 
-    /* Termul dark first paint. Neutrals are the Linear void scale.
+    /* Troupe dark first paint. Neutrals are the Linear void scale.
        Brand fill stays the composer blue. applyColorTheme overwrites these. */
     --background: 0.139 0.003 246.3;
     --foreground: 0.922 0.001 286.4;
@@ -160,7 +160,7 @@
     --popover-foreground: 0.922 0.001 286.4;
 
     /* --primary is AA text on card. Solid buttons use --primary-fill (L ≤ 0.55;
-       Termul pins it to brand blue-11 #0d74ce, 4.77:1 with white). */
+       Troupe pins it to brand blue-11 #0d74ce, 4.77:1 with white). */
     --primary: 0.688 0.169 251.4;
     --primary-fill: 0.5558 0.1622 252.2;
     --primary-foreground: 1 0 0;
@@ -524,7 +524,7 @@
     color: oklch(var(--popover-foreground));
   }
   /* Neutral, solid highlight: native popups may drop alpha, and --accent
-     is maroon in Termul Light. --input is one step above popover in both. */
+     is maroon in Troupe Light. --input is one step above popover in both. */
   select option:checked,
   select option:hover {
     background-color: oklch(var(--input));
@@ -987,7 +987,7 @@
  * --rail-keycap-shadow. By default those are --rail-keycap (`muted` in dark
  * themes, a slightly darker step in light themes so it reads on the sidebar
  * mist) and --keycap-shadow. Off the Rail it takes --keycap-fill (`muted`)
- * and --keycap-shadow. Termul Light sets a white container with its
+ * and --keycap-shadow. Troupe Light sets a white container with its
  * s-default shadow for both. Inside a popover use a foreground wash
  * instead (see components/ui/menu-styles.ts): `muted` sits too close to
  * `popover` to read there.

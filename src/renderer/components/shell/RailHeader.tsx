@@ -6,7 +6,7 @@ import { useTopRowPlatform } from '@/components/shell/top-row-context'
 /**
  * Top row part of the expanded Rail, 48px tall: the 8px window gutter, then
  * the 40px row that lines up with the Side panel header. Left to right:
- * - macOS: the traffic-light clearance, then the Termul mark.
+ * - macOS: the traffic-light clearance, then the Troupe mark.
  * - Elsewhere: a 48px slot that centers the mark on the Rail icon column
  *   (x = 24).
  * Then drag space, then the 28px Rail toggle: the row's last control, just

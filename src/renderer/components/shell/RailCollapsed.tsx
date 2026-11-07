@@ -69,7 +69,7 @@ const TOGGLE_STATES = [
 ]
 
 /**
- * The Termul mark and the Rail toggle share one clipped 36px slot. At rest
+ * The Troupe mark and the Rail toggle share one clipped 36px slot. At rest
  * the mark shows and the toggle waits 8px to the left, faded and blurred.
  * While the pointer is over the Rail (`group/rail` on the nav) the two
  * cross-fade after an 80ms intent delay: the toggle comes in left to right

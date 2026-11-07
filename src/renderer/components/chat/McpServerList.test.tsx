@@ -110,7 +110,7 @@ describe('McpServerList rows (per-server enable/disable + status dot)', () => {
       />
     )
     fireEvent.click(screen.getAllByText(/show tools/i)[0])
-    const failedLine = screen.getByText(/Termul could not reach this server/i)
+    const failedLine = screen.getByText(/Troupe could not reach this server/i)
     expect(failedLine).toHaveAttribute('title', 'initialize failed: connection refused')
   })
 
@@ -124,8 +124,8 @@ describe('McpServerList rows (per-server enable/disable + status dot)', () => {
       />
     )
     fireEvent.click(screen.getAllByText(/show tools/i)[1])
-    const failedLine = screen.getByText(/Termul could not reach this server/i)
-    expect(failedLine).toHaveAttribute('title', 'Termul could not reach this server.')
+    const failedLine = screen.getByText(/Troupe could not reach this server/i)
+    expect(failedLine).toHaveAttribute('title', 'Troupe could not reach this server.')
   })
 })
 
@@ -195,7 +195,7 @@ describe('McpServerList (the + sheet Connectors view)', () => {
       />
     )
     fireEvent.click(screen.getAllByText(/show tools/i)[1])
-    expect(screen.getByText('Termul could not reach this server.')).toHaveAttribute(
+    expect(screen.getByText('Troupe could not reach this server.')).toHaveAttribute(
       'title',
       'connection refused'
     )

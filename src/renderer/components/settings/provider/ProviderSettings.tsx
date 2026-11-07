@@ -271,7 +271,7 @@ export function ProviderSettings(): React.JSX.Element {
               Keep work and personal apart
             </span>
             <span className="text-2xs leading-relaxed text-muted-foreground">
-              Add another Claude account and choose it per project. When one hits its limit, Termul
+              Add another Claude account and choose it per project. When one hits its limit, Troupe
               can continue on the other.
             </span>
           </div>

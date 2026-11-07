@@ -223,7 +223,7 @@ export function InstallRequiredBanner({
         <div className="text-xs font-medium text-foreground">Install required</div>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {entry.install?.kind === 'managed-npm'
-            ? `Termul will install the pinned ${entry.install.package} package in its host cache.`
+            ? `Troupe will install the pinned ${entry.install.package} package in its host cache.`
             : `${entry.agent.name} needs a local ACP binary before it can start chats.`}
         </p>
       </div>
@@ -304,7 +304,7 @@ export function ManualInstallBanner({
         <div className="text-xs font-medium text-foreground">Manual install</div>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {entry.unavailableReason ??
-            `Install ${entry.agent.name} from the vendor, then point Termul at the binary.`}
+            `Install ${entry.agent.name} from the vendor, then point Troupe at the binary.`}
         </p>
         {expectedCommand && (
           <p className="mt-1 font-mono text-2xs text-muted-foreground">

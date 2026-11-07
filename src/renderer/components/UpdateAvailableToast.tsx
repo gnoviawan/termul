@@ -153,7 +153,7 @@ export function showUpdateDownloadedToast(version: string): void {
     id: readyToastId(version),
     duration: 30000,
     classNames: UPDATE_TOAST_CLASS_NAMES,
-    description: `Version ${version} is downloaded. Termul restarts to install it, and running terminal sessions close.`,
+    description: `Version ${version} is downloaded. Troupe restarts to install it, and running terminal sessions close.`,
     action: {
       label: 'Install and restart',
       onClick: () => confirmInstallAndRestart(version)
@@ -169,7 +169,7 @@ function showDownloadProgressToast(version: string, progress: number, preparing:
   toast.loading(preparing ? `Preparing update ${version}...` : `Downloading update ${version}...`, {
     id: progressToastId(version),
     description: preparing
-      ? 'Backing up your Termul data before the download starts.'
+      ? 'Backing up your Troupe data before the download starts.'
       : `${progress.toFixed(0)}% complete`,
     duration: Infinity
   })

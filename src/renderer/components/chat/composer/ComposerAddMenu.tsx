@@ -41,7 +41,7 @@ function openConnectorSettings(): void {
 }
 
 /**
- * The desktop composer's `+`: attach, mention, slash commands, Termul's own
+ * The desktop composer's `+`: attach, mention, slash commands, Troupe's own
  * tools, and the project's connectors (MCP servers). The phone shell uses `ComposerAddSheet`.
  */
 export function ComposerAddMenu({
@@ -133,7 +133,7 @@ export function ComposerAddMenu({
         <DropdownMenuSub>
           <DropdownMenuSubTrigger disabled={disabled}>
             <Wrench size={14} aria-hidden="true" className={ICON} />
-            Termul tools
+            Troupe tools
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-64">
             <DropdownMenuLabel>Ask the agent to use</DropdownMenuLabel>

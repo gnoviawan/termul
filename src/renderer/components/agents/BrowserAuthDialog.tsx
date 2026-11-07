@@ -165,7 +165,7 @@ export function BrowserAuthDialog({
           <DialogTitle className="text-sm">{`Finish signing in to ${agentName}`}</DialogTitle>
           <DialogDescription>
             {autoOpen
-              ? 'Waiting for sign-in in your browser. If the page did not open, use Open or Copy below. Termul will continue when sign-in finishes.'
+              ? 'Waiting for sign-in in your browser. If the page did not open, use Open or Copy below. Troupe will continue when sign-in finishes.'
               : `${agentName} tried to open a sign-in page, but this machine cannot open a browser. Open the link on your own device and sign in, then paste the failed localhost address your browser lands on back here.`}
           </DialogDescription>
         </DialogHeader>

@@ -2,7 +2,7 @@
  * APP BOOTSTRAP ENTRY POINT
  * =========================
  *
- * This is the generic renderer entry point for Termul Manager.
+ * This is the generic renderer entry point for Troupe.
  * The desktop runtime is Tauri-first, while this file remains useful for
  * browser-based development, preview, the web client (`build:web`), and tests.
  *

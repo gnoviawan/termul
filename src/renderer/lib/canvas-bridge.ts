@@ -1,6 +1,6 @@
 /**
  * The host side of figcraft's control protocol over `postMessage` (spine
- * AD-25): the only channel between Termul and the embedded editor.
+ * AD-25): the only channel between Troupe and the embedded editor.
  *
  * Wire shape (as built in the fork, `apps/figcraft-web/src/bridge.rs`):
  * request `{id, method, params, mountSeq}` → reply `{id, ok, result | error:

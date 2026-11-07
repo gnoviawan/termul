@@ -10,7 +10,7 @@ function saveError(reason: unknown): Error {
     reason === 'Could not verify Factory key in OS keychain'
   ) {
     return new Error(
-      'A persistent OS secret store is unavailable. Set up macOS Keychain, Windows Credential Manager, or Linux Secret Service on the Termul host and try again.'
+      'A persistent OS secret store is unavailable. Set up macOS Keychain, Windows Credential Manager, or Linux Secret Service on the Troupe host and try again.'
     )
   }
   // No arbitrary agent or backend text can be displayed: it might echo a key.
@@ -52,11 +52,11 @@ export const factoryKeyApi = {
       window.location.hostname !== '127.0.0.1' &&
       window.location.hostname !== '[::1]'
     ) {
-      throw new Error('Connect to Termul over HTTPS to send a Factory API key.')
+      throw new Error('Connect to Troupe over HTTPS to send a Factory API key.')
     }
     const headers = authHeader()
     if (!headers?.Authorization) {
-      throw new Error('Sign in to the Termul server before entering an API key.')
+      throw new Error('Sign in to the Troupe server before entering an API key.')
     }
     const response = await fetch(`${window.location.origin}/acp/factory-key`, {
       method: 'POST',
@@ -65,7 +65,7 @@ export const factoryKeyApi = {
     })
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
-        throw new Error('Sign in to the Termul server before entering an API key.')
+        throw new Error('Sign in to the Troupe server before entering an API key.')
       }
       const body = (await response.json().catch(() => null)) as { error?: string } | null
       throw saveError(body?.error)

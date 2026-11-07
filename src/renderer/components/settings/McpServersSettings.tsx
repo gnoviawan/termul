@@ -31,7 +31,7 @@ import { useProjectStore } from '@/stores/project-store'
 
 export function oauthFailureMessage(error: unknown): string {
   if (error instanceof McpOAuthError && error.code === MCP_UNSAFE_URL) {
-    return "This server's sign-in link isn't a secure https link, so Termul didn't open it."
+    return "This server's sign-in link isn't a secure https link, so Troupe didn't open it."
   }
   return 'OAuth flow failed. Check your browser for the authorization page.'
 }
@@ -130,7 +130,7 @@ export function McpServersSettings(): React.JSX.Element {
         footnote={
           <>
             Agents can also advertise experimental MCP-over-ACP (<code>mcpCapabilities.acp</code>).
-            Termul does not read it yet.
+            Troupe does not read it yet.
           </>
         }
       >
@@ -326,7 +326,7 @@ export function McpServersSettings(): React.JSX.Element {
                           </Button>
                         }
                       >
-                        Termul could not reach this server. Check the command, URL and environment
+                        Troupe could not reach this server. Check the command, URL and environment
                         values, then try again.
                         {mcpProbeError[server.id] ? (
                           <span className="mt-1 block break-words font-mono text-muted-foreground">

@@ -312,16 +312,16 @@ impl OnboardAnswers {
 
         let expose = BindMode::parse(&self.host) == Some(BindMode::All);
         if expose && self.allow_remote_writes {
-            lines.push("TERMUL_SERVER_ALLOW_REMOTE_WRITES=true".into());
+            lines.push("TROUPE_SERVER_ALLOW_REMOTE_WRITES=true".into());
         }
         if let Some(channel) = self.update_channel {
-            lines.push("TERMUL_SERVER_UPDATE_ENABLED=true".into());
+            lines.push("TROUPE_SERVER_UPDATE_ENABLED=true".into());
             lines.push(format!(
-                "TERMUL_SERVER_UPDATE_CHANNEL={}",
+                "TROUPE_SERVER_UPDATE_CHANNEL={}",
                 channel_name(channel)
             ));
             lines.push(format!(
-                "TERMUL_SERVER_UPDATE_INTERVAL_SECS={}",
+                "TROUPE_SERVER_UPDATE_INTERVAL_SECS={}",
                 self.update_interval_secs
             ));
         }
@@ -711,7 +711,7 @@ fn write_access_info<W: Write>(
     if let Some(channel) = update_channel {
         writeln!(
             stdout,
-            "Updates: {} channel (TERMUL_SERVER_UPDATE_ENABLED + _CHANNEL + _INTERVAL_SECS)",
+            "Updates: {} channel (TROUPE_SERVER_UPDATE_ENABLED + _CHANNEL + _INTERVAL_SECS)",
             channel_name(channel)
         )
         .ok();

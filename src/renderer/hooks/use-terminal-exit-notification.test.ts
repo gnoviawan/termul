@@ -112,13 +112,13 @@ describe('terminal exit notification logic', () => {
     )
   })
 
-  it('falls back to Termul when project not found', () => {
+  it('falls back to Troupe when project not found', () => {
     resetProjectStore()
 
     const { emitExit } = renderExitHook()
     emitExit('pty-1', 0)
 
-    expect(sendDesktopNotification).toHaveBeenCalledWith('Termul', 'Build Server — DONE')
+    expect(sendDesktopNotification).toHaveBeenCalledWith('Troupe', 'Build Server — DONE')
   })
 
   it('stays silent for an SSH session terminal (the SSH workspace shows its own end state)', () => {

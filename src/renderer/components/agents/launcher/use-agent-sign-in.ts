@@ -83,7 +83,7 @@ export function useAgentSignIn({
 
   // Run the agent-advertised authenticate for a chosen method, then re-prepare
   // so the session is created now that the provider login is complete. The
-  // provider owns the login UX (often opening its own browser); Termul never
+  // provider owns the login UX (often opening its own browser); Troupe never
   // invents a redirect URL or stores credentials. Mirrors Zed's
   // ThreadState::Unauthenticated → authenticate → reset flow.
   const runAuthenticate = useCallback(
