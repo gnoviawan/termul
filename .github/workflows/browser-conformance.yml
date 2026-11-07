@@ -32,9 +32,6 @@ jobs:
         include:
           - name: Windows
             os: windows-latest
-          - name: Windows line-tables
-            os: windows-latest
-            debug: line-tables-only
           - name: macOS
             os: macos-15
           - name: Linux
@@ -61,10 +58,17 @@ jobs:
             patchelf \
             xvfb
 
-      - name: Debuginfo level (experiment)
-        if: matrix.debug
-        shell: bash
-        run: echo "CARGO_PROFILE_DEV_DEBUG=${{ matrix.debug }}" >> "$GITHUB_ENV"
+      # The runner starts with 16 GB of RAM and a 3 GB pagefile that Windows
+      # grows on demand. Building the termul-manager test targets in parallel
+      # needs more commit than that, faster than the pagefile grows, and rustc
+      # then fails with "The paging file is too small" (os error 1455).
+      - name: Enlarge the pagefile
+        if: runner.os == 'Windows'
+        uses: al-cheb/configure-pagefile-action@9b6da52fb72a3c6147c1aad2df22d8d905681adc # v1.5
+        with:
+          minimum-size: 16GB
+          maximum-size: 24GB
+          disk-root: "D:"
 
       - name: Sample memory (diagnostic)
         if: runner.os == 'Windows'
