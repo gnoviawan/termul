@@ -53,9 +53,9 @@ using the same state directory as the server process if it was configured with
 `--state-dir`:
 
 ```sh
-termul-server claude auth status
-termul-server claude auth login
-termul-server claude install
+troupe-server claude auth status
+troupe-server claude auth login
+troupe-server claude install
 ```
 
 The API-key mode is optional. On bash or zsh, provide the key through a hidden
@@ -63,16 +63,16 @@ prompt and pipe it to Termul so it is not echoed or placed in command history:
 
 ```sh
 read -s -r -p "Anthropic API key: " CLAUDE_API_KEY
-printf '%s' "$CLAUDE_API_KEY" | termul-server claude api-key set
+printf '%s' "$CLAUDE_API_KEY" | troupe-server claude api-key set
 unset CLAUDE_API_KEY
-termul-server claude auth mode api-key
+troupe-server claude auth mode api-key
 ```
 
 To return to Claude Code login or remove the saved key:
 
 ```sh
-termul-server claude auth mode claude-code
-termul-server claude api-key delete
+troupe-server claude auth mode claude-code
+troupe-server claude api-key delete
 ```
 
 For an explicit state directory, pass `--state-dir PATH` after `claude`.
@@ -107,14 +107,14 @@ stay above a handoff divider.
 Headless hosts manage Accounts with:
 
 ```sh
-termul-server claude account list
-termul-server claude account add "Work"
-termul-server claude account login <id>
-termul-server claude account rename <id> "Office"
-termul-server claude account default <id>
-termul-server claude account project <project-id> <id>
-termul-server claude account project <project-id> default
-termul-server claude account remove <id>
+troupe-server claude account list
+troupe-server claude account add "Work"
+troupe-server claude account login <id>
+troupe-server claude account rename <id> "Office"
+troupe-server claude account default <id>
+troupe-server claude account project <project-id> <id>
+troupe-server claude account project <project-id> default
+troupe-server claude account remove <id>
 ```
 
 ### Account usage
@@ -203,7 +203,7 @@ keeps serving its open chats and running work until the idle reaper stops it.
 - **API-key mode selected but no key is saved:** run the headless
   `api-key set` command.
 - **OS keychain unavailable:** `claude-code` mode still launches and
-  `termul-server claude auth status` still reports (keychain-derived fields
+  `troupe-server claude auth status` still reports (keychain-derived fields
   show as unavailable). API-key flows stay fail-closed: `api-key set`,
   `api-key delete`, and launching in `api-key` mode all require a working
   keychain.

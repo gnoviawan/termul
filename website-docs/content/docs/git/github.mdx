@@ -54,7 +54,7 @@ Select an item to open it in a tab in the main area. The top of the tab shows th
 
 Select **Labels** or **Assignees** on an item to pick them from a list. Your choice applies when you select **Done**. To make a new label, type its name in the label list and select **Create label**. The list shows the labels with their GitHub colors.
 
-On a `termul-server` that is read-only for remote clients, you can't change labels, assignees or the state of an item.
+On a `troupe-server` that is read-only for remote clients, you can't change labels, assignees or the state of an item.
 
 The tab stays open when you restart Termul, like other tabs.
 
@@ -63,7 +63,7 @@ The tab stays open when you restart Termul, like other tabs.
 - To comment on an issue or pull request, type in the **Leave a comment (Markdown)** box at the bottom of **Conversation**. On a phone the box stays at the bottom of the screen, above the keyboard and select **Comment**. You can also press Ctrl+Enter (Cmd+Enter on macOS).
 - To answer a review thread, select **Reply** under the thread, type your reply, and select **Reply** again.
 
-The comment is posted on GitHub with your `gh` login, and the tab shows it as GitHub saved it. If GitHub refuses the comment, the error appears under the box and your text stays there so you can try again. On a `termul-server` that is read-only for remote clients, the comment and reply boxes are off.
+The comment is posted on GitHub with your `gh` login, and the tab shows it as GitHub saved it. If GitHub refuses the comment, the error appears under the box and your text stays there so you can try again. On a `troupe-server` that is read-only for remote clients, the comment and reply boxes are off.
 
 ## Merge a pull request
 
@@ -72,7 +72,7 @@ The **Merge** section of a pull request has a merge method menu with **Merge com
 - The merge button is on when GitHub says the pull request can merge now. Termul asks you to confirm before it merges, and the merge happens on GitHub.
 - When the pull request can't merge yet, for example because checks are still running, select **Enable auto-merge**. GitHub then merges it when its requirements pass. Select **Disable auto-merge** to turn it off.
 
-When you connect to a `termul-server` that is read-only for remote clients, the merge controls are off and show **This server is read-only for remote clients.**
+When you connect to a `troupe-server` that is read-only for remote clients, the merge controls are off and show **This server is read-only for remote clients.**
 
 ## Hand an issue or pull request to an agent
 
@@ -94,4 +94,4 @@ For a pull request:
 
 Selecting **Ask** or **Review** again reopens the same chat. The **Linked chats** list on the item shows every chat started from it; select one to open it.
 
-Buttons that create a worktree are off when the project isn't a Git repository, and when you connect to a `termul-server` that is read-only for remote clients.
+Buttons that create a worktree are off when the project isn't a Git repository, and when you connect to a `troupe-server` that is read-only for remote clients.
