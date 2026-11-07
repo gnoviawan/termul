@@ -1,4 +1,4 @@
-//! The automation authoring tools of the host `termul` MCP server: what the
+//! The automation authoring tools of the host `troupe` MCP server: what the
 //! child advertises and forwards, and the guide the authoring agent reads.
 //! The parent answers every call (`parent/automation.rs`) through the host's
 //! `AutomationService`, scoped to the calling session's project.
