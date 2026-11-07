@@ -182,6 +182,14 @@ export const KEEP_PATTERNS: readonly KeepPattern[] = [
     pattern: /\bTermul Symbols\b/g
   },
   {
+    id: 'rename-notice',
+    reason:
+      'The one-time notice tells people who update that the app was renamed; it has to name the old product.',
+    owner: 'keep forever',
+    pattern: /\bTermul is now Troupe\b/g,
+    include: ['src/renderer/lib/rename-notice.ts', 'src/renderer/hooks/use-rename-notice.test.tsx']
+  },
+  {
     id: 'windows-state-dir',
     reason:
       'src-tauri/src/web/config.rs stores termul-server state at %LOCALAPPDATA%/Termul via base.join("Termul"); renaming loses Windows server state (Tier B).',
