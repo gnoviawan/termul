@@ -124,7 +124,7 @@ pub async fn dirty_changed(
         .await
 }
 
-/// Termul's watcher saw the document change, or (`reload_failed`) the
+/// Troupe's watcher saw the document change, or (`reload_failed`) the
 /// renderer could not load the bytes the last report handed it.
 pub async fn disk_changed(
     mounts: &CanvasPersistence,

@@ -226,7 +226,7 @@ pub(crate) const LINUX_PACKAGE_RG_DIR: &str = "termul-manager";
 /// Sidecar locations, first match wins. The bundled name beside the running
 /// executable comes before the triple-named dev file so a packaged app does
 /// not fall through to `rg` on `PATH`. The Linux package lib dir comes first
-/// so an installed Termul keeps its own rg even when the distro one sits next
+/// so an installed Troupe keeps its own rg even when the distro one sits next
 /// to it in `/usr/bin`.
 fn rg_sidecar_candidates(cwd: Option<&Path>, exe_dir: Option<&Path>) -> Vec<PathBuf> {
     let bundled = rg_bundled_file_name();

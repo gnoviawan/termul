@@ -303,7 +303,7 @@ async fn build_web_auth_url(
         .await
         .map_err(|e| mcp_oauth::McpOAuthError::DiscoveryFailed(e.to_string()))?;
     manager.set_metadata(resolution.metadata);
-    let request = AuthorizationRequest::new(redirect_uri).with_client_name("Termul");
+    let request = AuthorizationRequest::new(redirect_uri).with_client_name("Troupe");
     let session = AuthorizationSession::new(manager, request)
         .await
         .map_err(|(_manager, e)| mcp_oauth::McpOAuthError::RegistrationFailed(e.to_string()))?;

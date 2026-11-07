@@ -134,7 +134,7 @@ fn combine_prefers_any_match() {
     use FileVerdict::*;
     assert_eq!(combine(Match, NotFound), HostKeyStatus::Trusted);
     assert_eq!(combine(NotFound, Match), HostKeyStatus::Trusted);
-    // Re-trusted with system ssh, or replaced in Termul: still trusted.
+    // Re-trusted with system ssh, or replaced in Troupe: still trusted.
     assert_eq!(combine(Mismatch, Match), HostKeyStatus::Trusted);
     assert_eq!(combine(Match, Mismatch), HostKeyStatus::Trusted);
     assert_eq!(combine(Mismatch, NotFound), HostKeyStatus::Changed);

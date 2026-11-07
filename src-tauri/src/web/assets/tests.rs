@@ -207,7 +207,7 @@ async fn serve_embedded_manifest_has_webmanifest_mime() {
     // Sanity: the embedded manifest parses as JSON and names the app.
     let json: serde_json::Value =
         serde_json::from_slice(&body).expect("manifest.webmanifest should be valid JSON");
-    assert_eq!(json["name"], "Termul");
+    assert_eq!(json["name"], "Troupe");
 }
 
 /// `embedded_response` cache policy: `assets/` → immutable, every other

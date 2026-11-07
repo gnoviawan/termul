@@ -439,7 +439,7 @@ fn only_clean_termul_chat_worktrees_are_accepted() {
     );
     assert_eq!(
         code(&other).to_string(),
-        "The worktree is not on a chat branch (my-feature), so Termul will not reset it"
+        "The worktree is not on a chat branch (my-feature), so Troupe will not reset it"
     );
 
     std::fs::write(repo.worktree.join("a.txt"), "edited").unwrap();

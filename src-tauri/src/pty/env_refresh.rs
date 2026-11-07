@@ -1,6 +1,6 @@
 //! Refresh `Path` / `PATH` from OS sources before PTY spawn.
 //!
-//! Termul's GUI process keeps a snapshot of the environment from launch time.
+//! Troupe's GUI process keeps a snapshot of the environment from launch time.
 //! Global installs and registry updates are invisible until we re-read PATH here.
 
 use std::collections::HashMap;

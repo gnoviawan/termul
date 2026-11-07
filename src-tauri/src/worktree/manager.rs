@@ -369,7 +369,7 @@ impl WorktreeManager {
     }
 
     /// Whether `path` lies under a `.termul/worktrees` directory (a
-    /// Termul-managed worktree). Compares path components, so it works with
+    /// Troupe-managed worktree). Compares path components, so it works with
     /// Windows backslashes too.
     pub fn is_managed_path(path: &str) -> bool {
         std::path::Path::new(path)
@@ -379,7 +379,7 @@ impl WorktreeManager {
             .any(|w| w[0].as_os_str() == ".termul" && w[1].as_os_str() == "worktrees")
     }
 
-    /// Remove all Termul-managed worktrees for a project.
+    /// Remove all Troupe-managed worktrees for a project.
     /// Used during project cascade delete. Reports per-worktree success/failure.
     pub fn remove_all_managed(
         project_path: &str,
@@ -395,12 +395,12 @@ impl WorktreeManager {
             let path = wt["path"].as_str().unwrap_or("").to_string();
             let _name = wt["name"].as_str().unwrap_or("unknown").to_string();
 
-            // Only remove Termul-managed worktrees
+            // Only remove Troupe-managed worktrees
             if !Self::is_managed_path(&path) {
                 results.push(RemoveResult {
                     worktree_path: path.clone(),
                     success: true,
-                    error: Some("Skipped: not a Termul-managed worktree".to_string()),
+                    error: Some("Skipped: not a Troupe-managed worktree".to_string()),
                 });
                 continue;
             }

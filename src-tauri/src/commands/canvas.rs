@@ -238,8 +238,8 @@ fn log_write_outcome(project_id: &str, outcome: &WriteOutcome) {
     }
 }
 
-/// `canvas_disk_changed { projectId, mountSeq, reloadFailed? }` — Termul's
-/// file watcher saw the mounted document change: `unchanged` (Termul's own
+/// `canvas_disk_changed { projectId, mountSeq, reloadFailed? }` — Troupe's
+/// file watcher saw the mounted document change: `unchanged` (Troupe's own
 /// write), `reload` with the bytes for a clean editor, or `conflict`
 /// (AD-27). `reloadFailed`: the editor did not load the bytes a `reload`
 /// handed it, which makes the change a `conflict`.
@@ -268,7 +268,7 @@ pub(crate) fn log_disk_outcome(project_id: &str, outcome: &DiskOutcome) {
     match outcome {
         DiskOutcome::Unchanged { .. } => {}
         DiskOutcome::Reload { .. } => {
-            log::info!("[canvas] reloaded from disk project_id={project_id}: changed outside Termul");
+            log::info!("[canvas] reloaded from disk project_id={project_id}: changed outside Troupe");
         }
         DiskOutcome::Conflict { view } => log::warn!(
             "[canvas] conflict project_id={project_id}: changed on disk with unsaved edits deleted={}",

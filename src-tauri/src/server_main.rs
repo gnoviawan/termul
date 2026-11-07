@@ -116,7 +116,7 @@ fn main() -> ExitCode {
     // AD-14: one host per durable path. Lock the state dir and every store
     // path (sessions, projects, workspace manifests, acp catalog, store file)
     // BEFORE anything opens or writes them — including the web-auth token
-    // file below. A held lock means another Termul host (desktop app or
+    // file below. A held lock means another Troupe host (desktop app or
     // termul-server) owns the path: refuse to start, never share it. The
     // locks live until `main` returns.
     let data_paths = StandalonePaths::resolve(&cfg);
