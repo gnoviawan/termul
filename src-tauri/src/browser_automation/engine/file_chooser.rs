@@ -15,6 +15,11 @@ use std::path::PathBuf;
 
 use tokio::sync::oneshot;
 
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+use super::string_eval::{self, CallResult};
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+use super::{EngineError, EngineErrorKind};
+
 struct Staged {
     files: Vec<PathBuf>,
     chosen: oneshot::Sender<()>,
@@ -48,6 +53,35 @@ pub fn release_tab(tab: &str) {
     STAGED.with(|staged| staged.borrow_mut().remove(tab));
 }
 
+/// Whether an answered chooser's files reached the page: the input's
+/// `input` or `change` fired after they were set (`heard`), or the input
+/// holds at least `want` files (`count`, from the `input_file_count`
+/// helper). A page may clear the input, or replace it, in its handler, so
+/// what was heard wins. Fails when `count` says the path names no file
+/// input and nothing was heard.
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+fn upload_landed(count: &serde_json::Value, want: usize, heard: bool) -> Result<bool, EngineError> {
+    if heard {
+        return Ok(true);
+    }
+    match count.as_i64() {
+        Some(n) if n >= 0 => Ok(usize::try_from(n).is_ok_and(|n| n >= want)),
+        _ => Err(EngineError::new(EngineErrorKind::PageException)),
+    }
+}
+
+/// Whether the `watch_input_files` call has answered that the input
+/// changed. False while it still watches, and when it ran out or failed.
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+fn heard_change(watch: &mut oneshot::Receiver<CallResult>) -> bool {
+    watch.try_recv().is_ok_and(|result| {
+        matches!(
+            string_eval::parse(result),
+            Ok(serde_json::Value::Bool(true))
+        )
+    })
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub use ui::set_input_files;
 
@@ -59,9 +93,9 @@ mod ui {
     use tauri::webview::PlatformWebview;
     use tokio::sync::oneshot;
 
-    use super::{release_tab, stage};
+    use super::{heard_change, release_tab, stage, upload_landed};
     use crate::browser_automation::budgets::{FILE_CHOOSER, UPLOAD_SETTLE};
-    use crate::browser_automation::engine::string_eval::{self, Completion};
+    use crate::browser_automation::engine::string_eval::{self, CallResult, Completion};
     use crate::browser_automation::engine::{assets, EngineError, EngineErrorKind};
     use crate::browser_tab_manager::BrowserTabManager;
 
@@ -81,20 +115,26 @@ mod ui {
         let script = assets::open_file_chooser(path);
         let body = string_eval::call_body(&script);
         let params = string_eval::params_json(&script);
+        let watch = assets::watch_input_files(path, FILE_CHOOSER.saturating_add(UPLOAD_SETTLE));
+        let watch_body = string_eval::call_body(&watch);
+        let watch_params = string_eval::params_json(&watch);
+        let (watch_tx, watch_rx) = oneshot::channel();
         let (chosen_tx, chosen_rx) = oneshot::channel();
         let label = tab.to_string();
         let want = files.len();
         let files = files.to_vec();
         // Staged in the same UI-thread job that opens the chooser, so the
-        // hook can never see the chooser before the files.
+        // hook can never see the chooser before the files. The watch is
+        // issued first in that job, so it listens before the files are set.
         let opened = string_eval::call(tabs, tab, move |platform, done| {
+            eval(platform, &watch_body, &watch_params, watch_tx);
             stage(&label, files, chosen_tx);
             eval(platform, &body, &params, done);
         })
         .await;
         let outcome = match opened {
             Ok(Value::Bool(true)) => match tokio::time::timeout(FILE_CHOOSER, chosen_rx).await {
-                Ok(Ok(())) => return wait_for_files(tabs, tab, path, want, eval).await,
+                Ok(Ok(())) => return wait_for_files(tabs, tab, path, want, watch_rx, eval).await,
                 Ok(Err(_)) => EngineError::new(EngineErrorKind::NoReply),
                 Err(_) => EngineError::new(EngineErrorKind::Timeout),
             },
@@ -111,13 +151,15 @@ mod ui {
 
     /// The chooser hook answered, but WebKit may fill the input (and fire
     /// its `change`) a moment later: WKWebView on macOS 15 does. Report the
-    /// upload only once the input holds the files, so the agent's next step
-    /// sees them.
+    /// upload only once the input holds the files or fired `input` or
+    /// `change` (`watch`), so the agent's next step sees them even when the
+    /// page cleared the input in its handler.
     async fn wait_for_files<F>(
         tabs: &BrowserTabManager,
         tab: &str,
         path: &str,
         want: usize,
+        mut watch: oneshot::Receiver<CallResult>,
         eval: F,
     ) -> Result<(), EngineError>
     where
@@ -133,14 +175,19 @@ mod ui {
                 eval(platform, &body, &params, done)
             })
             .await?;
-            match count.as_i64() {
-                Some(n) if n >= 0 && n as usize >= want => return Ok(()),
-                Some(n) if n >= 0 => {}
-                _ => return Err(EngineError::new(EngineErrorKind::PageException)),
+            // A watch answers once, so a change heard ends the wait here.
+            let heard = heard_change(&mut watch);
+            if upload_landed(&count, want, heard)? {
+                if heard {
+                    log::debug!(
+                        "[browser-tab] upload landed: the file input fired input or change"
+                    );
+                }
+                return Ok(());
             }
             if tokio::time::Instant::now() >= deadline {
                 log::warn!(
-                    "[browser-tab] upload chooser answered but the file input never held the files"
+                    "[browser-tab] upload chooser answered but the file input never held the files or changed"
                 );
                 return Err(EngineError::new(EngineErrorKind::Timeout));
             }

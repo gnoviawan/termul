@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use serde_json::json;
 use tokio::sync::oneshot;
 
 use super::*;
@@ -46,4 +47,56 @@ fn a_new_staging_replaces_the_earlier_one() {
         Some(vec![PathBuf::from("/staging/new.txt")])
     );
     assert_eq!(second_rx.try_recv(), Ok(()));
+}
+
+#[test]
+fn an_upload_lands_once_the_input_holds_the_files() {
+    assert_eq!(upload_landed(&json!(1), 1, false), Ok(true));
+    assert_eq!(
+        upload_landed(&json!(0), 1, false),
+        Ok(false),
+        "not filled yet"
+    );
+}
+
+#[test]
+fn an_upload_the_page_cleared_in_its_change_handler_still_landed() {
+    assert_eq!(upload_landed(&json!(0), 1, true), Ok(true));
+}
+
+#[test]
+fn an_upload_lands_when_the_page_replaced_the_input_after_its_change() {
+    assert_eq!(upload_landed(&json!(-1), 1, true), Ok(true));
+}
+
+#[test]
+fn a_path_that_names_no_file_input_and_heard_nothing_fails() {
+    assert_eq!(
+        upload_landed(&json!(-1), 1, false).map_err(|e| e.kind),
+        Err(EngineErrorKind::PageException)
+    );
+    assert_eq!(
+        upload_landed(&json!(null), 1, false).map_err(|e| e.kind),
+        Err(EngineErrorKind::PageException)
+    );
+}
+
+#[test]
+fn only_a_watch_that_saw_the_input_change_counts() {
+    let (tx, mut rx) = oneshot::channel();
+    assert!(!heard_change(&mut rx), "still watching");
+    tx.send(Ok("true".to_string())).unwrap();
+    assert!(heard_change(&mut rx));
+
+    let (tx, mut rx) = oneshot::channel();
+    tx.send(Ok("false".to_string())).unwrap();
+    assert!(!heard_change(&mut rx), "the watch ran out");
+
+    let (tx, mut rx) = oneshot::channel();
+    tx.send(Err(EngineErrorKind::PageException)).unwrap();
+    assert!(!heard_change(&mut rx), "the watch failed");
+
+    let (tx, mut rx) = oneshot::channel::<CallResult>();
+    drop(tx);
+    assert!(!heard_change(&mut rx), "the watch was never issued");
 }
