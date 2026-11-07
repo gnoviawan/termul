@@ -44,7 +44,7 @@ ARG TROUPE_UID=${TERMUL_UID}
 ARG TROUPE_GID=${TERMUL_GID}
 
 LABEL org.opencontainers.image.title="termul-server" \
-	org.opencontainers.image.description="Standalone Termul server: browser terminals, git, and ACP agents over HTTP and WebSocket" \
+	org.opencontainers.image.description="Standalone Troupe server: browser terminals, git, and ACP agents over HTTP and WebSocket" \
 	org.opencontainers.image.source="https://github.com/gnoviawan/termul" \
 	org.opencontainers.image.licenses="MIT" \
 	org.opencontainers.image.version="${TROUPE_RELEASE}"
