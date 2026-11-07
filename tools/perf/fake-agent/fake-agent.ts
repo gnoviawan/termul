@@ -2,7 +2,7 @@
  * Seeded fake ACP agent (CAP-1) — the load source for every perf scenario.
  *
  * Speaks the Agent side of the ACP JSON-RPC protocol over stdio exactly as
- * the Termul Rust host expects it (verified wire shapes below; see the
+ * the Troupe Rust host expects it (verified wire shapes below; see the
  * code map in spec-perf-check-toolkit.md):
  *
  * 1. `initialize` (id) → `{ protocolVersion: 1, agentCapabilities: {...}, authMethods: [] }`

@@ -102,7 +102,7 @@ const RELEASE_ASSET =
   /^https:\/\/github\.com\/gnoviawan\/figcraft\/releases\/download\/termul-[A-Za-z0-9._-]+\/figcraft-web-termul-[A-Za-z0-9._-]+\.zip$/
 
 /**
- * The pin's url when it names a figcraft-web release asset of the Termul
+ * The pin's url when it names a figcraft-web release asset of the Troupe
  * fork, the only place the bundle is downloaded from; anything else throws.
  * The bytes are checked against the pin's sha256 after the download, so a
  * redirect elsewhere cannot change what gets embedded.

@@ -1,9 +1,9 @@
 ---
 name: perf-toolkit
-description: Run Termul performance benchmarks, read the reports, and do before/after A/B compares with the tools/perf toolkit. Use when the user asks to measure app performance, run a perf scenario (stream-storm, project-switch, pty-flood, soak), compare runs, or investigate renderer jank/memory.
+description: Run Troupe performance benchmarks, read the reports, and do before/after A/B compares with the tools/perf toolkit. Use when the user asks to measure app performance, run a perf scenario (stream-storm, project-switch, pty-flood, soak), compare runs, or investigate renderer jank/memory.
 ---
 
-# Termul Perf Toolkit
+# Troupe Perf Toolkit
 
 Measures the desktop app's renderer performance under controlled, deterministic load: fake ACP agents stream seeded `sessionUpdate` traffic through the app's real custom-agent path while passive collectors capture React commits, page-level jank (LoAF/longtask/INP/rAF), and OS-level renderer memory/CPU. Every run writes a result directory with `result.json` + a self-contained `report.html`.
 

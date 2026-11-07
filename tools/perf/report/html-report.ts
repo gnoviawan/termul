@@ -217,7 +217,7 @@ export function renderReport(result: PerfRunResult): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Termul perf — ${esc(meta.scenario)} ${esc(meta.runId)}</title>
+<title>Troupe perf — ${esc(meta.scenario)} ${esc(meta.runId)}</title>
 <style>
   :root { color-scheme: dark; }
   body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: #0b0e14; color: #d7dde8; margin: 0; padding: 2rem; }

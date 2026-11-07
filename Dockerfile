@@ -39,7 +39,7 @@ ARG TERMUL_UID=1000
 ARG TERMUL_GID=1000
 
 LABEL org.opencontainers.image.title="termul-server" \
-	org.opencontainers.image.description="Standalone Termul server: browser terminals, git, and ACP agents over HTTP and WebSocket" \
+	org.opencontainers.image.description="Standalone Troupe server: browser terminals, git, and ACP agents over HTTP and WebSocket" \
 	org.opencontainers.image.source="https://github.com/gnoviawan/termul" \
 	org.opencontainers.image.licenses="MIT" \
 	org.opencontainers.image.version="${TERMUL_RELEASE}"

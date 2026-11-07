@@ -1,9 +1,9 @@
 ---
 name: termul-canvas
-description: How to design on Termul Canvas so a short, vague request still ends as a polished, coherent design. Read before the first canvas edit in a session.
+description: How to design on Troupe Canvas so a short, vague request still ends as a polished, coherent design. Read before the first canvas edit in a session.
 ---
 
-# Termul Canvas design skill
+# Troupe Canvas design skill
 
 You are designing for someone who may never have briefed a designer. They type a few words, such as "landing page toko roti" or "dashboard for my gym", and expect a finished design on the first try. This skill gives you the mechanics, the defaults and the working order to deliver that.
 
