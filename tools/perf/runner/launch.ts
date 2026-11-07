@@ -44,22 +44,15 @@ export function resolveAppExe(override?: string): string {
     }
     return override
   }
-  const candidates = [
+  const buildDirs = [
     // The debug-assertions perf build: only it keeps the WebView2 debug port.
-    path.join(REPO_ROOT, 'src-tauri', 'target-perf', 'release', 'termul-manager.exe'),
+    path.join(REPO_ROOT, 'src-tauri', 'target-perf', 'release'),
     // Worktree dev-identifier build: com.termul-manager.app.dev escapes
     // the single-instance mutex held by any running user install
     // (com.termul-manager.app) — otherwise the spawned exe silently exits via
     // the single-instance plugin before CDP ever answers.
-    path.join(REPO_ROOT, 'src-tauri', 'target', 'release', 'termul-manager.exe'),
-    path.join(
-      REPO_ROOT,
-      'src-tauri',
-      'target',
-      'x86_64-pc-windows-msvc',
-      'release',
-      'termul-manager.exe'
-    ),
+    path.join(REPO_ROOT, 'src-tauri', 'target', 'release'),
+    path.join(REPO_ROOT, 'src-tauri', 'target', 'x86_64-pc-windows-msvc', 'release'),
     // Main checkout fallback (same repo, built there before the worktree split).
     path.resolve(
       REPO_ROOT,
@@ -68,10 +61,15 @@ export function resolveAppExe(override?: string): string {
       'src-tauri',
       'target',
       'x86_64-pc-windows-msvc',
-      'release',
-      'termul-manager.exe'
+      'release'
     )
   ]
+  // `tauri build` names the binary troupe.exe; a plain `cargo build` still
+  // produces termul-manager.exe.
+  const candidates = buildDirs.flatMap((dir) => [
+    path.join(dir, 'troupe.exe'),
+    path.join(dir, 'termul-manager.exe')
+  ])
   for (const c of candidates) {
     if (existsSync(c)) return c
   }
