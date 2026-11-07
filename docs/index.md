@@ -1,4 +1,4 @@
-# troupe Documentation Index
+# Troupe Documentation Index
 
 **Type:** monolith
 **Primary Language:** TypeScript and Rust

@@ -25,8 +25,8 @@ exactly as registered.
 
 
 The app exe must exist — **the worktree dev-identifier perf build**
-(`src-tauri/target-perf/release/troupe.exe` from `tauri build`, or
-`termul-manager.exe` from a plain `cargo build`, whichever is newer; identifier
+(`src-tauri/target-perf/release/troupe.exe`; builds from before the rename named it
+`termul-manager.exe`, and the runner takes the newer of the two; identifier
 `com.termul-manager.app.dev`). It must be built with the dev config so it
 escapes the user's installed-instance single-instance mutex AND carries
 `withGlobalTauri`, and with debug assertions on: the host scrubs the

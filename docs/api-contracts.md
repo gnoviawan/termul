@@ -393,7 +393,7 @@ With no stored Factory key, a new Droid process tries `session/new` using the
 CLI's existing browser-login state before offering the auth-required banner.
 
 **2a. Terminal auth methods (headless login).** Clicking a `terminal` method in the
-auth banner spawns an ordinary troupe terminal tab (`kind:'shell'`, titled
+auth banner spawns an ordinary Troupe terminal tab (`kind:'shell'`, titled
 `Sign in — <agent>`) running the agent binary with the method's `args`/`env` in the
 session cwd. Exit code 0 → `authenticate(methodId)` runs and session creation
 proceeds; non-zero → toast and the banner stays. No live PTY is killed or
