@@ -150,6 +150,7 @@ import type { ContentBlock } from '@/lib/acp-api'
 import {
   _clearPayloadCacheForTesting,
   loadSessionIndex,
+  queueSessionPayloadDelete,
   setCachedSessionPayload
 } from '@/lib/acp-history-persistence'
 import { _resetAcpTransportForTests, AcpTransportError } from '@/lib/acp-transport'
@@ -620,6 +621,180 @@ describe('failed session lifecycle (story 5)', () => {
     // No user message existed, so no turn was re-sent.
     expect(sent).toHaveLength(0)
     expect(useAcpStore.getState().sessionIndex.some((e) => e.id === placeholderId)).toBe(false)
+  })
+
+  it('gh-1741: retrying an unpainted launch re-sends its first turn ahead of queued follow-ups', async () => {
+    // A GitHub hand-off (Fix CI / Resolve comments) launches with no
+    // optimistic first message: its first turn exists only as initialBlocks.
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    const placeholderId = useAcpStore
+      .getState()
+      .createLaunchPlaceholder({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
+    await useAcpStore.getState().sendPrompt(placeholderId, 'also check the lint job')
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn boom'))
+    await expect(
+      useAcpStore.getState().finalizeChatLaunch({
+        placeholderId,
+        configId: 'cfg-1',
+        cwd: '/work',
+        projectId: 'p1',
+        initialBlocks: [{ type: 'text', text: 'fix the failing CI checks' }]
+      })
+    ).rejects.toBeTruthy()
+
+    const sentTexts: string[] = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
+      async (command: string, args?: { text?: string }) => {
+        if (command === 'acp_spawn_agent')
+          return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+        if (command === 'acp_new_session') return { sessionId: 'sess-handoff-retry' }
+        if (command === 'acp_send_prompt') {
+          sentTexts.push(args?.text ?? '')
+          return 'end_turn'
+        }
+        throw new Error(`unexpected invoke command: ${command}`)
+      }
+    )
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+
+    const state = useAcpStore.getState()
+    expect(sentTexts).toEqual(['fix the failing CI checks'])
+    expect(
+      state.messages['sess-handoff-retry'].filter((m) => m.role === 'user').map((m) => m.blocks)
+    ).toEqual([[{ type: 'text', text: 'fix the failing CI checks' }]])
+    expect(state.promptQueues['sess-handoff-retry']?.map((q) => q.blocks)).toEqual([
+      [{ type: 'text', text: 'also check the lint job' }]
+    ])
+  })
+
+  it('gh-1741: deleting a failed hand-off launch drops its saved first turn', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    const placeholderId = useAcpStore
+      .getState()
+      .createLaunchPlaceholder({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn boom'))
+    await expect(
+      useAcpStore.getState().finalizeChatLaunch({
+        placeholderId,
+        configId: 'cfg-1',
+        cwd: '/work',
+        projectId: 'p1',
+        initialBlocks: [{ type: 'text', text: 'fix the failing CI checks' }]
+      })
+    ).rejects.toBeTruthy()
+    expect(useAcpStore.getState().sessions[placeholderId]?.launchFirstTurnBlocks).toEqual([
+      { type: 'text', text: 'fix the failing CI checks' }
+    ])
+
+    await useAcpStore.getState().deleteHistorySession(placeholderId)
+
+    expect(useAcpStore.getState().sessions[placeholderId]?.launchFirstTurnBlocks).toBeNull()
+  })
+
+  it('gh-1741: a retry started while the chat deletion is pending sends nothing; a failed delete allows retry again', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    const placeholderId = useAcpStore
+      .getState()
+      .createLaunchPlaceholder({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn boom'))
+    await expect(
+      useAcpStore.getState().finalizeChatLaunch({
+        placeholderId,
+        configId: 'cfg-1',
+        cwd: '/work',
+        projectId: 'p1',
+        initialBlocks: [{ type: 'text', text: 'fix the failing CI checks' }]
+      })
+    ).rejects.toBeTruthy()
+
+    const commands: string[] = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (command: string) => {
+      commands.push(command)
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 'sess-after-failed-delete' }
+      if (command === 'acp_send_prompt') return 'end_turn'
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    let failDelete: (error: Error) => void = () => {}
+    vi.mocked(queueSessionPayloadDelete).mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failDelete = reject
+        })
+    )
+
+    const deletion = useAcpStore.getState().deleteHistorySession(placeholderId)
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+    expect(commands).toEqual([])
+    expect(useAcpStore.getState().sessions[placeholderId]?.status).toBe('error')
+
+    failDelete(new Error('disk full'))
+    await deletion
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+    expect(commands).toContain('acp_send_prompt')
+  })
+
+  it('gh-1741: overlapping deletes keep the retry guard until the last one settles', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    const placeholderId = useAcpStore
+      .getState()
+      .createLaunchPlaceholder({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn boom'))
+    await expect(
+      useAcpStore.getState().finalizeChatLaunch({
+        placeholderId,
+        configId: 'cfg-1',
+        cwd: '/work',
+        projectId: 'p1',
+        initialBlocks: [{ type: 'text', text: 'fix the failing CI checks' }]
+      })
+    ).rejects.toBeTruthy()
+
+    const commands: string[] = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (command: string) => {
+      commands.push(command)
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 'sess-after-overlap' }
+      if (command === 'acp_send_prompt') return 'end_turn'
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    let failFirst: (error: Error) => void = () => {}
+    let failSecond: (error: Error) => void = () => {}
+    vi.mocked(queueSessionPayloadDelete)
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            failFirst = reject
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            failSecond = reject
+          })
+      )
+
+    const first = useAcpStore.getState().deleteHistorySession(placeholderId)
+    const second = useAcpStore.getState().deleteHistorySession(placeholderId)
+    failFirst(new Error('disk full'))
+    await first
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+    expect(commands).toEqual([])
+
+    failSecond(new Error('disk full'))
+    await second
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+    expect(commands).toContain('acp_send_prompt')
   })
 
   it('retryFailedLaunch rejects when no failed launch is recorded for the session', async () => {
