@@ -296,7 +296,11 @@ export function ProviderSettings(): React.JSX.Element {
               <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-3xs text-secondary-foreground">
                 troupe-server claude account
               </code>
-              on the host.
+              on the host (
+              <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-3xs text-secondary-foreground">
+                termul-server claude account
+              </code>
+              on a server installed before 0.5).
             </>
           )}
         </p>

@@ -82,6 +82,8 @@ run_legacy_installer() {
   HOME="$TERMUL_TEST_TMP_DIR/home" \
     TERMUL_INSTALL_YES=1 \
     TERMUL_INSTALL_APPLICATIONS_DIR="$TERMUL_TEST_TMP_DIR/Applications" \
+    TERMUL_INSTALL_BIN_DIR="$TERMUL_TEST_TMP_DIR/home/.local/bin" \
+    TERMUL_INSTALL_DESKTOP_DIR="$TERMUL_TEST_TMP_DIR/home/.local/share/applications" \
     run bash "$legacy_install_sh"
 }
 
