@@ -78,7 +78,7 @@ export const CONTEXT_PILL_NODE = 'contextPill'
 
 export const CONVERSATION_PILL_NODE = 'conversationPill'
 
-/** A Termul tool pill. Its token (`\uE00C…\uE00D`) is owned by `tool-tokens.ts`. */
+/** A Troupe tool pill. Its token (`\uE00C…\uE00D`) is owned by `tool-tokens.ts`. */
 export const TOOL_PILL_NODE = 'toolPill'
 
 type PillKind =

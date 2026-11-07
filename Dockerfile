@@ -9,7 +9,9 @@ ARG UBUNTU_VERSION=22.04
 FROM ubuntu:24.04 AS fetch
 ARG TARGETARCH
 # A GitHub release tag (v0.5.0, nightly), or "latest" for the newest stable release.
+# TROUPE_RELEASE wins; the old TERMUL_RELEASE build arg still works.
 ARG TERMUL_RELEASE=latest
+ARG TROUPE_RELEASE=${TERMUL_RELEASE}
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ca-certificates curl minisign \
 	&& rm -rf /var/lib/apt/lists/*
@@ -21,10 +23,10 @@ RUN set -eu; \
 		arm64) asset=termul-server-linux-aarch64 ;; \
 		*) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
 	esac; \
-	if [ "$TERMUL_RELEASE" = latest ]; then \
+	if [ "$TROUPE_RELEASE" = latest ]; then \
 		base=https://github.com/gnoviawan/termul/releases/latest/download; \
 	else \
-		base="https://github.com/gnoviawan/termul/releases/download/$TERMUL_RELEASE"; \
+		base="https://github.com/gnoviawan/termul/releases/download/$TROUPE_RELEASE"; \
 	fi; \
 	curl -fsSL --proto '=https' --retry 3 -o termul-server "$base/$asset"; \
 	curl -fsSL --proto '=https' --retry 3 -o termul-server.sig "$base/$asset.sig"; \
@@ -37,12 +39,15 @@ FROM ubuntu:${UBUNTU_VERSION}
 ARG TERMUL_RELEASE=latest
 ARG TERMUL_UID=1000
 ARG TERMUL_GID=1000
+ARG TROUPE_RELEASE=${TERMUL_RELEASE}
+ARG TROUPE_UID=${TERMUL_UID}
+ARG TROUPE_GID=${TERMUL_GID}
 
 LABEL org.opencontainers.image.title="termul-server" \
 	org.opencontainers.image.description="Standalone Troupe server: browser terminals, git, and ACP agents over HTTP and WebSocket" \
 	org.opencontainers.image.source="https://github.com/gnoviawan/termul" \
 	org.opencontainers.image.licenses="MIT" \
-	org.opencontainers.image.version="${TERMUL_RELEASE}"
+	org.opencontainers.image.version="${TROUPE_RELEASE}"
 
 # termul-server links WebKitGTK and GTK through the shared Tauri crate even
 # though the server never opens a window. The ldd check below fails the build
@@ -59,8 +64,8 @@ RUN apt-get update \
 		procps \
 		tini \
 	&& rm -rf /var/lib/apt/lists/* \
-	&& groupadd --non-unique --gid "$TERMUL_GID" termul \
-	&& useradd --non-unique --uid "$TERMUL_UID" --gid termul --create-home --shell /bin/bash termul \
+	&& groupadd --non-unique --gid "$TROUPE_GID" termul \
+	&& useradd --non-unique --uid "$TROUPE_UID" --gid termul --create-home --shell /bin/bash termul \
 	&& mkdir -p /home/termul/.local/bin /home/termul/.local/state/termul /workspace \
 	&& chown -R termul:termul /home/termul /workspace
 
@@ -69,8 +74,7 @@ RUN if ldd /usr/local/bin/termul-server | grep 'not found'; then exit 1; fi
 
 ENV HOME=/home/termul \
 	PATH=/home/termul/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-	LANG=C.UTF-8 \
-	TERMUL_SERVER_UPDATE_ENABLED=false
+	LANG=C.UTF-8
 
 USER termul
 WORKDIR /workspace
@@ -79,7 +83,7 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 	CMD curl -fsS http://127.0.0.1:8080/health > /dev/null || exit 1
 
-# A public bind with no TERMUL_WEB_AUTH_TOKEN makes the server generate a token
+# A public bind with no TROUPE_WEB_AUTH_TOKEN makes the server generate a token
 # into <state dir>/web-auth-token and refuse unauthenticated clients.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/termul-server"]
 CMD ["--host", "0.0.0.0", "--port", "8080", "--state-dir", "/home/termul/.local/state/termul"]

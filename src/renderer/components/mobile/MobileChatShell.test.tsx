@@ -597,11 +597,11 @@ describe('MobileChatShell', () => {
         expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Agent Chat')
       })
 
-      it('is "Termul" with no active tab', () => {
+      it('is "Troupe" with no active tab', () => {
         seedTabs([], null)
         renderShell()
 
-        expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Termul')
+        expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Troupe')
       })
     })
 

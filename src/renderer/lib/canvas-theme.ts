@@ -1,5 +1,5 @@
 /**
- * The `host.theme` payload: Termul's semantic tokens as `#rrggbb`, in the key
+ * The `host.theme` payload: Troupe's semantic tokens as `#rrggbb`, in the key
  * set the fork's `Tokens::from_host` reads (figcraft SPIKE.md, "Theme,
  * locale and brand"). Every key is required by the editor.
  */

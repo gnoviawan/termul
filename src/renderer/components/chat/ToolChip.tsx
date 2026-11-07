@@ -10,7 +10,7 @@ export const TERMUL_TOOL_ICONS: Record<TermulToolId, TermulIcon> = {
 }
 
 /**
- * Inline chip for a Termul tool pill, in the composer and the timeline. Same
+ * Inline chip for a Troupe tool pill, in the composer and the timeline. Same
  * inline metrics as `FileChip` so it stays in one line box.
  */
 export function ToolChip({

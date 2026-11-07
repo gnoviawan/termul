@@ -76,7 +76,7 @@ describe('Sonner Toaster mobile expansion + offset', () => {
     expect(props.mobileOffset).toBeUndefined()
   })
 
-  it('follows Termul appearance and paints a card, not a rich-color wash', () => {
+  it('follows Troupe appearance and paints a card, not a rich-color wash', () => {
     render(<Toaster />)
 
     const props = sonnerPropsRef.current!

@@ -45,7 +45,7 @@ export const useGitSheetStore = create<GitSheetState>((set) => ({
       if (wc?.state === 'unresolved') {
         reportUnresolvedWorkingCopy(projectId, wc)
         toast.error('This worktree is no longer available', {
-          description: 'Termul is refreshing the worktree list.'
+          description: 'Troupe is refreshing the worktree list.'
         })
         void logFrontendError({
           level: 'warn',

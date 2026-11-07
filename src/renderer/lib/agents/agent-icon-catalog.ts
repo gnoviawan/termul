@@ -28,7 +28,7 @@ const acpSvgModules = import.meta.glob<string>('@/assets/agent-icons/acp/*.svg',
 
 /**
  * An agent's brand colour per appearance: `light` for light themes, `dark`
- * for dark ones (Termul Dark, Dracula). Each clears 3:1 against the panel.
+ * for dark ones (Troupe Dark, Dracula). Each clears 3:1 against the panel.
  * Agents without one (monochrome marks, custom agents) use `currentColor`.
  */
 export interface AgentBrandColor {

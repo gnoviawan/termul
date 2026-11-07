@@ -33,7 +33,7 @@ The script does these things:
 3. It downloads the disk image and checks it against the release checksums. If the check fails, it installs nothing.
 4. It copies **Termul Manager.app** to `/Applications`.
 
-To skip the question, run the script with `TERMUL_INSTALL_YES=1`. To install somewhere other than `/Applications`, set `TERMUL_INSTALL_APPLICATIONS_DIR`.
+To skip the question, run the script with `TROUPE_INSTALL_YES=1`. To install somewhere other than `/Applications`, set `TROUPE_INSTALL_APPLICATIONS_DIR`. The older `TERMUL_INSTALL_*` names still work.
 
 ### Disk image
 
@@ -62,11 +62,11 @@ curl -fsSL https://raw.githubusercontent.com/gnoviawan/termul/v0.4.60/scripts/in
 The script downloads the latest AppImage and checks it against the release checksums. Then it does these things:
 
 - It saves the AppImage as `~/.local/bin/termul-manager.AppImage`.
-- It adds the `~/.local/bin/termul-manager` command, which starts the AppImage. On Wayland, this command also loads your system's `libwayland-client` library so that the window is not blank with Mesa 25 or later. Terminals in Termul do not get that setting. If the library is in another folder, set `TERMUL_WAYLAND_CLIENT_LIB` to its path.
+- It adds the `~/.local/bin/termul-manager` command, which starts the AppImage. On Wayland, this command also loads your system's `libwayland-client` library so that the window is not blank with Mesa 25 or later. Terminals in Termul do not get that setting. If the library is in another folder, set `TROUPE_WAYLAND_CLIENT_LIB` (or the older `TERMUL_WAYLAND_CLIENT_LIB`) to its path.
 - It adds a **Termul Manager** entry to your application menu.
 - It warns you if `~/.local/bin` is not on your `PATH`. Add that folder to your `PATH` to start Termul from a shell with `termul-manager`.
 
-Before it installs, the script asks you to confirm. To skip the question, run it with `TERMUL_INSTALL_YES=1`. To use a different folder, set `TERMUL_INSTALL_BIN_DIR`.
+Before it installs, the script asks you to confirm. To skip the question, run it with `TROUPE_INSTALL_YES=1`. To use a different folder, set `TROUPE_INSTALL_BIN_DIR`. The older `TERMUL_INSTALL_*` names still work.
 
 ### Debian, Ubuntu, Fedora, and other packages
 

@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import { ToolChip } from '../ToolChip'
 
 /**
- * Inline atom for a Termul tool pill. Like the other pills it is never parsed
+ * Inline atom for a Troupe tool pill. Like the other pills it is never parsed
  * from clipboard HTML; it re-enters only through its sentinel in `text/plain`.
  */
 export const ToolPill = Node.create({

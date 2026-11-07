@@ -329,7 +329,7 @@ test('the + sheet lists its sections and dismisses back to the + button', async 
   await expect(sheet.getByRole('button', { name: 'Files', exact: true })).toBeVisible()
   await expect(sheet.getByRole('button', { name: 'Mention a file or conversation' })).toBeVisible()
   await expect(sheet.getByRole('button', { name: 'Commands' })).toBeVisible()
-  await expect(sheet.getByRole('button', { name: 'Termul tools' })).toBeVisible()
+  await expect(sheet.getByRole('button', { name: 'Troupe tools' })).toBeVisible()
   // The agent, model and effort live in the selector pill, not in this sheet.
   await expect(sheet.getByRole('heading', { name: 'Chat options' })).toHaveCount(0)
   await expect(sheet.getByRole('button', { name: 'Medium', exact: true })).toHaveCount(0)

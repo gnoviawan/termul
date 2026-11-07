@@ -10,6 +10,39 @@ die() {
   return 1
 }
 
+# Settings read from the environment. TROUPE_<name> wins; the old
+# TERMUL_<name> still works.
+INSTALL_ENV_NAMES=(INSTALL_YES INSTALL_APPLICATIONS_DIR INSTALL_BIN_DIR INSTALL_DESKTOP_DIR)
+
+brand_env() {
+  local new="TROUPE_$1"
+  local old="TERMUL_$1"
+
+  local value="${!new:-}"
+
+  if [[ -n "${value//[[:space:]]/}" ]]; then
+    printf '%s' "$value"
+  else
+    printf '%s' "${!old:-}"
+  fi
+}
+
+note_legacy_env() {
+  local name
+  local new
+  local old
+  local value
+
+  for name in "${INSTALL_ENV_NAMES[@]}"; do
+    new="TROUPE_${name}"
+    old="TERMUL_${name}"
+    value="${!new:-}"
+    if [[ -z "${value//[[:space:]]/}" && -n "${!old:-}" ]]; then
+      printf '%s is deprecated; rename it to %s (%s still works for now)\n' "$old" "$new" "$old" >&2
+    fi
+  done
+}
+
 detect_os() {
   local os
   os="$(uname -s)"
@@ -171,19 +204,19 @@ confirm_install() {
   local prompt="$1"
   local reply
 
-  if [[ "${TERMUL_INSTALL_YES:-}" == "1" ]]; then
-    printf 'TERMUL_INSTALL_YES=1: %s\n' "$prompt"
+  if [[ "$(brand_env INSTALL_YES)" == "1" ]]; then
+    printf 'TROUPE_INSTALL_YES=1: %s\n' "$prompt"
     return 0
   fi
 
   if [[ ! -r /dev/tty ]]; then
-    die "Interactive confirmation requires /dev/tty. Set TERMUL_INSTALL_YES=1 to install non-interactively."
+    die "Interactive confirmation requires /dev/tty. Set TROUPE_INSTALL_YES=1 to install non-interactively."
     return 1
   fi
 
   printf '%s [y/N] ' "$prompt" >/dev/tty
   if ! IFS= read -r reply </dev/tty; then
-    die "Interactive confirmation requires /dev/tty. Set TERMUL_INSTALL_YES=1 to install non-interactively."
+    die "Interactive confirmation requires /dev/tty. Set TROUPE_INSTALL_YES=1 to install non-interactively."
     return 1
   fi
 
@@ -214,7 +247,9 @@ install_macos() {
   local tmpdir
   local dmg_path
   local mount_dir
-  local applications_dir="${TERMUL_INSTALL_APPLICATIONS_DIR:-/Applications}"
+  local applications_dir
+  applications_dir="$(brand_env INSTALL_APPLICATIONS_DIR)"
+  applications_dir="${applications_dir:-/Applications}"
   local app_source
   local app_target
   local legacy_target
@@ -295,8 +330,12 @@ install_linux() {
   local asset_name
   local tmpdir
   local appimage_path
-  local bin_dir="${TERMUL_INSTALL_BIN_DIR:-${HOME}/.local/bin}"
-  local desktop_dir="${TERMUL_INSTALL_DESKTOP_DIR:-${HOME}/.local/share/applications}"
+  local bin_dir
+  local desktop_dir
+  bin_dir="$(brand_env INSTALL_BIN_DIR)"
+  bin_dir="${bin_dir:-${HOME}/.local/bin}"
+  desktop_dir="$(brand_env INSTALL_DESKTOP_DIR)"
+  desktop_dir="${desktop_dir:-${HOME}/.local/share/applications}"
   local target_path="${bin_dir}/termul-manager"
   local appimage_target="${bin_dir}/termul-manager.AppImage"
   local desktop_path="${desktop_dir}/termul-manager.desktop"
@@ -339,8 +378,13 @@ set -e
 # added here so Termul removes exactly that entry from its terminals.
 unset TERMUL_LAUNCHER_PRELOAD
 if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
-  if [[ -n "${TERMUL_WAYLAND_CLIENT_LIB:-}" ]]; then
-    _candidates=("$TERMUL_WAYLAND_CLIENT_LIB")
+  # TROUPE_WAYLAND_CLIENT_LIB wins; the old TERMUL_ name still works.
+  _wayland_var=TERMUL_WAYLAND_CLIENT_LIB
+  _troupe_lib="${TROUPE_WAYLAND_CLIENT_LIB:-}"
+  [[ -z "${_troupe_lib//[[:space:]]/}" ]] || _wayland_var=TROUPE_WAYLAND_CLIENT_LIB
+  _wayland_lib="${!_wayland_var:-}"
+  if [[ -n "$_wayland_lib" ]]; then
+    _candidates=("$_wayland_lib")
   else
     _candidates=(
       /usr/lib64/libwayland-client.so.0
@@ -353,8 +397,8 @@ if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
   _elf64() { [[ "$(od -An -tx1 -j4 -N1 "$1" 2>/dev/null | tr -d ' \n')" == 02 ]]; }
   for _lib in "${_candidates[@]}"; do
     if [[ ! -f "$_lib" ]] || ! _elf64 "$_lib"; then
-      if [[ -n "${TERMUL_WAYLAND_CLIENT_LIB:-}" ]]; then
-        echo "termul-manager: TERMUL_WAYLAND_CLIENT_LIB=${_lib} is not a 64-bit library; starting without the Wayland preload" >&2
+      if [[ -n "$_wayland_lib" ]]; then
+        echo "termul-manager: ${_wayland_var}=${_lib} is not a 64-bit library; starting without the Wayland preload" >&2
       fi
       continue
     fi
@@ -401,7 +445,9 @@ main() {
   local version
   local sums_file
   local tmpdir
+  local install_dir
 
+  note_legacy_env
   os="$(detect_os)" || return 1
   arch="$(detect_arch)" || return 1
   require_tools "$os" || return 1
@@ -409,10 +455,12 @@ main() {
 
   case "$os" in
     darwin)
-      confirm_install "Install $(product_name "$version") ${version} (${os}-${arch}) to ${TERMUL_INSTALL_APPLICATIONS_DIR:-/Applications}?" || return 1
+      install_dir="$(brand_env INSTALL_APPLICATIONS_DIR)"
+      confirm_install "Install $(product_name "$version") ${version} (${os}-${arch}) to ${install_dir:-/Applications}?" || return 1
       ;;
     linux)
-      confirm_install "Install $(product_name "$version") ${version} (${os}-${arch}) to ${TERMUL_INSTALL_BIN_DIR:-${HOME}/.local/bin}?" || return 1
+      install_dir="$(brand_env INSTALL_BIN_DIR)"
+      confirm_install "Install $(product_name "$version") ${version} (${os}-${arch}) to ${install_dir:-${HOME}/.local/bin}?" || return 1
       ;;
     *)
       die "Unsupported operating system: ${os}"

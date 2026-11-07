@@ -35,7 +35,7 @@ export interface ComposerAddHandle {
   blurEditor: () => void
   /** Return focus to the editor (the desktop menu's close). */
   focusEditor: () => void
-  /** Insert a Termul tool pill at the caret; false when the editor is unavailable. */
+  /** Insert a Troupe tool pill at the caret; false when the editor is unavailable. */
   insertTool: (id: TermulToolId) => boolean
 }
 
@@ -52,7 +52,7 @@ const LOG_SOURCE = 'composer-add-sheet'
 type AddSheetView = 'connectors' | 'tools'
 
 const SHEET_TITLE: Record<AddSheetView, string> = {
-  tools: 'Termul tools',
+  tools: 'Troupe tools',
   connectors: 'Connectors'
 }
 
@@ -235,7 +235,7 @@ export function ComposerAddSheet({
                     <Wrench size={16} />
                   </SheetIconWell>
                 }
-                title="Termul tools"
+                title="Troupe tools"
                 subtitle="Browser, canvas and automations"
                 accessory="chevron"
                 subview="tools"

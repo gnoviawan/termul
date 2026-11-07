@@ -346,7 +346,7 @@ fn session_reopen_timeout_defaults_to_constant() {
     // Shared with the real-loop harness, which clears/restores these env vars
     // and resolves these timeouts while a mock agent runs: never interleave.
     let _serial = super::real_loop_tests::TIMEOUT_TEST_LOCK.blocking_lock();
-    if std::env::var("TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS").is_err() {
+    if crate::brand_env::value("ACP_SESSION_REOPEN_TIMEOUT_SECS").is_none() {
         assert_eq!(session_reopen_timeout(), SESSION_REOPEN_TIMEOUT);
     }
     assert_eq!(SESSION_REOPEN_TIMEOUT, Duration::from_secs(60));
@@ -997,7 +997,7 @@ fn turn_timeout_override_takes_effect_when_no_env_var() {
     let _serial = super::real_loop_tests::TIMEOUT_TEST_LOCK.blocking_lock();
     // The env var is usually absent in the test runner; when it IS set
     // (operator machine), it correctly masks the UI override — skip there.
-    if std::env::var("TERMUL_ACP_TURN_TIMEOUT_SECS").is_ok() {
+    if crate::brand_env::value("ACP_TURN_TIMEOUT_SECS").is_some() {
         return;
     }
     set_turn_timeout_override(Some(42));
@@ -1018,6 +1018,9 @@ fn turn_idle_timeout_precedence_env_beats_override_beats_default() {
     // Shared with the real-loop tests, which run turns under their own idle
     // window: neither side may observe the other's override/env var.
     let _serial = super::real_loop_tests::TIMEOUT_TEST_LOCK.blocking_lock();
+    if std::env::var_os("TROUPE_ACP_TURN_IDLE_TIMEOUT_SECS").is_some() {
+        return;
+    }
     let preexisting = std::env::var("TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS").ok();
     if preexisting.is_none() {
         set_turn_idle_timeout_override(Some(42));
@@ -1045,7 +1048,7 @@ fn session_new_timeout_override_takes_effect_when_no_env_var() {
     // Shared with the real-loop harness, which clears/restores these env vars
     // and resolves these timeouts while a mock agent runs: never interleave.
     let _serial = super::real_loop_tests::TIMEOUT_TEST_LOCK.blocking_lock();
-    if std::env::var("TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS").is_ok() {
+    if crate::brand_env::value("ACP_SESSION_NEW_TIMEOUT_SECS").is_some() {
         return;
     }
     set_session_new_timeout_override(Some(42));
@@ -1063,7 +1066,7 @@ fn session_reopen_timeout_override_takes_effect_when_no_env_var() {
     // Shared with the real-loop harness, which clears/restores these env vars
     // and resolves these timeouts while a mock agent runs: never interleave.
     let _serial = super::real_loop_tests::TIMEOUT_TEST_LOCK.blocking_lock();
-    if std::env::var("TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS").is_ok() {
+    if crate::brand_env::value("ACP_SESSION_REOPEN_TIMEOUT_SECS").is_some() {
         return;
     }
     set_session_reopen_timeout_override(Some(42));

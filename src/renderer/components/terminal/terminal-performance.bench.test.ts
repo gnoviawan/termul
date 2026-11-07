@@ -13,7 +13,7 @@ import { afterAll, describe, expect, it } from 'vitest'
  * - Measure terminal.write() throughput under representative workloads
  * - Capture frame time / duration for heavy streaming scenarios
  * - Include resize/fit churn sensitivity
- * - Keep scenarios Termul-specific rather than generic
+ * - Keep scenarios Troupe-specific rather than generic
  */
 
 function deterministicToken(index: number): string {
@@ -122,7 +122,7 @@ describe.skipIf(!hasCanvas)('Terminal performance baseline (xterm 5.5)', () => {
 
   afterAll(() => {
     // Print summary table after all benchmarks run
-    console.log('\n=== Termul xterm 5.5 Baseline Benchmark Results ===\n')
+    console.log('\n=== Troupe xterm 5.5 Baseline Benchmark Results ===\n')
     console.log('| Benchmark | Lines | Chars | Duration (ms) | Lines/sec | Chars/sec |')
     console.log('|-----------|------:|------:|--------------:|----------:|----------:|')
     for (const r of results) {

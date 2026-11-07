@@ -1,11 +1,11 @@
 /**
- * Termul's file watcher → the mounted canvases (spine AD-27). The same
+ * Troupe's file watcher → the mounted canvases (spine AD-27). The same
  * `onFileChanged` / `onFileCreated` / `onFileDeleted` chain the explorer and
  * the code editor use, fed by notify on the desktop and by the host's `fs`
- * watch on the web, so detection is Termul's and the editor never reads disk.
+ * watch on the web, so detection is Troupe's and the editor never reads disk.
  *
  * An event for a mounted document asks the host what changed
- * (`checkDisk`); the host tells Termul's own atomic writes apart by content
+ * (`checkDisk`); the host tells Troupe's own atomic writes apart by content
  * hash, so this side filters by path only. Events are debounced per project
  * because one save is several notify events (temp file, rename, modify).
  *

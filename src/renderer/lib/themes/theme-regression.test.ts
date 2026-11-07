@@ -5,8 +5,8 @@ import { BUNDLED_COLOR_THEMES } from './bundled-themes'
 import { COMPONENT_TOKEN_DEFAULTS } from './component-tokens'
 
 /**
- * Output captured before the Termul brand move. Every theme other than the
- * two Termul ones must keep rendering exactly as it did, and no theme may
+ * Output captured before the Troupe brand move. Every theme other than the
+ * two Troupe ones must keep rendering exactly as it did, and no theme may
  * change its terminal ANSI or selection colors.
  */
 const TERMUL_IDS = new Set(['termul', 'termul-light'])

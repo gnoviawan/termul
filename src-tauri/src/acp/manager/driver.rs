@@ -483,7 +483,7 @@ pub(super) async fn drive_connection(
     // so by default those are redacted to direction + byte length — enough to
     // confirm streaming/traffic without writing secrets to disk.
     //
-    // Set `TERMUL_ACP_TRACE_RAW=1` to log the full stdin/stdout JSON-RPC bodies
+    // Set `TROUPE_ACP_TRACE_RAW=1` to log the full stdin/stdout JSON-RPC bodies
     // (diagnostics only — may write secrets to the log; never enable in normal
     // use). Combine with a debug log level to see the trace.
     // Headless browser-open shim (spec-acp-terminal-auth): install a per-agent
@@ -514,9 +514,8 @@ pub(super) async fn drive_connection(
     let debug_agent_id = agent_id.clone();
     let redact_output = profile.redact_output;
     let trace_raw = !redact_output
-        && std::env::var("TERMUL_ACP_TRACE_RAW")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
+        && crate::brand_env::value("ACP_TRACE_RAW")
+            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
     // `TreeKillAgent` is `AcpAgent` on unix; on Windows it puts the agent in a
     // kill-on-close Job Object so killing it also reaps self-spawned workers.
     let agent = TreeKillAgent::new(config.to_mcp_server(shim_dir.as_deref())).with_debug(

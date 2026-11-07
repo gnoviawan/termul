@@ -86,7 +86,7 @@ describe('apply-color-theme', () => {
       expect(xterm.background).not.toBe('#000000')
     })
 
-    it('paints the Termul dark grid with the Linear void canvas and composer blue', () => {
+    it('paints the Troupe dark grid with the Linear void canvas and composer blue', () => {
       applyColorTheme('termul')
       const { xterm } = resolveThemeForTest(BUNDLED_COLOR_THEMES.termul)
       expect(xterm.background).toBe('#08090a')
@@ -119,7 +119,7 @@ describe('apply-color-theme', () => {
       ).toBeGreaterThanOrEqual(4.5)
     })
 
-    it('paints Termul light with Interfere grays and an exact #fcfcfc page', () => {
+    it('paints Troupe light with Interfere grays and an exact #fcfcfc page', () => {
       applyColorTheme('termul-light')
       expect(cssVarToHex('--background')).toBe('#fcfcfc')
       expect(cssVarToHex('--terminal-bg')).toBe('#fcfcfc')
@@ -298,14 +298,14 @@ describe('apply-color-theme', () => {
       expect(document.documentElement.style.getPropertyValue('--overlay').trim()).toBe('0 0 0')
     })
 
-    it('emits Termul dark connection from palette info, not the CSS cyan fallback', () => {
+    it('emits Troupe dark connection from palette info, not the CSS cyan fallback', () => {
       applyColorTheme('termul')
       expect(cssVarToHex('--connection')).toBe(
         oklchComponentsToHex(hexToOklchComponents(BUNDLED_COLOR_THEMES.termul.dark.palette.info))
       )
     })
 
-    it('emits the dark diff-added-foreground on Termul dark', () => {
+    it('emits the dark diff-added-foreground on Troupe dark', () => {
       applyColorTheme('termul')
       expect(cssVarToHex('--diff-added-foreground')).toBe(oklchComponentsToHex('0.786 0.138 154'))
     })

@@ -1,7 +1,7 @@
 /**
  * Reload one Agent chat onto a new process without closing its tab.
  *
- * Termul MCP is sent on the reopen. A new process rereads CLI agent config
+ * Troupe MCP is sent on the reopen. A new process rereads CLI agent config
  * (MCP, skills, plugins). Other open chats keep the old process.
  * The control stays disabled while a reply, queue, or question is open.
  * Running background agents ask for a confirm instead (`use-reload-chat`).

@@ -119,7 +119,7 @@ function CatalogSource({ state, setSync }: McpCatalogStatusHandle): React.JSX.El
   if (state.status === 'unavailable') {
     return (
       <p className="px-1 text-xs text-muted-foreground">
-        Termul couldn't check where the catalog comes from.
+        Troupe couldn't check where the catalog comes from.
       </p>
     )
   }
@@ -396,7 +396,7 @@ export function McpCatalogBrowser(): React.JSX.Element {
             </Button>
           }
         >
-          Termul couldn't load the MCP catalog.
+          Troupe couldn't load the MCP catalog.
         </SettingsNotice>
       ) : results === null ? (
         <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-3 text-xs text-muted-foreground">

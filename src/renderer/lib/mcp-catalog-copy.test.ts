@@ -15,10 +15,10 @@ describe('mcpCatalogReasonText', () => {
     ])
   })
 
-  it('names the package host Termul does not download from', () => {
+  it('names the package host Troupe does not download from', () => {
     expect(
       mcpCatalogReasonText({ code: 'unsupported-registry', registry: 'ghcr.example.com' })
-    ).toBe("Its package is hosted on ghcr.example.com, which Termul doesn't download from.")
+    ).toBe("Its package is hosted on ghcr.example.com, which Troupe doesn't download from.")
   })
 
   it('names the argument holding a cmd metacharacter', () => {
@@ -29,7 +29,7 @@ describe('mcpCatalogReasonText', () => {
 
   it('names the runner alias an import may not use', () => {
     expect(mcpCatalogReasonText({ code: 'unsupported-runner', command: 'npm exec' })).toBe(
-      "It runs its package through npm exec, which Termul can't check. Use npx, uvx, docker or dotnet dnx instead."
+      "It runs its package through npm exec, which Troupe can't check. Use npx, uvx, docker or dotnet dnx instead."
     )
   })
 
@@ -41,7 +41,7 @@ describe('mcpCatalogReasonText', () => {
         argument: '--registry'
       })
     ).toBe(
-      "It passes --registry to npx, which Termul doesn't allow because it can change what runs."
+      "It passes --registry to npx, which Troupe doesn't allow because it can change what runs."
     )
   })
 })

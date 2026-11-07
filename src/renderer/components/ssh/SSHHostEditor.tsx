@@ -57,7 +57,7 @@ function keyProblem(info: SSHKeyFileInfo): string | null {
     case 'notFound':
       return 'No file at this path.'
     case 'unreadable':
-      return 'Termul cannot read this file. Check its permissions.'
+      return 'Troupe cannot read this file. Check its permissions.'
     case 'puttyFormat':
       return 'This is a PuTTY .ppk key. Convert it to OpenSSH format with PuTTYgen first.'
     case 'notPrivateKey':
@@ -516,7 +516,7 @@ export function SSHHostEditor({
             {values.authMethod === 'agent' && (
               <p className="text-xs text-muted-foreground">
                 Uses the keys loaded in your SSH agent (ssh-agent, Pageant or the Windows OpenSSH
-                agent). Nothing secret is stored by Termul.
+                agent). Nothing secret is stored by Troupe.
               </p>
             )}
           </FieldGroup>

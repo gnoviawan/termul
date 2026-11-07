@@ -4,7 +4,7 @@
  * not a child: `CanvasMountLayer` owns it so it survives this tab (AD-19),
  * and this panel only claims the slot it is laid over while visible. The
  * mount itself is driven by the canvas store's phase; this panel re-sends
- * `host.theme` / `host.locale` when Termul's theme or the browser language
+ * `host.theme` / `host.locale` when Troupe's theme or the browser language
  * changes, without reloading the editor. While it shows a mounted canvas it
  * also tells the host the user is looking at it, which the mount cap ranks
  * eviction by (AD-26). A canvas the host unloaded shows a reopen prompt.
