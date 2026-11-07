@@ -107,9 +107,10 @@ pub struct PlatformRecord {
 }
 
 /// True only when the operator explicitly opts in via
-/// `TERMUL_SERVER_UPDATE_ENABLED=true` (case-insensitive). Absent → off.
+/// `TROUPE_SERVER_UPDATE_ENABLED=true` (case-insensitive; the `TERMUL_` name
+/// still works). Absent → off.
 pub fn is_update_enabled() -> bool {
-    std::env::var("TERMUL_SERVER_UPDATE_ENABLED")
+    crate::brand_env::value("SERVER_UPDATE_ENABLED")
         .map(|v| v.trim().eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }

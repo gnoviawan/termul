@@ -7,9 +7,10 @@
 # Then open http://localhost:8080/#token=<token>.
 #
 # Optional settings come from the shell or a .env file next to this file:
-# TERMUL_PORT, TERMUL_WORKSPACE, TERMUL_IMAGE, TERMUL_WEB_AUTH_TOKEN,
-# TERMUL_ALLOWED_ORIGINS, and, for `docker compose build`, TERMUL_RELEASE,
-# TERMUL_UID, and TERMUL_GID.
+# TROUPE_PORT, TROUPE_WORKSPACE, TROUPE_IMAGE, TROUPE_WEB_AUTH_TOKEN,
+# TROUPE_ALLOWED_ORIGINS, and, for `docker compose build`, TROUPE_RELEASE,
+# TROUPE_UID, and TROUPE_GID. The old TERMUL_* names still work; a TROUPE_*
+# name wins when both are set.
 
 # The project, service, and volume keep their termul names: renaming them would
 # start a second container next to a running one and leave the server state in
@@ -18,36 +19,38 @@ name: termul
 
 services:
   termul-server:
-    image: ${TERMUL_IMAGE:-ghcr.io/gnoviawan/troupe-server:latest}
+    image: ${TROUPE_IMAGE:-${TERMUL_IMAGE:-ghcr.io/gnoviawan/troupe-server:latest}}
     build:
       context: .
       args:
-        TERMUL_RELEASE: ${TERMUL_RELEASE:-latest}
-        TERMUL_UID: ${TERMUL_UID:-1000}
-        TERMUL_GID: ${TERMUL_GID:-1000}
+        TROUPE_RELEASE: ${TROUPE_RELEASE:-${TERMUL_RELEASE:-latest}}
+        TROUPE_UID: ${TROUPE_UID:-${TERMUL_UID:-1000}}
+        TROUPE_GID: ${TROUPE_GID:-${TERMUL_GID:-1000}}
     restart: unless-stopped
     ports:
       # Loopback only. "8080:8080" or "0.0.0.0:8080:8080" publishes the server
       # on every network the host is on. The auth token still applies, but the
       # server speaks plain HTTP, so the token crosses the network unencrypted.
       # For remote access, put an HTTPS reverse proxy in front instead.
-      - "127.0.0.1:${TERMUL_PORT:-8080}:8080"
+      - "127.0.0.1:${TROUPE_PORT:-${TERMUL_PORT:-8080}}:8080"
     environment:
       # Empty: the server generates a token on first start and keeps it in the
       # termul-home volume. A value here replaces that token.
-      TERMUL_WEB_AUTH_TOKEN: ${TERMUL_WEB_AUTH_TOKEN:-}
+      TROUPE_WEB_AUTH_TOKEN: ${TROUPE_WEB_AUTH_TOKEN:-${TERMUL_WEB_AUTH_TOKEN:-}}
       # The public origin of a reverse proxy that rewrites the Host header,
       # for example https://termul.example.com. Comma-separate several.
-      TERMUL_ALLOWED_ORIGINS: ${TERMUL_ALLOWED_ORIGINS:-}
+      TROUPE_ALLOWED_ORIGINS: ${TROUPE_ALLOWED_ORIGINS:-${TERMUL_ALLOWED_ORIGINS:-}}
       # Requests reach the container from the Docker network, never from
       # loopback, so without this the server refuses every file and git write
       # from the browser. Writes stay confined to registered projects, and the
-      # auth token is still required.
+      # auth token is still required. This key keeps its old name so an
+      # override file that sets TERMUL_SERVER_ALLOW_REMOTE_WRITES: "false"
+      # still replaces it.
       TERMUL_SERVER_ALLOW_REMOTE_WRITES: "true"
       # Sessions and the project registry live under --state-dir in the
       # termul-home volume. Set these only to move one of them elsewhere.
-      # TERMUL_SESSIONS_DIR: /home/termul/.local/state/termul/sessions
-      # TERMUL_PROJECTS_FILE: /home/termul/.local/state/termul/projects.json
+      # TROUPE_SESSIONS_DIR: /home/termul/.local/state/termul/sessions
+      # TROUPE_PROJECTS_FILE: /home/termul/.local/state/termul/projects.json
     volumes:
       # Server state, the auth token, and the home directory of the user that
       # runs shells and agents (git config, SSH keys, agent logins).
@@ -55,7 +58,7 @@ services:
       # The only host directory the server can see. Add projects under
       # /workspace in the web UI.
       - type: bind
-        source: ${TERMUL_WORKSPACE:-./workspace}
+        source: ${TROUPE_WORKSPACE:-${TERMUL_WORKSPACE:-./workspace}}
         target: /workspace
         bind:
           create_host_path: false

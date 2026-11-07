@@ -205,7 +205,7 @@ Server headers mirror the policy: the embedded release path serves `assets/` imm
 
 ## Standalone server origins
 
-`troupe-server` checks an `Origin` header when a client sends one. The header must name the same host and port as the request's `Host` header, or an origin passed to `--allowed-origins` / `TERMUL_ALLOWED_ORIGINS`. The embedded web client is served by the same process, so its requests match without an extra entry. Clients that omit `Origin` are unchanged, and `--web-auth-token` / `TERMUL_WEB_AUTH_TOKEN` still apply on their own.
+`troupe-server` checks an `Origin` header when a client sends one. The header must name the same host and port as the request's `Host` header, or an origin passed to `--allowed-origins` / `TROUPE_ALLOWED_ORIGINS`. The embedded web client is served by the same process, so its requests match without an extra entry. Clients that omit `Origin` are unchanged, and `--web-auth-token` / `TROUPE_WEB_AUTH_TOKEN` still apply on their own.
 
 A reverse proxy that preserves the public `Host` header (Caddy and cloudflared do this by default) matches `https://<public-host>` with no extra origin. When the proxy rewrites `Host` to the upstream address, list the public origin explicitly:
 
@@ -214,7 +214,7 @@ troupe-server --host 127.0.0.1 --port 8080 \
     --allowed-origins https://termul.example.com
 ```
 
-Comma-separate several origins, or repeat `--allowed-origins`. The flag replaces `TERMUL_ALLOWED_ORIGINS` when both are set. The server does not send `Access-Control-Allow-Origin`.
+Comma-separate several origins, or repeat `--allowed-origins`. The flag replaces `TROUPE_ALLOWED_ORIGINS` when both are set. The server does not send `Access-Control-Allow-Origin`.
 
 A server that runs without a bearer token also checks the `Host` header, so a DNS-rebinding page cannot reach it. It answers IP literals, `localhost`, and the hosts of `--allowed-origins`, and returns `403` for any other name. To reach a token-less server by a host name, such as a proxy that keeps the public `Host` header, list that origin with `--allowed-origins`. A server that requires the token accepts any `Host`, because a rebinding page cannot present the token.
 
@@ -237,7 +237,7 @@ The desktop app talks to the host through Tauri IPC, not these HTTP or WebSocket
 4. Open `http://localhost:8080/#token=<token>`.
 5. In the web UI, add `/workspace` or a folder under it as a project.
 
-Inside the container the server binds `0.0.0.0`, so it always requires the token. On first start it generates the token, stores it in the `termul-home` volume, and never prints it. To set your own token, put `TERMUL_WEB_AUTH_TOKEN=<token>` in a `.env` file next to `docker-compose.yml`. The token then shows in `docker inspect` output.
+Inside the container the server binds `0.0.0.0`, so it always requires the token. On first start it generates the token, stores it in the `termul-home` volume, and never prints it. To set your own token, put `TROUPE_WEB_AUTH_TOKEN=<token>` in a `.env` file next to `docker-compose.yml`. The token then shows in `docker inspect` output. Each `TROUPE_*` setting also accepts its older `TERMUL_*` name, so an existing `.env` file keeps working. A `TROUPE_*` value that is not blank wins when both are set. The fallback needs Docker Compose v2.
 
 Compose publishes the port on `127.0.0.1` only. Changing the mapping to `8080:8080` exposes the server on every host network, over plain HTTP. For remote access, put an HTTPS reverse proxy in front instead.
 
@@ -248,19 +248,19 @@ The token is a full credential. A holder of the token gets a shell and can start
 | Path in the container | Source | Contents |
 | --- | --- | --- |
 | `/home/termul` | `termul-home` named volume | The state directory `.local/state/termul` (sessions, `projects.json`, `store.json`, `web-auth-token`), plus the home directory of the shells and agents the server starts: git config, SSH keys, agent logins. |
-| `/workspace` | `./workspace` bind mount, or `TERMUL_WORKSPACE` | Your projects. This is the only host directory the server can see. |
+| `/workspace` | `./workspace` bind mount, or `TROUPE_WORKSPACE` | Your projects. This is the only host directory the server can see. |
 | `/tmp` | tmpfs, mounted `exec` | Scratch files and helper binaries. Cleared when the container stops. |
 
 The root filesystem is read-only, the container drops every Linux capability, and `no-new-privileges` is set. If a tool you run in Termul must write somewhere else, remove `read_only: true` from `docker-compose.yml`.
 
-Compose sets `TERMUL_SERVER_ALLOW_REMOTE_WRITES=true`. Browser requests reach the container from the Docker network, never from loopback. Without the setting, the server refuses project registration and every file and git write. With it, writes stay confined to registered projects, and the token is still required.
+Compose sets `TERMUL_SERVER_ALLOW_REMOTE_WRITES=true`. The key keeps its old name so an override file that sets the old name to `false` still replaces it. Browser requests reach the container from the Docker network, never from loopback. Without the setting, the server refuses project registration and every file and git write. With it, writes stay confined to registered projects, and the token is still required.
 
 ### Match the workspace owner
 
 The `termul` user has UID 1000 and GID 1000. It must be able to write to the workspace. If your host user has other IDs, build the image with them before the first start:
 
 ```bash
-TERMUL_UID=$(id -u) TERMUL_GID=$(id -g) docker compose up -d --build
+TROUPE_UID=$(id -u) TROUPE_GID=$(id -g) docker compose up -d --build
 ```
 
 The files in `termul-home` belong to the UID that created them. If you change the UID after the first start, run `chown -R` on the volume's files, or delete the volume with `docker compose down --volumes`. Deleting the volume also deletes the token, sessions, and project registry.
@@ -282,7 +282,7 @@ termul.example.com {
 If the proxy rewrites `Host` to the upstream address, add the public origin to `.env`:
 
 ```bash
-TERMUL_ALLOWED_ORIGINS=https://termul.example.com
+TROUPE_ALLOWED_ORIGINS=https://termul.example.com
 ```
 
 A proxy container on the same Compose network reaches the server at `termul-server:8080`. In that case, remove the `ports` entry.
@@ -294,9 +294,9 @@ docker compose pull
 docker compose up -d
 ```
 
-State stays in the `termul-home` volume. The image sets `TERMUL_SERVER_UPDATE_ENABLED=false`, and the server cannot replace its root-owned binary, so a new image is the only update path. To pin a version, set `TERMUL_IMAGE=ghcr.io/gnoviawan/troupe-server:<version>` in `.env`. Use `:nightly` to follow the nightly channel.
+State stays in the `termul-home` volume. The image does not turn on self-update, and the server cannot replace its root-owned binary, so a new image is the only update path. To pin a version, set `TROUPE_IMAGE=ghcr.io/gnoviawan/troupe-server:<version>` in `.env`. Use `:nightly` to follow the nightly channel.
 
-To build the image yourself, set `TERMUL_RELEASE` to a release tag such as `v0.5.0` or `nightly`, then run `docker compose up -d --build`. The default, `latest`, is the newest stable release. An `arm64` build needs a release that publishes `troupe-server-linux-aarch64`, or `termul-server-linux-aarch64` before 0.5.0. v0.4.21 publishes neither.
+To build the image yourself, set `TROUPE_RELEASE` to a release tag such as `v0.5.0` or `nightly`, then run `docker compose up -d --build`. The default, `latest`, is the newest stable release. An `arm64` build needs a release that publishes `troupe-server-linux-aarch64`, or `termul-server-linux-aarch64` before 0.5.0. v0.4.21 publishes neither.
 
 ## Operational Risks and Release Checklist
 
