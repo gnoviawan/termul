@@ -15,6 +15,7 @@
     "tests/e2e/seeded-server-args.ts",
     "scripts/acp-reference.ts",
     "scripts/validate-pr-body.ts",
+    "scripts/rebrand/*.ts",
     "scripts/canvas-eval/checks.ts",
     "scripts/canvas-eval/snapshot.ts",
     "scripts/canvas-eval/upstream.ts"
