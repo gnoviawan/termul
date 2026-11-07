@@ -100,7 +100,7 @@ export function useWorkspaceKeyboard({
       e.preventDefault()
       e.stopPropagation()
       // Keys pressed inside the cross-origin canvas iframe never reach this
-      // window, so this only fires while focus is in Termul's own chrome.
+      // window, so this only fires while focus is in Troupe's own chrome.
       if (activeTab?.type === 'canvas') {
         void useCanvasStore.getState().saveCanvas(activeTab.projectId)
         return

@@ -255,7 +255,7 @@ export interface AcpTransport {
   getAgentIdleWindow(): Promise<AgentIdleWindowStatus>
   fetchRegistrySnapshot(reason: RegistryCheckReason): Promise<AcpRegistrySnapshot>
   /**
-   * On-demand MCP client probe (Termul's own rmcp client connection — NOT the
+   * On-demand MCP client probe (Troupe's own rmcp client connection — NOT the
    * agent's). Stateless: takes the renderer-supplied wire config, opens a fresh
    * rmcp client, calls `initialize` + `tools/list`, then closes. Desktop↔web
    * parity: on web the probe runs on the termul-server host via
