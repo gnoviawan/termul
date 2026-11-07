@@ -21,7 +21,7 @@ bun run docs:build
 
 ## Content
 
-Write public documentation in `content/docs/`. Each `.mdx` file becomes a page under `/docs`. Each section folder has a `meta.json` that orders its pages, and `content/docs/meta.json` orders the sections.
+Write public documentation in `content/docs/`. Each `.mdx` file becomes a page under `/docs`, and the whole site, including search and the `llms.txt` files, is served under `/docs/`. Link to other pages with their full path, such as `/docs/agents`. Each section folder has a `meta.json` that orders its pages, and `content/docs/meta.json` orders the sections.
 
 ## Screenshots
 
@@ -43,3 +43,7 @@ Desktop-only features (embedded browser, SSH sessions, updates, sharing the desk
 ## Deploy
 
 The site is planned for `https://docs.termul.dev`, which is not live yet. Cloudflare Pages must be configured with the `termul-docs` project and `website-docs/build/client` as its build output directory.
+
+`bun run build` leaves the whole site in `build/client/docs/`. Its `404.html` is the SPA fallback, which Cloudflare Pages serves for unknown `/docs/*` URLs. `build/client/_redirects` sends the old root URLs (`/`, `/llms.txt`, `/llms-full.txt`, `/llms.mdx/docs/*`, `/api-reference.html`) to their `/docs/` paths, and only the standalone `termul-docs` project uses it.
+
+The landing deploy (`.github/workflows/deploy-landing.yml`) also builds the docs and copies `build/client/docs/` to `landing/dist/docs/`, so one Pages project serves the landing page at `/` and the docs at `/docs/`.
