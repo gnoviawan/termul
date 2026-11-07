@@ -2259,8 +2259,8 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       set((s) => ({ discoveredSessions: { ...s.discoveredSessions, [key]: all } }))
 
       // Discovery no longer promotes external sessions into host persistence:
-      // the Chats tab renders only Termul-created sessions (`discovered !== true`),
-      // and `session/list` results are external chats Termul did not create. The
+      // the Chats tab renders only Troupe-created sessions (`discovered !== true`),
+      // and `session/list` results are external chats Troupe did not create. The
       // function is retained so store coverage keeps exercising the `session/list`
       // path; it is no longer auto-triggered from the sidebar.
     } catch (e) {

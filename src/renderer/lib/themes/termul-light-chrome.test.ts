@@ -61,7 +61,7 @@ describe('termul light chrome', () => {
     }
   })
 
-  it('is attached only to Termul light and uses the brand blue', () => {
+  it('is attached only to Troupe light and uses the brand blue', () => {
     expect(BUNDLED_COLOR_THEMES['termul-light'].dark.chrome).toEqual(TERMUL_LIGHT_CHROME)
     expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.primary).toBe('#0d74ce')
     expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.success).toBe('#098658')

@@ -182,7 +182,7 @@ async function announceBarrier(page: Page): Promise<void> {
   await page.getByRole('textbox', { name: 'Search chats' }).fill('zzz-no-such-chat')
   await expect(liveRegion(page)).toHaveText('0 chats match')
   await page.keyboard.press('Escape')
-  await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'Troupe', exact: true })).toBeHidden()
 }
 
 /**
@@ -282,7 +282,7 @@ test.describe('shell live region', () => {
     await region.evaluate((el) => el.setAttribute('data-e2e-node', 'first-mount'))
 
     await page.getByRole('button', { name: 'Open menu' }).tap()
-    await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeVisible()
+    await expect(page.getByRole('dialog', { name: 'Troupe', exact: true })).toBeVisible()
     // The modal drawer hid everything outside it from assistive technology
     // (Radix hideOthers)...
     await expect(page.getByRole('banner')).toHaveCount(0)
@@ -299,7 +299,7 @@ test.describe('shell live region', () => {
     await expect.poll(announced).toEqual(['0 chats match', '0 chats match'])
 
     await page.keyboard.press('Escape')
-    await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeHidden()
+    await expect(page.getByRole('dialog', { name: 'Troupe', exact: true })).toBeHidden()
     // The same node, never remounted.
     await expect(liveRegion(page)).toHaveCount(1)
     await expect(region).toHaveAttribute('data-e2e-node', 'first-mount')
