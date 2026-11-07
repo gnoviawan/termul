@@ -1,12 +1,12 @@
 ---
 title: Install and start troupe-server
-description: Run Termul on a server and open it from any browser.
+description: Run Troupe on a server and open it from any browser.
 ---
 
 import { Step, Steps } from 'fumadocs-ui/components/steps'
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs'
 
-`troupe-server` is Termul without a window. It runs your agents, terminals and git on one machine and serves the Termul app to any browser that connects to it. Use it on a home server, a cloud machine, or your own computer.
+`troupe-server` is Troupe without a window. It runs your agents, terminals and git on one machine and serves the Troupe app to any browser that connects to it. Use it on a home server, a cloud machine, or your own computer.
 
 ## Install the server
 
@@ -38,9 +38,9 @@ Versions before 0.5.0 called the program `termul-server`. If you already run it,
 </Tab>
 <Tab value="Docker">
 
-The Termul repository has a `Dockerfile` and a `docker-compose.yml`. The image is `ghcr.io/gnoviawan/troupe-server`.
+The Troupe repository has a `Dockerfile` and a `docker-compose.yml`. The image is `ghcr.io/gnoviawan/troupe-server`.
 
-1. Copy `docker-compose.yml` from the Termul repository into a new folder.
+1. Copy `docker-compose.yml` from the Troupe repository into a new folder.
 2. In that folder, create the folder for your projects:
 
 	```bash
@@ -119,7 +119,7 @@ Open the link in a browser. The setup page asks for:
 - **Allow changes from other devices.** Shown when the host is `0.0.0.0`. Turn it on to let other devices make changes. See [Allow changes from other devices](/docs/remote/server-options#allow-changes-from-other-devices).
 - **Update channel.** `stable`, `insider`, `nightly`, or `none`. See [Update the server](/docs/remote/server-options#update-the-server).
 
-The **Advanced** section holds the **sessions directory** (where Termul keeps chat history), the **projects registry file** (your project list), and how often the server checks for updates. The defaults are in `~/.local/state/termul`.
+The **Advanced** section holds the **sessions directory** (where Troupe keeps chat history), the **projects registry file** (your project list), and how often the server checks for updates. The defaults are in `~/.local/state/termul`.
 
 The page checks each answer and shows mistakes next to its field, so nothing is saved until everything is valid.
 
@@ -128,7 +128,7 @@ The page checks each answer and shows mistakes next to its field, so nothing is 
 
 ### Let the server restart
 
-Applying saves your answers to `server-config.json` in the server's state folder. The server restarts itself on the address you picked, your browser follows it there, and you land in the normal Termul app.
+Applying saves your answers to `server-config.json` in the server's state folder. The server restarts itself on the address you picked, your browser follows it there, and you land in the normal Troupe app.
 
 When the host is `0.0.0.0`, the server also creates an access token and hands it to your browser on the way. Other browsers and devices still need it. See [The access token](/docs/remote/server-options#the-access-token).
 
@@ -163,7 +163,7 @@ To try the server, run it in the foreground:
 troupe-server
 ```
 
-On a server that is already set up, this serves Termul at `http://localhost:8080` for browsers on the same machine. On a fresh install it starts the setup page described above instead. Press `Ctrl+C` to stop it.
+On a server that is already set up, this serves Troupe at `http://localhost:8080` for browsers on the same machine. On a fresh install it starts the setup page described above instead. Press `Ctrl+C` to stop it.
 
 To let phones and other computers connect, listen on all network interfaces:
 
@@ -183,7 +183,7 @@ A new server has no projects.
 
 1. Open the server's address in a browser.
 2. Click **+** next to **PROJECTS**, then click **New project**. You can also press `Alt+N`.
-3. Click **Browse**. Termul opens a folder picker that shows the folders on the server, not on your own device.
+3. Click **Browse**. Troupe opens a folder picker that shows the folders on the server, not on your own device.
 4. Go to the project folder and select it, then create the project.
 
 The server saves the project in its projects file, so it is still there after the server restarts.

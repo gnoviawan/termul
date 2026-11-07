@@ -1,7 +1,7 @@
 # Claude Agent ACP
 
-Termul launches the official Claude Agent ACP adapter using a host-managed,
-version-pinned npm package. Termul does not install or update Anthropic's
+Troupe launches the official Claude Agent ACP adapter using a host-managed,
+version-pinned npm package. Troupe does not install or update Anthropic's
 separate Claude Code CLI.
 
 ## Prerequisites
@@ -10,8 +10,8 @@ separate Claude Code CLI.
 - Claude Code CLI installed from Anthropic and available as `claude`.
 - Either an existing Claude Code login or an Anthropic API key.
 
-Termul checks Node's major version, npm, and the external CLI before install.
-If Node is older than 22, upgrade it and restart Termul. If the CLI is missing,
+Troupe checks Node's major version, npm, and the external CLI before install.
+If Node is older than 22, upgrade it and restart Troupe. If the CLI is missing,
 install it using Anthropic's official instructions.
 
 ## Desktop setup
@@ -23,13 +23,13 @@ terminal:
 claude auth login
 ```
 
-Then start a Claude Agent chat and choose **Install** when prompted. Termul
+Then start a Claude Agent chat and choose **Install** when prompted. Troupe
 installs the exact catalog version into its managed host cache.
 
 The API-key method is available on headless hosts only (see below).
 
 Claude Code login is the default. API keys are host-wide; the selected auth
-mode is per state directory. API keys stay in the OS keychain; Termul never
+mode is per state directory. API keys stay in the OS keychain; Troupe never
 displays a saved key or sends it to a browser client. The selected auth mode
 is not a secret: it is stored as a plain file at `<state
 dir>/claude-auth-mode` (beside `acp-registry-binaries` — the app-data dir on
@@ -37,7 +37,7 @@ desktop), so `claude-code` mode keeps working on hosts with no OS keychain.
 Setting the mode writes this file and removes the legacy
 `acp.claude-agent.auth-mode` keychain entry that older versions used.
 
-When host status confirms a Claude Code login, Termul does not also invoke the
+When host status confirms a Claude Code login, Troupe does not also invoke the
 ACP adapter's separate sign-in methods before creating a session. This confirms
 only that the CLI reports an active login, not that the adapter can use that
 session. Anthropic's guidance restricts using Claude.ai subscription
@@ -59,7 +59,7 @@ troupe-server claude install
 ```
 
 The API-key mode is optional. On bash or zsh, provide the key through a hidden
-prompt and pipe it to Termul so it is not echoed or placed in command history:
+prompt and pipe it to Troupe so it is not echoed or placed in command history:
 
 ```sh
 read -s -r -p "Anthropic API key: " CLAUDE_API_KEY
@@ -88,11 +88,11 @@ folder (`~/.claude`, or `CLAUDE_CONFIG_DIR` when the host sets it). See
 [ADR-0004](./adr/0004-claude-accounts-linked-config-dirs.md).
 
 Every other Account has its own folder at `<state dir>/claude-accounts/<id>`.
-Termul starts the Claude agent of that Account with `CLAUDE_CONFIG_DIR` set to
+Troupe starts the Claude agent of that Account with `CLAUDE_CONFIG_DIR` set to
 it. The login and `.claude.json` stay in that folder; `projects`, `skills`,
 `plugins`, `rules`, `plans`, `file-history`, `agents`, `commands`,
 `settings.json` and `CLAUDE.md` are links back to the shared folder, so session
-history, settings and skills are the same on every Account. Termul never reads
+history, settings and skills are the same on every Account. Troupe never reads
 or refreshes the login tokens; Claude Code keeps them in its own credential
 store. The Account list (`<state dir>/claude-accounts.json`) holds names and
 ids only.
@@ -119,11 +119,11 @@ troupe-server claude account remove <id>
 
 ### Account usage
 
-Termul reads the usage windows of each Account (5-hour session, weekly, and
+Troupe reads the usage windows of each Account (5-hour session, weekly, and
 per-model weekly windows, with percent used and reset time) through the Claude
 Agent SDK that ships with the managed Claude ACP package. It runs a short
 `node` probe with the Account's `CLAUDE_CONFIG_DIR`, so Claude Code uses and
-refreshes its own login; Termul never reads a token, and the probe prints only
+refreshes its own login; Troupe never reads a token, and the probe prints only
 the limits and the plan type. The probe asks only for plan limits
 (`skipBehaviors`), writes no session file, and loads no MCP servers or user
 settings. Reads are cached on the host for 5 minutes; a forced refresh reuses a
@@ -133,7 +133,7 @@ unknown reply shape yields no windows instead of an error.
 
 During a turn, the Claude ACP adapter also attaches the live rate-limit state
 (`allowed`, `allowed_warning`, or `rejected`, with reset time and percent) to
-`usage_update` events. Termul forwards it as `rateLimit` on `acp:usage_update`.
+`usage_update` events. Troupe forwards it as `rateLimit` on `acp:usage_update`.
 
 `remove` signs the Claude CLI out of that Account, deletes its folder (never
 the shared folder), and moves its Projects back to the Default Account. The
@@ -171,7 +171,7 @@ rename and remove an Account (`add_claude_account`, `rename_claude_account`,
 (`start_claude_link_login`, `finish_claude_link_login`,
 `cancel_claude_login`): the host runs `claude auth login` without a browser,
 returns the sign-in link, and writes the code the user pastes from the Claude
-page to the CLI, which stores the login. Termul never sees the token.
+page to the CLI, which stores the login. Troupe never sees the token.
 View-only connections can only list; Settings hides the add, sign-in, rename
 and remove controls on them.
 
@@ -197,7 +197,7 @@ keeps serving its open chats and running work until the idle reaper stops it.
 
 ## Startup failures
 
-- **Node.js 22 or newer required:** upgrade Node and restart Termul.
+- **Node.js 22 or newer required:** upgrade Node and restart Troupe.
 - **Claude Code CLI missing:** install Anthropic's CLI separately, then run
   `claude auth login`.
 - **API-key mode selected but no key is saved:** run the headless
@@ -210,5 +210,5 @@ keeps serving its open chats and running work until the idle reaper stops it.
 
 `Incoming transport closed` means the ACP process closed its stdio connection
 during initialization. It does not, by itself, prove which prerequisite or
-runtime step failed. Check the host's prerequisite/auth status and Termul's ACP
+runtime step failed. Check the host's prerequisite/auth status and Troupe's ACP
 startup error without sharing credentials or environment dumps.

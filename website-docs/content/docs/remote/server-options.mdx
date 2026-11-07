@@ -30,7 +30,7 @@ To see more detail in the logs, start the server with `RUST_LOG=termul_manager_l
 
 ## The access token
 
-The access token is a password for the server. A browser must have it before it can use Termul.
+The access token is a password for the server. A browser must have it before it can use Troupe.
 
 - **On `127.0.0.1`, there is no token** unless you set one with `--web-auth-token`.
 - **On `0.0.0.0`, a token is always required.** If you didn't set one, the server creates a random token the first time it starts. It saves the token in `<state dir>/web-auth-token`, readable only by your user. The server never prints the token or writes it to the logs. Later starts reuse the same token.
@@ -41,13 +41,13 @@ To read the generated token:
 cat ~/.local/state/termul/web-auth-token
 ```
 
-To open Termul with the token, add it to the address after `#token=`:
+To open Troupe with the token, add it to the address after `#token=`:
 
 ```text
 http://<server-address>:8080/#token=<token>
 ```
 
-The part after `#` stays in your browser and is not sent to the server as part of the address. The browser saves the token, removes it from the address bar, and uses it on later visits. If you open the server without the token, Termul asks for it. See [Enter the token](/docs/remote/web-browser#enter-the-token).
+The part after `#` stays in your browser and is not sent to the server as part of the address. The browser saves the token, removes it from the address bar, and uses it on later visits. If you open the server without the token, Troupe asks for it. See [Enter the token](/docs/remote/web-browser#enter-the-token).
 
 To change the token, stop the server, delete the `web-auth-token` file, and start the server again. Every browser then has to enter the new token.
 
@@ -79,10 +79,10 @@ The default is view-only because changes from another device run with your user'
 
 ## Put a reverse proxy in front
 
-A reverse proxy such as Caddy or nginx can add HTTPS in front of Termul. HTTPS keeps the token private on the network. It also lets phones [install Termul as an app](/docs/remote/install-app) and show notifications.
+A reverse proxy such as Caddy or nginx can add HTTPS in front of Troupe. HTTPS keeps the token private on the network. It also lets phones [install Troupe as an app](/docs/remote/install-app) and show notifications.
 
 1. Start the server on `127.0.0.1`, for example `troupe-server --host 127.0.0.1 --port 8080`.
-2. Point the proxy at `127.0.0.1:8080`. Turn on WebSocket support in the proxy. Termul keeps a live connection open to the browser, and WebSocket is the kind of connection it uses.
+2. Point the proxy at `127.0.0.1:8080`. Turn on WebSocket support in the proxy. Troupe keeps a live connection open to the browser, and WebSocket is the kind of connection it uses.
 
 With Caddy, this is the whole configuration:
 

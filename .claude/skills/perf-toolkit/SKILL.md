@@ -25,7 +25,8 @@ exactly as registered.
 
 
 The app exe must exist — **the worktree dev-identifier perf build**
-(`src-tauri/target-perf/release/termul-manager.exe`, identifier
+(`src-tauri/target-perf/release/troupe.exe` from `tauri build`, or
+`termul-manager.exe` from a plain `cargo build`, whichever is newer; identifier
 `com.termul-manager.app.dev`). It must be built with the dev config so it
 escapes the user's installed-instance single-instance mutex AND carries
 `withGlobalTauri`, and with debug assertions on: the host scrubs the
@@ -57,7 +58,7 @@ the renderer.
 | `project-switch` | Repeated project switches under live agent+terminal load | `--projects 3 --cycles 10 --ui` (click sidebar vs store action) |
 | `pty-flood` | T terminals running the canned flood script (ANSI/wide/block lines + resize churn) | `--terminals 3 --lines-per-sec 200 --with-agent-stream` |
 | `soak` | Long stream + periodic switches (memory slope) | `--minutes 30 --yes` (ask-first: >15 min needs consent) |
-| `browser` | CAP-7 secondary lane vs termul-server (stream-storm/project-switch) | `--server http://127.0.0.1:3000` |
+| `browser` | CAP-7 secondary lane vs troupe-server (stream-storm/project-switch) | `--server http://127.0.0.1:3000` |
 
 Shared: `--seed` (determinism), `--exe`, `--keep-state` (debugging),
 `--use-real-agent <id>` (drive a REAL catalog agent instead of the fake —
@@ -166,7 +167,7 @@ Counts commits of `ChatMessage` / `ChatMessageList` / `AgentChatPanel` under a s
 
 ## Gotchas
 
-- The runner owns the spawned PID tree and kills it (`taskkill /T /F` + parent-PID sweep). If a run crashes hard, check for orphan `termul-manager`/`msedgewebview2` processes.
+- The runner owns the spawned PID tree and kills it (`taskkill /T /F` + parent-PID sweep). If a run crashes hard, check for orphan `troupe`/`termul-manager`/`msedgewebview2` processes.
 - Each run uses a scratch `WEBVIEW2_USER_DATA_FOLDER` under `tools/perf/results/<run-id>/userdata/` — the single-instance plugin stays isolated and user data is never touched. `--keep-state` preserves it for debugging.
 - Numbers are per-machine: only compare runs from the same machine; use the same `--seed`.
 - Windows-only desktop lane (WebView2 needs an interactive session). Browser lane covers headless.

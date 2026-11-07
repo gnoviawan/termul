@@ -1,4 +1,4 @@
-# termul Documentation Index
+# troupe Documentation Index
 
 **Type:** monolith
 **Primary Language:** TypeScript and Rust
@@ -7,7 +7,7 @@
 
 ## Project Overview
 
-Termul Manager is a project-aware desktop terminal workspace built with Tauri 2. It combines terminal management, project organization, snapshots, file exploration, editor panels, embedded browser tabs, and browser annotation workflows inside a single desktop shell.
+Troupe is a project-aware desktop terminal workspace built with Tauri 2. It combines terminal management, project organization, snapshots, file exploration, editor panels, embedded browser tabs, and browser annotation workflows inside a single desktop shell.
 
 ## Quick Reference
 

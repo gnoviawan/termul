@@ -1,4 +1,4 @@
-# Termul Manager - API Contracts
+# Troupe - API Contracts
 
 **Date:** 2026-05-09
 **Surface:** Internal Tauri command and event API
@@ -236,7 +236,7 @@ The `/ws` requests `list_persisted_sessions`, `get_session_payload` and `get_ses
 
 ## GitHub Issues and PRs
 
-The host runs the user's `gh` CLI for every GitHub read and write. Termul stores no GitHub token. The contract is `src/shared/types/github.types.ts`, and the renderer facade is `src/renderer/lib/github-api.ts`. `GithubService` (`src-tauri/src/github/`) implements each operation once. The desktop calls it through a Tauri command, and the browser and `troupe-server` call it through an HTTP route.
+The host runs the user's `gh` CLI for every GitHub read and write. Troupe stores no GitHub token. The contract is `src/shared/types/github.types.ts`, and the renderer facade is `src/renderer/lib/github-api.ts`. `GithubService` (`src-tauri/src/github/`) implements each operation once. The desktop calls it through a Tauri command, and the browser and `troupe-server` call it through an HTTP route.
 
 | Facade method | Tauri command | Web route | Reply `data` |
 |---|---|---|---|
@@ -271,7 +271,7 @@ Each Tauri command takes one argument, `request`. Each route takes the same obje
 - **Create label.** `createLabel` runs `gh label create`. The name is trimmed and must have 1 to 50 characters. The colour must be six hex digits (a leading `#` is dropped). The description is optional, at most 100 characters. Invalid input is refused with `GH_FAILED` before any `gh` call. An existing label name fails; the host never passes `--force`. When `gh` times out, the error says the change may already be applied.
 - **Edit item.** `editItem` adds and removes labels and assignees by name or login, matched without case. The host reads the item and the repository's labels and assignable users, resolves each name to its id, and refuses a name it cannot resolve before it writes. It sends one GraphQL mutation on stdin. The label and assignee changes in it run in order and are not a transaction: when one fails, the earlier ones may already be applied, so the client re-reads the item. An edit with no names succeeds without a write. When `gh` times out, the error says the change may already be applied.
 - **Item state.** `setItemState` closes or reopens an issue or PR (`closeIssue` with `stateReason`, `reopenIssue`, `closePullRequest`, `reopenPullRequest`). A PR close ignores `reason`. When `gh` times out, the error says the change may already be applied.
-- **Checkout PR.** `cwd` must be a clean Termul chat worktree: a linked worktree under its repository's `.termul/worktrees/`, on a `chat/` branch, with no uncommitted or untracked changes. Any other path is `PATH_VALIDATION_FAILED`. The host refuses with `GH_FORK_PUSH_BLOCKED` unless the user can write to the PR's head repository, or the PR allows maintainer edits and the user can write to the base repository. It checks this before it changes the worktree. Then it runs `gh pr checkout <n> --detach` in the worktree, which, like `git checkout`, refuses to overwrite local changes made since the cleanliness check. It then points the chat branch at the PR head with `git switch -C <chat branch>`. `headSha` is the commit the worktree is at, and it must equal the PR head. `pushCommand` is `git push <remote> HEAD:<headRefName>`, shell-quoted, where `<remote>` is the remote for the PR's head repository (or its URL).
+- **Checkout PR.** `cwd` must be a clean Troupe chat worktree: a linked worktree under its repository's `.termul/worktrees/`, on a `chat/` branch, with no uncommitted or untracked changes. Any other path is `PATH_VALIDATION_FAILED`. The host refuses with `GH_FORK_PUSH_BLOCKED` unless the user can write to the PR's head repository, or the PR allows maintainer edits and the user can write to the base repository. It checks this before it changes the worktree. Then it runs `gh pr checkout <n> --detach` in the worktree, which, like `git checkout`, refuses to overwrite local changes made since the cleanliness check. It then points the chat branch at the PR head with `git switch -C <chat branch>`. `headSha` is the commit the worktree is at, and it must equal the PR head. `pushCommand` is `git push <remote> HEAD:<headRefName>`, shell-quoted, where `<remote>` is the remote for the PR's head repository (or its URL).
 - **Errors.** The failure codes are `GITHUB_ERROR_CODES` in the contract file, plus `PATH_VALIDATION_FAILED` (desktop) and `OUTSIDE_PROJECT_ROOT` (web).
 - **Logging.** Each operation logs its start, success or failure with the repository, operation and code. The logs never include tokens, `gh` output, request bodies or remote URLs.
 
@@ -352,7 +352,7 @@ and, before creating a session (`create_session`), runs `authenticate_agent`
 - no method (or only empty/whitespace ids) → unchanged spawn → `session/new` flow.
 
 For the default `agent` auth type the provider owns the login UX (it may open its
-own browser); Termul never invents a client-side login-URL redirect. Apart
+own browser); Troupe never invents a client-side login-URL redirect. Apart
 from the opt-in Factory key described below, it does not store provider
 credentials. The `authenticate` invoke uses `{ agentId, methodId }`.
 
@@ -369,7 +369,7 @@ return only whether a key is stored. Subsequent Factory Droid spawns overlay the
 stored key, leaving active processes and sessions untouched. A missing or
 unusable OS secret store rejects saving, but browser Login and explicitly
 configured environment keys still work. The web endpoints require an enabled
-Termul web-auth gate; the browser only submits a key over HTTPS or loopback.
+Troupe web-auth gate; the browser only submits a key over HTTPS or loopback.
 Factory Login remains an explicit choice even with a stored key.
 The key form is offered when Factory requests authentication, not in the
 agent picker after an existing browser login. Saving checks through a
@@ -379,13 +379,13 @@ The bundled Factory launcher uses `droid exec --output-format acp`. The host
 also upgrades the old `acp-daemon` argument when spawning a registry-backed
 Factory config, including saved configs and remote catalog entries: the old
 mode initializes but its Droid child exits with code 1 at `session/new` when
-Termul attaches its plan MCP server.
+Troupe attaches its plan MCP server.
 Factory Droid may acknowledge `session/set_config_option` with `{}` rather than
 the ACP-required `configOptions` snapshot. Only for this agent, the host
 interprets that response as success without a snapshot; desktop and web
 clients retain their known options and update the chosen value locally.
 Creating another Factory session in the same Droid process resets the model
-of its existing sessions. Termul therefore does not refill a Factory warm
+of its existing sessions. Troupe therefore does not refill a Factory warm
 session after launch; a later chat uses a new Droid process while keeping
 earlier sessions alive. Login remains available in the auth-required banner,
 not as a permanent composer button once a session is ready.
@@ -393,7 +393,7 @@ With no stored Factory key, a new Droid process tries `session/new` using the
 CLI's existing browser-login state before offering the auth-required banner.
 
 **2a. Terminal auth methods (headless login).** Clicking a `terminal` method in the
-auth banner spawns an ordinary termul terminal tab (`kind:'shell'`, titled
+auth banner spawns an ordinary troupe terminal tab (`kind:'shell'`, titled
 `Sign in — <agent>`) running the agent binary with the method's `args`/`env` in the
 session cwd. Exit code 0 → `authenticate(methodId)` runs and session creation
 proceeds; non-zero → toast and the banner stays. No live PTY is killed or

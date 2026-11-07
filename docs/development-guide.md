@@ -1,10 +1,10 @@
-# Termul Manager - Development Guide
+# Troupe - Development Guide
 
 **Date:** 2026-05-09
 
 ## Overview
 
-Termul Manager is developed as a Tauri-first desktop application. Day-to-day development primarily happens in the TypeScript renderer while native desktop runtime concerns live in the Rust `src-tauri/` workspace.
+Troupe is developed as a Tauri-first desktop application. Day-to-day development primarily happens in the TypeScript renderer while native desktop runtime concerns live in the Rust `src-tauri/` workspace.
 
 ## Prerequisites
 
