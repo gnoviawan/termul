@@ -33,7 +33,7 @@ The script does these things:
 3. It downloads the disk image and checks it against the release checksums. If the check fails, it installs nothing.
 4. It copies **Termul Manager.app** to `/Applications`.
 
-To skip the question, run the script with `TERMUL_INSTALL_YES=1`. To install somewhere other than `/Applications`, set `TERMUL_INSTALL_APPLICATIONS_DIR`.
+To skip the question, run the script with `TROUPE_INSTALL_YES=1`. To install somewhere other than `/Applications`, set `TROUPE_INSTALL_APPLICATIONS_DIR`. The older `TERMUL_INSTALL_*` names still work.
 
 ### Disk image
 
@@ -66,7 +66,7 @@ The script downloads the latest AppImage and checks it against the release check
 - It adds a **Termul Manager** entry to your application menu.
 - It warns you if `~/.local/bin` is not on your `PATH`. Add that folder to your `PATH` to start Termul from a shell with `termul-manager`.
 
-Before it installs, the script asks you to confirm. To skip the question, run it with `TERMUL_INSTALL_YES=1`. To use a different folder, set `TERMUL_INSTALL_BIN_DIR`.
+Before it installs, the script asks you to confirm. To skip the question, run it with `TROUPE_INSTALL_YES=1`. To use a different folder, set `TROUPE_INSTALL_BIN_DIR`. The older `TERMUL_INSTALL_*` names still work.
 
 ### Debian, Ubuntu, Fedora, and other packages
 

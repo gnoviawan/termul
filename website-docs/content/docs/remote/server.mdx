@@ -66,8 +66,9 @@ Things to know about the container:
 - The port is open on `127.0.0.1` only. To reach it from other devices, put an HTTPS reverse proxy in front of it. See [Put a reverse proxy in front](/docs/remote/server-options#put-a-reverse-proxy-in-front).
 - The compose file turns on remote changes (`TERMUL_SERVER_ALLOW_REMOTE_WRITES=true`), because browser traffic reaches the container from the Docker network, not from the container itself.
 - The image has no agent programs such as Claude Code or Codex. Install them into `/home/termul/.local/bin` inside the container. That folder is on the `PATH` and is kept between restarts.
-- The user inside the container has user ID 1000. If your own user ID is different, build the image with yours before the first start: `TERMUL_UID=$(id -u) TERMUL_GID=$(id -g) docker compose up -d --build`.
-- To set your own token, put `TERMUL_WEB_AUTH_TOKEN=<token>` in a `.env` file next to `docker-compose.yml`.
+- The user inside the container has user ID 1000. If your own user ID is different, build the image with yours before the first start: `TROUPE_UID=$(id -u) TROUPE_GID=$(id -g) docker compose up -d --build`.
+- To set your own token, put `TROUPE_WEB_AUTH_TOKEN=<token>` in a `.env` file next to `docker-compose.yml`.
+- The older `TERMUL_*` name of each variable still works. If you set both, the `TROUPE_*` name wins unless it is empty. An existing `.env` file keeps working.
 
 To update, pull the new image and restart:
 
@@ -76,7 +77,7 @@ docker compose pull
 docker compose up -d
 ```
 
-To follow the nightly builds, set `TERMUL_IMAGE=ghcr.io/gnoviawan/termul-server:nightly` in `.env`.
+To follow the nightly builds, set `TROUPE_IMAGE=ghcr.io/gnoviawan/termul-server:nightly` in `.env`.
 
 </Tab>
 </Tabs>

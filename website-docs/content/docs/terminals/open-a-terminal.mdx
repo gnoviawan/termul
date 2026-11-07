@@ -105,4 +105,4 @@ The terminal opens in the active pane, and the tab has the profile's name. Profi
 
 A project can have 10 terminals open at once, and Termul as a whole can have 30. Terminals that keep running in the background count toward both limits. When you reach a limit, Termul shows a message such as "Terminal limit reached (10 per project, 30 total): this project is at its limit" and doesn't open the terminal. Close a terminal to open a new one.
 
-To change the per-project limit, set the `TERMUL_MAX_TERMINALS_PER_PROJECT` environment variable to a number before you start Termul. If you run Termul as a server, you can also use the `--max-terminals-per-project` flag. The total limit of 30 doesn't change.
+To change the per-project limit, set the `TROUPE_MAX_TERMINALS_PER_PROJECT` environment variable (or the older `TERMUL_MAX_TERMINALS_PER_PROJECT`) to a number before you start Termul. If you run Termul as a server, you can also use the `--max-terminals-per-project` flag. The total limit of 30 doesn't change.
