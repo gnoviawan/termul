@@ -22,6 +22,10 @@ teardown() {
   unset TERMUL_INSTALL_APPLICATIONS_DIR
   unset TERMUL_INSTALL_BIN_DIR
   unset TERMUL_INSTALL_DESKTOP_DIR
+  unset TROUPE_INSTALL_YES
+  unset TROUPE_INSTALL_APPLICATIONS_DIR
+  unset TROUPE_INSTALL_BIN_DIR
+  unset TROUPE_INSTALL_DESKTOP_DIR
   cleanup_tmp
 }
 
@@ -235,7 +239,7 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   run confirm_install "Install Termul Manager?"
 
   [ "$status" -ne 0 ]
-  [[ "$output" == *"TERMUL_INSTALL_YES=1"* ]]
+  [[ "$output" == *"Set TROUPE_INSTALL_YES=1 to install non-interactively."* ]]
 }
 
 @test "confirm_install proceeds with env var and echoes prompt" {
@@ -245,8 +249,56 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   run confirm_install "Install Termul Manager v1.2.3?"
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"TERMUL_INSTALL_YES=1"* ]]
-  [[ "$output" == *"Install Termul Manager v1.2.3?"* ]]
+  [ "$output" = "TROUPE_INSTALL_YES=1: Install Termul Manager v1.2.3?" ]
+}
+
+@test "confirm_install proceeds with the TROUPE_ name" {
+  load_install
+  export TROUPE_INSTALL_YES=1
+
+  run confirm_install "Install Termul Manager v1.2.3?"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "TROUPE_INSTALL_YES=1: Install Termul Manager v1.2.3?" ]
+}
+
+@test "brand_env prefers TROUPE_, falls back to TERMUL_, and ignores a blank TROUPE_" {
+  load_install
+
+  TROUPE_INSTALL_BIN_DIR=/new TERMUL_INSTALL_BIN_DIR=/old run brand_env INSTALL_BIN_DIR
+  [ "$output" = "/new" ]
+  TERMUL_INSTALL_BIN_DIR=/old run brand_env INSTALL_BIN_DIR
+  [ "$output" = "/old" ]
+  TROUPE_INSTALL_BIN_DIR= TERMUL_INSTALL_BIN_DIR=/old run brand_env INSTALL_BIN_DIR
+  [ "$output" = "/old" ]
+  unset TERMUL_INSTALL_BIN_DIR
+  run brand_env INSTALL_BIN_DIR
+  [ "$output" = "" ]
+}
+
+@test "note_legacy_env names each old variable once and skips renamed ones" {
+  load_install
+  unset TERMUL_INSTALL_APPLICATIONS_DIR TERMUL_INSTALL_DESKTOP_DIR
+  export TERMUL_INSTALL_YES=1
+  export TROUPE_INSTALL_BIN_DIR=/new
+
+  run --separate-stderr note_legacy_env
+
+  [ "$status" -eq 0 ]
+  [ "$stderr" = "TERMUL_INSTALL_YES is deprecated; rename it to TROUPE_INSTALL_YES (TERMUL_INSTALL_YES still works for now)" ]
+}
+
+@test "install_linux installs into TROUPE_INSTALL_BIN_DIR over the TERMUL_ name" {
+  stub_common_tools
+  stub_curl_release_flow "linux appimage payload"
+  load_install
+  export TROUPE_INSTALL_BIN_DIR="$HOME/troupe-bin"
+
+  run install_linux "v1.2.3" "x86_64" "$fixture_sums"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/troupe-bin/termul-manager.AppImage")" = "linux appimage payload" ]
+  [ ! -e "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage" ]
 }
 
 @test "install_macos downloads correct DMG, verifies before copy fallback, detaches, then xattrs" {
@@ -411,6 +463,18 @@ run_launcher() {
   [ "$status" -eq 0 ]
   [ "$output" = "LD_PRELOAD=<unset> marker=<unset> args=<--flag two words>" ]
   [[ "$stderr" == *"TERMUL_WAYLAND_CLIENT_LIB=$wayland_lib is not a 64-bit library"* ]]
+}
+
+@test "linux launcher prefers TROUPE_WAYLAND_CLIENT_LIB" {
+  install_linux_launcher
+  troupe_lib="$TERMUL_TEST_TMP_DIR/troupe/libwayland-client.so.0"
+  mkdir -p "${troupe_lib%/*}"
+  printf '\177ELF\002' >"$troupe_lib"
+
+  run_launcher WAYLAND_DISPLAY=wayland-0 TROUPE_WAYLAND_CLIENT_LIB="$troupe_lib"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<$troupe_lib> marker=<$troupe_lib> args=<--flag two words>" ]
 }
 
 @test "linux launcher finds the AppImage when started through a symlink" {
