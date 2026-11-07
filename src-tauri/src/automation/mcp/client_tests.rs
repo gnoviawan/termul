@@ -1,5 +1,5 @@
 //! `list_on` and `call_on` against a real rmcp server over an in-process
-//! duplex pipe, with the client config every Termul MCP client sends.
+//! duplex pipe, with the client config every Troupe MCP client sends.
 
 use std::sync::Arc;
 
@@ -102,7 +102,7 @@ impl ServerHandler for TestServer {
     }
 }
 
-/// A client with Termul's config over the `initialize` handshake, the one
+/// A client with Troupe's config over the `initialize` handshake, the one
 /// `connect` uses, or over `server/discover` at protocol 2026-07-28.
 async fn connected(modern: bool) -> (RunningService<RoleClient, ClientConfig>, Seen) {
     let handler = TestServer::default();

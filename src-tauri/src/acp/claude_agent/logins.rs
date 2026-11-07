@@ -4,7 +4,7 @@
 //! browser. The CLI prints a sign-in link, which goes to the client. The user
 //! signs in on claude.com in any browser, and the Claude page shows a code.
 //! The client sends that code back, and the host writes it to the CLI. The CLI
-//! exchanges the code and stores the login itself, so Termul never sees a
+//! exchanges the code and stores the login itself, so Troupe never sees a
 //! token. The link, the code and the CLI output are never logged.
 
 use std::collections::HashMap;

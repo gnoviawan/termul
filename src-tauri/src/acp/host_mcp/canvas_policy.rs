@@ -2,16 +2,16 @@
 //! canvas call before it reaches a renderer.
 //!
 //! The editor never touches the file system for an agent. `file.save` is
-//! Termul's own save, whatever path it names. An export with a `path` runs
-//! without it, so the bytes come back inline, and Termul writes them to that
+//! Troupe's own save, whatever path it names. An export with a `path` runs
+//! without it, so the bytes come back inline, and Troupe writes them to that
 //! path only when it lies inside the project. The editor picks an export's
 //! format from the path's extension when none is given, so without the path
-//! Termul names the format itself. Every other command or method that reads
+//! Troupe names the format itself. Every other command or method that reads
 //! or writes a path is refused with `UNSUPPORTED_IN_KIOSK`, and so is every
 //! command that would leave the project's one document behind or make the
 //! editor contact a server ([`Why`]). A call that runs another command,
 //! named in its params (`command.batch`, `text.preview`) or bound to the key
-//! it presses (`ui.key`), is routed as each command it runs. Termul decides
+//! it presses (`ui.key`), is routed as each command it runs. Troupe decides
 //! by reading a command's params, so a command whose whole params are a
 //! reference the engine fills in from an earlier batch step is refused.
 
@@ -28,7 +28,7 @@ pub enum CanvasRoute {
     Forward,
     /// `host.save` on the renderer instead of the editor's own save.
     HostSave,
-    /// `execute` (the export without its `path`) to the editor, then Termul
+    /// `execute` (the export without its `path`) to the editor, then Troupe
     /// writes the returned bytes to `path`.
     ExportTo {
         path: String,
@@ -54,14 +54,14 @@ enum Why {
     /// it has one.
     Files { instead: Option<&'static str> },
     /// It opens, closes or switches documents. The kiosk hides the tab bar,
-    /// so the project's document could not be brought back, and Termul's
+    /// so the project's document could not be brought back, and Troupe's
     /// save would write whichever document is in front over its file.
     OtherDocument,
-    /// It clears the unsaved mark without writing anything, so Termul's
+    /// It clears the unsaved mark without writing anything, so Troupe's
     /// autosave, which waits for that mark, would skip the changes.
     SkipsSave,
     /// It reaches past the canvas: it hands the document to a server or a
-    /// live session, opens a link, or contacts or writes outside Termul. The
+    /// live session, opens a link, or contacts or writes outside Troupe. The
     /// text says what it does.
     Outside(&'static str),
     /// It installs, updates or publishes plugin code. An installed plugin's
@@ -86,13 +86,13 @@ const FILES: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::Files { instead:
 const FILE_AT_PATH: CommandPolicy = CommandPolicy::Refuse(PATH, Why::Files { instead: None });
 const OTHER_DOCUMENT: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::OtherDocument);
 const LEAVES_TERMUL: CommandPolicy =
-    outside("shares the document outside Termul, with a server or a live session");
+    outside("shares the document outside Troupe, with a server or a live session");
 const PLUGIN_CODE: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::PluginCode);
 /// The kiosk has no live sessions or online files, and their commands ask
 /// sharing servers for files, links and people (`collab.files` with
 /// `refresh` asks the server `pref.publishServer` names).
 const LIVE_SESSIONS: CommandPolicy =
-    outside("is for live sessions and files kept on a sharing server outside Termul");
+    outside("is for live sessions and files kept on a sharing server outside Troupe");
 /// Loading a linked library asks a team library's server for it, or reads a
 /// library file outside the project.
 const LINKED_LIBRARIES: CommandPolicy = outside(
@@ -113,7 +113,7 @@ const fn files_unless(when: &'static [When], instead: &'static str) -> CommandPo
     )
 }
 
-/// figcraft engine commands Termul runs itself or refuses (`crates/engine/src`).
+/// figcraft engine commands Troupe runs itself or refuses (`crates/engine/src`).
 const COMMANDS: &[(&str, CommandPolicy)] = &[
     ("file.save", CommandPolicy::HostSave),
     ("file.export", CommandPolicy::ExportTo),
@@ -268,7 +268,7 @@ const PREVIEW: &str = "text.preview";
 const KEY: &str = "ui.key";
 /// The keys that make a value in a batch step's params a reference to an
 /// earlier step's result (figcraft `automation/batch.rs`). The engine swaps
-/// it for that value only after Termul routed the batch.
+/// it for that value only after Troupe routed the batch.
 const REFERENCE_KEYS: [&str; 3] = ["$step", "$ref", "$name"];
 
 /// Route one call. `params` is the call's parsed params.
@@ -296,7 +296,7 @@ fn route_execute(execute: &Value) -> CanvasRoute {
         return CanvasRoute::Refuse(CanvasError::new(
             CanvasErrorCode::UnsupportedInKiosk,
             format!(
-                "`{command}`'s params come from an earlier batch step, so Termul cannot check \
+                "`{command}`'s params come from an earlier batch step, so Troupe cannot check \
                  them; pass them directly"
             ),
         ));
@@ -360,7 +360,7 @@ fn route_as(inner: &Value, context: &str) -> CanvasRoute {
     ))
 }
 
-/// A batch runs as one undo step inside the editor, so a step Termul would
+/// A batch runs as one undo step inside the editor, so a step Troupe would
 /// have to handle itself refuses the whole batch, and a step the kiosk
 /// refuses on its own refuses it for the same reason.
 fn route_batch(params: &Value) -> CanvasRoute {
@@ -386,7 +386,7 @@ fn route_preview(params: &Value) -> CanvasRoute {
         return CanvasRoute::Refuse(CanvasError::new(
             CanvasErrorCode::UnsupportedInKiosk,
             format!(
-                "{context}its `command` is taken from an earlier batch step, which Termul cannot \
+                "{context}its `command` is taken from an earlier batch step, which Troupe cannot \
                  check before the batch runs; name the command itself"
             ),
         ));
@@ -397,7 +397,7 @@ fn route_preview(params: &Value) -> CanvasRoute {
 /// `ui.key` runs the command its key is bound to (figcraft `keymap`), so it
 /// is routed as that command. The editor looks the key up on the platform
 /// the browser reports and in the context it is in (on the canvas or editing
-/// text), which Termul cannot see, so the key is routed as its binding on
+/// text), which Troupe cannot see, so the key is routed as its binding on
 /// every platform in every context.
 fn route_key(params: &Value) -> CanvasRoute {
     use figcraft_engine::keymap::{lookup, Context, Mods, Platform};
@@ -439,7 +439,7 @@ fn route_key(params: &Value) -> CanvasRoute {
 }
 
 /// A param taken from an earlier batch step counts as given: the engine
-/// fills it in after Termul checked the batch.
+/// fills it in after Troupe checked the batch.
 fn applies(when: &[When], params: &Value) -> bool {
     is_reference(params)
         || when.iter().any(|when| match when {
@@ -499,7 +499,7 @@ fn refusal(name: &str, why: Why) -> CanvasError {
     let message = match why {
         Why::Files { instead } => {
             let refused = format!(
-                "`{name}` reads or writes files, which the Termul canvas does not allow: \
+                "`{name}` reads or writes files, which the Troupe canvas does not allow: \
                  save_file saves the project's document, and export returns bytes or writes \
                  inside the project"
             );
@@ -509,21 +509,21 @@ fn refusal(name: &str, why: Why) -> CanvasError {
             }
         }
         Why::OtherDocument => format!(
-            "`{name}` opens, closes or switches documents, which the Termul canvas does not \
+            "`{name}` opens, closes or switches documents, which the Troupe canvas does not \
              allow: it shows only the project's document, with no tabs to switch back, and \
-             Termul's save would write the document in front over the project's canvas file"
+             Troupe's save would write the document in front over the project's canvas file"
         ),
         Why::SkipsSave => format!(
-            "`{name}` marks the document saved without saving it, which the Termul canvas does \
-             not allow: Termul saves the canvas while it has unsaved changes, so they would \
+            "`{name}` marks the document saved without saving it, which the Troupe canvas does \
+             not allow: Troupe saves the canvas while it has unsaved changes, so they would \
              never be written. Save with save_file"
         ),
         Why::Outside(does) => {
-            format!("`{name}` {does}, which the Termul canvas does not allow")
+            format!("`{name}` {does}, which the Troupe canvas does not allow")
         }
         Why::RepeatsUnseen => format!(
             "`{name}` runs the editor's last command again, which may be one the user ran and \
-             which Termul cannot check, so the Termul canvas does not allow it. Run that command \
+             which Troupe cannot check, so the Troupe canvas does not allow it. Run that command \
              itself instead"
         ),
         Why::PluginCode => format!(

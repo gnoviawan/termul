@@ -46,7 +46,7 @@ fn a_download_mark_is_the_one_the_os_checks() {
             .unwrap();
         let value = String::from_utf8_lossy(&out.stdout);
         assert!(
-            value.starts_with("0081;") && value.trim_end().ends_with(";Termul;"),
+            value.starts_with("0081;") && value.trim_end().ends_with(";Troupe;"),
             "{value}"
         );
     }

@@ -167,7 +167,7 @@ impl TermulPlanServer {
                 "ok": false,
                 "code": "timeout",
                 "reason": "host_round_trip",
-                "message": "the Termul host did not answer in time",
+                "message": "the Troupe host did not answer in time",
             }),
             Ok(reply) => browser_reply(reply),
         };
@@ -196,7 +196,7 @@ fn browser_reply(reply: Result<FrameReply, String>) -> serde_json::Value {
         Ok(FrameReply { code, error, .. }) => serde_json::json!({
             "ok": false,
             "code": code.unwrap_or_else(|| "internal".to_string()),
-            "message": error.unwrap_or_else(|| "the Termul host rejected the call".to_string()),
+            "message": error.unwrap_or_else(|| "the Troupe host rejected the call".to_string()),
         }),
         Err(e) => serde_json::json!({
             "ok": false,
@@ -262,7 +262,7 @@ async fn describe_browser_tool(config: &ChildConfig) -> Option<DescribedTool> {
 /// start instead of deferring it behind tool search, where the agent sees
 /// only its name and rarely calls it. Only for the tools every session
 /// needs: `ask_user` stays deferred because Claude Code has its own
-/// question tool, which Termul also shows.
+/// question tool, which Troupe also shows.
 fn always_load() -> MetaObject {
     let mut meta = MetaObject::new();
     meta.0.insert("anthropic/alwaysLoad".to_string(), Value::Bool(true));
@@ -278,7 +278,7 @@ impl TermulPlanServer {
     #[tool(
         name = "plan",
         meta = always_load(),
-        description = "Update the execution plan / todo list shown in the Termul plan panel. You MUST call this instead of any built-in todo/task tool — do not maintain your own todo list. Every time you would create or update a task, call this tool so the user sees a unified plan UI across all agents."
+        description = "Update the execution plan / todo list shown in the Troupe plan panel. You MUST call this instead of any built-in todo/task tool — do not maintain your own todo list. Every time you would create or update a task, call this tool so the user sees a unified plan UI across all agents."
     )]
     async fn plan(&self, Parameters(input): Parameters<TermulPlanInput>) -> String {
         let request = FrameRequest {
@@ -294,7 +294,7 @@ impl TermulPlanServer {
     #[tool(
         name = "set_session_title",
         meta = always_load(),
-        description = "Set a concise title for the current Termul chat session. Call this EXACTLY ONCE per session, during the first turn, as soon as the user's intent is clear. Do not call it again for the same session — subsequent calls are ignored. Also pass `branch`: a short kebab-case slug for this chat's git branch (lowercase letters, digits and single hyphens, at most 48 characters, for example `fix-login-redirect`); Termul uses it to name the chat's worktree branch."
+        description = "Set a concise title for the current Troupe chat session. Call this EXACTLY ONCE per session, during the first turn, as soon as the user's intent is clear. Do not call it again for the same session — subsequent calls are ignored. Also pass `branch`: a short kebab-case slug for this chat's git branch (lowercase letters, digits and single hyphens, at most 48 characters, for example `fix-login-redirect`); Troupe uses it to name the chat's worktree branch."
     )]
     async fn set_session_title(
         &self,
@@ -313,7 +313,7 @@ impl TermulPlanServer {
 
     #[tool(
         name = "read_canvas_guide",
-        description = "Termul Canvas design guide (the termul-canvas skill). Call it with no topic before your first canvas edit in a session: it returns SKILL.md, the index with the general and taste rules and the list of topics. Then read the required topics canvas-basics and working-protocol, vague-prompts when the request is short, and the one domain guide that fits (landing-page, web-app, mobile-app, dashboard, slides, social-post or design-system). Returns Markdown.",
+        description = "Troupe Canvas design guide (the termul-canvas skill). Call it with no topic before your first canvas edit in a session: it returns SKILL.md, the index with the general and taste rules and the list of topics. Then read the required topics canvas-basics and working-protocol, vague-prompts when the request is short, and the one domain guide that fits (landing-page, web-app, mobile-app, dashboard, slides, social-post or design-system). Returns Markdown.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn read_canvas_guide(
@@ -327,7 +327,7 @@ impl TermulPlanServer {
 
     #[tool(
         name = "get_canvas_style",
-        description = "Termul Canvas style archetypes for designs whose user gave no brand. With no name, lists the curated styles with their mood and what they suit. With a name, returns that style: Inter faces and a type scale, light and dark colour tokens, spacing and radius scales, composition notes, and `apply`, the arguments for one batch call that creates the style's canvas variables. Returns JSON.",
+        description = "Troupe Canvas style archetypes for designs whose user gave no brand. With no name, lists the curated styles with their mood and what they suit. With a name, returns that style: Inter faces and a type scale, light and dark colour tokens, spacing and radius scales, composition notes, and `apply`, the arguments for one batch call that creates the style's canvas variables. Returns JSON.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_canvas_style(
@@ -340,7 +340,7 @@ impl TermulPlanServer {
 
     #[tool(
         name = "ask_user",
-        description = "Ask the user a question and wait for the answer. Use this INSTEAD of asking in plain text whenever you need a decision, a preference or missing details: the question appears as a panel in Termul and this call returns the answer. Pass `options` (label and optional description) for choices, `multi_select` to allow several picks, and `allow_free_text` (default true) to let the user type their own answer. The result is JSON: {\"answers\": [...], \"free_text\": string or null, \"cancelled\": boolean}. When cancelled is true the user dismissed the question; do not ask again unless you need the answer to continue."
+        description = "Ask the user a question and wait for the answer. Use this INSTEAD of asking in plain text whenever you need a decision, a preference or missing details: the question appears as a panel in Troupe and this call returns the answer. Pass `options` (label and optional description) for choices, `multi_select` to allow several picks, and `allow_free_text` (default true) to let the user type their own answer. The result is JSON: {\"answers\": [...], \"free_text\": string or null, \"cancelled\": boolean}. When cancelled is true the user dismissed the question; do not ask again unless you need the answer to continue."
     )]
     async fn ask_user(
         &self,

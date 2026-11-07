@@ -112,7 +112,7 @@ fn export_to(command: &str, params: Value) -> (String, Value) {
     let CanvasRoute::ExportTo { path, execute } =
         route("engine.execute", &execute(command, params))
     else {
-        panic!("{command} with a path is written by Termul");
+        panic!("{command} with a path is written by Troupe");
     };
     (path, execute)
 }
@@ -362,7 +362,7 @@ fn sending_the_document_outside_termul_is_refused() {
     ] {
         let error = refusal("engine.execute", &execute(command, json!({})));
         assert!(
-            error.message.contains("outside Termul"),
+            error.message.contains("outside Troupe"),
             "{command}: {}",
             error.message
         );
@@ -373,7 +373,7 @@ fn sending_the_document_outside_termul_is_refused() {
 fn opening_links_and_reaching_servers_or_the_machine_outside_termul_is_refused() {
     assert_eq!(
         refusal("engine.execute", &execute("text.openLink", json!({}))).message,
-        "`text.openLink` opens a link in a web browser, which the Termul canvas does not allow"
+        "`text.openLink` opens a link in a web browser, which the Troupe canvas does not allow"
     );
     for (command, params, does) in [
         (
@@ -392,7 +392,7 @@ fn opening_links_and_reaching_servers_or_the_machine_outside_termul_is_refused()
             error.message.starts_with(&format!("`{command}` {does}"))
                 && error
                     .message
-                    .ends_with("which the Termul canvas does not allow"),
+                    .ends_with("which the Troupe canvas does not allow"),
             "{command}: {}",
             error.message
         );
@@ -479,12 +479,12 @@ fn every_plugin_command_the_pinned_engine_runs_is_refused_or_known_to_bring_in_n
     assert_eq!(engine, sorted);
 }
 
-const SESSIONS: &str = "is for live sessions and files kept on a sharing server outside Termul";
+const SESSIONS: &str = "is for live sessions and files kept on a sharing server outside Troupe";
 const LIBRARIES: &str = "loads the document's linked libraries, which contacts the servers of its \
                          team libraries and reads library files outside the project";
 
 /// Commands that make the editor contact a server, set the server it
-/// contacts, or open a page outside Termul, each with what its refusal says
+/// contacts, or open a page outside Troupe, each with what its refusal says
 /// it does.
 const REACHES_A_SERVER: &[(&str, &str, &str)] = &[
     (
@@ -592,7 +592,7 @@ fn reaching_a_server_or_choosing_the_server_the_editor_contacts_is_refused() {
         let params: Value = serde_json::from_str(params).unwrap();
         assert_eq!(
             refusal("engine.execute", &execute(command, params.clone())).message,
-            format!("`{command}` {does}, which the Termul canvas does not allow"),
+            format!("`{command}` {does}, which the Troupe canvas does not allow"),
             "{command} {params}"
         );
     }
@@ -662,12 +662,12 @@ fn an_agent_cannot_point_the_editor_at_its_own_server_and_make_it_connect() {
         [
             Some(
                 "`pref.publishServer` sets the sharing server the editor contacts for online \
-                 files and join codes, which the Termul canvas does not allow"
+                 files and join codes, which the Troupe canvas does not allow"
                     .to_string()
             ),
             Some(
                 "`collab.files` is for live sessions and files kept on a sharing server outside \
-                 Termul, which the Termul canvas does not allow"
+                 Troupe, which the Troupe canvas does not allow"
                     .to_string()
             ),
         ]
@@ -756,7 +756,7 @@ fn previewing_a_team_library_style_cannot_make_the_editor_connect() {
     let preview_refusal = "`text.preview` runs the command it previews: `library.applyStyle` \
                            loads the document's linked libraries, which contacts the servers of \
                            its team libraries and reads library files outside the project, which \
-                           the Termul canvas does not allow";
+                           the Troupe canvas does not allow";
     assert_eq!(
         refusals,
         [
@@ -767,7 +767,7 @@ fn previewing_a_team_library_style_cannot_make_the_editor_connect() {
 }
 
 /// A batch step's param can be a reference to an earlier step's result,
-/// which the engine fills in after Termul checked the batch. The audit's
+/// which the engine fills in after Troupe checked the batch. The audit's
 /// preview names its command that way, and an export takes its path that
 /// way, so each is refused unread.
 #[test]
@@ -816,12 +816,12 @@ fn a_batch_step_cannot_take_a_param_termul_checks_from_an_earlier_step() {
         [
             Some(
                 "batch step 1: `text.preview` runs the command it previews: its `command` is \
-                 taken from an earlier batch step, which Termul cannot check before the batch \
+                 taken from an earlier batch step, which Troupe cannot check before the batch \
                  runs; name the command itself"
                     .to_string()
             ),
             Some(
-                "batch step 2: `file.exportSvg` reads or writes files, which the Termul canvas \
+                "batch step 2: `file.exportSvg` reads or writes files, which the Troupe canvas \
                  does not allow: save_file saves the project's document, and export returns \
                  bytes or writes inside the project"
                     .to_string()
@@ -860,7 +860,7 @@ fn a_batch_step_cannot_take_its_whole_params_from_an_earlier_step() {
     assert_eq!(
         refusal.as_deref(),
         Some(
-            "batch step 3: `text.preview`'s params come from an earlier batch step, so Termul \
+            "batch step 3: `text.preview`'s params come from an earlier batch step, so Troupe \
              cannot check them; pass them directly"
         )
     );
@@ -895,7 +895,7 @@ fn every_command_whose_whole_params_come_from_an_earlier_step_is_refused() {
                 )
             };
             let unread = format!(
-                "`{command}`'s params come from an earlier batch step, so Termul cannot check \
+                "`{command}`'s params come from an earlier batch step, so Troupe cannot check \
                  them; pass them directly"
             );
             assert_eq!(
@@ -1020,7 +1020,7 @@ fn every_command_that_runs_a_command_it_names_is_routed_by_that_command() {
             let message = refusal("engine.execute", &call).message;
             assert!(
                 message.ends_with(&format!(
-                    "`{command}` {does}, which the Termul canvas does not allow"
+                    "`{command}` {does}, which the Troupe canvas does not allow"
                 )),
                 "{call}: {message}"
             );
@@ -1030,7 +1030,7 @@ fn every_command_that_runs_a_command_it_names_is_routed_by_that_command() {
     }
 }
 
-/// `edit.repeat` runs the editor's last command again: one Termul never saw
+/// `edit.repeat` runs the editor's last command again: one Troupe never saw
 /// when the user ran it, such as a team library style from the Libraries
 /// panel.
 #[test]
@@ -1038,7 +1038,7 @@ fn repeating_the_editors_last_command_is_refused() {
     assert_eq!(
         refusal("engine.execute", &execute("edit.repeat", json!({}))).message,
         "`edit.repeat` runs the editor's last command again, which may be one the user ran and \
-         which Termul cannot check, so the Termul canvas does not allow it. Run that command \
+         which Troupe cannot check, so the Troupe canvas does not allow it. Run that command \
          itself instead"
     );
 }
@@ -1107,7 +1107,7 @@ fn every_command_the_pinned_engine_runs_has_a_policy_decision() {
 }
 
 /// An export path the policy gives a format to must be one the engine can
-/// write, or the agent gets an engine error for a path Termul accepted.
+/// write, or the agent gets an engine error for a path Troupe accepted.
 #[test]
 fn every_format_an_export_path_names_is_one_the_pinned_engine_exports() {
     use figcraft_mcp::Backend as _;
@@ -1554,7 +1554,7 @@ fn every_shortcut_for_a_command_termul_refuses_or_handles_is_refused() {
 }
 
 /// Pressing New file through the `key` tool would put a second document in
-/// front of the project's, which Termul's save would then write over it.
+/// front of the project's, which Troupe's save would then write over it.
 #[test]
 fn a_shortcut_cannot_open_a_second_document() {
     use figcraft_mcp::Backend as _;
@@ -1579,8 +1579,8 @@ fn a_shortcut_cannot_open_a_second_document() {
         refused.as_deref(),
         Some(
             "`ui.key` cmd+N runs the shortcut `file.new`: `file.new` opens, closes or switches \
-             documents, which the Termul canvas does not allow: it shows only the project's \
-             document, with no tabs to switch back, and Termul's save would write the document \
+             documents, which the Troupe canvas does not allow: it shows only the project's \
+             document, with no tabs to switch back, and Troupe's save would write the document \
              in front over the project's canvas file"
         )
     );

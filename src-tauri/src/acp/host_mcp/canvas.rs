@@ -80,11 +80,11 @@ impl CanvasErrorCode {
         match self {
             Self::CanvasClosed => Some(
                 "The canvas is not open: ask the user to open it with the Canvas button in \
-                 Termul's left rail, then retry.",
+                 Troupe's left rail, then retry.",
             ),
             Self::CanvasClosing => Some(
                 "The canvas is closing: ask the user to reopen it with the Canvas button in \
-                 Termul's left rail, then retry.",
+                 Troupe's left rail, then retry.",
             ),
             Self::CanvasHidden => Some(
                 "This tool needs the canvas on screen: ask the user to switch to the Canvas tab, \
@@ -92,7 +92,7 @@ impl CanvasErrorCode {
                  while it is hidden.",
             ),
             Self::CanvasOpenElsewhere => Some(
-                "This project's canvas is held by another Termul window or browser tab: ask the \
+                "This project's canvas is held by another Troupe window or browser tab: ask the \
                  user to close it there and reopen it with the Canvas button here, then retry.",
             ),
             Self::CanvasTimeout => Some(
@@ -102,16 +102,16 @@ impl CanvasErrorCode {
                  too, ask the user to check that the Canvas tab is open and responsive.",
             ),
             Self::UnsupportedInKiosk => Some(
-                "Termul owns the canvas file: save with save_file, export only to a relative \
+                "Troupe owns the canvas file: save with save_file, export only to a relative \
                  path inside the project, and never open or write design files on disk.",
             ),
             Self::NoActiveTurn => Some(
-                "Termul's host tools run only during a prompt turn, and this call came outside \
+                "Troupe's host tools run only during a prompt turn, and this call came outside \
                  one (for example after a background task woke you). The canvas may still be \
                  open, so do not ask the user to open it: continue after the user's next message.",
             ),
             Self::AmbiguousSession => Some(
-                "This agent has more than one chat with an active turn, so Termul cannot tell \
+                "This agent has more than one chat with an active turn, so Troupe cannot tell \
                  which one this call belongs to. Retry once every other chat's turn has ended.",
             ),
             Self::UnknownMethod | Self::EngineError => None,

@@ -1,4 +1,4 @@
-//! The canvas `Bridge`: Termul's implementation of figcraft-mcp's `Backend`
+//! The canvas `Bridge`: Troupe's implementation of figcraft-mcp's `Backend`
 //! (spine AD-18), living in the `host_mcp` child.
 //!
 //! `call` sends one `Canvas` frame to the parent over the same loopback TCP
@@ -192,7 +192,7 @@ impl Backend for Bridge {
     }
 
     fn describe(&self) -> String {
-        "Termul canvas".to_string()
+        "Troupe canvas".to_string()
     }
 
     /// The fork replaces `ui.render`'s file path with `host.renderPng`, which
