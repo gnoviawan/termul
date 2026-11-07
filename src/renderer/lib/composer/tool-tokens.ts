@@ -83,11 +83,16 @@ export function replaceToolTokensWithLabels(value: string): string {
     .join('')
 }
 
-/** The inverse for a persisted prompt: each tool's exact wire text becomes its pill again. */
+/**
+ * The inverse for a persisted prompt: each tool's exact wire text, current or
+ * legacy, becomes its pill again.
+ */
 export function restoreToolTokens(wireText: string): string {
   let text = wireText
   for (const tool of TERMUL_TOOLS) {
-    if (text.includes(tool.wireText)) text = text.replaceAll(tool.wireText, toolToken(tool.id))
+    for (const wire of [tool.wireText, tool.legacyWireText]) {
+      if (text.includes(wire)) text = text.replaceAll(wire, toolToken(tool.id))
+    }
   }
   return text
 }

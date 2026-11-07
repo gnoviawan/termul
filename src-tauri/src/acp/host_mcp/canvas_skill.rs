@@ -1,4 +1,4 @@
-//! Termul's design harness for the canvas (issue #1430): the `termul-canvas`
+//! Termul's design harness for the canvas (issue #1430): the `troupe-canvas`
 //! skill and the curated style archetypes, embedded in the binary and served
 //! by the `read_canvas_guide` and `get_canvas_style` host tools.
 //!

@@ -313,7 +313,7 @@ impl TermulPlanServer {
 
     #[tool(
         name = "read_canvas_guide",
-        description = "Termul Canvas design guide (the termul-canvas skill). Call it with no topic before your first canvas edit in a session: it returns SKILL.md, the index with the general and taste rules and the list of topics. Then read the required topics canvas-basics and working-protocol, vague-prompts when the request is short, and the one domain guide that fits (landing-page, web-app, mobile-app, dashboard, slides, social-post or design-system). Returns Markdown.",
+        description = "Termul Canvas design guide (the troupe-canvas skill). Call it with no topic before your first canvas edit in a session: it returns SKILL.md, the index with the general and taste rules and the list of topics. Then read the required topics canvas-basics and working-protocol, vague-prompts when the request is short, and the one domain guide that fits (landing-page, web-app, mobile-app, dashboard, slides, social-post or design-system). Returns Markdown.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn read_canvas_guide(
