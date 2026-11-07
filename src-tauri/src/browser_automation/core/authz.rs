@@ -39,7 +39,7 @@ impl DenyReason {
     pub fn as_str(self) -> &'static str {
         match self {
             DenyReason::Scheme => "scheme_not_allowed",
-            DenyReason::TermulOwned => "termul_owned_origin",
+            DenyReason::TermulOwned => "troupe_owned_origin",
             DenyReason::AppOrigin => "app_origin",
             DenyReason::UnspecifiedAddress => "unspecified_address",
             DenyReason::MetadataAddress => "metadata_address",
