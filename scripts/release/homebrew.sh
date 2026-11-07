@@ -39,11 +39,28 @@ is_release_prerelease() {
   [[ "$version" == *-* ]]
 }
 
+# 0.5.0 renamed the app from "Termul Manager" to Troupe. The DMG assets carry
+# the product name with spaces turned into dots, and the DMG holds
+# "<name>.app".
+release_product_name() {
+  local version core major minor
+  version="$(normalize_release_version "$1")" || return 1
+  core="${version%%[-+]*}"
+  IFS=. read -r major minor _ <<<"$core"
+  if ((major > 0 || minor >= 5)); then
+    printf '%s\n' "Troupe"
+  else
+    printf '%s\n' "Termul Manager"
+  fi
+}
+
 resolve_dmg_checksums() {
   local checksum_file="$1"
   local version="$2"
-  local arm_dmg="Termul.Manager_${version}_aarch64.dmg"
-  local intel_dmg="Termul.Manager_${version}_x64.dmg"
+  local name
+  name="$(release_product_name "$version")" || return 1
+  local arm_dmg="${name// /.}_${version}_aarch64.dmg"
+  local intel_dmg="${name// /.}_${version}_x64.dmg"
   local arm_sha256 intel_sha256
 
   arm_sha256="$(awk -v file="$arm_dmg" '$2 == file || $2 == "*" file { print $1 }' "$checksum_file")"
@@ -133,6 +150,8 @@ write_homebrew_cask() {
   local version="$2"
   local arm_sha256="$3"
   local intel_sha256="$4"
+  local name
+  name="$(release_product_name "$version")" || return 1
 
   mkdir -p "$(dirname "$output_file")"
   cat >"$output_file" <<EOF
@@ -143,24 +162,24 @@ cask "termul" do
   sha256 arm:   "$arm_sha256",
          intel: "$intel_sha256"
 
-  url "https://github.com/gnoviawan/termul/releases/download/v#{version}/Termul.Manager_#{version}_#{arch}.dmg"
-  name "Termul Manager"
+  url "https://github.com/gnoviawan/termul/releases/download/v#{version}/${name// /.}_#{version}_#{arch}.dmg"
+  name "$name"
   desc "Terminal-native workspace and CLI agent manager"
   homepage "https://github.com/gnoviawan/termul"
 
   auto_updates true
 
-  app "Termul Manager.app"
+  app "$name.app"
 EOF
 
   if [[ "$version" == "0.4.8" ]]; then
-    cat >>"$output_file" <<'EOF'
+    cat >>"$output_file" <<EOF
 
   # v0.4.8 predates Developer ID signing and notarization. Do not copy this
   # narrowly scoped compatibility exception to later casks.
   postflight do
     system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/Termul Manager.app"]
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/$name.app"]
   end
 EOF
   fi

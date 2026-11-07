@@ -1,0 +1,5 @@
+#!/bin/sh
+# Termul Manager was renamed Troupe in 0.5.0. This launcher keeps menu entries,
+# scripts and the 0.4.x in-app updater's relaunch, which runs
+# /usr/bin/termul-manager after installing the update, working.
+exec /usr/bin/troupe "$@"
