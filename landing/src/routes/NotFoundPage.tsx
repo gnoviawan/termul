@@ -4,7 +4,7 @@ import { Button } from '../components/ui/Button';
 
 export function NotFoundPage() {
   useSeoMeta({
-    title: 'Page not found — Termul',
+    title: 'Page not found — Troupe',
     description: 'The page you are looking for does not exist.',
     robots: 'noindex,nofollow',
   });

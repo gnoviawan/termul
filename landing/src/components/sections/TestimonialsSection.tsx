@@ -164,7 +164,7 @@ export function TestimonialsSection() {
           align="center"
           titleId="testimonials-heading"
           title="Built for developers who live in the terminal"
-          description="Teams use Termul to keep projects, shells, and context in one workspace—without rebuilding their setup every time they switch repos."
+          description="Teams use Troupe to keep projects, shells, and context in one workspace—without rebuilding their setup every time they switch repos."
           className="mb-10 w-full max-w-2xl space-y-2"
           titleClassName="mb-8 text-3xl md:text-5xl"
         />

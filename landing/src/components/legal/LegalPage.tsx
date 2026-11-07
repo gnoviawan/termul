@@ -17,7 +17,7 @@ export function LegalPage({
   children,
 }: LegalPageProps) {
   useSeoMeta({
-    title: `${title} — Termul`,
+    title: `${title} — Troupe`,
     description,
     robots: 'index,follow',
   });
@@ -33,7 +33,7 @@ export function LegalPage({
         </h1>
         <p className="mt-3 text-sm">Last updated: {lastUpdated}</p>
         <p className="mt-6 rounded-lg border border-border-subtle p-4 text-sm">
-          This page is a plain-language draft. It describes what the Termul
+          This page is a plain-language draft. It describes what the Troupe
           website and app do today, as far as we could verify in the source
           code. It is not legal advice.
         </p>
