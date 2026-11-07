@@ -10,7 +10,11 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { confirmInstallAndRestart } from '@/lib/confirm-install-update'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { supportsSignedChannelUpdate, type UpdateChannel } from '@/lib/tauri-updater-api'
+import {
+  AUR_UPDATE_COMMAND,
+  supportsSignedChannelUpdate,
+  type UpdateChannel
+} from '@/lib/tauri-updater-api'
 import type { UpdaterErrorSource } from '@/stores/updater-store'
 
 interface UpdatesSectionProps {
@@ -113,7 +117,7 @@ export function UpdatesSection({
           >
             <span className="font-medium text-foreground">Version {version} is available.</span>{' '}
             {isAurUpdater
-              ? 'Update through the AUR with: yay -S termul-manager'
+              ? `Update through the AUR with: ${AUR_UPDATE_COMMAND}`
               : isManualUpdateMode
                 ? 'Automatic update is not available. Download and install it from the release page.'
                 : 'A new version is ready to download.'}

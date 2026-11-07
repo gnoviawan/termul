@@ -86,6 +86,8 @@ export type UpdateMode = 'tauri' | 'aur'
 
 const UPDATE_MODE: UpdateMode = import.meta.env.VITE_TERMUL_UPDATE_MODE === 'aur' ? 'aur' : 'tauri'
 
+export const AUR_UPDATE_COMMAND = 'yay -S troupe'
+
 /**
  * Default mode uses Tauri's signed updater manifest and self-update flow.
  * AUR mode only checks upstream GitHub Releases and asks users to update with yay.
@@ -639,7 +641,7 @@ export async function downloadUpdate(
 
     return {
       success: false,
-      error: 'AUR build cannot self-update. Update with: yay -S termul-manager',
+      error: `AUR build cannot self-update. Update with: ${AUR_UPDATE_COMMAND}`,
       code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
     }
   }
@@ -731,7 +733,7 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
   if (isAurUpdateMode()) {
     return {
       success: false,
-      error: 'AUR build cannot self-install updates. Update with: yay -S termul-manager',
+      error: `AUR build cannot self-install updates. Update with: ${AUR_UPDATE_COMMAND}`,
       code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
     }
   }
