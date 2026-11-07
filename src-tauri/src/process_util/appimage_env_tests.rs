@@ -219,11 +219,19 @@ fn pythonhome_removed_only_when_under_appdir() {
 
 #[test]
 fn marker_vars_are_removed() {
-    let edits = gated(&[("ARGV0", "termul"), ("OWD", "/home/u")]);
+    let edits = gated(&[
+        ("ARGV0", "termul"),
+        ("OWD", "/home/u"),
+        ("TERMUL_LAUNCHER_PRELOAD", "/usr/lib/libwayland-client.so.0"),
+    ]);
     assert_eq!(find(&edits, "APPDIR"), Some(&EnvEdit::Remove));
     assert_eq!(find(&edits, "APPIMAGE"), Some(&EnvEdit::Remove));
     assert_eq!(find(&edits, "ARGV0"), Some(&EnvEdit::Remove));
     assert_eq!(find(&edits, "OWD"), Some(&EnvEdit::Remove));
+    assert_eq!(
+        find(&edits, "TERMUL_LAUNCHER_PRELOAD"),
+        Some(&EnvEdit::Remove)
+    );
 }
 
 #[cfg(unix)]

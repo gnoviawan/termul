@@ -29,8 +29,11 @@
 //! launched from a terminal can outlive it (#281).
 
 mod appimage_env;
+mod launcher_preload;
 
 pub(crate) use appimage_env::{clean_appimage_env, AppImageEnvCommand};
+#[cfg(not(target_os = "windows"))]
+pub(crate) use launcher_preload::remove_launcher_preload;
 
 /// Windows `CREATE_NO_WINDOW` process creation flag.
 #[cfg(windows)]
@@ -279,3 +282,5 @@ mod tests;
 // the sibling `process_util/appimage_env_tests.rs` is found without a `#[path]`.
 #[cfg(all(test, unix))]
 mod appimage_env_tests;
+#[cfg(all(test, not(target_os = "windows")))]
+mod launcher_preload_tests;

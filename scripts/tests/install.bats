@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+bats_require_minimum_version 1.5.0
+
 load "helpers.bash"
 
 fixture_sums="$TERMUL_TEST_REPO_ROOT/scripts/tests/fixtures/SHA256SUMS.txt"
@@ -325,9 +327,101 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   grep -q "releases/download/v1.2.3/Termul.Manager_1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
   ! grep -q "Termul.Manager_v1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
   [ -x "$TERMUL_INSTALL_BIN_DIR/termul-manager" ]
+  [ "$(cat "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage")" = "linux appimage payload" ]
   [ -f "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop" ]
   grep -q "Exec=$TERMUL_INSTALL_BIN_DIR/termul-manager" "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
   [[ "$output" == *"not in PATH"* ]]
+}
+
+# Installs for real, then swaps the AppImage for a stub that prints the env and
+# argv the launcher hands it.
+install_linux_launcher() {
+  stub_common_tools
+  stub_curl_release_flow "linux appimage payload"
+  load_install
+  install_linux "v1.2.3" "x86_64" "$fixture_sums" >/dev/null 2>&1
+  cat >"$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage" <<'STUB'
+#!/usr/bin/env bash
+printf 'LD_PRELOAD=<%s> marker=<%s> args=<%s>\n' "${LD_PRELOAD-unset}" "${TERMUL_LAUNCHER_PRELOAD-unset}" "$*"
+STUB
+  chmod 755 "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage"
+  wayland_lib="$TERMUL_TEST_TMP_DIR/host/libwayland-client.so.0"
+  mkdir -p "${wayland_lib%/*}"
+    printf '\177ELF\002' >"$wayland_lib"
+}
+
+# ld.so warns on stderr about the fake preload paths; assert on stdout only.
+run_launcher() {
+  run --separate-stderr env -u LD_PRELOAD -u TERMUL_LAUNCHER_PRELOAD -u WAYLAND_DISPLAY \
+    TERMUL_WAYLAND_CLIENT_LIB="$wayland_lib" "$@" "$TERMUL_INSTALL_BIN_DIR/termul-manager" --flag "two words"
+}
+
+@test "linux launcher preloads the host libwayland on Wayland and records it" {
+  install_linux_launcher
+
+  run_launcher WAYLAND_DISPLAY=wayland-0
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<$wayland_lib> marker=<$wayland_lib> args=<--flag two words>" ]
+}
+
+@test "linux launcher appends to a user LD_PRELOAD and keeps it" {
+  install_linux_launcher
+
+  run_launcher WAYLAND_DISPLAY=wayland-0 LD_PRELOAD="/opt/a.so /opt/b.so"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=</opt/a.so /opt/b.so:$wayland_lib> marker=<$wayland_lib> args=<--flag two words>" ]
+}
+
+@test "linux launcher adds nothing when the user already preloads the host libwayland" {
+  install_linux_launcher
+
+  run_launcher WAYLAND_DISPLAY=wayland-0 LD_PRELOAD="$wayland_lib"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<$wayland_lib> marker=<unset> args=<--flag two words>" ]
+}
+
+@test "linux launcher leaves X11 sessions untouched" {
+  install_linux_launcher
+
+  run_launcher LD_PRELOAD=/opt/a.so
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=</opt/a.so> marker=<unset> args=<--flag two words>" ]
+}
+
+@test "linux launcher adds nothing when the host has no libwayland" {
+  install_linux_launcher
+  rm "$wayland_lib"
+
+  run_launcher WAYLAND_DISPLAY=wayland-0 TERMUL_LAUNCHER_PRELOAD=/stale.so
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<unset> marker=<unset> args=<--flag two words>" ]
+}
+
+@test "linux launcher skips a 32-bit libwayland and says so" {
+  install_linux_launcher
+  printf '\177ELF\001' >"$wayland_lib"
+
+  run_launcher WAYLAND_DISPLAY=wayland-0
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<unset> marker=<unset> args=<--flag two words>" ]
+  [[ "$stderr" == *"TERMUL_WAYLAND_CLIENT_LIB=$wayland_lib is not a 64-bit library"* ]]
+}
+
+@test "linux launcher finds the AppImage when started through a symlink" {
+  install_linux_launcher
+  mkdir -p "$TERMUL_TEST_TMP_DIR/elsewhere"
+  ln -s "$TERMUL_INSTALL_BIN_DIR/termul-manager" "$TERMUL_TEST_TMP_DIR/elsewhere/termul"
+
+  run --separate-stderr env -u LD_PRELOAD -u WAYLAND_DISPLAY "$TERMUL_TEST_TMP_DIR/elsewhere/termul" --flag
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<unset> marker=<unset> args=<--flag>" ]
 }
 
 @test "main happy macOS path reaches hdiutil once" {

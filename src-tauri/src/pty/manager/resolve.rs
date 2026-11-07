@@ -841,6 +841,7 @@ impl PtyManager {
             for (key, value) in env::vars() {
                 env.insert(key, value);
             }
+            crate::process_util::remove_launcher_preload(&mut env);
 
             if !custom_sets_path {
                 crate::pty::env_refresh::apply_fresh_path(&mut env);
