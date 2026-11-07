@@ -8,16 +8,22 @@
 $ErrorActionPreference = 'Stop'
 $manifest = Join-Path $PSScriptRoot 'comctl32-v6.manifest'
 
+# Compiler diagnostics arrive on stdout as JSON with everything else, so they
+# are printed from it; otherwise a failed build shows no error.
 $messages = & cargo test --no-run --message-format=json @args
-if ($LASTEXITCODE -ne 0) { throw "cargo test --no-run failed with exit code $LASTEXITCODE" }
+$exitCode = $LASTEXITCODE
 
 $count = 0
 foreach ($line in $messages) {
     try { $message = $line | ConvertFrom-Json } catch { continue }
-    if ($message.reason -eq 'compiler-artifact' -and $message.profile.test -and $message.executable) {
+    if ($message.reason -eq 'compiler-message') {
+        Write-Host $message.message.rendered
+    }
+    elseif ($message.reason -eq 'compiler-artifact' -and $message.profile.test -and $message.executable) {
         Copy-Item -Path $manifest -Destination "$($message.executable).manifest" -Force
         (Get-Item $message.executable).LastWriteTime = Get-Date
         $count++
     }
 }
+if ($exitCode -ne 0) { throw "cargo test --no-run failed with exit code $exitCode" }
 Write-Host "manifest installed next to $count test executables"

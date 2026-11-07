@@ -58,6 +58,18 @@ jobs:
             patchelf \
             xvfb
 
+      # The runner starts with 16 GB of RAM and a 3 GB pagefile that Windows
+      # grows on demand. Building the termul-manager test targets in parallel
+      # commits up to about 34 GB, faster than the pagefile grows, and rustc
+      # then fails with "The paging file is too small" (os error 1455).
+      - name: Enlarge the pagefile
+        if: runner.os == 'Windows'
+        uses: al-cheb/configure-pagefile-action@9b6da52fb72a3c6147c1aad2df22d8d905681adc # v1.5
+        with:
+          minimum-size: 24GB
+          maximum-size: 32GB
+          disk-root: "D:"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
