@@ -336,9 +336,9 @@ install_linux() {
   bin_dir="${bin_dir:-${HOME}/.local/bin}"
   desktop_dir="$(brand_env INSTALL_DESKTOP_DIR)"
   desktop_dir="${desktop_dir:-${HOME}/.local/share/applications}"
-  local target_path="${bin_dir}/termul-manager"
-  local appimage_target="${bin_dir}/termul-manager.AppImage"
-  local desktop_path="${desktop_dir}/termul-manager.desktop"
+  local target_path="${bin_dir}/troupe"
+  local appimage_target="${bin_dir}/troupe.AppImage"
+  local desktop_path="${desktop_dir}/troupe.desktop"
   local name
 
   if [[ "$arch" != "x86_64" ]]; then
@@ -398,7 +398,7 @@ if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
   for _lib in "${_candidates[@]}"; do
     if [[ ! -f "$_lib" ]] || ! _elf64 "$_lib"; then
       if [[ -n "$_wayland_lib" ]]; then
-        echo "termul-manager: ${_wayland_var}=${_lib} is not a 64-bit library; starting without the Wayland preload" >&2
+        echo "troupe: ${_wayland_var}=${_lib} is not a 64-bit library; starting without the Wayland preload" >&2
       fi
       continue
     fi
@@ -415,7 +415,7 @@ fi
 
 _self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null)" || _self=""
 [[ -n "$_self" ]] || _self="${BASH_SOURCE[0]}"
-exec "${_self%/*}/termul-manager.AppImage" "$@"
+exec "${_self%/*}/troupe.AppImage" "$@"
 LAUNCHER
     chmod 755 "$target_path" || exit 1
     cat >"$desktop_path" <<DESKTOP
@@ -427,11 +427,26 @@ Terminal=false
 Categories=Development;Utility;
 DESKTOP
 
+    # Pre-0.5.0 installs used the termul-manager names. Keep them pointing at
+    # Troupe so shell aliases, scripts and dock pins still work; the hidden
+    # entry avoids a second menu item.
+    ln -sfn troupe "${bin_dir}/termul-manager" || exit 1
+    ln -sfn troupe.AppImage "${bin_dir}/termul-manager.AppImage" || exit 1
+    cat >"${desktop_dir}/termul-manager.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=${name}
+Exec=${target_path}
+Terminal=false
+NoDisplay=true
+Categories=Development;Utility;
+DESKTOP
+
     case ":${PATH}:" in
       *":${bin_dir}:"*)
         ;;
       *)
-        printf 'Warning: %s is not in PATH. Add it to run termul-manager from your shell.\n' "$bin_dir" >&2
+        printf 'Warning: %s is not in PATH. Add it to run troupe from your shell.\n' "$bin_dir" >&2
         ;;
     esac
 

@@ -218,7 +218,7 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
 @test "verify_sha256 fails missing and mismatched entries without creating install targets" {
   load_install
   local payload="$TERMUL_TEST_TMP_DIR/payload"
-  local target="$TERMUL_INSTALL_BIN_DIR/termul-manager"
+  local target="$TERMUL_INSTALL_BIN_DIR/troupe"
   printf '%s' "tampered payload" >"$payload"
 
   run verify_sha256 "$payload" "Troupe_9.9.9_amd64.AppImage" "$fixture_sums"
@@ -299,8 +299,8 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   run install_linux "v1.2.3" "x86_64" "$fixture_sums"
 
   [ "$status" -eq 0 ]
-  [ "$(cat "$HOME/troupe-bin/termul-manager.AppImage")" = "linux appimage payload" ]
-  [ ! -e "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage" ]
+  [ "$(cat "$HOME/troupe-bin/troupe.AppImage")" = "linux appimage payload" ]
+  [ ! -e "$TERMUL_INSTALL_BIN_DIR/troupe.AppImage" ]
 }
 
 @test "install_macos downloads correct DMG, verifies before copy fallback, detaches, then xattrs" {
@@ -416,7 +416,7 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
 
   [ "$status" -eq 0 ]
   grep -q "releases/download/v0.4.60/Termul.Manager_0.4.60_amd64.AppImage" "$TERMUL_TEST_LOG"
-  grep -Fxq "Name=Termul Manager" "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
+  grep -Fxq "Name=Termul Manager" "$TERMUL_INSTALL_DESKTOP_DIR/troupe.desktop"
 }
 
 @test "install_linux installs AppImage, desktop entry, chmod, and PATH warning" {
@@ -429,13 +429,62 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   [ "$status" -eq 0 ]
   grep -q "releases/download/v1.2.3/Troupe_1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
   ! grep -q "Troupe_v1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
-  [ -x "$TERMUL_INSTALL_BIN_DIR/termul-manager" ]
-  [ "$(cat "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage")" = "linux appimage payload" ]
-  [ -f "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop" ]
-  grep -q "Exec=$TERMUL_INSTALL_BIN_DIR/termul-manager" "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
-  grep -Fxq "Name=Troupe" "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
-  [[ "$output" == *"Installed Troupe to $TERMUL_INSTALL_BIN_DIR/termul-manager"* ]]
-  [[ "$output" == *"not in PATH"* ]]
+  [ -x "$TERMUL_INSTALL_BIN_DIR/troupe" ]
+  [ "$(cat "$TERMUL_INSTALL_BIN_DIR/troupe.AppImage")" = "linux appimage payload" ]
+  [ "$(cat "$TERMUL_INSTALL_DESKTOP_DIR/troupe.desktop")" = "[Desktop Entry]
+Type=Application
+Name=Troupe
+Exec=$TERMUL_INSTALL_BIN_DIR/troupe
+Terminal=false
+Categories=Development;Utility;" ]
+  [[ "$output" == *"Installed Troupe to $TERMUL_INSTALL_BIN_DIR/troupe"* ]]
+  [[ "$output" == *"Warning: $TERMUL_INSTALL_BIN_DIR is not in PATH. Add it to run troupe from your shell."* ]]
+}
+
+@test "install_linux keeps the termul-manager names as links to troupe and a hidden desktop entry" {
+  stub_common_tools
+  stub_curl_release_flow "linux appimage payload"
+  load_install
+
+  run install_linux "v1.2.3" "x86_64" "$fixture_sums"
+
+  [ "$status" -eq 0 ]
+  [ "$(readlink "$TERMUL_INSTALL_BIN_DIR/termul-manager")" = "troupe" ]
+  [ "$(readlink "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage")" = "troupe.AppImage" ]
+  [ "$(cat "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop")" = "[Desktop Entry]
+Type=Application
+Name=Troupe
+Exec=$TERMUL_INSTALL_BIN_DIR/troupe
+Terminal=false
+NoDisplay=true
+Categories=Development;Utility;" ]
+}
+
+@test "install_linux over a pre-0.5.0 script install leaves both names launching Troupe" {
+  stub_common_tools
+  stub_curl_release_flow "linux appimage payload"
+  load_install
+  mkdir -p "$TERMUL_INSTALL_BIN_DIR" "$TERMUL_INSTALL_DESKTOP_DIR"
+  printf '#!/usr/bin/env bash\nexec "${BASH_SOURCE[0]%%/*}/termul-manager.AppImage" "$@"\n' >"$TERMUL_INSTALL_BIN_DIR/termul-manager"
+  printf '#!/usr/bin/env bash\necho old payload\n' >"$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage"
+  chmod 755 "$TERMUL_INSTALL_BIN_DIR/termul-manager" "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage"
+  printf '[Desktop Entry]\nName=Termul Manager\nExec=%s/termul-manager\n' "$TERMUL_INSTALL_BIN_DIR" >"$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
+
+  run install_linux "v1.2.3" "x86_64" "$fixture_sums"
+  [ "$status" -eq 0 ]
+  printf '#!/usr/bin/env bash\necho "troupe payload $*"\n' >"$TERMUL_INSTALL_BIN_DIR/troupe.AppImage"
+
+  run --separate-stderr env -u WAYLAND_DISPLAY "$TERMUL_INSTALL_BIN_DIR/troupe" --a
+  [ "$status" -eq 0 ]
+  [ "$output" = "troupe payload --a" ]
+  run --separate-stderr env -u WAYLAND_DISPLAY "$TERMUL_INSTALL_BIN_DIR/termul-manager" --b
+  [ "$status" -eq 0 ]
+  [ "$output" = "troupe payload --b" ]
+  run --separate-stderr env -u WAYLAND_DISPLAY "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage" --c
+  [ "$status" -eq 0 ]
+  [ "$output" = "troupe payload --c" ]
+  grep -Fxq "Exec=$TERMUL_INSTALL_BIN_DIR/troupe" "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
+  grep -Fxq "NoDisplay=true" "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
 }
 
 # Installs for real, then swaps the AppImage for a stub that prints the env and
@@ -445,11 +494,11 @@ install_linux_launcher() {
   stub_curl_release_flow "linux appimage payload"
   load_install
   install_linux "v1.2.3" "x86_64" "$fixture_sums" >/dev/null 2>&1
-  cat >"$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage" <<'STUB'
+  cat >"$TERMUL_INSTALL_BIN_DIR/troupe.AppImage" <<'STUB'
 #!/usr/bin/env bash
 printf 'LD_PRELOAD=<%s> marker=<%s> args=<%s>\n' "${LD_PRELOAD-unset}" "${TERMUL_LAUNCHER_PRELOAD-unset}" "$*"
 STUB
-  chmod 755 "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage"
+  chmod 755 "$TERMUL_INSTALL_BIN_DIR/troupe.AppImage"
   wayland_lib="$TERMUL_TEST_TMP_DIR/host/libwayland-client.so.0"
   mkdir -p "${wayland_lib%/*}"
     printf '\177ELF\002' >"$wayland_lib"
@@ -458,13 +507,22 @@ STUB
 # ld.so warns on stderr about the fake preload paths; assert on stdout only.
 run_launcher() {
   run --separate-stderr env -u LD_PRELOAD -u TERMUL_LAUNCHER_PRELOAD -u WAYLAND_DISPLAY \
-    TERMUL_WAYLAND_CLIENT_LIB="$wayland_lib" "$@" "$TERMUL_INSTALL_BIN_DIR/termul-manager" --flag "two words"
+    TERMUL_WAYLAND_CLIENT_LIB="$wayland_lib" "$@" "$TERMUL_INSTALL_BIN_DIR/${launcher:-troupe}" --flag "two words"
 }
 
 @test "linux launcher preloads the host libwayland on Wayland and records it" {
   install_linux_launcher
 
   run_launcher WAYLAND_DISPLAY=wayland-0
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<$wayland_lib> marker=<$wayland_lib> args=<--flag two words>" ]
+}
+
+@test "linux launcher preloads the same way when started as termul-manager" {
+  install_linux_launcher
+
+  launcher=termul-manager run_launcher WAYLAND_DISPLAY=wayland-0
 
   [ "$status" -eq 0 ]
   [ "$output" = "LD_PRELOAD=<$wayland_lib> marker=<$wayland_lib> args=<--flag two words>" ]
@@ -533,7 +591,7 @@ run_launcher() {
 @test "linux launcher finds the AppImage when started through a symlink" {
   install_linux_launcher
   mkdir -p "$TERMUL_TEST_TMP_DIR/elsewhere"
-  ln -s "$TERMUL_INSTALL_BIN_DIR/termul-manager" "$TERMUL_TEST_TMP_DIR/elsewhere/termul"
+  ln -s "$TERMUL_INSTALL_BIN_DIR/troupe" "$TERMUL_TEST_TMP_DIR/elsewhere/termul"
 
   run --separate-stderr env -u LD_PRELOAD -u WAYLAND_DISPLAY "$TERMUL_TEST_TMP_DIR/elsewhere/termul" --flag
 
@@ -567,7 +625,7 @@ run_launcher() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"Install Troupe v1.2.3 (linux-x86_64) to $HOME/.local/bin?"* ]]
-  [ -x "$TERMUL_INSTALL_BIN_DIR/termul-manager" ]
+  [ -x "$TERMUL_INSTALL_BIN_DIR/troupe" ]
   grep -q "Troupe_1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
   ! grep -q "Troupe_v1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
 }
