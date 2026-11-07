@@ -35,7 +35,7 @@ export function FeatureVisualCodeEditor() {
           </div>
           <div className="flex-1 bg-graphite p-3 text-[10px] flex flex-col gap-2">
             <div className="text-[9px] text-gray-500 font-mono uppercase tracking-wide">Preview</div>
-            <div className="text-gray-300 font-medium"># Termul</div>
+            <div className="text-gray-300 font-medium"># Troupe</div>
             <div className="text-gray-500 leading-relaxed">
               A workspace terminal with editor and browser tabs.
             </div>

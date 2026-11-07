@@ -10,7 +10,7 @@ export type Testimonial = {
 export const testimonials: Testimonial[] = [
   {
     quote:
-      "Switching repos used to mean rebuilding my whole terminal layout. Termul keeps each project’s shells exactly where I left them.",
+      "Switching repos used to mean rebuilding my whole terminal layout. Troupe keeps each project’s shells exactly where I left them.",
     image: 'https://github.com/shadcn.png',
     name: 'Alex Chen',
     role: 'Staff Engineer',
@@ -64,7 +64,7 @@ export const testimonials: Testimonial[] = [
   },
   {
     quote:
-      'Cross-platform parity matters for us. Termul on macOS and Windows finally looks and behaves the same.',
+      'Cross-platform parity matters for us. Troupe on macOS and Windows finally looks and behaves the same.',
     image: 'https://unavatar.io/x/sundarpichai',
     name: 'Drew Patel',
     role: 'Engineering manager',
@@ -91,7 +91,7 @@ export const testimonials: Testimonial[] = [
   },
   {
     quote:
-      'Termul became the default launcher for every repo I touch. One place for shells, browser, and context.',
+      'Troupe became the default launcher for every repo I touch. One place for shells, browser, and context.',
     image: 'https://unavatar.io/x/elonmusk',
     name: 'Quinn Walsh',
     role: 'Founder',

@@ -9,7 +9,7 @@ export const MoreFeaturesSection = () => {
       <SectionHeader
         align="center"
         title="Built for the whole workflow."
-        description="Beyond the headline features, Termul is packed with the everyday conveniences that keep you in flow."
+        description="Beyond the headline features, Troupe is packed with the everyday conveniences that keep you in flow."
         className="max-w-2xl"
         descriptionClassName="mt-4"
       />
