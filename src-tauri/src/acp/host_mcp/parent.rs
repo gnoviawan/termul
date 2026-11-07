@@ -272,7 +272,7 @@ impl HostPlanServer {
 
     /// The `(port, token, provisional_session_id)` that `agent_id` already
     /// holds for `real_session_id`, if any. A reopen on the same agent passes
-    /// them again so the agent sees an unchanged `termul` server and keeps its
+    /// them again so the agent sees an unchanged `troupe` server and keeps its
     /// live session instead of rebuilding it. A pending reopen token does not
     /// count: a failed reopen evicts it.
     #[must_use]

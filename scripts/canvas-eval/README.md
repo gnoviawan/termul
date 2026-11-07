@@ -4,8 +4,8 @@ A repeatable check that the Troupe Canvas design harness (issue #1430) makes des
 
 ## What runs where
 
-- **The agent** is Claude Code in print mode (`claude -p`), with its built-in tools turned off and only the `termul` MCP server available. Set `CANVAS_EVAL_AGENT` to use another binary with the same flags.
-- **The `termul` server** is `mcp-router.ts`. It takes the instructions and tool definitions from a real Troupe binary (`--internal-mcp-plan-server`), runs `read_canvas_guide` and `get_canvas_style` in that binary, and runs canvas tools in `figcraft-cli mcp`, the headless build of the same engine the app embeds.
+- **The agent** is Claude Code in print mode (`claude -p`), with its built-in tools turned off and only the `troupe` MCP server available. Set `CANVAS_EVAL_AGENT` to use another binary with the same flags.
+- **The `troupe` server** is `mcp-router.ts`. It takes the instructions and tool definitions from a real Troupe binary (`--internal-mcp-plan-server`), runs `read_canvas_guide` and `get_canvas_style` in that binary, and runs canvas tools in `figcraft-cli mcp`, the headless build of the same engine the app embeds.
 - **Baseline mode** hides the two harness tools and drops the instruction sentences that name them, which is what an agent saw before the harness. `session.json` in each run folder records exactly what the agent was shown.
 - **Results** go to `out/<timestamp>/<prompt id>/<mode>/`: `design.figcraft`, `design.png`, `document.json` (the layer tree), `calls.jsonl` (every tool call), `transcript.jsonl` (the agent's stream) and `result.json`.
 

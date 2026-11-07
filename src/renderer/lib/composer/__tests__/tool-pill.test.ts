@@ -21,7 +21,7 @@ const roundTrip = (value: string): string =>
   docToDisplayText(schema.nodeFromJSON(draftFromTokens(value)))
 
 // The host titles chats from these literals; normalize_tests.rs pins the same strings.
-const BROWSER_WIRE = '(Use the browser tool from the termul MCP server)'
+const BROWSER_WIRE = '(Use the browser tool from the troupe MCP server)'
 
 describe('Termul tool pill', () => {
   it('parses a tool token into a pill node carrying the tool id', () => {
@@ -47,9 +47,9 @@ describe('Termul tool pill', () => {
   it('sends agent-neutral wire text in place of each pill', () => {
     expect(
       composerWireText(`${toolToken('browser')} open localhost and ${toolToken('canvas')}`, [])
-    ).toBe(`${BROWSER_WIRE} open localhost and (Use the canvas tools from the termul MCP server)`)
+    ).toBe(`${BROWSER_WIRE} open localhost and (Use the canvas tools from the troupe MCP server)`)
     expect(composerWireText(`schedule it ${toolToken('automations')}`, [])).toBe(
-      'schedule it (Use the automation tools from the termul MCP server)'
+      'schedule it (Use the automation tools from the troupe MCP server)'
     )
   })
 
@@ -111,6 +111,17 @@ describe('Termul tool pill', () => {
     )
   })
 
+  it('turns a 0.4.x prompt naming the termul server back into pills when a chat reopens', () => {
+    expect(
+      wireBlocksToDisplay([
+        {
+          type: 'text',
+          text: '(Use the browser tool from the termul MCP server) open localhost and (Use the canvas tools from the termul MCP server)'
+        }
+      ])
+    ).toEqual([{ type: 'text', text: '\uE00Cbrowser\uE00D open localhost and \uE00Ccanvas\uE00D' }])
+  })
+
   it('keeps an unknown tool id as plain text without leaking a sentinel', () => {
     const value = '\uE00Cscreenshot\uE00D now'
     expect(composerWireText(value, [])).toBe('screenshot now')
@@ -125,7 +136,7 @@ describe('Termul tool pill', () => {
       { kind: 'text', text: ' b c' }
     ])
     expect(composerWireText(`x\uE00D ${toolToken('canvas')}`, [])).toBe(
-      'x (Use the canvas tools from the termul MCP server)'
+      'x (Use the canvas tools from the troupe MCP server)'
     )
   })
 

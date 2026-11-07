@@ -121,6 +121,23 @@ asset_version() {
   printf '%s\n' "${version#v}"
 }
 
+# 0.5.0 renamed the app from "Termul Manager" to Troupe. Release assets carry the
+# product name with spaces turned into dots, and the DMG holds "<name>.app".
+product_name() {
+  local core major minor
+
+  core="$(asset_version "$1")"
+  core="${core%%[-+]*}"
+  IFS=. read -r major minor _ <<<"$core"
+  if ((major > 0 || minor >= 5)); then
+    printf '%s\n' "Troupe"
+  else
+    printf '%s\n' "Termul Manager"
+  fi
+}
+
+LEGACY_PRODUCT_NAME="Termul Manager"
+
 hash_file() {
   local file="$1"
 
@@ -200,6 +217,8 @@ install_macos() {
   local applications_dir="${TERMUL_INSTALL_APPLICATIONS_DIR:-/Applications}"
   local app_source
   local app_target
+  local legacy_target
+  local name
 
   case "$arch" in
     aarch64)
@@ -215,7 +234,8 @@ install_macos() {
   esac
 
   normalized_version="$(asset_version "$version")"
-  asset_name="Termul.Manager_${normalized_version}_${suffix}.dmg"
+  name="$(product_name "$version")"
+  asset_name="${name// /.}_${normalized_version}_${suffix}.dmg"
   tmpdir="$(mktemp -d)"
   dmg_path="${tmpdir}/${asset_name}"
   mount_dir="${tmpdir}/mount"
@@ -239,8 +259,8 @@ install_macos() {
     hdiutil attach -nobrowse -mountpoint "$mount_dir" "$dmg_path" || exit 1
     termul_macos_mounted=1
 
-    app_source="${mount_dir}/Termul Manager.app"
-    app_target="${applications_dir}/Termul Manager.app"
+    app_source="${mount_dir}/${name}.app"
+    app_target="${applications_dir}/${name}.app"
     if [[ -e "$app_target" ]]; then
       if ! rm -rf "$app_target"; then
         sudo rm -rf "$app_target" || exit 1
@@ -253,8 +273,17 @@ install_macos() {
 
     hdiutil detach "$mount_dir" || exit 1
     termul_macos_mounted=0
+
+    # Troupe replaces the pre-0.5.0 bundle. App data lives under the bundle
+    # identifier, which did not change, so removing the old bundle keeps it.
+    legacy_target="${applications_dir}/${LEGACY_PRODUCT_NAME}.app"
+    if [[ "$legacy_target" != "$app_target" && -e "$legacy_target" ]]; then
+      if ! rm -rf "$legacy_target"; then
+        sudo rm -rf "$legacy_target" || exit 1
+      fi
+    fi
     xattr -dr com.apple.quarantine "$app_target" 2>/dev/null || true
-    printf 'Installed Termul Manager to %s\n' "$app_target"
+    printf 'Installed %s to %s\n' "$name" "$app_target"
   )
 }
 
@@ -271,6 +300,7 @@ install_linux() {
   local target_path="${bin_dir}/termul-manager"
   local appimage_target="${bin_dir}/termul-manager.AppImage"
   local desktop_path="${desktop_dir}/termul-manager.desktop"
+  local name
 
   if [[ "$arch" != "x86_64" ]]; then
     die "Unsupported Linux architecture: ${arch}"
@@ -278,7 +308,8 @@ install_linux() {
   fi
 
   normalized_version="$(asset_version "$version")"
-  asset_name="Termul.Manager_${normalized_version}_amd64.AppImage"
+  name="$(product_name "$version")"
+  asset_name="${name// /.}_${normalized_version}_amd64.AppImage"
   tmpdir="$(mktemp -d)"
   appimage_path="${tmpdir}/${asset_name}"
 
@@ -346,7 +377,7 @@ LAUNCHER
     cat >"$desktop_path" <<DESKTOP
 [Desktop Entry]
 Type=Application
-Name=Termul Manager
+Name=${name}
 Exec=${target_path}
 Terminal=false
 Categories=Development;Utility;
@@ -360,7 +391,7 @@ DESKTOP
         ;;
     esac
 
-    printf 'Installed Termul Manager to %s\n' "$target_path"
+    printf 'Installed %s to %s\n' "$name" "$target_path"
   )
 }
 
@@ -378,10 +409,10 @@ main() {
 
   case "$os" in
     darwin)
-      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${TERMUL_INSTALL_APPLICATIONS_DIR:-/Applications}?" || return 1
+      confirm_install "Install $(product_name "$version") ${version} (${os}-${arch}) to ${TERMUL_INSTALL_APPLICATIONS_DIR:-/Applications}?" || return 1
       ;;
     linux)
-      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${TERMUL_INSTALL_BIN_DIR:-${HOME}/.local/bin}?" || return 1
+      confirm_install "Install $(product_name "$version") ${version} (${os}-${arch}) to ${TERMUL_INSTALL_BIN_DIR:-${HOME}/.local/bin}?" || return 1
       ;;
     *)
       die "Unsupported operating system: ${os}"
