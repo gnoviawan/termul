@@ -294,7 +294,7 @@ export function ProviderSettings(): React.JSX.Element {
               <Monitor size={12} className="shrink-0" />
               {READ_ONLY_SERVER_REASON} To add or sign in to an account, use the desktop app, or run
               <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-3xs text-secondary-foreground">
-                termul-server claude account
+                troupe-server claude account
               </code>
               on the host.
             </>

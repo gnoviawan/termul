@@ -868,7 +868,7 @@ jobs:
               # not the git tag that `releases/download/insider/...` resolves via.
               git tag -f insider "$SHA"
               git push origin insider --force
-              gh release edit insider --target "$SHA" --prerelease
+              gh release edit insider --target "$SHA" --title "Troupe Insider" --prerelease
             else
               gh release create insider --target "$SHA" \
                 --title "Troupe Insider" \
