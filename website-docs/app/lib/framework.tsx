@@ -13,7 +13,8 @@ function toRouterPath(href: string): string | undefined {
     href.startsWith(`${docsRoute}#`) ||
     href.startsWith(`${docsRoute}?`)
   ) {
-    return href.slice(docsRoute.length) || '/'
+    const rest = href.slice(docsRoute.length)
+    return rest.startsWith('/') ? rest : `/${rest}`
   }
   return undefined
 }
