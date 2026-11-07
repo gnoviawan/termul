@@ -284,6 +284,26 @@ describe('font-family keep', () => {
   })
 })
 
+describe('rename-notice keep', () => {
+  it.each([
+    'src/renderer/lib/rename-notice.ts',
+    'src/renderer/hooks/use-rename-notice.test.tsx'
+  ])('keeps the notice title in %s', (path) => {
+    const text = "export const RENAME_NOTICE_TITLE = 'Termul is now Troupe' // Termul"
+    expect(rewrite(path, text, off)).toEqual({
+      output: "export const RENAME_NOTICE_TITLE = 'Termul is now Troupe' // Troupe",
+      hits: [{ ruleId: 'display-termul', line: 1 }],
+      kept: { 'rename-notice': 1 }
+    })
+  })
+
+  it('renames the same title in any other file', () => {
+    expect(out('src/renderer/components/Other.tsx', "'Termul is now Troupe'")).toBe(
+      "'Troupe is now Troupe'"
+    )
+  })
+})
+
 describe('keep paths', () => {
   it.each([
     'CHANGELOG.md',
