@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { Bug, Edit2, Search, SlidersHorizontal, Workflow } from '@/components/icons'
 import { RailColumnIcons } from '@/components/shell/RailColumnIcons'
 import { RailUtilityButtons } from '@/components/shell/RailFooter'
@@ -10,6 +9,7 @@ import { SSHPopover } from '@/components/shell/SSHPopover'
 import { useTopRowPlatform } from '@/components/shell/top-row-context'
 import { useTrafficLightInset } from '@/components/shell/traffic-light-inset'
 import { useShortcutLabel } from '@/components/shell/use-shortcut-label'
+import { useTabTrackHold } from '@/components/shell/use-tab-track-hold'
 import { showsFileColumn } from '@/layouts/workspace-layout/explorer-column-blocks'
 import { cn } from '@/lib/utils'
 import { useFileExplorerVisible } from '@/stores/file-explorer-store'
@@ -18,35 +18,6 @@ import { useSettingsModalStore, useSettingsModalView } from '@/stores/settings-m
 import { useSSHWorkspaceOpen } from '@/stores/ssh-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
-
-/**
- * Whether the Rail shows the Column tab track. A tab icon click opens the Side
- * panel, which takes the track's place; removing the track right away moves
- * every button below it up under the pointer, so a second click lands on
- * Automations or Canvas. The track stays until the pointer leaves the Rail.
- */
-function useTabTrackHold(sidePanelOnScreen: boolean): {
-  showTrack: boolean
-  onPointerEnter: () => void
-  onPointerLeave: () => void
-} {
-  const [pointerInside, setPointerInside] = useState(false)
-  const [held, setHeld] = useState(false)
-  const [lastOnScreen, setLastOnScreen] = useState(sidePanelOnScreen)
-  // Derived during render, so the track never leaves for a frame.
-  if (lastOnScreen !== sidePanelOnScreen) {
-    setLastOnScreen(sidePanelOnScreen)
-    setHeld(sidePanelOnScreen && pointerInside)
-  }
-  return {
-    showTrack: !sidePanelOnScreen || held,
-    onPointerEnter: () => setPointerInside(true),
-    onPointerLeave: () => {
-      setPointerInside(false)
-      setHeld(false)
-    }
-  }
-}
 
 interface RailCollapsedProps {
   projects: Project[]
@@ -178,6 +149,7 @@ export function RailCollapsed({
 
   return (
     <div
+      ref={rail.railRef}
       className="flex h-full w-12 shrink-0 flex-col items-center gap-1 pb-2"
       onPointerEnter={rail.onPointerEnter}
       onPointerLeave={rail.onPointerLeave}
@@ -206,12 +178,12 @@ export function RailCollapsed({
 
         {/* The Column tabs sit in a track, like the Side panel's tab bar, so
             they read as tabs and not as actions. While the Side panel is on
-            screen it shows the tabs itself, so the Rail shows none, but only
-            once the pointer leaves the Rail: dropping the track under the
-            pointer would move the buttons below it there (#1725). */}
+            screen it shows the tabs itself, so the Rail shows none; after a
+            Rail tab click, only once the pointer leaves (#1725). */}
         {rail.showTrack && (
           <div
             data-testid="rail-column-tab-track"
+            onClickCapture={rail.onTrackClickCapture}
             // 10px = the 8px buttons inside + the 2px padding (concentric).
             className="flex flex-col items-center gap-0.5 rounded-[10px] border border-border bg-card p-0.5"
           >
