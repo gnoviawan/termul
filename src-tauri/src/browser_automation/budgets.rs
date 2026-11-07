@@ -60,6 +60,13 @@ pub const FILE_CHOOSER: Duration = secs(5);
 /// WebKit: how long the input may take to hold the files after the
 /// chooser hook answered. WKWebView on macOS 15 fills it a moment later.
 pub const UPLOAD_SETTLE: Duration = secs(2);
+/// WebKit: how long the upload's `input`/`change` watch listens. It starts
+/// before the chooser opens, so it outlasts the open call, the chooser
+/// wait, the settle wait and that wait's last file-count poll.
+pub const UPLOAD_WATCH: Duration = EVAL_STEP
+    .saturating_add(FILE_CHOOSER)
+    .saturating_add(UPLOAD_SETTLE)
+    .saturating_add(EVAL_STEP);
 
 /// Per-verb action budgets, referenced by the action registry. Each is the
 /// worst case of the steps the verb runs.

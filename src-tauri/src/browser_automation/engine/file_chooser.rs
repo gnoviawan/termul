@@ -115,7 +115,7 @@ mod ui {
     use tokio::sync::oneshot;
 
     use super::{heard_change, release_tab, settle_poll, stage};
-    use crate::browser_automation::budgets::{FILE_CHOOSER, UPLOAD_SETTLE};
+    use crate::browser_automation::budgets::{FILE_CHOOSER, UPLOAD_SETTLE, UPLOAD_WATCH};
     use crate::browser_automation::engine::string_eval::{self, CallResult, Completion};
     use crate::browser_automation::engine::{assets, EngineError, EngineErrorKind};
     use crate::browser_tab_manager::BrowserTabManager;
@@ -136,7 +136,7 @@ mod ui {
         let script = assets::open_file_chooser(path);
         let body = string_eval::call_body(&script);
         let params = string_eval::params_json(&script);
-        let watch = assets::watch_input_files(path, FILE_CHOOSER.saturating_add(UPLOAD_SETTLE));
+        let watch = assets::watch_input_files(path, UPLOAD_WATCH);
         let watch_body = string_eval::call_body(&watch);
         let watch_params = string_eval::params_json(&watch);
         let (watch_tx, watch_rx) = oneshot::channel();
