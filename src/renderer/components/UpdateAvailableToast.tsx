@@ -115,7 +115,7 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
       onClick: async () => {
         if (isAur) {
           toast.info('Run in terminal', {
-            description: 'yay -S termul-manager'
+            description: 'yay -S troupe'
           })
           return
         }
