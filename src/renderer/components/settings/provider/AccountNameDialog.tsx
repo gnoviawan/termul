@@ -65,7 +65,7 @@ export function AccountNameDialog({
         <DialogHeader>
           <DialogTitle>Rename account</DialogTitle>
           <DialogDescription>
-            Termul shows this name instead of the email address.
+            Troupe shows this name instead of the email address.
           </DialogDescription>
         </DialogHeader>
         <form

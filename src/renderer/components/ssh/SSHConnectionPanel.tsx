@@ -194,7 +194,7 @@ function HostKeyQuestion({ session }: { session: SSHSession }): React.JSX.Elemen
           ) : (
             <p className="text-sm text-muted-foreground">
               First connection to {target}. Check that this fingerprint matches the one from the
-              server&apos;s administrator, then trust it. Termul remembers it for next time.
+              server&apos;s administrator, then trust it. Troupe remembers it for next time.
             </p>
           )}
         </div>

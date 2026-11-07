@@ -670,7 +670,7 @@ describe('mobile composer: Add to chat sheet', () => {
       'Files',
       '@Mention a file or conversationAttach project files or another chat as context',
       '/CommandsAgent commands and skills',
-      'Termul toolsBrowser, canvas and automations',
+      'Troupe toolsBrowser, canvas and automations',
       'ConnectorsNone added'
     ])
   })
@@ -966,7 +966,7 @@ describe('mobile composer: closed session', () => {
       'Files',
       'Mention a file or conversation',
       'Commands',
-      'Termul tools'
+      'Troupe tools'
     ]) {
       expect(within(sheet).getByRole('button', { name })).toBeDisabled()
     }

@@ -146,7 +146,7 @@ function framedSkillsToDisplay(body: string): string | null {
   // was never a chip stays literal — the forward direction only framed real
   // chips, and unframed names have no header entry to reconstruct from).
   // When NO marker resolves to a framed name the text is not a completed
-  // Termul framing — either a split prefix whose markers have not arrived or
+  // Troupe framing — either a split prefix whose markers have not arrived or
   // prose that merely matches the shape — so it passes through verbatim.
   let resolved = false
   const display = userText.replace(SKILL_MARKER_RE, (marker, name: string) => {

@@ -29,7 +29,7 @@ export function buildReadOnlyGuard({ repo, kind, number }: GuardedItem): string 
     `You may read it with ${reads}, and read files in the current checkout.`,
     'Do not create, edit or delete files. Do not check out branches, create worktrees, commit or push.',
     'Do not post to GitHub: no comments, reviews, labels, merges, closing or reopening.',
-    "If the user asks you to change code or GitHub, decline and point them to Termul's Start, Fix CI or Resolve comments actions.",
+    "If the user asks you to change code or GitHub, decline and point them to Troupe's Start, Fix CI or Resolve comments actions.",
     'These rules apply to every message in this chat, including this one.',
     READ_ONLY_GUARD_CLOSE
   ].join('\n')

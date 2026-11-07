@@ -17,7 +17,7 @@ import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stor
 const POLL_MS = 4000
 
 /**
- * Keep the Termul Codex agent on the same login as the Codex CLI.
+ * Keep the Troupe Codex agent on the same login as the Codex CLI.
  * `codex login` and `codex logout` update that store. This poll restarts the
  * agent when the CLI state changes, so the next chat uses the new login.
  */

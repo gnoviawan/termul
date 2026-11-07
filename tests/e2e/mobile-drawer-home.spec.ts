@@ -208,7 +208,7 @@ async function launchChat(page: Page, prompt: string): Promise<string> {
 /** Tap the shell's ☰ and wait for the drawer to be on screen and settled. */
 async function openDrawer(page: Page): Promise<Locator> {
   await page.getByRole('button', { name: 'Open menu' }).tap()
-  const drawer = page.getByRole('dialog', { name: 'Termul', exact: true })
+  const drawer = page.getByRole('dialog', { name: 'Troupe', exact: true })
   await expect(drawer).toBeVisible()
   // The sheet slides in from the left: measure only once it has landed.
   await expect
@@ -383,10 +383,10 @@ test('the drawer is a full-screen Claude-style navigator: project row beside the
   expect(Math.max(...tabWidths) - Math.min(...tabWidths)).toBeLessThanOrEqual(1)
   await expect(sectionNav(drawer, 'Chats')).toHaveAttribute('aria-current', 'true')
 
-  // The "Termul" title only names the dialog; the project row is the top row,
+  // The "Troupe" title only names the dialog; the project row is the top row,
   // beside the close ×.
-  const title = drawer.getByRole('heading', { level: 2, name: 'Termul', exact: true })
-  await expect(drawer).toHaveAccessibleName('Termul')
+  const title = drawer.getByRole('heading', { level: 2, name: 'Troupe', exact: true })
+  await expect(drawer).toHaveAccessibleName('Troupe')
   const projectRow = drawer.getByRole('button', { name: project.name })
   const close = drawer.getByRole('button', { name: 'Close', exact: true })
   const projectBox = await boxOf(projectRow)

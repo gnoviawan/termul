@@ -45,6 +45,7 @@ import { useProjectGitBranch } from './hooks/use-project-git-branch'
 import { useProjectIcon } from './hooks/use-project-icon'
 import { useProjectRegistry } from './hooks/use-project-registry'
 import { useRemoteProjects } from './hooks/use-remote-projects'
+import { useRenameNotice } from './hooks/use-rename-notice'
 import { useShellLayoutHydration } from './hooks/use-shell-layout-hydration'
 import { useSmoothWheelScroll } from './hooks/use-smooth-wheel-scroll'
 import { useSSHSessionEvents } from './hooks/use-ssh-session-events'
@@ -100,6 +101,7 @@ function AppEffects(): null {
   useMenuUpdaterListener()
   useUpdateCheck()
   useUpdateToast()
+  useRenameNotice()
   useVisibilityState()
   useTerminalExitNotification()
   useTerminalIdleNotification()

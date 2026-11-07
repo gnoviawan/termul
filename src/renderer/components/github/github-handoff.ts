@@ -147,7 +147,7 @@ async function pullRequestTurn(
  * Hand a GitHub issue or PR to an agent chat (CAP-5 to CAP-8) through the
  * shared launch path. Every chat is linked to its item; Ask and Review reopen
  * their existing chat. Start leaves its prompt as an unsent composer draft.
- * Termul never resolves threads or closes items itself. Never rejects: a
+ * Troupe never resolves threads or closes items itself. Never rejects: a
  * failure is shown as a toast and logged.
  */
 export async function runGithubHandoff(

@@ -88,15 +88,15 @@ describe('ComposerAddMenu', () => {
       'Add files or photos',
       '@Mention@',
       '/Slash commands/',
-      'Termul tools',
+      'Troupe tools',
       'Connectors2 on'
     ])
   })
 
-  it('lists the Termul tools, marks a closed canvas, and inserts the picked tool after closing', async () => {
+  it('lists the Troupe tools, marks a closed canvas, and inserts the picked tool after closing', async () => {
     const { handle } = renderMenu('chat-current')
     await openMenu()
-    const trigger = screen.getByRole('menuitem', { name: 'Termul tools' })
+    const trigger = screen.getByRole('menuitem', { name: 'Troupe tools' })
     act(() => trigger.focus())
     fireEvent.keyDown(trigger, { key: 'ArrowRight' })
     await screen.findByText('Ask the agent to use')

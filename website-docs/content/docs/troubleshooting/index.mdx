@@ -50,7 +50,7 @@ LD_PRELOAD=/usr/lib/libwayland-client.so.0 ./Termul.Manager_<version>_amd64.AppI
 
 With this command, the terminals in Termul also load that library. The `termul-manager` command does not have this side effect.
 
-If the library is in a folder that the command does not check, set `TERMUL_WAYLAND_CLIENT_LIB` to its path before you run `termul-manager`.
+If the library is in a folder that the command does not check, set `TROUPE_WAYLAND_CLIENT_LIB` to its path before you run `termul-manager`. A `termul-manager` command installed by an older script reads only the older name, `TERMUL_WAYLAND_CLIENT_LIB`. The current command reads both.
 
 ## An agent shows "Needs Node.js" or "Install"
 
@@ -80,7 +80,7 @@ A server that other devices can reach asks for an access token. If your browser 
    - If you have the link with `#token=` at the end, the token is the text after `#token=`.
    - If the server made the token itself, it is in a file named `web-auth-token` in the server's state folder. On Linux and macOS that is `~/.local/state/termul/web-auth-token`. On Windows it is in `%LOCALAPPDATA%\Termul`.
    - With Docker, run `docker compose exec termul-server cat /home/termul/.local/state/termul/web-auth-token`.
-   - If you started the server with `--web-auth-token` or `TERMUL_WEB_AUTH_TOKEN`, use that value.
+   - If you started the server with `--web-auth-token` or `TROUPE_WEB_AUTH_TOKEN`, use that value.
 2. Paste the token and select **Continue**.
 
 **Invalid token** means the token is wrong or the server has a new one. **Could not reach the server** means the browser cannot connect. Check the address and that the server runs.

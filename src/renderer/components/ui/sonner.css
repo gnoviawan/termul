@@ -1,5 +1,5 @@
 /* Sonner ships its own light fills and rich-color washes. These rules
-   load after sonner/dist/styles.css and paint every toast with Termul
+   load after sonner/dist/styles.css and paint every toast with Troupe
    tokens. One Carbon card. Status lives on the icon. Info stays neutral. */
 
 [data-sonner-toaster] [data-sonner-toast][data-styled="true"] {

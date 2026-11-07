@@ -721,7 +721,7 @@ describe('ChatInputBar + menu', () => {
       'Add files',
       '@Mention@',
       '/Slash commands/',
-      'Termul tools',
+      'Troupe tools',
       'Connectors2 on'
     ])
   })
@@ -2497,7 +2497,7 @@ describe('ChatInputBar conversation mentions', () => {
       ctrlKey: false
     })
     const menu = await screen.findByRole('menu')
-    for (const name of [/Mention/, /Slash commands/, 'Termul tools']) {
+    for (const name of [/Mention/, /Slash commands/, 'Troupe tools']) {
       expect(within(menu).getByRole('menuitem', { name })).toHaveAttribute('data-disabled')
     }
     fireEvent.keyDown(menu, { key: 'Escape' })
@@ -2638,7 +2638,7 @@ describe('ChatInputBar conversation mentions', () => {
           type: 'text',
           text:
             '<termul-conversation id="chat-2" title="Fix web reconnect">\n' +
-            'Transcript of the Termul chat "Fix web reconnect" with an agent, attached by the user as context.\n\n' +
+            'Transcript of the Troupe chat "Fix web reconnect" with an agent, attached by the user as context.\n\n' +
             'User: why does it drop?\n' +
             'Agent: Backoff resets too early.\n' +
             '</termul-conversation>'
@@ -2666,7 +2666,7 @@ describe('ChatInputBar conversation mentions', () => {
           type: 'text',
           text:
             `<termul-conversation id="long" title="${capped}">\n` +
-            `Transcript of the Termul chat "${capped}" with an agent, attached by the user as context.\n\n` +
+            `Transcript of the Troupe chat "${capped}" with an agent, attached by the user as context.\n\n` +
             'User: why does it drop?\n' +
             'Agent: Backoff resets too early.\n' +
             '</termul-conversation>'

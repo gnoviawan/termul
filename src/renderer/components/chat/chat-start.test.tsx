@@ -6,7 +6,7 @@ import { ChatEmptyState } from './ChatEmptyState'
 import { CHAT_STARTERS, ChatStarters, ChatStartHero } from './chat-start'
 
 describe('ChatStartHero (shared by the launcher and the empty chat)', () => {
-  it('shows the Termul mark and the project question', () => {
+  it('shows the Troupe mark and the project question', () => {
     render(<ChatStartHero projectLabel="termul-new" headingLevel={2} />)
     expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
       'What should we do in termul-new?'

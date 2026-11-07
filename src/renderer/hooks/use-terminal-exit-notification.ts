@@ -32,7 +32,7 @@ export function sanitizeNotificationText(
  * highlight border on the finished terminal (cross-OS, no notification-click needed).
  *
  * Notification format:
- *   Title: <project name>  (or "Termul" if project unknown)
+ *   Title: <project name>  (or "Troupe" if project unknown)
  *   Body:  <terminal name> — DONE
  *          or <terminal name> — Failed (exit code: N) for non-zero exit
  */
@@ -66,7 +66,7 @@ export function useTerminalExitNotification(): void {
 
       const project = useProjectStore.getState().projects.find((p) => p.id === terminal.projectId)
 
-      const title = sanitizeNotificationText(project?.name ?? 'Termul')
+      const title = sanitizeNotificationText(project?.name ?? 'Troupe')
       const terminalName = sanitizeNotificationText(terminal.name)
 
       const body =

@@ -59,7 +59,7 @@ function notificationCopy(event: AgentChatNotifyEvent): { title: string; body: s
   const session = acp.sessions[event.sessionId]
   const indexed = acp.sessionIndex.find((entry) => entry.id === event.sessionId)
   const project = useProjectStore.getState().projects.find((item) => item.id === session?.projectId)
-  const title = sanitizeNotificationText(project?.name ?? 'Termul')
+  const title = sanitizeNotificationText(project?.name ?? 'Troupe')
   const chat = sanitizeNotificationText(session?.title || indexed?.title || 'Agent Chat')
   const suffix =
     event.kind === 'turn-finished'

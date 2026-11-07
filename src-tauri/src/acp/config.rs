@@ -274,7 +274,7 @@ impl AgentConfig {
         // for every ACP agent so vendor CLIs skip a browser login. A user
         // override of any case wins.
         #[cfg(windows)]
-        if std::env::var_os("TERMUL_SERVER").is_some()
+        if crate::brand_env::var("SERVER").is_some()
             && !env_map
                 .keys()
                 .any(|key| key.eq_ignore_ascii_case("NO_BROWSER"))
