@@ -1171,7 +1171,7 @@ async function openHistorySessionInner(
 
   // Issue #1420: a reopen (idle-stop auto-resume, manual Resume chat, a
   // history-row open — any path but Reload this chat) must re-attach the host
-  // `termul` plan server and the user's configured MCP servers, exactly as
+  // `troupe` plan server and the user's configured MCP servers, exactly as
   // Reload does (see reload-chat.ts). With no list the host treats the reopen
   // as "no MCP" and the agent loses the canvas tools, plan, set_session_title,
   // ask_user and every configured MCP server. An explicit caller list (Reload)

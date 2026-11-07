@@ -102,7 +102,7 @@ async fn oauth_header(
     }
 }
 
-/// Build the internal `termul` MCP server config (for the `plan` tool; stdio self-spawn) to
+/// Build the internal `troupe` MCP server config (for the `plan` tool; stdio self-spawn) to
 /// prepend into a session's `mcp_servers`. The agent spawns
 /// `current_exe() --internal-mcp-plan-server` as a child; the child reads
 /// `TERMUL_PLAN_PORT` / `_TOKEN` / `_SESSION_ID` / `_AGENT_ID` from env,
@@ -129,7 +129,7 @@ pub(super) fn build_internal_plan_stdio(
         ),
         EnvVariable::new(crate::acp::host_mcp::ENV_AGENT_ID, agent_id.to_string()),
     ];
-    let stdio = McpServerStdio::new("termul".to_string(), exe)
+    let stdio = McpServerStdio::new("troupe".to_string(), exe)
         .args(vec![crate::acp::host_mcp::CHILD_ARG.to_string()])
         .env(env);
     vec![McpServer::Stdio(stdio)]

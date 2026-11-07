@@ -637,19 +637,28 @@ const TOOL_PILL_LABELS: &[(&str, &str)] = &[
     ("the automation tools", "Automations"),
 ];
 
-/// `text` with each `(Use <hint> from the termul MCP server)` frame replaced
-/// by its pill label, an unknown hint dropped. `None` when there is no frame.
+/// How a tool pill's frame ends, current name first. 0.4.x hosts named their
+/// server `termul`, and chats persisted then still carry that frame.
+const TOOL_PILL_CLOSES: &[&str] = &[
+    " from the troupe MCP server)",
+    " from the termul MCP server)",
+];
+
+/// `text` with each `(Use <hint> from the troupe MCP server)` frame (or its
+/// 0.4.x `termul` twin) replaced by its pill label, an unknown hint dropped.
+/// `None` when there is no frame.
 fn tool_pill_labels(text: &str) -> Option<String> {
     const OPEN: &str = "(Use ";
-    const CLOSE: &str = " from the termul MCP server)";
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     let mut found = false;
     while let Some(start) = rest.find(OPEN) {
         let after = &rest[start + OPEN.len()..];
-        let Some(end) = after
-            .find(CLOSE)
-            .filter(|end| !after[..*end].contains(['(', ')', '\n']))
+        let Some((end, close_len)) = TOOL_PILL_CLOSES
+            .iter()
+            .filter_map(|close| after.find(close).map(|end| (end, close.len())))
+            .min()
+            .filter(|(end, _)| !after[..*end].contains(['(', ')', '\n']))
         else {
             out.push_str(&rest[..start + OPEN.len()]);
             rest = after;
@@ -663,7 +672,7 @@ fn tool_pill_labels(text: &str) -> Option<String> {
         {
             out.push_str(&format!(" {label} "));
         }
-        rest = &after[end + CLOSE.len()..];
+        rest = &after[end + close_len..];
     }
     if !found {
         return None;

@@ -100,7 +100,7 @@ function runOne(prompt: Prompt, mode: string, out: string): RunResult {
     '--tools',
     '',
     '--allowedTools',
-    'mcp__termul',
+    'mcp__troupe',
     '--output-format',
     'stream-json',
     '--verbose',
