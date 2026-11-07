@@ -72,7 +72,7 @@ require_tools() {
       done
       ;;
     linux)
-      for tool in cp chmod mkdir; do
+      for tool in cp chmod mkdir od tr; do
         if ! command -v "$tool" >/dev/null 2>&1; then
           missing+=("$tool")
         fi
