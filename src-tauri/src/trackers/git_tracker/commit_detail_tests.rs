@@ -539,7 +539,7 @@ fn it_signed_commit_detail_ignores_show_signature() {
             "--passphrase",
             "",
             "--quick-gen-key",
-            "Termul Test <t@example.com>",
+            "Troupe Test <t@example.com>",
             "ed25519",
             "sign",
             "never",

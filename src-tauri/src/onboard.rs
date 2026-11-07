@@ -618,7 +618,7 @@ fn build_systemd_unit_text(
 ) -> String {
     let mut s = String::new();
     s.push_str("[Unit]\n");
-    s.push_str("Description=Termul standalone server (onboard-generated)\n");
+    s.push_str("Description=Troupe standalone server (onboard-generated)\n");
     s.push_str("After=network.target\n\n");
     s.push_str("[Service]\n");
     s.push_str("Type=simple\n");
@@ -657,7 +657,7 @@ fn write_access_info<W: Write>(
     let bind_all = BindMode::parse(host) == Some(BindMode::All);
     writeln!(
         stdout,
-        "Termul server is starting in the background on http://localhost:{port}"
+        "Troupe server is starting in the background on http://localhost:{port}"
     )
     .ok();
     if bind_all {

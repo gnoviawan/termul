@@ -1,6 +1,6 @@
 //! Crash remount (spine AD-31): `canvas.crash_timeouts` consecutive
 //! `CANVAS_TIMEOUT`s on a ready mount, or the editor's `event.crashed`, mark
-//! the mount crashed. Termul replaces it with a fresh `Loading` mount of the
+//! the mount crashed. Troupe replaces it with a fresh `Loading` mount of the
 //! same document under a new `mountSeq`, so the renderer loads the last
 //! saved bytes into a new iframe, and reports what the crash lost.
 //!

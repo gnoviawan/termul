@@ -16,7 +16,7 @@
 //!   the file.
 //!
 //! A second host that finds a lock held refuses to start with
-//! [`DataLockError::Busy`], which names the path and says another Termul host
+//! [`DataLockError::Busy`], which names the path and says another Troupe host
 //! owns it. Lock paths are canonicalized and de-duplicated, so aliases and
 //! symlinks of one path (and the same path named twice, e.g. a default that an
 //! override also points at) are locked once — a second `try_lock` on a second
@@ -49,7 +49,7 @@ pub const ACP_INSTALL_DIR_NAME: &str = "acp-registry-binaries";
 /// Why a data path could not be locked.
 #[derive(Debug)]
 pub enum DataLockError {
-    /// Another process holds the lock: another Termul host owns this path.
+    /// Another process holds the lock: another Troupe host owns this path.
     Busy {
         /// The durable path the caller asked to protect.
         path: PathBuf,
@@ -72,7 +72,7 @@ impl std::fmt::Display for DataLockError {
             } => {
                 write!(
                     f,
-                    "data path '{}' is already in use by another Termul host (lock file '{}' is held",
+                    "data path '{}' is already in use by another Troupe host (lock file '{}' is held",
                     path.display(),
                     lock_file.display()
                 )?;

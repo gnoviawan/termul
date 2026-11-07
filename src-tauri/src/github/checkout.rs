@@ -14,7 +14,7 @@ use crate::trackers::GitTracker;
 const GIT_TIMEOUT_MS: u64 = 10_000;
 const CHAT_BRANCH_PREFIX: &str = "chat/";
 
-/// A clean Termul chat worktree: a linked worktree under its repository's
+/// A clean Troupe chat worktree: a linked worktree under its repository's
 /// `.termul/worktrees/`, on a `chat/` branch.
 pub(super) struct ChatWorktree {
     pub root: String,
@@ -61,7 +61,7 @@ pub(super) fn chat_worktree(cwd: &str) -> Result<ChatWorktree, GithubError> {
     let branch = git(&root, &["symbolic-ref", "--short", "-q", "HEAD"]).unwrap_or_default();
     if !branch.starts_with(CHAT_BRANCH_PREFIX) {
         return Err(GithubError::Refused(format!(
-            "The worktree is not on a chat branch ({}), so Termul will not reset it",
+            "The worktree is not on a chat branch ({}), so Troupe will not reset it",
             if branch.is_empty() {
                 "detached HEAD"
             } else {

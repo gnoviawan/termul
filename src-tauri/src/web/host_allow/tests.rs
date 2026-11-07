@@ -46,10 +46,10 @@ fn missing_host_is_allowed() {
 
 #[test]
 fn hosts_of_allowed_origins_are_served() {
-    let policy = OriginPolicy::parse_list("https://Termul.Example.com, http://box.local:8080")
+    let policy = OriginPolicy::parse_list("https://Troupe.Example.com, http://box.local:8080")
         .expect("origins");
     let hosts = HostAllowList::from_origins(&policy);
-    assert!(hosts.allows(Some("termul.example.com")));
+    assert!(hosts.allows(Some("troupe.example.com")));
     assert!(hosts.allows(Some("box.local:8080")));
     assert!(!hosts.allows(Some("other.example.com")));
 }

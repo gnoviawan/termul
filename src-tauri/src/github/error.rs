@@ -21,9 +21,9 @@ pub enum GithubError {
     /// A fork PR whose head branch the user cannot push to; says why.
     ForkPushBlocked(String),
     EmptyComment,
-    /// A `cwd` that is not one of Termul's own worktrees.
+    /// A `cwd` that is not one of Troupe's own worktrees.
     NotTermulWorktree(String),
-    /// A request Termul refuses before calling gh; the text is the reason.
+    /// A request Troupe refuses before calling gh; the text is the reason.
     Refused(String),
     Timeout,
     Failed(String),
@@ -63,7 +63,7 @@ impl std::fmt::Display for GithubError {
             Self::ForkPushBlocked(detail) | Self::Refused(detail) => f.write_str(detail),
             Self::EmptyComment => f.write_str("The comment is empty"),
             Self::NotTermulWorktree(path) => {
-                write!(f, "{path} is not a Termul chat worktree")
+                write!(f, "{path} is not a Troupe chat worktree")
             }
             Self::Timeout => f.write_str("gh did not respond in time"),
             Self::Failed(detail) => write!(f, "gh failed: {detail}"),

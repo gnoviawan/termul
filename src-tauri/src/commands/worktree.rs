@@ -302,7 +302,7 @@ pub async fn worktree_check_dirty(worktree_path: String) -> Result<IpcResult<Dir
     }
 }
 
-/// Remove all Termul-managed worktrees for a project.
+/// Remove all Troupe-managed worktrees for a project.
 /// Reports per-worktree success/failure. Refused as a whole with
 /// `destructive_op_blocked` when a session is mid-turn inside any worktree
 /// that would be removed.

@@ -12,7 +12,7 @@
 //!   the few spawn sites that do not hide a console.
 //! - [`KillOnCloseJob`] (Windows only) wraps a Job Object configured with
 //!   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`: terminating the job, or closing its
-//!   last handle (including when Termul itself exits), kills the assigned
+//!   last handle (including when Troupe itself exits), kills the assigned
 //!   process and every descendant it spawned. Windows has no process-group
 //!   kill, so this is the only reliable tree-kill for wrapper launchers and
 //!   agents that spawn their own workers.

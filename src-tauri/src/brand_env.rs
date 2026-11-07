@@ -28,7 +28,7 @@ static NOTICES: Mutex<Notices> = Mutex::new(Notices {
     pending: Vec::new(),
 });
 
-/// Both names of a variable Termul sets for a child process, new name first.
+/// Both names of a variable Troupe sets for a child process, new name first.
 #[must_use]
 pub fn names(suffix: &str) -> [String; 2] {
     [

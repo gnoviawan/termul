@@ -28,7 +28,7 @@ fn second_acquire_of_a_held_dir_is_busy_until_the_first_is_dropped() {
     let canonical = fs::canonicalize(&dir).unwrap();
     assert!(
         message.contains(&canonical.display().to_string())
-            && message.contains("another Termul host")
+            && message.contains("another Troupe host")
             && message.contains(&format!("by pid {}", std::process::id())),
         "message must name the path, the rival and its pid: {message}"
     );
@@ -251,7 +251,7 @@ fn two_standalone_hosts_on_one_state_dir_conflict_and_overlapping_overrides_dedu
 
     let error = paths.lock().expect_err("second server is refused");
     assert!(error.is_busy());
-    assert!(error.to_string().contains("another Termul host"));
+    assert!(error.to_string().contains("another Troupe host"));
 
     drop(first);
     paths.lock().expect("lockable again after the first exits");
