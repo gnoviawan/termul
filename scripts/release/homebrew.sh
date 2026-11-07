@@ -145,17 +145,54 @@ generate_sha256sums() {
   fi
 }
 
+# The cask token follows the product name: "troupe" from 0.5.0, "termul"
+# before.
+homebrew_cask_token() {
+  local name
+  name="$(release_product_name "$1")" || return 1
+  if [[ "$name" == "Troupe" ]]; then
+    printf '%s\n' "troupe"
+  else
+    printf '%s\n' "termul"
+  fi
+}
+
+# Writes the cask for <version> into a checkout of the tap. From 0.5.0 it also
+# deletes Casks/termul.rb and maps termul to troupe in cask_renames.json:
+# `brew update` then moves installed termul casks to troupe, and Homebrew
+# ignores the rename while the old cask file still exists.
+#
+#   update_homebrew_tap <tap_dir> <version> <arm_sha256> <intel_sha256>
+update_homebrew_tap() {
+  local tap_dir="$1"
+  local version="$2"
+  local token
+  token="$(homebrew_cask_token "$version")" || return 1
+
+  if [[ "$token" == "termul" && -e "$tap_dir/Casks/troupe.rb" ]]; then
+    echo "The tap already ships the troupe cask; publishing termul $version would undo the rename." >&2
+    return 1
+  fi
+
+  write_homebrew_cask "$tap_dir/Casks/$token.rb" "$version" "$3" "$4" || return 1
+  if [[ "$token" == "troupe" ]]; then
+    rm -f -- "$tap_dir/Casks/termul.rb"
+    printf '{\n  "termul": "troupe"\n}\n' >"$tap_dir/cask_renames.json"
+  fi
+}
+
 write_homebrew_cask() {
   local output_file="$1"
   local version="$2"
   local arm_sha256="$3"
   local intel_sha256="$4"
-  local name
+  local name token
   name="$(release_product_name "$version")" || return 1
+  token="$(homebrew_cask_token "$version")" || return 1
 
   mkdir -p "$(dirname "$output_file")"
   cat >"$output_file" <<EOF
-cask "termul" do
+cask "$token" do
   arch arm: "aarch64", intel: "x64"
 
   version "$version"

@@ -20,14 +20,21 @@ concurrency:
 
 jobs:
   publish:
-    name: Update termul-manager on AUR
+    name: Update ${{ matrix.package }} on AUR
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    # 0.5.0 renamed the package to troupe (replaces termul-manager). The old
+    # package keeps getting bumps until it is merged into troupe on the AUR, so
+    # existing installs keep upgrading in the meantime.
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [termul-manager, troupe]
     container:
       image: archlinux:base-devel
     env:
-      AUR_PACKAGE: termul-manager
-      AUR_REPO: ssh://aur@aur.archlinux.org/termul-manager.git
+      AUR_PACKAGE: ${{ matrix.package }}
+      AUR_REPO: ssh://aur@aur.archlinux.org/${{ matrix.package }}.git
     steps:
       - name: Install tools
         run: |
@@ -75,31 +82,57 @@ jobs:
             VERSION="$REF_NAME"
           fi
           VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           # Prerelease guard: any version with a prerelease segment (RC, nightly)
           # is skipped so AUR only publishes stable. Mirrors publish-homebrew's
           # stable-only cask gate without sourcing the termul checkout (this job
           # runs in the archlinux container and does not check out the repo).
           if [[ "$VERSION" == *-* ]]; then
-            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "Skipping AUR publish for prerelease $VERSION."
-          else
-            if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
-              echo "Invalid stable version: $VERSION" >&2
-              exit 1
-            fi
-            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+            echo "Invalid stable version: $VERSION" >&2
+            exit 1
+          fi
+          IFS=. read -r major minor _ <<<"$VERSION"
+          renamed=false
+          if ((major > 0 || minor >= 5)); then
+            renamed=true
+          fi
+          if [[ "$AUR_PACKAGE" == "troupe" && "$renamed" == "false" ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping troupe for $VERSION: it publishes 0.5.0 and later."
+            exit 0
+          fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          if [[ "$AUR_PACKAGE" == "termul-manager" && "$renamed" == "true" ]]; then
+            echo "may_be_retired=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Clone AUR package
-        if: steps.version.outputs.is_prerelease != 'true'
+        id: clone
+        if: steps.version.outputs.publish == 'true'
+        env:
+          MAY_BE_RETIRED: ${{ steps.version.outputs.may_be_retired }}
         run: |
           runuser -u builder -- git clone "$AUR_REPO" "/home/builder/$AUR_PACKAGE"
+          # Cloning a package that does not exist on the AUR gives an empty
+          # repo, and pushing to it would create the package.
+          if [[ -f "/home/builder/$AUR_PACKAGE/PKGBUILD" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$MAY_BE_RETIRED" == "true" ]]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "$AUR_PACKAGE is gone from the AUR (merged into troupe); nothing to update."
+          else
+            echo "$AUR_PACKAGE has no PKGBUILD on the AUR. Create the package first." >&2
+            exit 1
+          fi
 
       - name: Update PKGBUILD
-        if: steps.version.outputs.is_prerelease != 'true'
-        working-directory: /home/builder/termul-manager
+        if: steps.clone.outputs.present == 'true'
+        working-directory: /home/builder/${{ matrix.package }}
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -111,8 +144,8 @@ jobs:
           runuser -u builder -- bash -c 'makepkg --printsrcinfo > .SRCINFO'
 
       - name: Commit and push
-        if: steps.version.outputs.is_prerelease != 'true'
-        working-directory: /home/builder/termul-manager
+        if: steps.clone.outputs.present == 'true'
+        working-directory: /home/builder/${{ matrix.package }}
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
