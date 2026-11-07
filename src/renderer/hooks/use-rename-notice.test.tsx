@@ -37,8 +37,12 @@ describe('useRenameNotice', () => {
     localStorage.clear()
   })
 
-  it('shows once on a device an earlier version already used', async () => {
-    localStorage.setItem('termul.deviceId', 'device-from-0.4.60')
+  it.each([
+    'termul.deviceId',
+    'termul-store:projects',
+    'termul:file-explorer-width'
+  ])('shows once on a device where an earlier version wrote %s', async (key) => {
+    localStorage.setItem(key, 'from-0.4.x')
 
     await launch()
 

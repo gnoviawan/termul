@@ -14,7 +14,8 @@ export const RENAME_NOTICE_DESCRIPTION =
   "It's the same app with a new name. Your projects, chats, settings and sign-ins are unchanged."
 export const RENAME_NOTICE_DISMISS_LABEL = 'Got it'
 export const RENAME_NOTICE_STORAGE_KEY = 'termul.renameNotice'
-const EARLIER_VERSION_KEY_PREFIX = 'termul.'
+/** 0.4.x keys start `termul.`, `termul-` or `termul:`. */
+const EARLIER_VERSION_KEY_PREFIX = 'termul'
 
 /** `fresh`: this device started on the new name. `dismissed`: the notice was acknowledged. */
 type RenameNoticeRecord = 'fresh' | 'dismissed'
@@ -51,7 +52,7 @@ function storedKeys(storage: Storage): string[] {
 /**
  * Whether this device ran an earlier version, decided from storage as it was
  * before this page wrote anything. Since 0.4.50 every launch mints
- * `termul.deviceId`, so any other `termul.` key means an update; keys from
+ * `termul.deviceId`, so any other `termul` key means an update; keys from
  * other apps on a shared origin do not count. A device that jumps from an
  * older version without such a key misses the notice, which is the safe way
  * to be wrong. Otherwise this is a fresh install, recorded right away so keys
