@@ -1,5 +1,5 @@
 ---
-name: termul-canvas
+name: troupe-canvas
 description: How to design on Termul Canvas so a short, vague request still ends as a polished, coherent design. Read before the first canvas edit in a session.
 ---
 

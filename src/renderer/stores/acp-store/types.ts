@@ -179,7 +179,7 @@ export interface OpenHistoryOptions {
    * list. When omitted (idle-stop auto-resume, manual Resume chat, a
    * history-row open) it defaults to
    * `selectMcpServersForAgent(state.mcpServers, capabilities).servers` so the
-   * host `termul` server and the user's configured MCP servers survive the
+   * host `troupe` server and the user's configured MCP servers survive the
    * reopen (#1420). An explicit `[]` still asks the host to attach only the
    * plan server.
    */
