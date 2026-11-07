@@ -1,4 +1,4 @@
-//! Opt-in self-update subsystem for the standalone `termul-server` binary.
+//! Opt-in self-update subsystem for the standalone `troupe-server` binary.
 //!
 //! The desktop app updates via the signed `@tauri-apps/plugin-updater` flow; the
 //! standalone server has no Tauri runtime, so it ships its own bespoke updater
@@ -276,16 +276,22 @@ pub fn select_platform_record<'a>(
 // Network I/O seams (not unit-tested — exercised by the manual checks).
 // ---------------------------------------------------------------------------
 
-/// Allowed origin for downloaded server binaries. Mirrors the desktop's
-/// `releaseUrlAssetName` validator: a manifest `url` outside the termul GitHub
-/// repo is rejected so a compromised manifest can't redirect the server at an
-/// attacker-controlled binary (the signature check would still catch a forged
-/// binary, but rejecting the origin is defense-in-depth).
-const ALLOWED_BINARY_URL_PREFIX: &str = "https://github.com/gnoviawan/termul/";
+/// Allowed origins for downloaded server binaries. Mirrors the desktop's
+/// `releaseUrlAssetName` validator: a manifest `url` outside the project's
+/// GitHub repo is rejected so a compromised manifest can't redirect the server
+/// at an attacker-controlled binary (the signature check would still catch a
+/// forged binary, but rejecting the origin is defense-in-depth). Both repo
+/// names are listed so this build keeps updating once the repo is renamed to
+/// `gnoviawan/troupe`; 0.4.x servers accept only the `termul` prefix, so
+/// manifests keep emitting it until they are gone.
+const ALLOWED_BINARY_URL_PREFIXES: [&str; 2] = [
+    "https://github.com/gnoviawan/termul/",
+    "https://github.com/gnoviawan/troupe/",
+];
 
 /// Cap on a downloaded server binary so a manifest endpoint that lies about
 /// Content-Length (or omits it) can't exhaust memory. 200 MiB is generous for
-/// the standalone `termul-server` binary (a stripped release build is tens of
+/// the standalone `troupe-server` binary (a stripped release build is tens of
 /// MiB) while bounding the exposure.
 const MAX_BINARY_BYTES: usize = 200 * 1024 * 1024;
 
@@ -296,17 +302,24 @@ fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .user_agent("termul-server-updater")
+            .user_agent("troupe-server-updater")
             .timeout(Duration::from_secs(120))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new())
     })
 }
 
-/// Reject a server-binary download URL outside the termul GitHub origin.
+/// Reject a server-binary download URL outside the project's GitHub origin.
 pub fn validate_binary_url(url: &str) -> Result<()> {
-    if !url.trim().starts_with(ALLOWED_BINARY_URL_PREFIX) {
-        bail!("server binary url {url} is outside the allowed origin {ALLOWED_BINARY_URL_PREFIX}");
+    let url = url.trim();
+    if !ALLOWED_BINARY_URL_PREFIXES
+        .iter()
+        .any(|prefix| url.starts_with(prefix))
+    {
+        bail!(
+            "server binary url {url} is outside the allowed origins {}",
+            ALLOWED_BINARY_URL_PREFIXES.join(", ")
+        );
     }
     Ok(())
 }
@@ -330,7 +343,7 @@ pub async fn fetch_manifest(channel: UpdateChannel) -> Result<Manifest> {
 }
 
 /// Download the signed server binary bytes for a platform record. Rejects URLs
-/// outside the termul GitHub origin, and caps the body at [`MAX_BINARY_BYTES`]
+/// outside the project's GitHub origin, and caps the body at [`MAX_BINARY_BYTES`]
 /// (checked against Content-Length up front AND enforced mid-stream so a server
 /// that lies about the length can't exhaust memory).
 pub async fn download_binary(url: &str) -> Result<Vec<u8>> {
@@ -457,7 +470,7 @@ pub fn atomic_swap(binary_path: &Path, new_bytes: &[u8]) -> Result<PathBuf> {
             Ok(()) => {}
             Err(restore_err) => {
                 eprintln!(
-                    "termul-server self-update: CRITICAL — promote {} -> {} failed ({e}) \
+                    "troupe-server self-update: CRITICAL — promote {} -> {} failed ({e}) \
                      AND restore {} -> {} also failed ({restore_err}); \
                      no binary at {} — recover the `.old` file manually",
                     new_path.display(),

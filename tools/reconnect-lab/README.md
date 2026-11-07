@@ -1,6 +1,6 @@
 # Reconnect lab
 
-The lab measures how fast the web client recovers after a connection fault. It runs a real Chromium page against an isolated `termul-server`, through a TCP proxy that injects faults while a fake agent streams a turn.
+The lab measures how fast the web client recovers after a connection fault. It runs a real Chromium page against an isolated `troupe-server`, through a TCP proxy that injects faults while a fake agent streams a turn.
 
 For each fault, the lab reports the time until the chat socket is connected again, the time until streamed text grows again, how long "Reconnecting…" was visible, and how many sockets the page opened.
 
@@ -8,7 +8,7 @@ For each fault, the lab reports the time until the chat socket is connected agai
 
 - A web build: `bun run build:web`
 - The canvas bundle: `bun scripts/canvas/fetch-figcraft-bundle.mjs`
-- A release server binary: `cargo build --release --bin termul-server --features standalone-server`
+- A release server binary: `cargo build --release --bin troupe-server --features standalone-server`
 - Playwright Chromium, as for `tests/e2e`
 
 The lab binds only to `127.0.0.1` on free ports and uses a temporary state directory. It never touches a running server.

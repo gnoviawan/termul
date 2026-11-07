@@ -1,4 +1,4 @@
-//! Standalone headless `termul-server` binary (Story 1.2).
+//! Standalone headless `troupe-server` binary (Story 1.2).
 //!
 //! Constructs an [`AcpManager`] with a [`WsRelaySink`] stub (no Tauri
 //! `AppHandle`) and serves the Axum skeleton from `termul_manager_lib::web`.
@@ -43,6 +43,14 @@ fn main() -> ExitCode {
     // to hide browser login (`NO_BROWSER=1`). Desktop builds never set it.
     std::env::set_var("TERMUL_SERVER", "1");
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
+
+    if raw_args
+        .first()
+        .is_some_and(|arg| arg == "--version" || arg == "-V")
+    {
+        println!("troupe-server {} (Troupe)", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
 
     // `--check-update`: operator-explicit one-shot self-update. Handled before
     // `ServerConfig::from_args` so the flag (unknown to the shared parser) does
@@ -117,14 +125,14 @@ fn main() -> ExitCode {
     // path (sessions, projects, workspace manifests, acp catalog, store file)
     // BEFORE anything opens or writes them — including the web-auth token
     // file below. A held lock means another Termul host (desktop app or
-    // termul-server) owns the path: refuse to start, never share it. The
+    // troupe-server) owns the path: refuse to start, never share it. The
     // locks live until `main` returns.
     let data_paths = StandalonePaths::resolve(&cfg);
     let _data_locks = match data_paths.lock() {
         Ok(locks) => locks,
         Err(error) => {
-            error!("termul-server: refusing to start: {error}");
-            eprintln!("termul-server: {error}");
+            error!("troupe-server: refusing to start: {error}");
+            eprintln!("troupe-server: {error}");
             return ExitCode::from(1);
         }
     };
@@ -160,8 +168,8 @@ fn main() -> ExitCode {
         Err(error) => {
             // Durable tracing event (stderr is lost for detached services);
             // the message carries resolution context only — never the token.
-            error!("termul-server: web auth resolution failed, refusing to start: {error}");
-            eprintln!("termul-server: {error}");
+            error!("troupe-server: web auth resolution failed, refusing to start: {error}");
+            eprintln!("troupe-server: {error}");
             return ExitCode::from(1);
         }
     };
@@ -176,7 +184,7 @@ fn main() -> ExitCode {
         WebAuthResolution::Gated { auth, origin } => {
             match &origin {
                 termul_manager_lib::web::auth::WebAuthOrigin::Configured => {
-                    info!("termul-server: web auth enabled (operator-configured token)");
+                    info!("troupe-server: web auth enabled (operator-configured token)");
                     if public_bind {
                         warn_plaintext_transport();
                     }
@@ -184,7 +192,7 @@ fn main() -> ExitCode {
                 termul_manager_lib::web::auth::WebAuthOrigin::Loaded(path) => {
                     // No secret in the log — only the source path.
                     info!(
-                        "termul-server: web auth enabled (token loaded from {})",
+                        "troupe-server: web auth enabled (token loaded from {})",
                         path.display()
                     );
                     // Loaded implies a public bind — the warning always applies.
@@ -200,7 +208,7 @@ fn main() -> ExitCode {
                     // browser itself, so skip the read-the-file directions.
                     if !setup_required {
                         println!(
-                            "termul-server: generated a web auth token (first boot on a public bind).\n\
+                            "troupe-server: generated a web auth token (first boot on a public bind).\n\
                              The token is never printed or logged — read it from the\n\
                              owner-protected file (mode 0600 on Unix): {}\n\
                              Then open http://<host>:{}/#token=<token> — the token travels in\n\
@@ -214,7 +222,7 @@ fn main() -> ExitCode {
                         );
                     }
                     info!(
-                        "termul-server: web auth enabled (token generated, persisted to {})",
+                        "troupe-server: web auth enabled (token generated, persisted to {})",
                         path.display()
                     );
                     warn_plaintext_transport();
@@ -251,7 +259,7 @@ fn main() -> ExitCode {
             "No web auth is enforced yet (Epic 2)."
         };
         tracing::warn!(
-            "termul-server: remote writes ENABLED (--allow-remote-writes); non-loopback peers \
+            "troupe-server: remote writes ENABLED (--allow-remote-writes); non-loopback peers \
              on {} gain: fs mkdir/write/delete/rename/copy CONFINED to the registered project roots; \
              git + worktree operations confined to the registered project roots; AND host-state mutation via \
              /projects/default, /acp/install, /log/frontend-error. Loopback callers \
@@ -261,7 +269,7 @@ fn main() -> ExitCode {
         );
         if cfg.bind_mode() == Some(BindMode::Localhost) {
             tracing::warn!(
-                "termul-server: --allow-remote-writes is a no-op when bound to 127.0.0.1 \
+                "troupe-server: --allow-remote-writes is a no-op when bound to 127.0.0.1 \
                  (no non-loopback peer can ever reach the server)"
             );
         }
@@ -269,7 +277,7 @@ fn main() -> ExitCode {
 
     if !cfg.allowed_origins.is_empty() {
         info!(
-            "termul-server: extra request origins allowed ({})",
+            "troupe-server: extra request origins allowed ({})",
             cfg.allowed_origins
         );
     }
@@ -301,8 +309,8 @@ fn main() -> ExitCode {
         let sessions_dir = match cfg.sessions_dir.clone() {
             Some(path) => path,
             None => {
-                error!("termul-server: sessions directory is not configured");
-                eprintln!("termul-server: sessions directory is not configured");
+                error!("troupe-server: sessions directory is not configured");
+                eprintln!("troupe-server: sessions directory is not configured");
                 return ExitCode::from(1);
             }
         };
@@ -310,7 +318,7 @@ fn main() -> ExitCode {
         // projects must follow `--state-dir` when that flag is the only
         // location override. Paths only — never tokens or credentials.
         info!(
-            "termul-server: resolved sessions '{}' projects '{}' state '{}'",
+            "troupe-server: resolved sessions '{}' projects '{}' state '{}'",
             sessions_dir.display(),
             cfg.projects_file
                 .as_ref()
@@ -327,16 +335,16 @@ fn main() -> ExitCode {
             // adopts the store (renamed afterwards).
             Ok(store) => Arc::new(store.with_legacy_manifests(legacy_manifests_dir(&data_paths.state_dir))),
             Err(error) => {
-                error!("termul-server: refusing to start: {error}");
-                eprintln!("termul-server: {error}");
+                error!("troupe-server: refusing to start: {error}");
+                eprintln!("troupe-server: {error}");
                 return ExitCode::from(1);
             }
         };
         let persistence = match SessionPersistence::open(sessions_dir).await {
             Ok(persistence) => persistence,
             Err(error) => {
-                error!("termul-server: failed to open sessions store: {error}");
-                eprintln!("termul-server: failed to open sessions store: {error}");
+                error!("troupe-server: failed to open sessions store: {error}");
+                eprintln!("troupe-server: failed to open sessions store: {error}");
                 return ExitCode::from(1);
             }
         };
@@ -350,7 +358,7 @@ fn main() -> ExitCode {
         let acp_catalog = match AcpCatalogService::open(acp_catalog_dir).await {
             Ok(service) => Some(service),
             Err(error) => {
-                eprintln!("termul-server: failed to open acp-catalog store: {error}");
+                eprintln!("troupe-server: failed to open acp-catalog store: {error}");
                 return ExitCode::from(1);
             }
         };
@@ -373,7 +381,7 @@ fn main() -> ExitCode {
         {
             Ok(service) => Some(service),
             Err(error) => {
-                eprintln!("termul-server: failed to open acp-install store: {error}");
+                eprintln!("troupe-server: failed to open acp-install store: {error}");
                 return ExitCode::from(1);
             }
         };
@@ -418,7 +426,7 @@ fn main() -> ExitCode {
                 }
                 Err(e) => {
                     eprintln!(
-                        "termul-server: failed to load projects file '{}': {e}",
+                        "troupe-server: failed to load projects file '{}': {e}",
                         projects_file.display()
                     );
                     return ExitCode::from(1);
@@ -430,7 +438,7 @@ fn main() -> ExitCode {
             // The registry stays memory-only — warn loudly instead of
             // silently losing every project on restart.
             warn!(
-                "termul-server: no projects file resolved (no --projects-file / \
+                "troupe-server: no projects file resolved (no --projects-file / \
                  $TERMUL_PROJECTS_FILE and no platform state dir); the project \
                  registry is in-memory only and projects will NOT persist \
                  across restarts"
@@ -485,7 +493,7 @@ fn main() -> ExitCode {
         {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("termul-server failed: {e}");
+                eprintln!("troupe-server failed: {e}");
                 ExitCode::from(1)
             }
         }
@@ -499,7 +507,7 @@ fn main() -> ExitCode {
 /// safe for journald/nohup logs.
 fn warn_plaintext_transport() {
     warn!(
-        "termul-server: PLAINTEXT transport — HTTP/WebSocket bearer traffic, including the \
+        "troupe-server: PLAINTEXT transport — HTTP/WebSocket bearer traffic, including the \
          web auth token, is readable by network observers on this public bind. For \
          non-loopback exposure, place the server behind an HTTPS reverse proxy that \
          terminates TLS."
@@ -519,7 +527,7 @@ fn init_tracing() {
 
 /// Resolve the server's own binary path for the self-update swap/reexec.
 fn current_binary_path() -> PathBuf {
-    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("termul-server"))
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("troupe-server"))
 }
 
 /// Read the persisted `<state dir>/web-auth-token` for the setup-mode apply
@@ -533,7 +541,7 @@ fn persisted_web_auth_token(state_dir: &Path) -> Option<String> {
         Ok(contents) => WebAuthToken::new(&contents).map(|token| token.as_str().to_string()),
         Err(error) => {
             warn!(
-                "termul-server: could not re-read the web auth token file for the \
+                "troupe-server: could not re-read the web auth token file for the \
                  setup apply reply: {error}"
             );
             None
@@ -556,12 +564,12 @@ fn run_setup_mode(
     // A present-but-corrupt config file lands here too —
     // `ServerConfig::setup_required` already error-logged it durably, so a
     // single boundary info! suffices either way.
-    info!("termul-server: no usable server config — entering setup mode");
+    info!("troupe-server: no usable server config — entering setup mode");
     let setup_token = match server_config_file::generate_setup_token() {
         Ok(token) => token,
         Err(e) => {
-            error!("termul-server: {e}");
-            eprintln!("termul-server: {e}");
+            error!("troupe-server: {e}");
+            eprintln!("troupe-server: {e}");
             return ExitCode::from(1);
         }
     };
@@ -587,11 +595,11 @@ fn run_setup_mode(
         ""
     };
     println!(
-        "termul-server: setup required — no completed server config.\n\
+        "troupe-server: setup required — no completed server config.\n\
          Open this one-time URL to configure the server (valid for this boot only):\n\
          \n    {setup_url}{host_hint}\n"
     );
-    info!("termul-server: setup mode — configure the server at {setup_url}");
+    info!("troupe-server: setup mode — configure the server at {setup_url}");
 
     let state = setup::SetupState::new(
         setup_token,
@@ -620,8 +628,8 @@ fn run_setup_mode(
     match runtime.block_on(setup::serve(state, bind_addr, allowed_origins)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            error!("termul-server: setup-mode server failed: {e}");
-            eprintln!("termul-server setup mode failed: {e}");
+            error!("troupe-server: setup-mode server failed: {e}");
+            eprintln!("troupe-server setup mode failed: {e}");
             ExitCode::from(1)
         }
     }
@@ -743,7 +751,7 @@ fn run_one_shot_update_check() -> ExitCode {
 /// Spawn the background periodic self-update loop on the server's tokio runtime.
 /// Enablement, channel, and interval come from
 /// `server_config_file::resolve_update_settings(state_dir)` — once
-/// `server-config.json` exists (web onboarding or `termul-server onboard`),
+/// `server-config.json` exists (web onboarding or `troupe-server onboard`),
 /// the file is authoritative; otherwise the legacy
 /// `TERMUL_SERVER_UPDATE_ENABLED`/`_CHANNEL`/`_INTERVAL_SECS` env vars apply.
 /// No-op (with an info log) when the resolved settings are disabled — the
@@ -842,12 +850,12 @@ fn spawn_periodic_update_loop(state_dir: &Path) {
 }
 
 fn usage() -> &'static str {
-    r#"termul-server — standalone headless ACP web server
+    r#"troupe-server — standalone headless Troupe server (ACP over HTTP and WebSocket)
 
 USAGE:
-    termul-server [OPTIONS]
-    termul-server onboard          Guided setup + background launch
-    termul-server --check-update   One-shot self-update
+    troupe-server [OPTIONS]
+    troupe-server onboard          Guided setup + background launch
+    troupe-server --check-update   One-shot self-update
 
 OPTIONS:
   Network:
@@ -998,6 +1006,7 @@ OPTIONS:
                                   without launching.
 
     -h, --help                    Show this help
+    -V, --version                 Show the version
 
 ENVIRONMENT:
     <state dir>                   Unix: $XDG_STATE_HOME/termul or
@@ -1019,22 +1028,22 @@ ENVIRONMENT:
 
 EXAMPLES:
     # Local: serve the embedded web client on loopback
-    termul-server
+    troupe-server
 
     # LAN: expose to phone browsers on the trusted network
-    termul-server --host 0.0.0.0 --port 8080
+    troupe-server --host 0.0.0.0 --port 8080
 
     # LAN with remote writes (trusted network only)
-    termul-server --host 0.0.0.0 --allow-remote-writes
+    troupe-server --host 0.0.0.0 --allow-remote-writes
 
     # Background with debug logging
-    RUST_LOG=termul_manager_lib=debug termul-server --host 0.0.0.0 \
+    RUST_LOG=termul_manager_lib=debug troupe-server --host 0.0.0.0 \
         > /tmp/termul-server.log 2>&1 &
 
     # Guided setup (auto-detects systemd or setsid, survives SSH logout)
-    termul-server onboard
+    troupe-server onboard
 
     # One-shot self-update check
-    termul-server --check-update
+    troupe-server --check-update
 "#
 }

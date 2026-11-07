@@ -412,7 +412,7 @@ pub fn schedule_self_restart(reason: &'static str) {
                 tracing::info!(
                     target: "termul::server_config",
                     reason,
-                    "restarting termul-server to apply new config"
+                    "restarting troupe-server to apply new config"
                 );
                 if let Err(e) = crate::server_update::restart_binary(&exe) {
                     tracing::error!(

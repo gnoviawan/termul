@@ -212,8 +212,8 @@ describe('mergeUpdaterManifests', () => {
     const dir = await fixtureDir()
     const serverKeys = ['linux-x86_64-server', 'linux-aarch64-server']
     const serverAssets: Record<string, string> = {
-      'linux-x86_64-server': 'termul-server',
-      'linux-aarch64-server': 'termul-server-linux-aarch64'
+      'linux-x86_64-server': 'troupe-server',
+      'linux-aarch64-server': 'troupe-server-linux-aarch64'
     }
     const releaseUrl = (name: string) =>
       `https://github.com/gnoviawan/termul/releases/download/nightly/${name}`
@@ -256,9 +256,9 @@ describe('mergeUpdaterManifests', () => {
       channel: 'nightly'
     })
 
-    expect(merged.platforms['linux-x86_64-server'].url).toBe(releaseUrl('termul-server'))
+    expect(merged.platforms['linux-x86_64-server'].url).toBe(releaseUrl('troupe-server'))
     expect(merged.platforms['linux-aarch64-server'].url).toBe(
-      releaseUrl('termul-server-linux-aarch64')
+      releaseUrl('troupe-server-linux-aarch64')
     )
   })
 

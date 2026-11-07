@@ -1,12 +1,12 @@
 ---
-title: Install and start termul-server
+title: Install and start troupe-server
 description: Run Termul on a server and open it from any browser.
 ---
 
 import { Step, Steps } from 'fumadocs-ui/components/steps'
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs'
 
-`termul-server` is Termul without a window. It runs your agents, terminals and git on one machine and serves the Termul app to any browser that connects to it. Use it on a home server, a cloud machine, or your own computer.
+`troupe-server` is Termul without a window. It runs your agents, terminals and git on one machine and serves the Termul app to any browser that connects to it. Use it on a home server, a cloud machine, or your own computer.
 
 ## Install the server
 
@@ -19,24 +19,26 @@ Release builds are for Linux on x64 and arm64. Download the one that matches you
 
 ```bash
 case "$(uname -m)" in
-	x86_64)        asset=termul-server ;;
-	aarch64|arm64) asset=termul-server-linux-aarch64 ;;
+	x86_64)        asset=troupe-server ;;
+	aarch64|arm64) asset=troupe-server-linux-aarch64 ;;
 	*) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
-curl -fL -o termul-server "https://github.com/gnoviawan/termul/releases/latest/download/$asset"
-chmod +x termul-server
+curl -fL -o troupe-server "https://github.com/gnoviawan/termul/releases/latest/download/$asset"
+chmod +x troupe-server
 ```
 
 The builds need glibc 2.35 or newer, which Ubuntu 22.04 and later have. Distributions that use musl instead of glibc, such as Alpine, aren't supported.
 
 The link above gets the latest stable release. For the nightly build, download from `https://github.com/gnoviawan/termul/releases/download/nightly/$asset` instead.
 
-Move the file to a folder on your `PATH`, such as `~/.local/bin`, so you can run `termul-server` from anywhere.
+Move the file to a folder on your `PATH`, such as `~/.local/bin`, so you can run `troupe-server` from anywhere.
+
+Versions before 0.5.0 called the program `termul-server`. If you already run it, you don't need to reinstall: updates replace the `termul-server` file in place, and your service and scripts keep working.
 
 </Tab>
 <Tab value="Docker">
 
-The Termul repository has a `Dockerfile` and a `docker-compose.yml`. The image is `ghcr.io/gnoviawan/termul-server`.
+The Termul repository has a `Dockerfile` and a `docker-compose.yml`. The image is `ghcr.io/gnoviawan/troupe-server`.
 
 1. Copy `docker-compose.yml` from the Termul repository into a new folder.
 2. In that folder, create the folder for your projects:
@@ -76,14 +78,14 @@ docker compose pull
 docker compose up -d
 ```
 
-To follow the nightly builds, set `TERMUL_IMAGE=ghcr.io/gnoviawan/termul-server:nightly` in `.env`.
+To follow the nightly builds, set `TERMUL_IMAGE=ghcr.io/gnoviawan/troupe-server:nightly` in `.env`.
 
 </Tab>
 </Tabs>
 
 ## Set it up in the browser
 
-A fresh `termul-server` has no settings yet, so the first run serves a setup page instead of the app. While it waits for you, the server listens on every network interface, so you can open the page from another device.
+A fresh `troupe-server` has no settings yet, so the first run serves a setup page instead of the app. While it waits for you, the server listens on every network interface, so you can open the page from another device.
 
 <Steps>
 <Step>
@@ -93,7 +95,7 @@ A fresh `termul-server` has no settings yet, so the first run serves a setup pag
 Run this in a terminal on the server:
 
 ```bash
-termul-server
+troupe-server
 ```
 
 The server prints a setup link to the terminal, or to the service's journal, and waits:
@@ -138,17 +140,17 @@ For the settings it holds, `server-config.json` wins over flags and environment 
 
 ### Set it up in the terminal instead
 
-`termul-server onboard` asks the same questions in a terminal and writes the same `server-config.json` — both paths produce identical settings. Use it for scripted or headless installs, or when you want the wizard to install the server as a service so it keeps running after you log out of SSH:
+`troupe-server onboard` asks the same questions in a terminal and writes the same `server-config.json` — both paths produce identical settings. Use it for scripted or headless installs, or when you want the wizard to install the server as a service so it keeps running after you log out of SSH:
 
 ```bash
-termul-server onboard
+troupe-server onboard
 ```
 
 Press Enter at any question to keep the default shown in brackets. When the wizard finishes, it starts the server and prints its address, how to read the logs, and how to stop it.
 
 The wizard may also offer to write a settings file, `termul-server.env`, in the state folder. Answer `y` so the background server gets the same settings.
 
-On machines with systemd, the wizard installs a `termul-server` service. When you run it as root, it is a system service and you manage it with `systemctl stop termul-server` and `journalctl -u termul-server -f`. As another user, it is a user service, so add `--user` to both commands.
+On machines with systemd, the wizard installs a `troupe-server` service. When you run it as root, it is a system service and you manage it with `systemctl stop troupe-server` and `journalctl -u troupe-server -f`. As another user, it is a user service, so add `--user` to both commands. If the machine already has the `termul-server` service from an earlier version, the wizard updates that service instead, so keep using `termul-server` in those commands.
 
 On machines without systemd, the wizard starts the server as a background process. The log is `termul-server.log` and the process ID is in `termul-server.pid`, both in the state folder. A background process doesn't restart after a crash or a reboot.
 
@@ -157,7 +159,7 @@ On machines without systemd, the wizard starts the server as a background proces
 To try the server, run it in the foreground:
 
 ```bash
-termul-server
+troupe-server
 ```
 
 On a server that is already set up, this serves Termul at `http://localhost:8080` for browsers on the same machine. On a fresh install it starts the setup page described above instead. Press `Ctrl+C` to stop it.
@@ -165,7 +167,7 @@ On a server that is already set up, this serves Termul at `http://localhost:8080
 To let phones and other computers connect, listen on all network interfaces:
 
 ```bash
-termul-server --host 0.0.0.0 --port 8080
+troupe-server --host 0.0.0.0 --port 8080
 ```
 
 Flags such as `--host` and `--port` count as a configuration, so a fresh install started this way skips the setup page. Once a `server-config.json` exists it wins over these flags for the settings it holds — change those under **Settings**, in the **Server** tab, instead. Flags the file doesn't cover, such as `--allowed-origins`, still apply.

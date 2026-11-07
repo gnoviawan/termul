@@ -9,8 +9,8 @@ import { E2E_BASE_URL, E2E_DEVICE_ID } from './helpers'
  *
  * Requires from the environment (the global-setup enforces these):
  * - A freshly built `dist-web/` (bun run build:web).
- * - A release `termul-server` binary at src-tauri/target/release/termul-server
- *   (cargo build --release --bin termul-server --features standalone-server).
+ * - A release `troupe-server` binary at src-tauri/target/release/troupe-server
+ *   (cargo build --release --bin troupe-server --features standalone-server).
  *
  * The suite is NOT self-starting: global-setup spawns one isolated server
  * (loopback, throwaway state dir) and seeds a deterministic fake ACP agent

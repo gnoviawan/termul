@@ -17,7 +17,7 @@ export const requiredPlatformKeys = [
   'darwin-aarch64-app',
   'darwin-x86_64',
   'darwin-x86_64-app',
-  // Standalone `termul-server` binaries (linux x64 and arm64). Each channel's
+  // Standalone `troupe-server` binaries (linux x64 and arm64). Each channel's
   // manifest covers both the desktop targets and both server targets so a
   // single manifest drives both updaters.
   'linux-x86_64-server',

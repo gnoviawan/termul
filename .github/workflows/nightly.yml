@@ -5,7 +5,7 @@ name: Nightly
 # (detected from a release/v* branch, or patch-bumped from current), and
 # publishes a prerelease under the moving `nightly` tag with a per-channel
 # `latest-nightly.json` manifest covering both the desktop targets and the
-# standalone `termul-server` binary.
+# standalone `troupe-server` binary.
 
 on:
   schedule:
@@ -436,7 +436,7 @@ jobs:
           retention-days: 1
 
   standalone-server:
-    name: Build termul-server (linux-${{ matrix.arch }})
+    name: Build troupe-server (linux-${{ matrix.arch }})
     needs: [prepare, mcp-snapshot]
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -446,13 +446,13 @@ jobs:
           - arch: x64
             runner: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
-            asset_name: termul-server
+            asset_name: troupe-server
             platform_key: linux-x86_64-server
             elf_machine: 'x86-64'
           - arch: arm64
             runner: ubuntu-22.04-arm
             rust_target: aarch64-unknown-linux-gnu
-            asset_name: termul-server-linux-aarch64
+            asset_name: troupe-server-linux-aarch64
             platform_key: linux-aarch64-server
             elf_machine: 'ARM aarch64'
     steps:
@@ -549,40 +549,40 @@ jobs:
         shell: bash
         run: test -f canvas/bundle/index.html && test -s canvas/bundle/index.html
 
-      - name: Build termul-server (linux-${{ matrix.arch }} release)
+      - name: Build troupe-server (linux-${{ matrix.arch }} release)
         working-directory: src-tauri
         # Bake the signing pubkey into the binary at compile time so the opt-in
         # self-update subsystem can verify downloaded binaries (option_env!).
         env:
           TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
         run: >
-          cargo build --release --bin termul-server
+          cargo build --release --bin troupe-server
           --features standalone-server
 
-      - name: Locate termul-server binary
+      - name: Locate troupe-server binary
         working-directory: src-tauri
         shell: bash
         run: |
-          echo "Searching for termul-server binary in target/..."
-          find target -name 'termul-server' -type f -print || true
-          ls -la target/release/termul-server 2>/dev/null || echo "target/release/termul-server NOT FOUND"
+          echo "Searching for troupe-server binary in target/..."
+          find target -name 'troupe-server' -type f -print || true
+          ls -la target/release/troupe-server 2>/dev/null || echo "target/release/troupe-server NOT FOUND"
 
-      - name: Verify termul-server binary architecture
+      - name: Verify troupe-server binary architecture
         working-directory: src-tauri
         env:
           ELF_MACHINE: ${{ matrix.elf_machine }}
         run: |
-          file target/release/termul-server
-          file target/release/termul-server | grep -F "$ELF_MACHINE"
+          file target/release/troupe-server
+          file target/release/troupe-server | grep -F "$ELF_MACHINE"
 
-      - name: Sign termul-server binary
+      - name: Sign troupe-server binary
         working-directory: src-tauri
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          bun run tauri signer sign "$(pwd)/target/release/termul-server"
-          test -f "$(pwd)/target/release/termul-server.sig"
+          bun run tauri signer sign "$(pwd)/target/release/troupe-server"
+          test -f "$(pwd)/target/release/troupe-server.sig"
 
       - name: Prepare server manifest fragment
         shell: bash
@@ -592,28 +592,28 @@ jobs:
           PLATFORM_KEY: ${{ matrix.platform_key }}
         run: |
           node scripts/release/prepare-server-artifacts.mjs \
-            --signature src-tauri/target/release/termul-server.sig \
+            --signature src-tauri/target/release/troupe-server.sig \
             --binary-name "$ASSET_NAME" \
             --platform-key "$PLATFORM_KEY" \
             --tag nightly \
             --version "$VERSION" \
             --output server-collected/server-manifest.json
 
-      - name: Stage termul-server binary + signature
+      - name: Stage troupe-server binary + signature
         shell: bash
         env:
           ASSET_NAME: ${{ matrix.asset_name }}
           ARCH: ${{ matrix.arch }}
         run: |
           mkdir -p server-collected
-          cp src-tauri/target/release/termul-server "server-collected/$ASSET_NAME"
-          cp src-tauri/target/release/termul-server.sig "server-collected/$ASSET_NAME.sig"
+          cp src-tauri/target/release/troupe-server "server-collected/$ASSET_NAME"
+          cp src-tauri/target/release/troupe-server.sig "server-collected/$ASSET_NAME.sig"
           # The API spec is the same on every arch; the x64 build emits it.
           if [[ "$ARCH" == "x64" ]]; then
-            src-tauri/target/release/termul-server openapi > server-collected/openapi.yaml
+            src-tauri/target/release/troupe-server openapi > server-collected/openapi.yaml
           fi
 
-      - name: Upload termul-server workflow artifact
+      - name: Upload troupe-server workflow artifact
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: nightly-standalone-server-${{ matrix.arch }}
@@ -680,10 +680,13 @@ jobs:
             done < <(find "$root/assets" -maxdepth 1 -type f -print0)
           done
 
-          # Standalone server binaries: one workflow artifact per arch (<arch>:<asset>:<key>).
-          # Both are required so a release never ships without an arm64 server.
-          for entry in x64:termul-server:linux-x86_64-server arm64:termul-server-linux-aarch64:linux-aarch64-server; do
-            IFS=: read -r server_arch server_asset server_key <<< "$entry"
+          # Standalone server binaries: one workflow artifact per arch
+          # (<arch>:<asset>:<legacy asset>:<key>). Both are required so a release
+          # never ships without an arm64 server. The legacy termul-server names
+          # are byte-identical copies for scripts and old Dockerfiles that
+          # download by name; the manifest points at the troupe-server names.
+          for entry in x64:troupe-server:termul-server:linux-x86_64-server arm64:troupe-server-linux-aarch64:termul-server-linux-aarch64:linux-aarch64-server; do
+            IFS=: read -r server_arch server_asset legacy_asset server_key <<< "$entry"
             server_root="release-inputs/nightly-standalone-server-$server_arch"
             if [[ ! -s "$server_root/server-manifest.json" || ! -s "$server_root/$server_asset" || ! -s "$server_root/$server_asset.sig" ]]; then
               echo "Missing collected standalone server input for $server_arch" >&2
@@ -699,6 +702,8 @@ jobs:
             ' "$server_root/server-manifest.json" "$server_key" "$server_asset"
             cp "$server_root/$server_asset" "release-assets/$server_asset"
             cp "$server_root/$server_asset.sig" "release-assets/$server_asset.sig"
+            cp "$server_root/$server_asset" "release-assets/$legacy_asset"
+            cp "$server_root/$server_asset.sig" "release-assets/$legacy_asset.sig"
             manifests+=("$server_root/server-manifest.json")
           done
 

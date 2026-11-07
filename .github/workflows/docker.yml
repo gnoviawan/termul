@@ -31,7 +31,7 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     env:
-      TERMUL_IMAGE: termul-server:ci
+      TERMUL_IMAGE: troupe-server:ci
       BASE_URL: http://127.0.0.1:8080
       TOKEN_FILE: /home/termul/.local/state/termul/web-auth-token
     steps:
@@ -49,6 +49,14 @@ jobs:
             --build-arg TERMUL_UID="$(id -u)" \
             --build-arg TERMUL_GID="$(id -g)" \
             --tag "$TERMUL_IMAGE" .
+
+      - name: Check the binary answers under both names
+        run: |
+          set -euo pipefail
+          for bin in troupe-server termul-server; do
+            docker run --rm --entrypoint "/usr/local/bin/$bin" "$TERMUL_IMAGE" --help > /dev/null
+          done
+          test "$(docker run --rm --entrypoint readlink "$TERMUL_IMAGE" /usr/local/bin/termul-server)" = troupe-server
 
       - name: Start the compose stack
         run: |
