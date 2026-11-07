@@ -3,7 +3,7 @@
 //! Mirrors `remote::host::RemoteBindMode` so `--host` parsing stays consistent
 //! across the desktop-hosted shared-live server and the headless ACP server.
 //! The single-token web auth gate (CAP-1 interim) is configured here
-//! (`--web-auth-token` / `$TERMUL_WEB_AUTH_TOKEN`); resolution + persistence
+//! (`--web-auth-token` / `$TROUPE_WEB_AUTH_TOKEN`); resolution + persistence
 //! live in `web::auth`, the Epic-2 identity/authz model replaces both later.
 
 use std::net::SocketAddr;
@@ -91,7 +91,7 @@ where
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DesktopAgentIdleWindow {
     pub secs: u64,
-    /// `true` when `$TERMUL_AGENT_IDLE_REAP_SECS` supplied `secs`. That value
+    /// `true` when `$TROUPE_AGENT_IDLE_REAP_SECS` supplied `secs`. That value
     /// stays locked: App Preferences cannot move the live window.
     pub from_env: bool,
 }
@@ -110,7 +110,7 @@ pub fn server_agent_idle_window_lock(cfg: &ServerConfig) -> Option<&'static str>
     }
 }
 
-/// `$TERMUL_AGENT_IDLE_REAP_SECS` → [`DEFAULT_AGENT_IDLE_WINDOW_SECS`] (1800).
+/// `$TROUPE_AGENT_IDLE_REAP_SECS` → [`DEFAULT_AGENT_IDLE_WINDOW_SECS`] (1800).
 /// An invalid env value is ignored with a logged warning.
 #[must_use]
 pub fn desktop_agent_idle_window_secs() -> DesktopAgentIdleWindow {
@@ -132,7 +132,7 @@ pub fn desktop_agent_idle_window_secs() -> DesktopAgentIdleWindow {
 }
 
 /// The per-project terminal cap for the desktop host, which has no CLI:
-/// `$TERMUL_MAX_TERMINALS_PER_PROJECT` → [`DEFAULT_MAX_TERMINALS_PER_PROJECT`].
+/// `$TROUPE_MAX_TERMINALS_PER_PROJECT` → [`DEFAULT_MAX_TERMINALS_PER_PROJECT`].
 /// An invalid env value is ignored with a logged warning.
 #[must_use]
 pub fn desktop_max_terminals_per_project() -> usize {
@@ -185,7 +185,7 @@ fn removed_flag_warning(flag: &str, value: Option<&str>) -> String {
 }
 
 /// Resolve the default ACP session-history root for the standalone
-/// `termul-server`: `$TERMUL_SESSIONS_DIR` (trimmed, non-empty) →
+/// `termul-server`: `$TROUPE_SESSIONS_DIR` (trimmed, non-empty) →
 /// `$XDG_STATE_HOME/termul/sessions` →
 /// `$HOME/.local/state/termul/sessions` →
 /// `%LOCALAPPDATA%/Termul/sessions`.
@@ -235,7 +235,7 @@ pub fn default_sessions_dir() -> Option<PathBuf> {
 
 /// Resolve the default VFS-roots registry file (Story 4.1) for the
 /// standalone `termul-server`. Mirrors [`default_sessions_dir`]'s chain:
-/// `$TERMUL_PROJECTS_FILE` (trimmed, non-empty) →
+/// `$TROUPE_PROJECTS_FILE` (trimmed, non-empty) →
 /// `$XDG_STATE_HOME/termul/projects.json` →
 /// `$HOME/.local/state/termul/projects.json` →
 /// `%LOCALAPPDATA%/Termul/projects.json`.
@@ -389,11 +389,11 @@ pub struct ServerConfig {
     /// Per-session event-log capacity (bounded ring; AC4). Default 4096.
     pub event_log_capacity: usize,
     /// Idle window (seconds) after which the host reaps an idle agent.
-    /// `--agent-idle-window-secs` → `$TERMUL_AGENT_IDLE_REAP_SECS` →
+    /// `--agent-idle-window-secs` → `$TROUPE_AGENT_IDLE_REAP_SECS` →
     /// [`DEFAULT_AGENT_IDLE_WINDOW_SECS`] (1800). The desktop host reads the
     /// same env var and default through [`desktop_agent_idle_window_secs`].
     pub agent_idle_window_secs: u64,
-    /// `true` when a flag or `$TERMUL_AGENT_IDLE_REAP_SECS` fixed the window.
+    /// `true` when a flag or `$TROUPE_AGENT_IDLE_REAP_SECS` fixed the window.
     /// Settings can change the live window only when this is `false`.
     pub agent_idle_window_locked: bool,
     /// Outbound-queue overflow tolerance per client: consecutive failed
@@ -402,7 +402,7 @@ pub struct ServerConfig {
     /// `serve_router` into the connection runtime every `/ws` socket uses.
     pub overflow_tolerance: usize,
     /// Per-project terminal cap enforced by the PTY manager on every spawn.
-    /// `--max-terminals-per-project` → `$TERMUL_MAX_TERMINALS_PER_PROJECT` →
+    /// `--max-terminals-per-project` → `$TROUPE_MAX_TERMINALS_PER_PROJECT` →
     /// [`DEFAULT_MAX_TERMINALS_PER_PROJECT`] (10). The desktop host reads the
     /// same env var and default through [`desktop_max_terminals_per_project`].
     pub max_terminals_per_project: usize,
@@ -414,11 +414,11 @@ pub struct ServerConfig {
     pub receipt_retention_secs: u64,
     /// Age (seconds) after which an unused per-device store partition is
     /// garbage collected. `--partition-gc-age-secs` →
-    /// `$TERMUL_PARTITION_GC_AGE_SECS` → [`DEFAULT_PARTITION_GC_AGE_SECS`]
+    /// `$TROUPE_PARTITION_GC_AGE_SECS` → [`DEFAULT_PARTITION_GC_AGE_SECS`]
     /// (90 days). Read by the host's [`crate::web::store::StorePolicy`].
     pub partition_gc_age_secs: u64,
     /// Per-device store partition byte budget. `--partition-byte-budget` →
-    /// `$TERMUL_PARTITION_BYTE_BUDGET` → [`DEFAULT_PARTITION_BYTE_BUDGET`]
+    /// `$TROUPE_PARTITION_BYTE_BUDGET` → [`DEFAULT_PARTITION_BYTE_BUDGET`]
     /// (16 MiB). A write that would push a partition past it is refused
     /// `STORE_PARTITION_FULL`.
     pub partition_byte_budget: u64,
@@ -442,7 +442,7 @@ pub struct ServerConfig {
     /// standalone `termul-server` binary loads this at startup and seeds the
     /// in-memory [`crate::web::project_registry::ProjectRegistry`] from it.
     /// [`ServerConfig::from_args`] resolves this as `--projects-file` →
-    /// `$TERMUL_PROJECTS_FILE` → `<--state-dir>/projects.json` when
+    /// `$TROUPE_PROJECTS_FILE` → `<--state-dir>/projects.json` when
     /// `--state-dir` was passed → the platform state dir (`$XDG_STATE_HOME`
     /// / `$HOME` / `%LOCALAPPDATA%`, via [`default_projects_file`]). An
     /// explicit `--state-dir` therefore beats HOME/XDG (issue #839 / #879).
@@ -456,7 +456,7 @@ pub struct ServerConfig {
     pub projects_file: Option<PathBuf>,
     /// Standalone-only durable session root. Resolved by
     /// [`ServerConfig::from_args`] as `--sessions-dir` →
-    /// `$TERMUL_SESSIONS_DIR` → `<--state-dir>/sessions` when `--state-dir`
+    /// `$TROUPE_SESSIONS_DIR` → `<--state-dir>/sessions` when `--state-dir`
     /// was passed → the platform state dir (issue #839 / #879). Desktop
     /// shared-live uses `None` and does not consult this resolver.
     pub sessions_dir: Option<PathBuf>,
@@ -479,7 +479,7 @@ pub struct ServerConfig {
     /// `false` keeps the CWE-306 loopback guard on for any `0.0.0.0` bind.
     /// Only the standalone
     /// `termul-server` honors `--allow-remote-writes` /
-    /// `TERMUL_SERVER_ALLOW_REMOTE_WRITES`; the desktop shared-live host
+    /// `TROUPE_SERVER_ALLOW_REMOTE_WRITES`; the desktop shared-live host
     /// always sets this `false` (LAN clients remain view-only for
     /// mutations). The web auth token gate (`web_auth_token`)
     /// is independent: it authenticates the client, while this flag admits
@@ -490,7 +490,7 @@ pub struct ServerConfig {
     /// `/ws` `authenticate` handshake, gates `/terminal/ws` operations until
     /// `authenticate`, and the router middleware requires it on every gated
     /// HTTP API route. Set via `--web-auth-token` or
-    /// `$TERMUL_WEB_AUTH_TOKEN`. On a public bind (`--host 0.0.0.0`) with no
+    /// `$TROUPE_WEB_AUTH_TOKEN`. On a public bind (`--host 0.0.0.0`) with no
     /// configured token, `server_main` generates + persists one via
     /// `web::auth::resolve` (fail-closed); a loopback bind without a token
     /// stays ungated (legacy behavior). The desktop shared-live host always
@@ -499,7 +499,7 @@ pub struct ServerConfig {
     /// Extra `http`/`https` origins accepted when a request carries `Origin`
     /// and that origin's host and port differ from the request `Host`
     /// header. Empty (the default) accepts only the request's own host and
-    /// port. Set via `--allowed-origins` or `$TERMUL_ALLOWED_ORIGINS` for a
+    /// port. Set via `--allowed-origins` or `$TROUPE_ALLOWED_ORIGINS` for a
     /// reverse proxy whose public origin does not match the `Host` header
     /// the server sees. Clients that omit `Origin` are unchanged.
     pub allowed_origins: OriginPolicy,
@@ -516,8 +516,8 @@ pub struct ServerConfig {
     /// gh-1105: `true` when the operator supplied ANY of the onboarding
     /// fields via argv/env: `--host`, `--port`, `--sessions-dir`,
     /// `--projects-file`, `--allow-remote-writes`, or the env equivalents
-    /// (`$TERMUL_SESSIONS_DIR`, `$TERMUL_PROJECTS_FILE`,
-    /// `$TERMUL_SERVER_ALLOW_REMOTE_WRITES` — `--host`/`--port` have no env
+    /// (`$TROUPE_SESSIONS_DIR`, `$TROUPE_PROJECTS_FILE`,
+    /// `$TROUPE_SERVER_ALLOW_REMOTE_WRITES` — `--host`/`--port` have no env
     /// equivalents). An explicit argv/env config means the operator already
     /// onboarded outside the wizard: [`Self::setup_required`] never enters
     /// setup mode — these values form a complete config on their own.
@@ -671,7 +671,7 @@ impl ServerConfig {
         // Story 4.1: the VFS-roots registry file. Parsed but NOT validated
         // against the filesystem here (a missing file loads as an empty
         // registry at load, not a fatal error). When the flag is absent,
-        // resolution after the loop is `$TERMUL_PROJECTS_FILE`, then
+        // resolution after the loop is `$TROUPE_PROJECTS_FILE`, then
         // `<--state-dir>/projects.json` when `--state-dir` was passed, then
         // the HOME/XDG platform default (`default_projects_file`).
         let mut projects_file: Option<PathBuf> = None;
@@ -691,7 +691,7 @@ impl ServerConfig {
         // unset/invalid env var stays `false` (lenient — no fatal startup).
         let mut allow_remote_writes = false;
         // Optional web auth token (CAP-1 interim). The CLI flag wins over
-        // $TERMUL_WEB_AUTH_TOKEN; an empty flag value is a parse error, an
+        // $TROUPE_WEB_AUTH_TOKEN; an empty flag value is a parse error, an
         // empty env value is ignored (mirrors the other env fallbacks).
         let mut web_auth_token: Option<WebAuthToken> = None;
         // Extra origins for a reverse proxy. `None` until a flag is seen so
@@ -963,13 +963,13 @@ impl ServerConfig {
         let remote_writes_env = brand_env::value("SERVER_ALLOW_REMOTE_WRITES");
 
         // Story 4.1 / issue #839 / #879: resolve the projects registry file.
-        // `--projects-file` wins, then `$TERMUL_PROJECTS_FILE`, then
+        // `--projects-file` wins, then `$TROUPE_PROJECTS_FILE`, then
         // `<--state-dir>/projects.json` when `--state-dir` was passed, and
         // only then the HOME/XDG platform default. The platform default must
         // not run first: `$HOME` is almost always set, so putting
         // `default_projects_file()` ahead of the state-dir derivation made
         // `--state-dir` a no-op for projects. The specific env var still
-        // outranks `--state-dir` so an operator's TERMUL_PROJECTS_FILE keeps
+        // outranks `--state-dir` so an operator's TROUPE_PROJECTS_FILE keeps
         // its registry. With no `--state-dir`, resolution is unchanged
         // (env, then HOME/XDG) — the desktop app and unscoped server starts
         // rely on that. The file is NOT validated against the filesystem
@@ -981,8 +981,8 @@ impl ServerConfig {
             .or_else(|| state_dir.as_ref().map(|dir| dir.join("projects.json")))
             .or_else(default_projects_file);
 
-        // Issue #613: optional $TERMUL_STORE_FILE env default when
-        // --store-file is absent (mirrors the $TERMUL_PROJECTS_FILE env
+        // Issue #613: optional $TROUPE_STORE_FILE env default when
+        // --store-file is absent (mirrors the $TROUPE_PROJECTS_FILE env
         // pattern). An unset/empty env var means "resolve the default at
         // serve time".
         let store_file = match store_file {
@@ -1003,7 +1003,7 @@ impl ServerConfig {
                 Some("true") | Some("1")
             );
         }
-        // Optional $TERMUL_WEB_AUTH_TOKEN fallback when --web-auth-token is
+        // Optional $TROUPE_WEB_AUTH_TOKEN fallback when --web-auth-token is
         // absent. An unset/EMPTY env var is ignored (no token); only the CLI
         // flag rejects an empty value.
         let web_auth_token = web_auth_token.or_else(|| {
@@ -1013,7 +1013,7 @@ impl ServerConfig {
             OriginPolicy::from_cli_or_env(allowed_origins_cli).map_err(ParseCliError::Message)?;
 
         // Issue #839 / #879: explicit --sessions-dir wins, then
-        // `$TERMUL_SESSIONS_DIR`, then `<--state-dir>/sessions` when
+        // `$TROUPE_SESSIONS_DIR`, then `<--state-dir>/sessions` when
         // `--state-dir` was passed, and only then the HOME/XDG platform
         // default. HOME/XDG must not outrank `--state-dir` — `$HOME` is set
         // on a real machine, so the old order never reached the derivation

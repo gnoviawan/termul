@@ -225,7 +225,7 @@ The desktop app talks to the host through Tauri IPC, not these HTTP or WebSocket
 4. Open `http://localhost:8080/#token=<token>`.
 5. In the web UI, add `/workspace` or a folder under it as a project.
 
-Inside the container the server binds `0.0.0.0`, so it always requires the token. On first start it generates the token, stores it in the `termul-home` volume, and never prints it. To set your own token, put `TROUPE_WEB_AUTH_TOKEN=<token>` in a `.env` file next to `docker-compose.yml`. The token then shows in `docker inspect` output. Each `TROUPE_*` setting also accepts its older `TERMUL_*` name, so an existing `.env` file keeps working. A non-empty `TROUPE_*` value wins when both are set. The fallback needs Docker Compose v2.
+Inside the container the server binds `0.0.0.0`, so it always requires the token. On first start it generates the token, stores it in the `termul-home` volume, and never prints it. To set your own token, put `TROUPE_WEB_AUTH_TOKEN=<token>` in a `.env` file next to `docker-compose.yml`. The token then shows in `docker inspect` output. Each `TROUPE_*` setting also accepts its older `TERMUL_*` name, so an existing `.env` file keeps working. A `TROUPE_*` value that is not blank wins when both are set. The fallback needs Docker Compose v2.
 
 Compose publishes the port on `127.0.0.1` only. Changing the mapping to `8080:8080` exposes the server on every host network, over plain HTTP. For remote access, put an HTTPS reverse proxy in front instead.
 

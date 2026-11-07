@@ -68,7 +68,7 @@ Things to know about the container:
 - The image has no agent programs such as Claude Code or Codex. Install them into `/home/termul/.local/bin` inside the container. That folder is on the `PATH` and is kept between restarts.
 - The user inside the container has user ID 1000. If your own user ID is different, build the image with yours before the first start: `TROUPE_UID=$(id -u) TROUPE_GID=$(id -g) docker compose up -d --build`.
 - To set your own token, put `TROUPE_WEB_AUTH_TOKEN=<token>` in a `.env` file next to `docker-compose.yml`.
-- The older `TERMUL_*` name of each variable still works. If you set both, the `TROUPE_*` name wins unless it is empty. An existing `.env` file keeps working.
+- The older `TERMUL_*` name of each variable still works. If you set both, the `TROUPE_*` name wins unless it is blank (empty or only spaces). An existing `.env` file keeps working.
 
 To update, pull the new image and restart:
 

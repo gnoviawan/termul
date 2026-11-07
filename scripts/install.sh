@@ -18,8 +18,10 @@ brand_env() {
   local new="TROUPE_$1"
   local old="TERMUL_$1"
 
-  if [[ -n "${!new:-}" ]]; then
-    printf '%s' "${!new}"
+  local value="${!new:-}"
+
+  if [[ -n "${value//[[:space:]]/}" ]]; then
+    printf '%s' "$value"
   else
     printf '%s' "${!old:-}"
   fi
@@ -29,11 +31,13 @@ note_legacy_env() {
   local name
   local new
   local old
+  local value
 
   for name in "${INSTALL_ENV_NAMES[@]}"; do
     new="TROUPE_${name}"
     old="TERMUL_${name}"
-    if [[ -z "${!new:-}" && -n "${!old:-}" ]]; then
+    value="${!new:-}"
+    if [[ -z "${value//[[:space:]]/}" && -n "${!old:-}" ]]; then
       printf '%s is deprecated; rename it to %s (%s still works for now)\n' "$old" "$new" "$old" >&2
     fi
   done
@@ -345,7 +349,8 @@ unset TERMUL_LAUNCHER_PRELOAD
 if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
   # TROUPE_WAYLAND_CLIENT_LIB wins; the old TERMUL_ name still works.
   _wayland_var=TERMUL_WAYLAND_CLIENT_LIB
-  [[ -z "${TROUPE_WAYLAND_CLIENT_LIB:-}" ]] || _wayland_var=TROUPE_WAYLAND_CLIENT_LIB
+  _troupe_lib="${TROUPE_WAYLAND_CLIENT_LIB:-}"
+  [[ -z "${_troupe_lib//[[:space:]]/}" ]] || _wayland_var=TROUPE_WAYLAND_CLIENT_LIB
   _wayland_lib="${!_wayland_var:-}"
   if [[ -n "$_wayland_lib" ]]; then
     _candidates=("$_wayland_lib")

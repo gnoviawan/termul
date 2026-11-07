@@ -82,9 +82,9 @@ fn cloudflared_sidecar_name() -> &'static str {
 }
 
 /// Resolve the cloudflared binary path. Mirrors `resolve_rg_path`:
-/// env override `TROUPE_CLOUDFLARED_PATH` (or `TERMUL_CLOUDFLARED_PATH`) (absolute, or relative to cwd /
-/// `src-tauri`), then the bundled sidecar under the same candidate dirs as
-/// `rg`. Returns `(path, source)`; `source = "path"` is the bare-name
+/// env override `TROUPE_CLOUDFLARED_PATH`, or the deprecated
+/// `TERMUL_CLOUDFLARED_PATH` (absolute, or relative to cwd / `src-tauri`),
+/// then the bundled sidecar under the same candidate dirs as `rg`. Returns `(path, source)`; `source = "path"` is the bare-name
 /// last-resort fallback (resolved via PATH at spawn time).
 ///
 /// Keep this function pure / side-effect-free so it can be unit-tested without

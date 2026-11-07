@@ -524,6 +524,8 @@ These are the `acp_*`, `claude_accounts_*`, `ws_channel_*` and `codex_cli_auth_s
 | `acp_history_list_legacy` | Lists the legacy store so the wipe migration can verify what it wrote. |
 | `acp_history_get_legacy` | Reads one legacy payload for the same verification. |
 
+Each `TROUPE_*` variable in these rows is also read under its old `TERMUL_*` name, which logs one deprecation warning per process. A `TROUPE_*` value that is not blank wins.
+
 ### `/ws` requests
 
 A request frame is `{id, type, payload, command_id?}`. The reply is `{id, ok: true, payload?}` or `{id, ok: false, err: {code, message, details?}}`. Payloads use camelCase. The shared contract is `src/shared/types/web-protocol.types.ts` (`WS_REQUEST_TYPES`, `WS_COMMAND_CLASSES`, `WS_ERROR_CODES`). The Rust dispatcher is `src-tauri/src/web/ws/dispatch.rs`.

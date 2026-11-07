@@ -4,7 +4,7 @@
 //! Browsers attach `Origin` on WebSocket upgrades and on state-changing
 //! fetches. When the header is present it must name the same host and port
 //! as the request's `Host` header, or an origin the operator listed
-//! (`--allowed-origins` / `TERMUL_ALLOWED_ORIGINS`) for a reverse proxy whose
+//! (`--allowed-origins` / `TROUPE_ALLOWED_ORIGINS`) for a reverse proxy whose
 //! public origin does not match that `Host`. Clients that omit `Origin`
 //! (scripts, other non-browser callers) are unchanged.
 //!

@@ -1021,7 +1021,7 @@ ENVIRONMENT:
     TROUPE_SERVER_UPDATE_CHANNEL  stable|insider|nightly (required for periodic loop)
     TROUPE_SERVER_UPDATE_INTERVAL_SECS  periodic loop interval [default: 21600]
     Every TROUPE_* variable above also accepts its old TERMUL_* name;
-    a non-empty TROUPE_* value wins when both are set.
+    a TROUPE_* value that is not blank wins when both are set.
 
 EXAMPLES:
     # Local: serve the embedded web client on loopback

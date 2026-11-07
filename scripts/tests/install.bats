@@ -271,6 +271,8 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   [ "$output" = "/old" ]
   TROUPE_INSTALL_BIN_DIR= TERMUL_INSTALL_BIN_DIR=/old run brand_env INSTALL_BIN_DIR
   [ "$output" = "/old" ]
+  TROUPE_INSTALL_BIN_DIR="  " TERMUL_INSTALL_BIN_DIR=/old run brand_env INSTALL_BIN_DIR
+  [ "$output" = "/old" ]
   unset TERMUL_INSTALL_BIN_DIR
   run brand_env INSTALL_BIN_DIR
   [ "$output" = "" ]

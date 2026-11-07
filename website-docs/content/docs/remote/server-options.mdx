@@ -22,7 +22,7 @@ This page lists the `termul-server` settings you are most likely to change. Run 
 | `--max-terminals-per-project <N>` | `TROUPE_MAX_TERMINALS_PER_PROJECT` | `10` | The most terminals one project can have open. The whole server allows 30. |
 | `--check-update` | | | Check for a new server version once, then exit. See [Update the server](#update-the-server). |
 
-When you set both a flag and its environment variable, the flag wins. The older `TERMUL_*` name of each variable still works. If you set both, the `TROUPE_*` name wins unless it is empty. A `server-config.json` in the state folder — written by the setup page or by `termul-server onboard` — wins over both for the settings it holds: host, port, sessions directory, projects file, remote writes, and updates.
+When you set both a flag and its environment variable, the flag wins. The older `TERMUL_*` name of each variable still works. If you set both, the `TROUPE_*` name wins unless it is blank (empty or only spaces). A `server-config.json` in the state folder — written by the setup page or by `termul-server onboard` — wins over both for the settings it holds: host, port, sessions directory, projects file, remote writes, and updates.
 
 The state folder is `$XDG_STATE_HOME/termul` when `XDG_STATE_HOME` is set. Otherwise it is `~/.local/state/termul`.
 
