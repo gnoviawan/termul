@@ -362,6 +362,7 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
 
   [ "$status" -eq 0 ]
   grep -q "releases/download/v0.4.60/Termul.Manager_0.4.60_amd64.AppImage" "$TERMUL_TEST_LOG"
+  grep -Fxq "Name=Termul Manager" "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
 }
 
 @test "install_linux installs AppImage, desktop entry, chmod, and PATH warning" {
@@ -378,6 +379,8 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   [ "$(cat "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage")" = "linux appimage payload" ]
   [ -f "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop" ]
   grep -q "Exec=$TERMUL_INSTALL_BIN_DIR/termul-manager" "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
+  grep -Fxq "Name=Troupe" "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
+  [[ "$output" == *"Installed Troupe to $TERMUL_INSTALL_BIN_DIR/termul-manager"* ]]
   [[ "$output" == *"not in PATH"* ]]
 }
 
@@ -483,7 +486,7 @@ run_launcher() {
   run main
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Install Termul Manager v1.2.3 (darwin-aarch64) to $TERMUL_INSTALL_APPLICATIONS_DIR?"* ]]
+  [[ "$output" == *"Install Troupe v1.2.3 (darwin-aarch64) to $TERMUL_INSTALL_APPLICATIONS_DIR?"* ]]
   [ "$(grep -c "hdiutil attach" "$TERMUL_TEST_LOG")" -eq 1 ]
 }
 
@@ -497,7 +500,7 @@ run_launcher() {
   run main
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Install Termul Manager v1.2.3 (linux-x86_64) to $HOME/.local/bin?"* ]]
+  [[ "$output" == *"Install Troupe v1.2.3 (linux-x86_64) to $HOME/.local/bin?"* ]]
   [ -x "$TERMUL_INSTALL_BIN_DIR/termul-manager" ]
   grep -q "Troupe_1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
   ! grep -q "Troupe_v1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"

@@ -6,7 +6,8 @@ set -e
 # the file, so removing it (which installing Troupe does) deletes the user's rg.
 # Keep a copy here; postinst puts it back once the old package is gone.
 if [ "$1" = install ] || [ "$1" = upgrade ]; then
-  if dpkg-query -S /usr/bin/rg 2>/dev/null | grep -Eq '(^|[ ,])termul-manager[,:]' &&
+  if [ -f /usr/bin/rg ] &&
+    dpkg-query -S /usr/bin/rg 2>/dev/null | grep -Eq '(^|[ ,])termul-manager[,:]' &&
     [ "$(dpkg-query -W -f='${db:Status-Status}' ripgrep 2>/dev/null)" = installed ]; then
     cp -p /usr/bin/rg /usr/bin/.rg.troupe-gh1580
   fi

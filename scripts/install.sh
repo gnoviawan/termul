@@ -283,7 +283,7 @@ install_macos() {
       fi
     fi
     xattr -dr com.apple.quarantine "$app_target" 2>/dev/null || true
-    printf 'Installed Termul Manager to %s\n' "$app_target"
+    printf 'Installed %s to %s\n' "$name" "$app_target"
   )
 }
 
@@ -377,7 +377,7 @@ LAUNCHER
     cat >"$desktop_path" <<DESKTOP
 [Desktop Entry]
 Type=Application
-Name=Termul Manager
+Name=${name}
 Exec=${target_path}
 Terminal=false
 Categories=Development;Utility;
@@ -391,7 +391,7 @@ DESKTOP
         ;;
     esac
 
-    printf 'Installed Termul Manager to %s\n' "$target_path"
+    printf 'Installed %s to %s\n' "$name" "$target_path"
   )
 }
 
@@ -409,10 +409,10 @@ main() {
 
   case "$os" in
     darwin)
-      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${TERMUL_INSTALL_APPLICATIONS_DIR:-/Applications}?" || return 1
+      confirm_install "Install $(product_name "$version") ${version} (${os}-${arch}) to ${TERMUL_INSTALL_APPLICATIONS_DIR:-/Applications}?" || return 1
       ;;
     linux)
-      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${TERMUL_INSTALL_BIN_DIR:-${HOME}/.local/bin}?" || return 1
+      confirm_install "Install $(product_name "$version") ${version} (${os}-${arch}) to ${TERMUL_INSTALL_BIN_DIR:-${HOME}/.local/bin}?" || return 1
       ;;
     *)
       die "Unsupported operating system: ${os}"
