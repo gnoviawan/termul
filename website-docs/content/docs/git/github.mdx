@@ -3,17 +3,17 @@ title: GitHub issues and pull requests
 description: Browse the issues and pull requests of your GitHub repository, comment on them, hand them to an agent chat, and merge a pull request.
 ---
 
-The **GitHub** tab lists the issues and pull requests of the project's GitHub repository. Open one to read it, see its checks, comment on it, hand it to an agent chat, and merge a pull request, without leaving Termul.
+The **GitHub** tab lists the issues and pull requests of the project's GitHub repository. Open one to read it, see its checks, comment on it, hand it to an agent chat, and merge a pull request, without leaving Troupe.
 
 ## Before you start
 
-Termul talks to GitHub through the GitHub CLI (`gh`) on the computer that runs Termul. It uses your `gh` login and never stores a token.
+Troupe talks to GitHub through the GitHub CLI (`gh`) on the computer that runs Troupe. It uses your `gh` login and never stores a token.
 
 When the tab can't show the list yet, it tells you what to fix:
 
 - **GitHub CLI not installed**: install `gh` from [cli.github.com](https://cli.github.com), then select **Retry**.
 - **This project isn't a GitHub repository**: the project's Git remote is missing or points to a host the GitHub CLI doesn't know.
-- **Sign in to** a host: select **Sign in**. Termul opens a terminal that runs the `gh auth login` command shown above the button. Finish the login there, then select **Retry**.
+- **Sign in to** a host: select **Sign in**. Troupe opens a terminal that runs the `gh auth login` command shown above the button. Finish the login there, then select **Retry**.
 
 If your login is missing a scope, or `GH_TOKEN` or `GITHUB_TOKEN` is set and overrides your `gh` login, a yellow note appears above the list with the command that fixes it. Select the copy button next to the command and run it in a terminal.
 
@@ -21,7 +21,7 @@ If your login is missing a scope, or `GH_TOKEN` or `GITHUB_TOKEN` is set and ove
 
 Select the **GitHub** icon in the side panel. It is the fourth tab, after **Changes**. The list takes the place of the file list.
 
-On a phone, open the side menu and tap the **GitHub** icon. See [Use Termul on a phone](/docs/remote/phone).
+On a phone, open the side menu and tap the **GitHub** icon. See [Use Troupe on a phone](/docs/remote/phone).
 
 ## Filter the list
 
@@ -35,7 +35,7 @@ On a phone, open the side menu and tap the **GitHub** icon. See [Use Termul on a
 
 On a phone, the label and assignee lists open as a sheet. Your choices apply when you select **Done**.
 
-The list refreshes on its own every two minutes while Termul is visible. Select **Refresh** (the circular arrow at the end of the **All**, **Issues** and **PRs** row) to update it now. If a refresh fails, the last list stays on screen.
+The list refreshes on its own every two minutes while Troupe is visible. Select **Refresh** (the circular arrow at the end of the **All**, **Issues** and **PRs** row) to update it now. If a refresh fails, the last list stays on screen.
 
 Each filter is kept per working copy, so a [worktree](/docs/git/worktrees) can show a different list from the project folder.
 
@@ -56,7 +56,7 @@ Select **Labels** or **Assignees** on an item to pick them from a list. Your cho
 
 On a `troupe-server` that is read-only for remote clients, you can't change labels, assignees or the state of an item.
 
-The tab stays open when you restart Termul, like other tabs.
+The tab stays open when you restart Troupe, like other tabs.
 
 ## Comment and reply
 
@@ -69,14 +69,14 @@ The comment is posted on GitHub with your `gh` login, and the tab shows it as Gi
 
 The **Merge** section of a pull request has a merge method menu with **Merge commit**, **Squash and merge** and **Rebase and merge**.
 
-- The merge button is on when GitHub says the pull request can merge now. Termul asks you to confirm before it merges, and the merge happens on GitHub.
+- The merge button is on when GitHub says the pull request can merge now. Troupe asks you to confirm before it merges, and the merge happens on GitHub.
 - When the pull request can't merge yet, for example because checks are still running, select **Enable auto-merge**. GitHub then merges it when its requirements pass. Select **Disable auto-merge** to turn it off.
 
 When you connect to a `troupe-server` that is read-only for remote clients, the merge controls are off and show **This server is read-only for remote clients.**
 
 ## Hand an issue or pull request to an agent
 
-The buttons in the item's header start an [agent chat](/docs/agents/start-a-chat) with the issue or pull request already in the prompt. The chat uses the agent you picked last in the new chat launcher. If you haven't set up an agent yet, Termul shows **Set up an agent first** and opens the launcher.
+The buttons in the item's header start an [agent chat](/docs/agents/start-a-chat) with the issue or pull request already in the prompt. The chat uses the agent you picked last in the new chat launcher. If you haven't set up an agent yet, Troupe shows **Set up an agent first** and opens the launcher.
 
 For an issue:
 
@@ -90,7 +90,7 @@ For a pull request:
 - **Fix CI** appears when a check failed. It creates a new worktree with the pull request checked out and hands the failing checks, with the last lines of their logs, to an agent.
 - **Resolve comments** appears when a review thread is unresolved. Pick the threads to hand off, then select **Hand off**. The agent works on them in a new worktree with the pull request checked out and can push there. You resolve the threads on GitHub yourself.
 
-**Fix CI** and **Resolve comments** only appear on open and draft pull requests. When Termul can't let the agent push to the pull request's branch, for example a fork that doesn't allow edits from maintainers, the chat isn't started and a message says why.
+**Fix CI** and **Resolve comments** only appear on open and draft pull requests. When Troupe can't let the agent push to the pull request's branch, for example a fork that doesn't allow edits from maintainers, the chat isn't started and a message says why.
 
 Selecting **Ask** or **Review** again reopens the same chat. The **Linked chats** list on the item shows every chat started from it; select one to open it.
 

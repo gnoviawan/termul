@@ -113,6 +113,6 @@ the agent the conversation ended with:
 ## Both surfaces
 
 The flow works identically on the Tauri desktop app and the web client over
-`termul-server`: the picker, separator, and marker persistence are shared
+`troupe-server`: the picker, separator, and marker persistence are shared
 renderer + host code, and the durable record type is implemented on both the
 IPC command and the WS route side.

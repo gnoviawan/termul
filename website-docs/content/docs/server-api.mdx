@@ -3,7 +3,7 @@ title: Build your own client
 description: Use the troupe-server HTTP API and its OpenAPI spec to write scripts, integrations, or your own interface.
 ---
 
-`troupe-server` serves the Termul app, and the app talks to the server through a plain HTTP and WebSocket API. You can use the same API from a script, a native app, or your own web interface. The HTTP part is described in an OpenAPI 3.1 file that the Termul repository generates from the server's own code.
+`troupe-server` serves the Troupe app, and the app talks to the server through a plain HTTP and WebSocket API. You can use the same API from a script, a native app, or your own web interface. The HTTP part is described in an OpenAPI 3.1 file that the Troupe repository generates from the server's own code.
 
 <Callout type="warn">The API is not versioned yet. Routes and fields can change between releases. Read the spec that matches the server version you run.</Callout>
 
@@ -90,8 +90,8 @@ The upgrade request itself needs no token. After the socket opens, send an `auth
 {"id":"1","type":"authenticate","payload":{"protocolVersion":7,"deviceId":"my-client","clientInstanceId":"my-client-1","token":"<token>"}}
 ```
 
-The server refuses an `authenticate` with a different `protocolVersion`. The current frames, request types, and version number are in [`src/shared/types/web-protocol.types.ts`](https://github.com/gnoviawan/termul/blob/dev/src/shared/types/web-protocol.types.ts) in the Termul repository. The Termul web app is the reference client, and its socket code is in `src/renderer/lib/`.
+The server refuses an `authenticate` with a different `protocolVersion`. The current frames, request types, and version number are in [`src/shared/types/web-protocol.types.ts`](https://github.com/gnoviawan/termul/blob/dev/src/shared/types/web-protocol.types.ts) in the Troupe repository. The Troupe web app is the reference client, and its socket code is in `src/renderer/lib/`.
 
 ## Add a route to the spec
 
-This section is for people who change the Termul server. The server builds the spec from its own Rust types, so no spec file is checked in and there is nothing to regenerate. When you add or remove an HTTP route, add or remove its row in the `ROUTES` table in `src-tauri/src/web/openapi/`. A Rust test fails until the table and the router match.
+This section is for people who change the Troupe server. The server builds the spec from its own Rust types, so no spec file is checked in and there is nothing to regenerate. When you add or remove an HTTP route, add or remove its row in the `ROUTES` table in `src-tauri/src/web/openapi/`. A Rust test fails until the table and the router match.

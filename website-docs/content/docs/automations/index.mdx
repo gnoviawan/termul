@@ -5,7 +5,7 @@ description: Have an agent build a task that runs on a schedule, act on suggesti
 
 An automation is a task that runs on its own, on a schedule or when you start it. For example, "every weekday at 9, summarize open PRs". You do not build automations by hand. You describe one to an AI agent in a chat, the agent builds it, and you review and approve it in the **Automations** tab. It does not run until you approve it.
 
-Automations belong to a project, and they run on the machine that runs that project: your desktop, or `troupe-server` when you use [Termul on a server](/docs/remote/server).
+Automations belong to a project, and they run on the machine that runs that project: your desktop, or `troupe-server` when you use [Troupe on a server](/docs/remote/server).
 
 ## Open the Automations tab
 
@@ -29,7 +29,7 @@ The state is one of:
 Every weekday at 9, summarize the open pull requests in this repo.
 ```
 
-Termul gives the agent tools to build the automation. The agent may ask you questions first, for example which repository to read or which agent should write the summary. When it is done, it sends the automation to you for review. Termul opens the **Automations** tab on that automation and shows a message such as "Claude proposed an automation — review and approve". On a phone, the automation opens directly.
+Troupe gives the agent tools to build the automation. The agent may ask you questions first, for example which repository to read or which agent should write the summary. When it is done, it sends the automation to you for review. Troupe opens the **Automations** tab on that automation and shows a message such as "Claude proposed an automation — review and approve". On a phone, the automation opens directly.
 
 The agent cannot approve, enable or run an automation. Only you can.
 
@@ -37,14 +37,14 @@ To change an automation later, ask an agent in a chat. Every change makes a new 
 
 ## Suggestions from repeated asks
 
-Termul can notice when you keep asking for the same thing and offer to turn it into an automation. It never builds one without asking you.
+Troupe can notice when you keep asking for the same thing and offer to turn it into an automation. It never builds one without asking you.
 
 - **In a chat.** When your request names a cadence, such as "every morning" or "weekly", or repeats something you asked earlier in the same chat, the agent first finishes the task. Then it asks once in that chat: "This looks repeatable. Want me to turn it into a scheduled background automation?" Answer **Yes, schedule it** to have the agent build it, or **Not now**. It does not ask again in that chat.
-- **Across chats.** Termul looks at the prompts you sent in the project's chats over the last 30 days. If you asked something very similar on 3 or more different days, it suggests an automation with a schedule guessed from when you usually ask, for example weekly, on weekdays or daily at a certain time. This check runs on your machine and does not send your prompts to an AI model.
+- **Across chats.** Troupe looks at the prompts you sent in the project's chats over the last 30 days. If you asked something very similar on 3 or more different days, it suggests an automation with a schedule guessed from when you usually ask, for example weekly, on weekdays or daily at a certain time. This check runs on your machine and does not send your prompts to an AI model.
 
 A suggestion shows up as a card titled **This looks repeatable**, with the request it noticed, how many days you asked it and the usual timing. The card appears in a chat right after you send a matching request (at most once per chat), and in the **Suggested** section at the top of the **Automations** tab.
 
-- **Create automation** starts a new chat on your default agent with a prompt that asks it to build the automation. The agent may ask you a few questions first, such as when it should run and where the results should go, and then sends it to you for review. If no default agent is ready, Termul opens the agent launcher so you can pick one. If the chat cannot start, for example because the project has no folder, Termul shows an error and the suggestion stays so you can try again.
+- **Create automation** starts a new chat on your default agent with a prompt that asks it to build the automation. The agent may ask you a few questions first, such as when it should run and where the results should go, and then sends it to you for review. If no default agent is ready, Troupe opens the agent launcher so you can pick one. If the chat cannot start, for example because the project has no folder, Troupe shows an error and the suggestion stays so you can try again.
 - **Not now** hides the suggestion in this project on this device for 24 hours. It shows up again when the 24 hours are over, even on a screen you left open.
 - **Don't suggest this again** removes the suggestion for good.
 
@@ -56,10 +56,10 @@ The **Run policy** card shows what the automation will do once it is approved:
 
 - **Trigger**. The schedule, for example a cron expression with its time zone, an interval such as every 30 min, or one date and time. **Run manually** means it only runs when you click **Run now**.
 - **Next runs**. Up to the next three times it will run.
-- **Agents**. Each step that runs an AI agent, with the agent, its model, its time limit and the tools it may use. **no tools** means the agent can only answer. When the agent asks to use a tool, Termul allows it only if the tool is on that list, and refuses all other tools. File tools work only inside the automation's folder, and never on `.git`, `.github`, `.claude`, editor settings or `.env` files. **run commands (full access)** lets the agent run any command-line tool installed on the machine and do anything you can do in a terminal, so approve it only when you trust the step. An agent that reads web content, or the output of an agent that can reach the web, cannot run commands, fetch from the network, use MCP and other tools, or edit files. An agent that can fetch from the network or use MCP and other tools cannot also read or edit files. Claude agent steps run without your Claude settings files, so rules you saved with "don't ask again" do not apply to them. Settings such as a proxy address or an API key helper in your Claude settings file do not apply either.
+- **Agents**. Each step that runs an AI agent, with the agent, its model, its time limit and the tools it may use. **no tools** means the agent can only answer. When the agent asks to use a tool, Troupe allows it only if the tool is on that list, and refuses all other tools. File tools work only inside the automation's folder, and never on `.git`, `.github`, `.claude`, editor settings or `.env` files. **run commands (full access)** lets the agent run any command-line tool installed on the machine and do anything you can do in a terminal, so approve it only when you trust the step. An agent that reads web content, or the output of an agent that can reach the web, cannot run commands, fetch from the network, use MCP and other tools, or edit files. An agent that can fetch from the network or use MCP and other tools cannot also read or edit files. Claude agent steps run without your Claude settings files, so rules you saved with "don't ask again" do not apply to them. Settings such as a proxy address or an API key helper in your Claude settings file do not apply either.
 - **Secrets**. The secrets each step uses. See [Secrets](#secrets).
 - **Outbound hosts**. The web addresses each step may send requests to. A step cannot reach any other host.
-- **On failure**. How long Termul waits before the next run after failures in a row. The wait grows from 30 seconds up to 1 hour.
+- **On failure**. How long Troupe waits before the next run after failures in a row. The wait grows from 30 seconds up to 1 hour.
 
 If an AI step reads content from the web and a later step sends data out, the card shows a warning. A fetched page can contain instructions for the agent, so check the outbound hosts before you approve.
 
@@ -76,7 +76,7 @@ Below the card, **Diagram** shows the automation's steps and how they connect. A
 - choose a path (Condition);
 - repeat its steps once for each item in a list, up to 100 items (For each). A longer list fails the step;
 - join two paths into one (Merge);
-- pause the run for a set time, up to 7 days (Wait). The run picks up on time, even after Termul or the machine restarts;
+- pause the run for a set time, up to 7 days (Wait). The run picks up on time, even after Troupe or the machine restarts;
 - stop the run with an error (Fail).
 
 ## Run, pause or delete an automation
@@ -85,7 +85,7 @@ Below the card, **Diagram** shows the automation's steps and how they connect. A
 - Turn off **Enabled** to stop the automation from running on its schedule. Turn it on again to resume.
 - Click **Delete** and confirm to remove the automation. It stops running, and its run history is deleted. You cannot undo this.
 
-If the machine was off or Termul was closed when a run was due, Termul runs the automation once when it starts again. That run is labeled **Catch-up**.
+If the machine was off or Troupe was closed when a run was due, Troupe runs the automation once when it starts again. That run is labeled **Catch-up**.
 
 ## Check a run
 
@@ -105,6 +105,6 @@ Some steps need a secret, such as an API token for a web request. You enter secr
 
 A saved secret shows **Saved**. Click **Replace** to change it, or **Delete** to remove it. A secret the automation no longer uses is marked **Unused**.
 
-Secrets belong to the project, so every automation in the project can use them. Only web request (HTTP) steps can use a secret, and Termul never shows a saved value again.
+Secrets belong to the project, so every automation in the project can use them. Only web request (HTTP) steps can use a secret, and Troupe never shows a saved value again.
 
-Secrets are kept on the machine that runs the project, in the system keychain. On a machine without a keychain, such as `troupe-server` on a Linux server without a desktop, Termul keeps them in a file named `automation-secrets.json` in its data folder that only your user account can read.
+Secrets are kept on the machine that runs the project, in the system keychain. On a machine without a keychain, such as `troupe-server` on a Linux server without a desktop, Troupe keeps them in a file named `automation-secrets.json` in its data folder that only your user account can read.

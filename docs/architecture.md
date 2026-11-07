@@ -1,4 +1,4 @@
-# Termul Manager - Architecture
+# Troupe - Architecture
 
 **Date:** 2026-05-09
 **Project Type:** Desktop Application
@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-Termul Manager is a single-repository desktop application built around a **Tauri 2 + Rust runtime** and a **React 18 + TypeScript renderer**. The architecture emphasizes a clean boundary between UI concerns and native capabilities:
+Troupe is a single-repository desktop application built around a **Tauri 2 + Rust runtime** and a **React 18 + TypeScript renderer**. The architecture emphasizes a clean boundary between UI concerns and native capabilities:
 
 - the **renderer** owns user interaction, state, layout orchestration, editor/browser/terminal surfaces, and persistence adapters
 - the **native runtime** owns PTY processes, browser child webviews, migration execution, shell detection, window integration, and OS-level operations
@@ -351,7 +351,7 @@ Standalone `troupe-server` owns its `PtyManager` and terminates those PTYs after
 
 ## ACP agent chat
 
-The agent chat runs coding agents that speak the [Agent Client Protocol](https://agentclientprotocol.com) (ACP): JSON-RPC 2.0 over the agent subprocess's stdin and stdout. Termul is the ACP client. The Rust host starts the agent, completes the `initialize` handshake, creates sessions, streams prompt turns, and answers the agent's reverse requests (permission prompts, file reads and writes, terminals, elicitations). The renderer shows the result as a chat. The ACP client library is the `agent-client-protocol` crate (`src-tauri/Cargo.toml`).
+The agent chat runs coding agents that speak the [Agent Client Protocol](https://agentclientprotocol.com) (ACP): JSON-RPC 2.0 over the agent subprocess's stdin and stdout. Troupe is the ACP client. The Rust host starts the agent, completes the `initialize` handshake, creates sessions, streams prompt turns, and answers the agent's reverse requests (permission prompts, file reads and writes, terminals, elicitations). The renderer shows the result as a chat. The ACP client library is the `agent-client-protocol` crate (`src-tauri/Cargo.toml`).
 
 The subsystem has four parts that the sections below cover in turn: a runtime with one thread per agent, a relay that carries one protocol to every client, a renderer facade, and a host-owned session store. This section explains how they fit. `docs/api-contracts.md` ("ACP command and event reference") lists every command, request, event and route.
 
@@ -419,7 +419,7 @@ Every `session/new` receives a host-side MCP server in its `mcp_servers` list (`
 - `set_session_title` sets the chat title once and proposes a worktree branch slug.
 - `browser` drives the in-app browser pane. It works on the Windows desktop only, and other hosts report `capability_unavailable`. A consent prompt gates the first call of a session.
 
-Claude Code defers MCP tools behind tool search and shows the model only their names. So `plan` and `set_session_title` carry `_meta` `anthropic/alwaysLoad: true`, and the server `instructions` open with a paragraph that names `plan`, `set_session_title` and `ask_user`. By default Claude Code keeps only the first 4096 UTF-16 code units of a server's instructions (`CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH` can change that), so all Termul-owned text must fit before figcraft's guide (`CLAUDE_INSTRUCTIONS_BUDGET`, checked by a test).
+Claude Code defers MCP tools behind tool search and shows the model only their names. So `plan` and `set_session_title` carry `_meta` `anthropic/alwaysLoad: true`, and the server `instructions` open with a paragraph that names `plan`, `set_session_title` and `ask_user`. By default Claude Code keeps only the first 4096 UTF-16 code units of a server's instructions (`CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH` can change that), so all Troupe-owned text must fit before figcraft's guide (`CLAUDE_INSTRUCTIONS_BUDGET`, checked by a test).
 
 The server has two halves, in `src-tauri/src/acp/host_mcp/`. The parent half is a TCP listener on `127.0.0.1` with an ephemeral port, shared by all sessions and started lazily. The child half is a stdio MCP server, the host binary itself started as `current_exe() --internal-mcp-plan-server` (`CHILD_ARG`). Both `main` functions, desktop and standalone, branch on that flag before any app setup. The child forwards each tool call to the parent as one frame over a fresh connection. A per-session random token in the frame identifies the session, and the parent ignores frames with an unknown token. The design needs no Tauri `AppHandle`, so it works the same in both binaries.
 

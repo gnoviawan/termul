@@ -1,10 +1,10 @@
-# Termul Manager - Deployment Guide
+# Troupe - Deployment Guide
 
 **Date:** 2026-07-28
 
 ## Overview
 
-Termul Manager is distributed as a packaged Tauri desktop application. Releases are built on GitHub Actions, updater artifacts are signed with the existing Tauri minisign key, macOS bundles are additionally Developer ID signed and notarized, and one publish job owns every GitHub Release upload.
+Troupe is distributed as a packaged Tauri desktop application. Releases are built on GitHub Actions, updater artifacts are signed with the existing Tauri minisign key, macOS bundles are additionally Developer ID signed and notarized, and one publish job owns every GitHub Release upload.
 
 ## Packaging Model
 
@@ -131,12 +131,12 @@ Both `aarch64-apple-darwin` and `x86_64-apple-darwin` are built. For these targe
 The macOS collection gate requires exactly one `.app` and one DMG, resolves the app's declared `CFBundleExecutable`, and inspects that executable with `otool -L` and `otool -l`. It permits system libraries and relocatable `@rpath`, `@loader_path`, and `@executable_path` dependencies, but rejects Homebrew/local prefixes, runner-local absolute paths, unexpected relative load paths, and non-portable `LC_RPATH` entries. It then runs:
 
 ```bash
-codesign --verify --deep --strict --verbose=2 "Termul Manager.app"
-spctl --assess --type execute --verbose=4 "Termul Manager.app"
-xcrun stapler validate "Termul Manager.app"
-codesign --verify --strict --verbose=2 Termul.Manager_*.dmg
-spctl --assess --type open --context context:primary-signature --verbose=4 Termul.Manager_*.dmg
-xcrun stapler validate Termul.Manager_*.dmg
+codesign --verify --deep --strict --verbose=2 "Troupe.app"
+spctl --assess --type execute --verbose=4 "Troupe.app"
+xcrun stapler validate "Troupe.app"
+codesign --verify --strict --verbose=2 Troupe_*.dmg
+spctl --assess --type open --context context:primary-signature --verbose=4 Troupe_*.dmg
+xcrun stapler validate Troupe_*.dmg
 ```
 
 After maintainers provision the Apple secrets, repeat these checks against both architectures on a real release. Existing v0.4.8 GitHub assets cannot be retroactively notarized.
@@ -166,11 +166,11 @@ The web bundle (`dist-web/`, served by `troupe-server` and the desktop shared-li
 
 **Installing.** There is no in-app install button by design — use the browser-native affordance:
 
-- Desktop Chrome/Edge: the install icon in the address bar (or menu → "Install Termul").
+- Desktop Chrome/Edge: the install icon in the address bar (or menu → "Install Troupe").
 - Android Chrome: menu → "Add to Home screen" / install prompt.
 - iOS Safari: Share → "Add to Home Screen" (`apple-mobile-web-app-capable` + `black-translucent` status bar + opaque `apple-touch-icon` are set).
 
-Launched installed, the app runs `display: standalone` with the Termul name/icon. `start_url`/`scope` are `/`. Token auth normally carries over because `web-auth-token.ts` moves the `#token=` fragment into `localStorage` and strips it from the URL on first load.
+Launched installed, the app runs `display: standalone` with the Troupe name/icon. `start_url`/`scope` are `/`. Token auth normally carries over because `web-auth-token.ts` moves the `#token=` fragment into `localStorage` and strips it from the URL on first load.
 
 **iOS caveat.** Home-screen web apps get an isolated `localStorage` separate from Safari's. On a token-gated server the token stored in the browser tab does NOT carry into the installed iOS app — since `#token=` is consumed into `localStorage` on first load, the installed app may need the token re-entered once in its own storage. This is a web-auth limitation, not PWA-specific.
 
@@ -201,7 +201,7 @@ Server headers mirror the policy: the embedded release path serves `assets/` imm
 
 **Offline scope.** The app is a thin shell over a live server — offline startup reaches the normal connection-error UI; terminals and chat still require the host.
 
-**Manual verification.** Serve the client over `https://` or `localhost`, then in Chrome/Edge DevTools → **Application**: the Manifest tab shows name/icons with no errors; Service Workers shows `sw.js` activated and running; the install icon appears in the address bar (criteria met). `curl -I` on `/sw.js`, `/manifest.webmanifest`, `/index.html`, and an `/icons/*` file should show `Cache-Control: no-cache, must-revalidate` (and `application/manifest+json` for the manifest); a hashed `/assets/*` file shows `immutable`. On iOS, Share → "Add to Home Screen" should preview the opaque icon and "Termul" title.
+**Manual verification.** Serve the client over `https://` or `localhost`, then in Chrome/Edge DevTools → **Application**: the Manifest tab shows name/icons with no errors; Service Workers shows `sw.js` activated and running; the install icon appears in the address bar (criteria met). `curl -I` on `/sw.js`, `/manifest.webmanifest`, `/index.html`, and an `/icons/*` file should show `Cache-Control: no-cache, must-revalidate` (and `application/manifest+json` for the manifest); a hashed `/assets/*` file shows `immutable`. On iOS, Share → "Add to Home Screen" should preview the opaque icon and "Troupe" title.
 
 ## Standalone server origins
 
@@ -251,7 +251,7 @@ The token is a full credential. A holder of the token gets a shell and can start
 | `/workspace` | `./workspace` bind mount, or `TROUPE_WORKSPACE` | Your projects. This is the only host directory the server can see. |
 | `/tmp` | tmpfs, mounted `exec` | Scratch files and helper binaries. Cleared when the container stops. |
 
-The root filesystem is read-only, the container drops every Linux capability, and `no-new-privileges` is set. If a tool you run in Termul must write somewhere else, remove `read_only: true` from `docker-compose.yml`.
+The root filesystem is read-only, the container drops every Linux capability, and `no-new-privileges` is set. If a tool you run in Troupe must write somewhere else, remove `read_only: true` from `docker-compose.yml`.
 
 Compose sets `TERMUL_SERVER_ALLOW_REMOTE_WRITES=true`. The key keeps its old name so an override file that sets the old name to `false` still replaces it. Browser requests reach the container from the Docker network, never from loopback. Without the setting, the server refuses project registration and every file and git write. With it, writes stay confined to registered projects, and the token is still required.
 

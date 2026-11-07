@@ -79,11 +79,11 @@ optimized_for_llm: false
 - Follow feature-folder component organization; prefer existing Radix/shadcn + Tailwind patterns over a second UI system.
 - When adding behavior exposed to UI, gate native-only paths with `isTauriContext()` (from `@/lib/tauri-runtime`) and provide a web-mode fallback (see Remote Parity).
 
-### Remote / Multi-Target Parity Rules  *(desktop ↔ termul-server)*
+### Remote / Multi-Target Parity Rules  *(desktop ↔ troupe-server)*
 
-This project ships a **shared-live dual-target architecture**. The desktop app and the standalone `termul-server` share code — changes to one side MUST be checked against the other.
+This project ships a **shared-live dual-target architecture**. The desktop app and the standalone `troupe-server` share code — changes to one side MUST be checked against the other.
 
-- **Two binaries, one crate** (`termul_manager_lib`): desktop `src-tauri/src/main.rs` (`termul-manager`, `default-run`) and standalone `src-tauri/src/server_main.rs` (`termul-server`, feature `standalone-server`, path **outside** `src/bin/` so the Tauri bundler doesn't re-add it). The standalone is a **console** subsystem (no `windows_subsystem = "windows"`).
+- **Two binaries, one crate** (`termul_manager_lib`): desktop `src-tauri/src/main.rs` (`termul-manager`, `default-run`) and standalone `src-tauri/src/server_main.rs` (`troupe-server`, feature `standalone-server`, path **outside** `src/bin/` so the Tauri bundler doesn't re-add it). The standalone is a **console** subsystem (no `windows_subsystem = "windows"`).
 - **Shared `web` module** (`src-tauri/src/web/`: `router.rs`, `ws.rs`, `fs_api.rs`, `project_registry.rs`, `projects_api.rs`, `config.rs`, `permissions.rs`, `chat_history_cache.rs`, `assets.rs`, `sink/`) is consumed by BOTH:
   - Desktop in-process via `web::serve_router` (driven by `remote/host.rs` `RemoteServerState`) — **never kills agents**.
   - Standalone via `web::serve` (in `server_main.rs`) — **calls `AcpManager::kill_all` after Axum drains**.
@@ -97,13 +97,13 @@ This project ships a **shared-live dual-target architecture**. The desktop app a
 
 ### UI / Responsive & Mobile Rules
 
-"Mobile" here means the **responsive web client served by `termul-server`** (phone browsers over LAN/tunnel) — there is **no native mobile target** (`gen/android` and `gen/ios` are not scaffolded; only `icons/android|ios` branding exists). Build UI to work in a browser/phone, not just the Tauri webview.
+"Mobile" here means the **responsive web client served by `troupe-server`** (phone browsers over LAN/tunnel) — there is **no native mobile target** (`gen/android` and `gen/ios` are not scaffolded; only `icons/android|ios` branding exists). Build UI to work in a browser/phone, not just the Tauri webview.
 
 - New UI must be **responsive and mobile-friendly**: prefer `react-resizable-panels`, `react-virtuoso`/`@tanstack/react-virtual` for long lists, and existing responsive patterns (`components/chat/chat-responsive`, `chat-layout.ts`, `ProjectSwitcherDrawer`). Don't hardcode desktop-only dimensions.
 - **Feature-detect native surfaces** (window controls, tray, native notifications, OS dialogs). Desktop entry `TauriApp.tsx` has them; web `App.tsx` does not. Gate with `isTauriContext()` and degrade gracefully.
 - Keep the bundle **web-safe**: no direct `@tauri-apps/*` imports in components/hooks/stores (Biome-enforced). Route native calls through `src/renderer/lib/` facades that have web-mode fallbacks.
 - Don't assume native chrome, drag-drop, or global hotkeys exist on the web/mobile surface — provide keyboard + touch equivalents.
-- When designing a feature, ask: "Does this work on a phone browser served by termul-server?" If not, gate it desktop-only with an explicit `isTauriContext()` branch and document why.
+- When designing a feature, ask: "Does this work on a phone browser served by troupe-server?" If not, gate it desktop-only with an explicit `isTauriContext()` branch and document why.
 
 ### Testing Rules
 
@@ -146,7 +146,7 @@ This project ships a **shared-live dual-target architecture**. The desktop app a
   - Confirm the graph project/generation with `list_projects`/`index_status` at session start or after compaction; state coverage limits when making exhaustive/negative claims.
 - **Logging is mandatory when adding a feature or flow** — it is the primary maintainability/debuggability surface (issue #244). The stack differs per target; use the right one:
   - **Desktop Rust runtime**: emit via the `log` facade (`log::info!`/`warn!`/`error!`/`debug!`). Routed by `tauri-plugin-log` (`src-tauri/src/logging.rs`) to `<app_log_dir>/termul.log` (rotated, KeepOne, 5MB) + stdout in debug. Levels via `RUST_LOG` (floor `info` release / `debug` debug; per-module overrides supported). A global panic hook and per-process `session_id()` (8-char) already exist — reuse `session_id()` for correlation-worthy lines.
-  - **Standalone `termul-server`**: uses `tracing` + `tracing-subscriber` (`EnvFilter`, `RUST_LOG`) initialized in `server_main.rs`. Use `tracing::info!`/`warn!`/`error!` (NOT the `log` facade) on this path.
+  - **Standalone `troupe-server`**: uses `tracing` + `tracing-subscriber` (`EnvFilter`, `RUST_LOG`) initialized in `server_main.rs`. Use `tracing::info!`/`warn!`/`error!` (NOT the `log` facade) on this path.
   - **Renderer**: import from `src/renderer/lib/log-api.ts` (`logFrontendError`, `installGlobalErrorForwarding`), which forwards to the backend log via the `log_frontend_error` Tauri command (desktop) or `POST /log/frontend-error` (web/remote mode) and never throws. Prefer it over raw `console.*` for errors/warnings that must survive a closed DevTools.
   - **What to log**: meaningful boundaries — operation start, success, and especially failure (with context: ids, paths, offending input/error). Errors must be logged, never swallowed silently. Levels: `info` normal ops, `warn` recoverable degradation, `error` failures, `debug`/`trace` dev-only detail. Never log secrets/credentials (keyring values, tokens, env contents).
   - Reuse existing helpers for new runtime entrypoints: `logging::log_startup_banner`, `logging::install_panic_hook`, `logging::session_id`, `logging::log_file_path`.
@@ -162,7 +162,7 @@ This project ships a **shared-live dual-target architecture**. The desktop app a
 - Do **not** treat the app as browser-history-first — preserve hash-router.
 - Do **not** introduce a second state/UI framework when Zustand, Tailwind, Radix/shadcn already cover it.
 - Do **not** "fix" strict typing with blanket `any`, unsafe casts, or suppressions.
-- Do **not** ship a desktop-only Tauri command/behavior without checking the `termul-server` + `web/*` route + renderer facade parity.
+- Do **not** ship a desktop-only Tauri command/behavior without checking the `troupe-server` + `web/*` route + renderer facade parity.
 - Do **not** use `web::serve` on the desktop shared-live path — use `serve_router` (kill-all hazard).
 - Do **not** build UI that only works in the Tauri webview — verify it degrades for web/mobile via `isTauriContext()` facades.
 - Do **not** ship a feature or flow without structured logs at its boundaries (start/success/failure).
