@@ -25,7 +25,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -44,22 +44,15 @@ export function resolveAppExe(override?: string): string {
     }
     return override
   }
-  const candidates = [
+  const buildDirs = [
     // The debug-assertions perf build: only it keeps the WebView2 debug port.
-    path.join(REPO_ROOT, 'src-tauri', 'target-perf', 'release', 'termul-manager.exe'),
+    path.join(REPO_ROOT, 'src-tauri', 'target-perf', 'release'),
     // Worktree dev-identifier build: com.termul-manager.app.dev escapes
     // the single-instance mutex held by any running user install
     // (com.termul-manager.app) — otherwise the spawned exe silently exits via
     // the single-instance plugin before CDP ever answers.
-    path.join(REPO_ROOT, 'src-tauri', 'target', 'release', 'termul-manager.exe'),
-    path.join(
-      REPO_ROOT,
-      'src-tauri',
-      'target',
-      'x86_64-pc-windows-msvc',
-      'release',
-      'termul-manager.exe'
-    ),
+    path.join(REPO_ROOT, 'src-tauri', 'target', 'release'),
+    path.join(REPO_ROOT, 'src-tauri', 'target', 'x86_64-pc-windows-msvc', 'release'),
     // Main checkout fallback (same repo, built there before the worktree split).
     path.resolve(
       REPO_ROOT,
@@ -68,15 +61,22 @@ export function resolveAppExe(override?: string): string {
       'src-tauri',
       'target',
       'x86_64-pc-windows-msvc',
-      'release',
-      'termul-manager.exe'
+      'release'
     )
   ]
-  for (const c of candidates) {
-    if (existsSync(c)) return c
+  // `tauri build` names the binary troupe.exe; a plain `cargo build` still
+  // produces termul-manager.exe. Both can sit in one dir, so take the newer.
+  const exeNames = ['troupe.exe', 'termul-manager.exe']
+  for (const dir of buildDirs) {
+    const built = exeNames
+      .map((name) => path.join(dir, name))
+      .filter((exe) => existsSync(exe))
+      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+    if (built[0]) return built[0]
   }
+  const tried = buildDirs.flatMap((dir) => exeNames.map((name) => path.join(dir, name)))
   throw new Error(
-    `app exe not found; build it with \`bun run build:tauri:win\` or pass --exe <path>. Tried:\n  ${candidates.join('\n  ')}`
+    `app exe not found; build it with \`bun run build:tauri:win\` or pass --exe <path>. Tried:\n  ${tried.join('\n  ')}`
   )
 }
 

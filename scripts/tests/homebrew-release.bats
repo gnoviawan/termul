@@ -278,3 +278,79 @@ NAMES
   [ "$status" -eq 1 ]
   [ -z "$output" ]
 }
+
+@test "update_homebrew_tap moves a termul tap to the troupe cask with a rename from 0.5.0" {
+  local tap="$TERMUL_TEST_TMP_DIR/tap"
+  local arm_sha="6be298c2c2c8562b340b069357e8b5d6c3838791ac77c089114004db6a663e69"
+  local intel_sha="72b1d5ab617dcc72c021ec4524ec90a8607870d2011fa83686c4ccda185854c8"
+  mkdir -p "$tap/Casks"
+  printf 'cask "termul" do\nend\n' >"$tap/Casks/termul.rb"
+
+  update_homebrew_tap "$tap" "0.5.0" "$arm_sha" "$intel_sha"
+
+  [ "$(ls "$tap/Casks")" = "troupe.rb" ]
+  [ "$(cat "$tap/cask_renames.json")" = '{
+  "termul": "troupe"
+}' ]
+  [ "$(cat "$tap/Casks/troupe.rb")" = 'cask "troupe" do
+  arch arm: "aarch64", intel: "x64"
+
+  version "0.5.0"
+  sha256 arm:   "6be298c2c2c8562b340b069357e8b5d6c3838791ac77c089114004db6a663e69",
+         intel: "72b1d5ab617dcc72c021ec4524ec90a8607870d2011fa83686c4ccda185854c8"
+
+  url "https://github.com/gnoviawan/termul/releases/download/v#{version}/Troupe_#{version}_#{arch}.dmg"
+  name "Troupe"
+  desc "Terminal-native workspace and CLI agent manager"
+  homepage "https://github.com/gnoviawan/termul"
+
+  auto_updates true
+
+  app "Troupe.app"
+
+  zap trash: [
+    "~/Library/Application Support/com.termul-manager.app",
+    "~/Library/Caches/com.termul-manager.app",
+    "~/Library/HTTPStorages/com.termul-manager.app",
+    "~/Library/Logs/com.termul-manager.app",
+    "~/Library/Preferences/com.termul-manager.app.plist",
+    "~/Library/Saved Application State/com.termul-manager.app.savedState",
+    "~/Library/WebKit/com.termul-manager.app",
+  ]
+end' ]
+
+  update_homebrew_tap "$tap" "0.5.1" "$arm_sha" "$intel_sha"
+
+  [ "$(ls "$tap/Casks")" = "troupe.rb" ]
+  grep -Fxq '  version "0.5.1"' "$tap/Casks/troupe.rb"
+}
+
+@test "update_homebrew_tap keeps publishing the termul cask for 0.4.x" {
+  local tap="$TERMUL_TEST_TMP_DIR/tap"
+  local arm_sha="6be298c2c2c8562b340b069357e8b5d6c3838791ac77c089114004db6a663e69"
+  local intel_sha="72b1d5ab617dcc72c021ec4524ec90a8607870d2011fa83686c4ccda185854c8"
+
+  update_homebrew_tap "$tap" "0.4.61" "$arm_sha" "$intel_sha"
+
+  [ "$(ls "$tap/Casks")" = "termul.rb" ]
+  [ ! -e "$tap/cask_renames.json" ]
+  [ "$(sed -n '1p;4p;8,10p;15p' "$tap/Casks/termul.rb")" = 'cask "termul" do
+  version "0.4.61"
+  url "https://github.com/gnoviawan/termul/releases/download/v#{version}/Termul.Manager_#{version}_#{arch}.dmg"
+  name "Termul Manager"
+  desc "Terminal-native workspace and CLI agent manager"
+  app "Termul Manager.app"' ]
+}
+
+@test "update_homebrew_tap refuses a 0.4.x cask once the tap ships troupe" {
+  local tap="$TERMUL_TEST_TMP_DIR/tap"
+  local arm_sha="6be298c2c2c8562b340b069357e8b5d6c3838791ac77c089114004db6a663e69"
+  local intel_sha="72b1d5ab617dcc72c021ec4524ec90a8607870d2011fa83686c4ccda185854c8"
+  update_homebrew_tap "$tap" "0.5.0" "$arm_sha" "$intel_sha"
+
+  run update_homebrew_tap "$tap" "0.4.61" "$arm_sha" "$intel_sha"
+
+  [ "$status" -eq 1 ]
+  [ "$output" = "The tap already ships the troupe cask; publishing termul 0.4.61 would undo the rename." ]
+  [ "$(ls "$tap/Casks")" = "troupe.rb" ]
+}
