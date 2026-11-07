@@ -114,21 +114,25 @@ jobs:
       - name: Clone AUR package
         id: clone
         if: steps.version.outputs.publish == 'true'
+        shell: bash
         env:
           MAY_BE_RETIRED: ${{ steps.version.outputs.may_be_retired }}
         run: |
-          runuser -u builder -- git clone "$AUR_REPO" "/home/builder/$AUR_PACKAGE"
-          # Cloning a package that does not exist on the AUR gives an empty
-          # repo, and pushing to it would create the package.
-          if [[ -f "/home/builder/$AUR_PACKAGE/PKGBUILD" ]]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$MAY_BE_RETIRED" == "true" ]]; then
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "$AUR_PACKAGE is gone from the AUR (merged into troupe); nothing to update."
-          else
-            echo "$AUR_PACKAGE has no PKGBUILD on the AUR. Create the package first." >&2
+          # Ask the AUR whether the package exists rather than looking at the
+          # clone: a clone of a missing package is an empty repo, and pushing
+          # to it would create the package.
+          info="$(curl -fsS "https://aur.archlinux.org/rpc/v5/info?arg%5B%5D=$AUR_PACKAGE")"
+          if [[ "$info" == *'"resultcount":0'* ]]; then
+            if [[ "$MAY_BE_RETIRED" == "true" ]]; then
+              echo "present=false" >> "$GITHUB_OUTPUT"
+              echo "$AUR_PACKAGE is gone from the AUR (merged into troupe); nothing to update."
+              exit 0
+            fi
+            echo "$AUR_PACKAGE does not exist on the AUR. Create the package first." >&2
             exit 1
           fi
+          runuser -u builder -- git clone "$AUR_REPO" "/home/builder/$AUR_PACKAGE"
+          echo "present=true" >> "$GITHUB_OUTPUT"
 
       - name: Update PKGBUILD
         if: steps.clone.outputs.present == 'true'

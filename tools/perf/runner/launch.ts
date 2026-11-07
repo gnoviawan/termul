@@ -25,7 +25,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -65,16 +65,18 @@ export function resolveAppExe(override?: string): string {
     )
   ]
   // `tauri build` names the binary troupe.exe; a plain `cargo build` still
-  // produces termul-manager.exe.
-  const candidates = buildDirs.flatMap((dir) => [
-    path.join(dir, 'troupe.exe'),
-    path.join(dir, 'termul-manager.exe')
-  ])
-  for (const c of candidates) {
-    if (existsSync(c)) return c
+  // produces termul-manager.exe. Both can sit in one dir, so take the newer.
+  const exeNames = ['troupe.exe', 'termul-manager.exe']
+  for (const dir of buildDirs) {
+    const built = exeNames
+      .map((name) => path.join(dir, name))
+      .filter((exe) => existsSync(exe))
+      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+    if (built[0]) return built[0]
   }
+  const tried = buildDirs.flatMap((dir) => exeNames.map((name) => path.join(dir, name)))
   throw new Error(
-    `app exe not found; build it with \`bun run build:tauri:win\` or pass --exe <path>. Tried:\n  ${candidates.join('\n  ')}`
+    `app exe not found; build it with \`bun run build:tauri:win\` or pass --exe <path>. Tried:\n  ${tried.join('\n  ')}`
   )
 }
 

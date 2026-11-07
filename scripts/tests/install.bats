@@ -190,6 +190,22 @@ command chmod \"\$@\"
   ! grep -q "curl" "$TERMUL_TEST_LOG"
 }
 
+@test "require_tools on Linux names ln, which the compat links need" {
+  load_install
+  local tool
+  for tool in curl mktemp awk sha256sum cp chmod mkdir od tr; do
+    stub_cmd "$tool" "exit 0"
+  done
+  local saved_path="$PATH"
+  PATH="$TERMUL_TEST_STUB_BIN"
+
+  run require_tools linux
+
+  PATH="$saved_path"
+  [ "$status" -eq 1 ]
+  [ "$output" = "Missing required tools: ln" ]
+}
+
 @test "resolve_version parses latest redirect without api.github.com" {
   stub_cmd curl "
 printf '%s\\n' \"\$*\" >>\"\$TERMUL_TEST_LOG\"
