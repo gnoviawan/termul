@@ -347,7 +347,7 @@ STUB
   chmod 755 "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage"
   wayland_lib="$TERMUL_TEST_TMP_DIR/host/libwayland-client.so.0"
   mkdir -p "${wayland_lib%/*}"
-  : >"$wayland_lib"
+    printf '\177ELF\002' >"$wayland_lib"
 }
 
 # ld.so warns on stderr about the fake preload paths; assert on stdout only.
@@ -400,6 +400,17 @@ run_launcher() {
 
   [ "$status" -eq 0 ]
   [ "$output" = "LD_PRELOAD=<unset> marker=<unset> args=<--flag two words>" ]
+}
+
+@test "linux launcher skips a 32-bit libwayland and says so" {
+  install_linux_launcher
+  printf '\177ELF\001' >"$wayland_lib"
+
+  run_launcher WAYLAND_DISPLAY=wayland-0
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<unset> marker=<unset> args=<--flag two words>" ]
+  [[ "$stderr" == *"TERMUL_WAYLAND_CLIENT_LIB=$wayland_lib is not a 64-bit library"* ]]
 }
 
 @test "linux launcher finds the AppImage when started through a symlink" {

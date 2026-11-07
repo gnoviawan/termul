@@ -28,6 +28,9 @@ pub(crate) fn remove_launcher_preload(env: &mut HashMap<String, String>) {
     let Some(added) = env.remove(LAUNCHER_PRELOAD_VAR) else {
         return;
     };
+    if added.is_empty() {
+        return;
+    }
     let Some(preload) = env.get(LD_PRELOAD) else {
         return;
     };

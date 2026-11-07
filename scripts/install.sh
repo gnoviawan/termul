@@ -317,8 +317,16 @@ if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
       /usr/lib/libwayland-client.so.0
     )
   fi
+  # Only a 64-bit library (ELF class byte 0x02) can be preloaded into the
+  # 64-bit AppImage; ld.so ignores a 32-bit copy and the window stays blank.
+  _elf64() { [[ "$(od -An -tx1 -j4 -N1 "$1" 2>/dev/null | tr -d ' \n')" == 02 ]]; }
   for _lib in "${_candidates[@]}"; do
-    [[ -f "$_lib" ]] || continue
+    if [[ ! -f "$_lib" ]] || ! _elf64 "$_lib"; then
+      if [[ -n "${TERMUL_WAYLAND_CLIENT_LIB:-}" ]]; then
+        echo "termul-manager: TERMUL_WAYLAND_CLIENT_LIB=${_lib} is not a 64-bit library; starting without the Wayland preload" >&2
+      fi
+      continue
+    fi
     case " ${LD_PRELOAD//:/ } " in
       *" ${_lib} "*) ;;
       *)
@@ -330,8 +338,9 @@ if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
   done
 fi
 
-_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-exec "${_dir}/termul-manager.AppImage" "$@"
+_self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null)" || _self=""
+[[ -n "$_self" ]] || _self="${BASH_SOURCE[0]}"
+exec "${_self%/*}/termul-manager.AppImage" "$@"
 LAUNCHER
     chmod 755 "$target_path" || exit 1
     cat >"$desktop_path" <<DESKTOP

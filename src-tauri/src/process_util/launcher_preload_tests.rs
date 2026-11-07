@@ -77,3 +77,14 @@ fn a_suffix_that_is_not_a_whole_entry_is_not_removed() {
 
     assert_eq!(preload(&env), Some("/opt/x/usr/lib/libwayland-client.so.0"));
 }
+
+#[test]
+fn an_empty_marker_leaves_ld_preload_untouched() {
+    let env = terminal_env(&[
+        ("LD_PRELOAD", "/opt/a.so:"),
+        ("TERMUL_LAUNCHER_PRELOAD", ""),
+    ]);
+
+    assert_eq!(preload(&env), Some("/opt/a.so:"));
+    assert_eq!(env.get("TERMUL_LAUNCHER_PRELOAD"), None);
+}
