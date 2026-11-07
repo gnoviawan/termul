@@ -21,7 +21,7 @@ fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
 fn gated(extra: &[(&str, &str)]) -> Vec<(String, EnvEdit)> {
     let mut pairs = vec![
         ("APPDIR", "/tmp/.mount_abc"),
-        ("APPIMAGE", "/home/u/Termul.AppImage"),
+        ("APPIMAGE", "/home/u/Troupe.AppImage"),
     ];
     pairs.extend_from_slice(extra);
     plan_appimage_env_cleanup(env(&pairs))
@@ -38,7 +38,7 @@ fn set(value: &str) -> EnvEdit {
 #[test]
 fn gate_closed_when_appdir_missing() {
     let edits = plan_appimage_env_cleanup(env(&[
-        ("APPIMAGE", "/home/u/Termul.AppImage"),
+        ("APPIMAGE", "/home/u/Troupe.AppImage"),
         ("LD_LIBRARY_PATH", "/tmp/.mount_abc/usr/lib:/usr/lib"),
     ]));
     assert!(edits.is_empty());
@@ -60,7 +60,7 @@ fn gate_closed_when_either_var_empty() {
 
     let empty_appdir = plan_appimage_env_cleanup(env(&[
         ("APPDIR", ""),
-        ("APPIMAGE", "/home/u/Termul.AppImage"),
+        ("APPIMAGE", "/home/u/Troupe.AppImage"),
         polluted[0],
     ]));
     assert!(empty_appdir.is_empty());
@@ -245,7 +245,7 @@ fn non_utf8_values_do_not_panic() {
         ("APPDIR".to_string(), appdir),
         (
             "APPIMAGE".to_string(),
-            OsString::from("/home/u/Termul.AppImage"),
+            OsString::from("/home/u/Troupe.AppImage"),
         ),
         ("LD_LIBRARY_PATH".to_string(), bad),
     ]
@@ -302,7 +302,7 @@ fn child_sees_cleaned_env_end_to_end() {
     // values.
     let get = env(&[
         ("APPDIR", "/tmp/.mount_abc"),
-        ("APPIMAGE", "/home/u/Termul.AppImage"),
+        ("APPIMAGE", "/home/u/Troupe.AppImage"),
         ("LD_LIBRARY_PATH", "/tmp/.mount_abc/usr/lib:/opt/host/lib"),
     ]);
 

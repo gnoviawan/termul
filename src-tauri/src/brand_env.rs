@@ -1,4 +1,4 @@
-//! Environment variables under the Troupe name with the Termul name as a
+//! Environment variables under the Troupe name with the old product name as a
 //! fallback. `TROUPE_<suffix>` wins; `TERMUL_<suffix>` still works and logs
 //! one deprecation line per variable per process. Values are never logged.
 

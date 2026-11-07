@@ -136,12 +136,20 @@ describe('CLI against a git repo', () => {
 
   it('--check exits 1 while the word remains and 0 once applied', () => {
     setup({ 'src/b.ts': "const title = 'Termul'\nconst app = 'Termul Manager.app'\n" })
-    expect(run('--check')).toMatchObject({
+    expect(run('--check')).toEqual({
       status: 1,
-      stdout: "src/b.ts:1: const title = 'Termul'\n"
+      stdout: "src/b.ts:1: const title = 'Termul'\n",
+      stderr: [
+        '1 "Termul" left. The product is called Troupe now.',
+        'Rename each file (site links stay until the domain moves):',
+        "  bun run rebrand --apply --skip-category url --paths 'src/b.ts'",
+        'If the old name is intended (persisted data, a legacy file name, history), add a',
+        'keep entry with a reason to KEEP_PATTERNS or KEEP_PATHS in scripts/rebrand/rules.ts.',
+        ''
+      ].join('\n')
     })
-    run('--apply', '--paths', '**')
-    expect(run('--check')).toMatchObject({ status: 0, stdout: '' })
+    run('--apply', '--skip-category', 'url', '--paths', 'src/b.ts')
+    expect(run('--check')).toEqual({ status: 0, stdout: '', stderr: 'No "Termul" left.\n' })
   })
 
   it('the dry run reports hits, batches and leaves files untouched', () => {
