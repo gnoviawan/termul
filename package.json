@@ -56,6 +56,7 @@
     "lint": "biome lint .",
     "lint:fix": "biome lint --write .",
     "check": "biome check .",
+    "rebrand": "bun scripts/rebrand/rebrand.ts",
     "check:fix": "biome check --write .",
     "ci": "biome ci --diagnostic-level=error .",
     "format": "biome format --write .",

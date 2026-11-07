@@ -34,7 +34,7 @@
     <script>
       // The deploy copies openapi.yaml from the latest stable release. Before a
       // release ships one, the site's SPA fallback answers this URL with HTML.
-      fetch('/openapi.yaml')
+      fetch('openapi.yaml')
         .then((response) => (response.ok ? response.text() : ''))
         .catch(() => '')
         .then((spec) => {

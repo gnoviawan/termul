@@ -62,7 +62,7 @@ fn a_framed_handoff_draft_with_skills_titles_from_the_user_text() {
 fn a_prompt_opening_with_a_tool_pill_titles_from_the_tool_name() {
     assert_eq!(
         title_of(
-            "(Use the browser tool from the termul MCP server) open localhost and check the login"
+            "(Use the browser tool from the troupe MCP server) open localhost and check the login"
         ),
         "Browser open localhost and check the login"
     );
@@ -71,7 +71,7 @@ fn a_prompt_opening_with_a_tool_pill_titles_from_the_tool_name() {
 #[test]
 fn a_tool_pill_mid_prompt_becomes_its_label() {
     assert_eq!(
-        title_of("schedule it (Use the automation tools from the termul MCP server) daily"),
+        title_of("schedule it (Use the automation tools from the troupe MCP server) daily"),
         "schedule it Automations daily"
     );
 }
@@ -79,7 +79,19 @@ fn a_tool_pill_mid_prompt_becomes_its_label() {
 #[test]
 fn two_tool_pills_both_become_labels() {
     assert_eq!(
+        title_of("(Use the browser tool from the troupe MCP server) open localhost and (Use the canvas tools from the troupe MCP server)"),
+        "Browser open localhost and Canvas"
+    );
+}
+
+#[test]
+fn a_0_4_tool_pill_naming_the_termul_server_still_becomes_its_label() {
+    assert_eq!(
         title_of("(Use the browser tool from the termul MCP server) open localhost and (Use the canvas tools from the termul MCP server)"),
+        "Browser open localhost and Canvas"
+    );
+    assert_eq!(
+        title_of("(Use the browser tool from the termul MCP server) open localhost and (Use the canvas tools from the troupe MCP server)"),
         "Browser open localhost and Canvas"
     );
 }
@@ -87,7 +99,7 @@ fn two_tool_pills_both_become_labels() {
 #[test]
 fn a_tool_pill_only_prompt_titles_as_the_tool() {
     assert_eq!(
-        title_of("(Use the canvas tools from the termul MCP server)"),
+        title_of("(Use the canvas tools from the troupe MCP server)"),
         "Canvas"
     );
 }
@@ -95,14 +107,14 @@ fn a_tool_pill_only_prompt_titles_as_the_tool() {
 #[test]
 fn an_unknown_tool_hint_is_dropped() {
     assert_eq!(
-        title_of("(Use the terminal tools from the termul MCP server) list the panes"),
+        title_of("(Use the terminal tools from the troupe MCP server) list the panes"),
         "list the panes"
     );
 }
 
 #[test]
 fn prompt_text_for_suggestions_keeps_the_tool_instruction() {
-    let text = "(Use the browser tool from the termul MCP server) open localhost";
+    let text = "(Use the browser tool from the troupe MCP server) open localhost";
     assert_eq!(
         user_prompt_text(&json!({ "content": [{ "type": "text", "text": text }] })).as_deref(),
         Some(text)
