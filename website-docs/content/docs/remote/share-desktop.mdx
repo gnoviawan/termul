@@ -15,7 +15,7 @@ Sharing uses `cloudflared`, a free program from Cloudflare. It creates a tempora
 
 Termul doesn't install `cloudflared` for you. Install it yourself, then make sure Termul can find it. Termul looks for it in this order:
 
-1. The path in the `TERMUL_CLOUDFLARED_PATH` environment variable, if you set it.
+1. The path in the `TROUPE_CLOUDFLARED_PATH` environment variable (or the older `TERMUL_CLOUDFLARED_PATH`), if you set it.
 2. A `cloudflared` program in the same folder as the Termul app.
 3. `cloudflared` on your `PATH`.
 
@@ -53,7 +53,7 @@ Phones that were open on the link show **Host offline**. See [Connection status]
 
 ## If the QR code doesn't appear
 
-- **An error mentions `cloudflared binary not found`.** Termul can't find `cloudflared`. Install it, or set `TERMUL_CLOUDFLARED_PATH` to its full path, then restart Termul.
+- **An error mentions `cloudflared binary not found`.** Termul can't find `cloudflared`. Install it, or set `TROUPE_CLOUDFLARED_PATH` to its full path, then restart Termul.
 - **The error says the tunnel URL was not received.** `cloudflared` started but didn't get an address within 25 seconds. Check your internet connection and try again.
 - **The popover says Tunnel disconnected.** `cloudflared` stopped after it started. Turn **Enable remote access** off and on to get a new link.
 - **The phone says the site can't be reached.** A new address can take a few seconds to work everywhere. Wait a moment, then scan again.
