@@ -312,6 +312,23 @@ describe('rename-notice keep', () => {
   })
 })
 
+describe('commit-trailer keep', () => {
+  it('keeps the trailer key that resend lookups read from git history', () => {
+    const text = 'const TRAILER_KEY: &str = "Termul-Command-Id";'
+    expect(rewrite('src-tauri/src/trackers/git_tracker/commit_stamp.rs', text, off)).toEqual({
+      output: text,
+      hits: [],
+      kept: { 'commit-trailer': 1 }
+    })
+  })
+
+  it('still renames the word next to the trailer', () => {
+    expect(out('src/a.rs', '/// Termul stamps `Termul-Command-Id: <id>`')).toBe(
+      '/// Troupe stamps `Termul-Command-Id: <id>`'
+    )
+  })
+})
+
 describe('keep paths', () => {
   it.each([
     'CHANGELOG.md',

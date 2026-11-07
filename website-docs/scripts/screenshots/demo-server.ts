@@ -21,7 +21,7 @@ type Files = Record<string, string>
 const shopFiles: Files = {
   'README.md': `# Acme Shop
 
-A small storefront used to show off Termul.
+A small storefront used to show off Troupe.
 
 \`\`\`mermaid
 flowchart LR

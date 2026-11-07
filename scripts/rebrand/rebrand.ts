@@ -37,7 +37,7 @@ const USAGE = `Usage: bun scripts/rebrand/rebrand.ts [mode] [options]
 Modes (pick one):
   --dry-run               Simulate the rewrite and print a Markdown report (default)
   --apply --paths <glob>  Rewrite matching files in place; --paths is required, '**' means all
-  --check                 List every remaining word "Termul"; exit 1 if any
+  --check                 List every remaining word "Termul" with how to fix it; exit 1 if any
 
 Options:
   --paths <glob>          Limit to files matching a path, directory or glob (repeatable)
@@ -406,17 +406,33 @@ function runApply(
   console.log(`\n${changed} files changed, ${replacements} replacements`)
 }
 
+function checkVerdict(found: number, paths: readonly string[]): string {
+  if (found === 0) return 'No "Termul" left.'
+  return [
+    `${found} "Termul" left. The product is called Troupe now.`,
+    'Rename each file (site links stay until the domain moves):',
+    ...paths.map(
+      (path) => `  bun run rebrand --apply --skip-category url --paths ${shellQuote(path)}`
+    ),
+    'If the old name is intended (persisted data, a legacy file name, history), add a',
+    'keep entry with a reason to KEEP_PATTERNS or KEEP_PATHS in scripts/rebrand/rules.ts.'
+  ].join('\n')
+}
+
 function runCheck(root: string, files: readonly string[]): number {
   let found = 0
+  const paths: string[] = []
   for (const path of files) {
     const loaded = load(root, path)
     if (loaded.kind !== 'text') continue
-    for (const hit of findTermul(path, loaded.text)) {
+    const hits = findTermul(path, loaded.text)
+    if (hits.length > 0) paths.push(path)
+    for (const hit of hits) {
       found += 1
       console.log(`${path}:${hit.line}: ${hit.lineText.trim()}`)
     }
   }
-  console.error(found === 0 ? 'No "Termul" left.' : `${found} "Termul" left.`)
+  console.error(checkVerdict(found, paths))
   return found === 0 ? 0 : 1
 }
 

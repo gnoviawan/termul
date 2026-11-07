@@ -185,6 +185,13 @@ export const KEEP_PATTERNS: readonly KeepPattern[] = [
     include: ['src/renderer/lib/rename-notice.ts', 'src/renderer/hooks/use-rename-notice.test.tsx']
   },
   {
+    id: 'commit-trailer',
+    reason:
+      'Commits carry a "Termul-Command-Id:" trailer in users\' git history, and resend lookups read it back; renaming it breaks resends of commits made before 0.5.0.',
+    owner: 'keep forever',
+    pattern: /\bTermul-Command-Id\b/g
+  },
+  {
     id: 'windows-state-dir',
     reason:
       'src-tauri/src/web/config.rs stores termul-server state at %LOCALAPPDATA%/Termul via base.join("Termul"); renaming loses Windows server state (Tier B).',

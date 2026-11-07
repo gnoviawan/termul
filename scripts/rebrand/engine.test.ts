@@ -111,6 +111,14 @@ describe('findTermul', () => {
     ])
   })
 
+  it('does not report site links, which stay until the domain moves', () => {
+    expect(findTermul('docs/a.md', 'see https://docs.termul.dev/docs and termul.dev')).toEqual([])
+  })
+
+  it('does not report the commit trailer key', () => {
+    expect(findTermul('src/a.rs', 'contains("Termul-Command-Id: commit-1")')).toEqual([])
+  })
+
   it('reports nothing for kept paths', () => {
     expect(findTermul('CHANGELOG.md', 'Termul')).toEqual([])
     expect(findTermul('docs/CHANGES.md', 'Termul')).toEqual([

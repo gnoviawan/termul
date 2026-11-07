@@ -139,6 +139,9 @@ jobs:
       - name: Install Bun dependencies
         run: bun install --frozen-lockfile
 
+      - name: Rebrand check (no old product name)
+        run: bun run rebrand --check
+
       - name: Biome (lint + format + imports)
         run: bun run ci
 

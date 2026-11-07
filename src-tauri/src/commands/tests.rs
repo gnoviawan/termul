@@ -268,8 +268,8 @@ fn linux_bundle_config_installs_rg_at_the_runtime_lookup_path() {
 }
 
 /// The 0.5.0 rename turned the `termul-manager` deb/rpm into `troupe`. Without
-/// these fields dpkg and rpm install Troupe next to Termul Manager instead of
-/// replacing it.
+/// these fields dpkg and rpm install Troupe next to the old `termul-manager`
+/// package instead of replacing it.
 #[test]
 fn linux_packages_replace_the_termul_manager_package() {
     let raw = include_str!("../../tauri.linux.conf.json");
