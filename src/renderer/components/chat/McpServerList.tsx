@@ -60,8 +60,9 @@ export interface McpServerListProps {
 
 /**
  * Summary line, per-server rows and the next-chat footnote of the phone
- * + sheet's Connectors view. Rows and footnote render only when
- * there is at least one server; the host owns its own heading.
+ * + sheet's Connectors view. Rows and the next-chat footnote render only
+ * when there is at least one server; a stale chat's reload footnote also
+ * renders with none. The host owns its own heading.
  */
 export function McpServerList({
   count,

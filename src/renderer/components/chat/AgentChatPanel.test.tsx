@@ -1836,6 +1836,39 @@ describe('AgentChatPanel live-turn retry wire rebuild', () => {
 
     expect(mockSendPromptBlocks).toHaveBeenCalledOnce()
   })
+
+  it('does not relaunch a crashed chat while a live Retry is still pending', async () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    messagesRef.current = [
+      {
+        id: 'm1',
+        role: 'user',
+        blocks: [{ type: 'text', text: `see ${conversationToken('Fix login', 'chat-7')}` }]
+      }
+    ]
+    const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    // No await between the steps: the first Retry is still reading the
+    // conversation when the chat crashes and Retry is pressed again.
+    act(() => {
+      chatMessageListPropsRef.current?.onRetry?.()
+    })
+    sessionRef.current = mockAcpSession({
+      id: 's1',
+      cwd: '/w',
+      status: 'error',
+      lastError: 'agent crashed'
+    })
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(errorNoticePropsRef.current?.onRetry).toBeDefined()
+    act(() => {
+      errorNoticePropsRef.current?.onRetry?.()
+    })
+    await act(async () => {})
+
+    expect(mockRetryCrashed).not.toHaveBeenCalled()
+    expect(mockSendPromptBlocks).toHaveBeenCalledOnce()
+  })
 })
 
 describe('AgentChatPanel hidden-panel render gate (multi-project perf)', () => {

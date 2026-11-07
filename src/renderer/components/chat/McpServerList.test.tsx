@@ -56,7 +56,7 @@ describe('McpServerList rows (per-server enable/disable + status dot)', () => {
   })
 
   it('shows no footnote and no reload for a chat whose servers are current', () => {
-    render(<McpServerList count={1} servers={servers} onToggle={vi.fn()} />)
+    render(<McpServerList count={1} servers={servers} onToggle={vi.fn()} onReloadChat={vi.fn()} />)
     expect(screen.queryByText(/takes effect on the next chat/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Reload this chat' })).not.toBeInTheDocument()
   })

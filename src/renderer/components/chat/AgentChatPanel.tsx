@@ -599,6 +599,9 @@ export function AgentChatPanel({
       return
     }
     if (!lastUserBlocks || !canRetryLastUserTurn) return
+    // Reading a mentioned conversation is async: any Retry before the pending
+    // one sends (even a crash relaunch) would send the turn twice.
+    if (retryInFlightRef.current) return
     setDismissedError(session?.lastError ?? null)
     // A crashed/disconnected chat can't re-send into the dead agent — restart
     // the agent + replay history first (user-initiated Retry; honors ADR-003's
@@ -627,9 +630,6 @@ export function AgentChatPanel({
       toast.error(`Skill '${missingPath.name}' is missing a path`)
       return
     }
-    // Reading a mentioned conversation is async: a second Retry before the
-    // first sends would queue a duplicate turn.
-    if (retryInFlightRef.current) return
     retryInFlightRef.current = true
     const userBlocks = lastUserBlocks
     void retryWireBlocks(userBlocks, skills)
