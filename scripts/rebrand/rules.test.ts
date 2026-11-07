@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { rewrite } from './engine'
+import { keptPathOf, rewrite } from './engine'
 import type { Rule } from './rules'
 
 const off = { repoRenamed: false }
@@ -326,6 +326,68 @@ describe('commit-trailer keep', () => {
     expect(out('src/a.rs', '/// Termul stamps `Termul-Command-Id: <id>`')).toBe(
       '/// Troupe stamps `Termul-Command-Id: <id>`'
     )
+  })
+})
+
+describe('server-binary-url-allowlist keep', () => {
+  const renamed = { repoRenamed: true }
+
+  it('keeps the old repo prefix the server accepts but renames its manifest URL', () => {
+    const text = [
+      '"https://github.com/gnoviawan/termul/releases/download/nightly/latest-nightly.json"',
+      'const ALLOWED_BINARY_URL_PREFIXES: [&str; 2] = [',
+      '    "https://github.com/gnoviawan/termul/",',
+      '    "https://github.com/gnoviawan/troupe/",'
+    ].join('\n')
+    expect(rewrite('src-tauri/src/server_update.rs', text, renamed)).toEqual({
+      output: [
+        '"https://github.com/gnoviawan/troupe/releases/download/nightly/latest-nightly.json"',
+        'const ALLOWED_BINARY_URL_PREFIXES: [&str; 2] = [',
+        '    "https://github.com/gnoviawan/termul/",',
+        '    "https://github.com/gnoviawan/troupe/",'
+      ].join('\n'),
+      hits: [{ ruleId: 'repo-url', line: 1 }],
+      kept: { 'server-binary-url-allowlist': 1 }
+    })
+  })
+
+  it('keeps the pinned server binary URLs the tests prove are accepted', () => {
+    const text = [
+      '"https://github.com/gnoviawan/termul/releases/download/nightly/troupe-server",',
+      '"https://github.com/gnoviawan/termul/releases/download/v0.4.60/termul-server-linux-aarch64",',
+      '"https://github.com/gnoviawan/termul/releases/latest/download/latest-stable.json"'
+    ].join('\n')
+    expect(rewrite('src-tauri/src/server_update/tests.rs', text, renamed)).toEqual({
+      output: [
+        '"https://github.com/gnoviawan/termul/releases/download/nightly/troupe-server",',
+        '"https://github.com/gnoviawan/termul/releases/download/v0.4.60/termul-server-linux-aarch64",',
+        '"https://github.com/gnoviawan/troupe/releases/latest/download/latest-stable.json"'
+      ].join('\n'),
+      hits: [{ ruleId: 'repo-url', line: 3 }],
+      kept: { 'server-binary-url-allowlist': 2 }
+    })
+  })
+
+  it('renames the same URLs in any other file', () => {
+    const text =
+      '"https://github.com/gnoviawan/termul/" https://github.com/gnoviawan/termul/releases/download/v0.5.0/troupe-server'
+    expect(out('website-docs/content/docs/remote/server.mdx', text, renamed)).toBe(
+      '"https://github.com/gnoviawan/troupe/" https://github.com/gnoviawan/troupe/releases/download/v0.5.0/troupe-server'
+    )
+  })
+})
+
+describe('release-url-pins keep path', () => {
+  it.each([
+    'scripts/release/prepare-platform-artifacts.mjs',
+    'scripts/release/prepare-server-artifacts.mjs',
+    'scripts/release/prepare-server-artifacts.test.ts',
+    'scripts/release/merge-updater-manifests.mjs'
+  ])('%s keeps the pinned old repo URL after the rename', (path) => {
+    const text =
+      'const url = `https://github.com/gnoviawan/termul/releases/download/${tag}/${name}`'
+    expect(keptPathOf(path)).toBe('release-url-pins')
+    expect(rewrite(path, text, { repoRenamed: true })).toEqual({ output: text, hits: [], kept: {} })
   })
 })
 
