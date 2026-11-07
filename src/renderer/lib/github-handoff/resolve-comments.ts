@@ -23,7 +23,7 @@ function threadData(thread: GithubReviewThread, index: number): string {
 }
 
 /**
- * CAP-8 Resolve comments. Termul never resolves a thread: the agent changes
+ * CAP-8 Resolve comments. Troupe never resolves a thread: the agent changes
  * code and pushes, and the user resolves threads on GitHub.
  */
 export function resolveCommentsPrompt({

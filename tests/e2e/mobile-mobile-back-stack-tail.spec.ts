@@ -197,7 +197,7 @@ async function pressSystemBack(page: Page): Promise<void> {
 
 async function openDrawer(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Open menu' }).tap()
-  await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Troupe', exact: true })).toBeVisible()
 }
 
 /**
@@ -666,7 +666,7 @@ test('a route pushed under an open drawer re-arms its entry: one back closes the
   const gate = await installReplyGate(page, (frame) => frame.type === 'create_session')
   gate.arm()
   const { base } = await bootMobileShell(page)
-  const drawer = page.getByRole('dialog', { name: 'Termul', exact: true })
+  const drawer = page.getByRole('dialog', { name: 'Troupe', exact: true })
 
   // The launcher is still settling (no warm-up can be waited for with its reply
   // held): a remount can swallow the text, so type until the Start button takes it.

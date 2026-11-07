@@ -528,7 +528,7 @@ test('header ⋯ sheet keeps its rows, order, 44px and Close chat divider on a n
 
   // No tab open: the five navigation rows, no Close chat.
   await headerButton(page, 'More').tap()
-  const sheet = page.getByRole('dialog', { name: 'Termul' })
+  const sheet = page.getByRole('dialog', { name: 'Troupe' })
   await expect(sheet).toBeVisible()
   await expect(sheetRows(sheet)).toHaveText(navigation)
   await expectRowsAtLeast44(sheetRows(sheet))

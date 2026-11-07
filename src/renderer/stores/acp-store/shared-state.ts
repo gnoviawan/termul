@@ -243,7 +243,7 @@ export function persistSession(
     // so launch recovery can prefer the chat whose turn is still running.
     turnActive: session.activeTurn === true || session.openTurnId != null ? true : undefined,
     // Preserve the origin flag so a discovered (external) session re-projected
-    // here can't lose `discovered: true` and leak into the Termul-only sidebar.
+    // here can't lose `discovered: true` and leak into the Troupe-only sidebar.
     // Prefer the live-session marker (set by openDiscoveredSession) over the
     // existing index entry, so the disconnect/close path stays correct even when
     // no sessionIndex entry exists yet.
