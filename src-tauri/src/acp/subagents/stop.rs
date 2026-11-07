@@ -34,7 +34,7 @@ impl fmt::Display for StopSubagentError {
         match self {
             Self::UnknownAgent => f.write_str("The agent of this chat is not running"),
             Self::UnknownSubagent => f.write_str("This chat has no such subagent"),
-            Self::NotStoppable => f.write_str("The agent does not let Termul stop this subagent"),
+            Self::NotStoppable => f.write_str("The agent does not let Troupe stop this subagent"),
             Self::Failed(error) => write!(f, "Could not reach the agent: {error}"),
         }
     }

@@ -154,7 +154,7 @@ impl HostPlanServer {
                 late: Some(late),
             }) => {
                 let message = format!(
-                    "{}. The export is still running: Termul writes it to `{}` if it finishes \
+                    "{}. The export is still running: Troupe writes it to `{}` if it finishes \
                      within {} minutes and no newer export to that path starts first",
                     error.message,
                     file.relative,

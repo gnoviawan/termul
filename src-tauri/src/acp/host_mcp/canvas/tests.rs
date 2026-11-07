@@ -334,7 +334,7 @@ fn errors_an_agent_can_recover_from_tell_it_the_next_step() {
         (CanvasErrorCode::CanvasHidden, "Canvas tab"),
         (
             CanvasErrorCode::CanvasOpenElsewhere,
-            "another Termul window",
+            "another Troupe window",
         ),
         (CanvasErrorCode::CanvasTimeout, "do not retry it blindly"),
         (CanvasErrorCode::UnsupportedInKiosk, "save_file"),

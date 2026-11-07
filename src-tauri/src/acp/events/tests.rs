@@ -1148,7 +1148,7 @@ fn agent_error_carries_provider_code_only_for_provider_failures() {
 }
 
 /// Issue #362: the schema's `McpCapabilities.acp` exists only behind the
-/// `unstable_mcp_over_acp` feature, which Termul does not enable. An agent that
+/// `unstable_mcp_over_acp` feature, which Troupe does not enable. An agent that
 /// advertises it is parsed with the flag dropped, so `acp:agent_spawned`
 /// (whose `capabilities` is this type) never carries it and the renderer cannot "retain it for diagnostics". If this fails
 /// after enabling the feature, update the Experimental MCP-over-ACP notice in

@@ -276,7 +276,7 @@ impl ConfigOptionValue {
     }
 }
 
-/// A key typed into Termul for an API-key sign-in. Its `Debug` never prints
+/// A key typed into Troupe for an API-key sign-in. Its `Debug` never prints
 /// it, and it is never logged or stored.
 #[derive(Clone)]
 pub struct ApiKey(String);
@@ -544,7 +544,7 @@ pub(super) fn requests_summarized_thinking(config: &AgentConfig) -> bool {
 ///
 /// The adapter copies this object onto the Agent SDK query. `display:
 /// "summarized"` is what makes current Claude models return reasoning text.
-/// Without it, thinking blocks arrive empty and Termul draws no Thought row.
+/// Without it, thinking blocks arrive empty and Troupe draws no Thought row.
 pub(super) fn summarized_thinking_meta() -> Meta {
     Meta::from_iter([(
         "claudeCode".to_string(),

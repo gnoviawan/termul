@@ -1,6 +1,6 @@
 //! Host-injected `plan` MCP tool — first-class plan UI for every ACP agent.
 //!
-//! Termul auto-injects a host-side MCP server into every `session/new`
+//! Troupe auto-injects a host-side MCP server into every `session/new`
 //! `mcp_servers` list (see `AcpManager::new_session_with_context`). The agent
 //! discovers it like any MCP tool and calls it instead of a built-in todo
 //! tool. When called, the host updates a per-session plan cache and emits a
@@ -75,9 +75,9 @@ pub const ENV_AGENT_ID: &str = "TERMUL_PLAN_AGENT_ID";
 /// reach for. Claude Code defers MCP tools behind tool search and shows only
 /// their names, so a tool's own description never reaches the model unless
 /// the agent loads it; this paragraph is what makes the agent look.
-pub const TERMUL_TOOL_INSTRUCTIONS: &str = "Termul tools: if your client lists one of these \
+pub const TERMUL_TOOL_INSTRUCTIONS: &str = "Troupe tools: if your client lists one of these \
 tools by name only, load its definition (for example with tool search) before you call it. \
-Track your work in Termul's plan panel with the `plan` tool: call it whenever you would create \
+Track your work in Troupe's plan panel with the `plan` tool: call it whenever you would create \
 or update a todo list, send the full list with each item's status every time, and keep no todo \
 list of your own. In the first turn, once the user's intent is clear, call `set_session_title` \
 once with a short title and a kebab-case `branch` slug. When you need a decision or missing \
@@ -86,17 +86,17 @@ plain text.";
 
 /// The context budget Claude Code gives a server's `instructions`: it keeps
 /// this many UTF-16 code units (`CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`,
-/// default 4096) and drops the rest. Every Termul-owned paragraph must fit
+/// default 4096) and drops the rest. Every Troupe-owned paragraph must fit
 /// inside it; figcraft's guide, last, may be cut.
 pub const CLAUDE_INSTRUCTIONS_BUDGET: usize = 4096;
 
 /// Markdown affordances of the chat renderer.
-pub const TERMUL_CHAT_INSTRUCTIONS: &str = "Termul renders your markdown replies in a rich chat UI. \
+pub const TERMUL_CHAT_INSTRUCTIONS: &str = "Troupe renders your markdown replies in a rich chat UI. \
 Embed images and videos inline with `![alt](path)`, for generated charts, screenshots, diagrams, \
 and screen recordings: paths relative to the session working directory, absolute paths, \
 `file://` URLs, and https URLs render in the desktop app and on the web. A markdown link to an \
 image or video file also shows it inline. \
-Reference files as markdown links `[label](path)`: Termul renders them as buttons that open \
+Reference files as markdown links `[label](path)`: Troupe renders them as buttons that open \
 the file in its built-in editor — absolute and cwd-relative paths inside the session workspace \
 roots work, a `:line` suffix (or `#L<line>` on the link target) positions the cursor, and \
 bare multi-segment file paths in prose become open-in-editor links too.";
@@ -519,7 +519,7 @@ impl PlanStore {
 /// = clear contract: passing `entries: vec![]` emits a `Plan` with an empty
 /// list, which the renderer's `_onPlanUpdate` maps to `dropPlanForSession`.
 ///
-/// `agent_id` is the Termul-side `AgentId` (used for the wire event payload);
+/// `agent_id` is the Troupe-side `AgentId` (used for the wire event payload);
 /// the renderer keys plan state by `session_id`.
 pub fn emit_plan_update(
     sinks: &[Arc<dyn EventSink>],

@@ -291,7 +291,7 @@ pub async fn run_full_flow(
         .await
         .map_err(|e| McpOAuthError::DiscoveryFailed(e.to_string()))?;
     manager.set_metadata(resolution.metadata);
-    let request = AuthorizationRequest::new(redirect_uri).with_client_name("Termul");
+    let request = AuthorizationRequest::new(redirect_uri).with_client_name("Troupe");
     let session = AuthorizationSession::new(manager, request)
         .await
         .map_err(|(_manager, e)| McpOAuthError::RegistrationFailed(e.to_string()))?;

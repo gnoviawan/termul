@@ -429,7 +429,7 @@ pub struct ToolSchema {
 
 const FORMS: &str = "Pass action parameters either flat at the top level (e.g. {\"action\":\"navigate\",\"url\":\"https://example.com\"}) or nested under \"args\" (e.g. {\"action\":\"navigate\",\"args\":{\"url\":\"https://example.com\"}}); \"args\" must be a JSON object, never a string.";
 
-const UNAVAILABLE: &str = "Termul browser automation is not available on this host: it needs the Termul desktop app. Every call returns capability_unavailable.";
+const UNAVAILABLE: &str = "Troupe browser automation is not available on this host: it needs the Troupe desktop app. Every call returns capability_unavailable.";
 
 /// The `browser` tool schema for this host. `None` means no automation
 /// host is registered (termul-server): the tool fails closed.
@@ -502,7 +502,7 @@ Replies are JSON {{ok, ...}}. tab holds host facts about the tab (tab.id is the 
 }
 
 fn describe(facts: &EngineFacts) -> String {
-    let mut out = format!("Control the Termul in-app browser (the pane the user can watch). {FORMS}\nActions:");
+    let mut out = format!("Control the Troupe in-app browser (the pane the user can watch). {FORMS}\nActions:");
     for spec in available(facts) {
         let params: Vec<String> = spec
             .params

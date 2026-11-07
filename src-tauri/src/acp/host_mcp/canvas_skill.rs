@@ -1,9 +1,9 @@
-//! Termul's design harness for the canvas (issue #1430): the `troupe-canvas`
+//! Troupe's design harness for the canvas (issue #1430): the `troupe-canvas`
 //! skill and the curated style archetypes, embedded in the binary and served
 //! by the `read_canvas_guide` and `get_canvas_style` host tools.
 //!
 //! The Markdown and the style data live in `resources/canvas-skill/` and are
-//! versioned with Termul, not with the canvas engine. Both binaries embed
+//! versioned with Troupe, not with the canvas engine. Both binaries embed
 //! them through this module, so desktop and `termul-server` serve the same
 //! text.
 

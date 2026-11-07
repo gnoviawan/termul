@@ -10,7 +10,7 @@ use std::path::PathBuf;
 /// Opaque identifier for a spawned ACP agent (one OS subprocess + driver thread).
 ///
 /// Generated as a UUID v4 by the manager when an agent is spawned. This is the
-/// Termul-side handle for an agent and is distinct from any protocol session id.
+/// Troupe-side handle for an agent and is distinct from any protocol session id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AgentId(pub String);

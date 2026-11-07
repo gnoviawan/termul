@@ -56,7 +56,7 @@ pub(super) async fn run_command_loop(
             };
             if response.protocol_version != ProtocolVersion::V1 {
                 let message = format!(
-                    "This agent requires ACP protocol version {:?}. Termul supports version 1.",
+                    "This agent requires ACP protocol version {:?}. Troupe supports version 1.",
                     response.protocol_version
                 );
                 log::warn!("[acp] agent {agent_id} {message}");

@@ -184,7 +184,7 @@ pub async fn acp_mcp_oauth_start(
     // 2. Create the authorization session (handles dynamic registration + PKCE).
     //    The session holds the PKCE verifier in its InMemoryStateStore — we MUST
     //    keep it alive until the callback arrives, then use it for the token exchange.
-    let request = AuthorizationRequest::new(&redirect_uri).with_client_name("Termul");
+    let request = AuthorizationRequest::new(&redirect_uri).with_client_name("Troupe");
     let session = AuthorizationSession::new(manager, request)
         .await
         .map_err(|(_manager, e)| format!("OAuth registration failed: {e}"))?;
@@ -245,7 +245,7 @@ pub async fn acp_mcp_oauth_start(
                         continue;
                     }
                     let full_url = format!("http://127.0.0.1:{port}{target}");
-                    let body = "<!DOCTYPE html><html><body><h2>Authorization complete</h2><p>You can close this tab and return to Termul.</p><script>window.close();</script></body></html>";
+                    let body = "<!DOCTYPE html><html><body><h2>Authorization complete</h2><p>You can close this tab and return to Troupe.</p><script>window.close();</script></body></html>";
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                         body.len(), body
