@@ -20,8 +20,10 @@ return new Promise(function (resolve) {
     unlisten(el, 'change', onEvent, true);
     resolve(heard);
   }
+  // Capture listeners also see events from descendants (a page can append
+  // and click a checkbox inside the input): only the input's own count.
   function onEvent(e) {
-    if (e.isTrusted) finish(true);
+    if (e.isTrusted && e.target === el) finish(true);
   }
   listen(el, 'input', onEvent, true);
   listen(el, 'change', onEvent, true);
