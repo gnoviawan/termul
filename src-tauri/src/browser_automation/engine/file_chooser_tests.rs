@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use serde_json::json;
 use tokio::sync::oneshot;
 
 use super::*;
@@ -46,4 +47,89 @@ fn a_new_staging_replaces_the_earlier_one() {
         Some(vec![PathBuf::from("/staging/new.txt")])
     );
     assert_eq!(second_rx.try_recv(), Ok(()));
+}
+
+#[test]
+fn an_upload_lands_once_the_input_holds_the_files() {
+    assert_eq!(upload_landed(&json!(1), 1, false), Ok(true));
+    assert_eq!(
+        upload_landed(&json!(0), 1, false),
+        Ok(false),
+        "not filled yet"
+    );
+}
+
+#[test]
+fn an_upload_the_page_cleared_in_its_change_handler_still_landed() {
+    assert_eq!(upload_landed(&json!(0), 1, true), Ok(true));
+}
+
+#[test]
+fn an_upload_lands_when_the_page_replaced_the_input_after_its_change() {
+    assert_eq!(upload_landed(&json!(-1), 1, true), Ok(true));
+}
+
+#[test]
+fn a_path_that_names_no_file_input_and_heard_nothing_fails() {
+    assert_eq!(
+        upload_landed(&json!(-1), 1, false).map_err(|e| e.kind),
+        Err(EngineErrorKind::PageException)
+    );
+    assert_eq!(
+        upload_landed(&json!(null), 1, false).map_err(|e| e.kind),
+        Err(EngineErrorKind::PageException)
+    );
+}
+
+#[test]
+fn a_replaced_input_waits_for_the_watch_until_the_deadline() {
+    assert_eq!(
+        settle_poll(&json!(-1), 1, false, false),
+        Ok(false),
+        "the watch may not have answered yet"
+    );
+    assert_eq!(
+        settle_poll(&json!(-1), 1, true, false),
+        Ok(true),
+        "a trusted change arrived while waiting"
+    );
+    assert_eq!(
+        settle_poll(&json!(-1), 1, true, true),
+        Ok(true),
+        "heard on the last poll"
+    );
+    assert_eq!(
+        settle_poll(&json!(-1), 1, false, true).map_err(|e| e.kind),
+        Err(EngineErrorKind::PageException)
+    );
+}
+
+#[test]
+fn files_that_never_arrive_time_out_only_at_the_deadline() {
+    assert_eq!(settle_poll(&json!(0), 1, false, false), Ok(false));
+    assert_eq!(
+        settle_poll(&json!(0), 1, false, true).map_err(|e| e.kind),
+        Err(EngineErrorKind::Timeout)
+    );
+    assert_eq!(settle_poll(&json!(1), 1, false, true), Ok(true));
+}
+
+#[test]
+fn only_a_watch_that_saw_the_input_change_counts() {
+    let (tx, mut rx) = oneshot::channel();
+    assert!(!heard_change(&mut rx), "still watching");
+    tx.send(Ok("true".to_string())).unwrap();
+    assert!(heard_change(&mut rx));
+
+    let (tx, mut rx) = oneshot::channel();
+    tx.send(Ok("false".to_string())).unwrap();
+    assert!(!heard_change(&mut rx), "the watch ran out");
+
+    let (tx, mut rx) = oneshot::channel();
+    tx.send(Err(EngineErrorKind::PageException)).unwrap();
+    assert!(!heard_change(&mut rx), "the watch failed");
+
+    let (tx, mut rx) = oneshot::channel::<CallResult>();
+    drop(tx);
+    assert!(!heard_change(&mut rx), "the watch was never issued");
 }
