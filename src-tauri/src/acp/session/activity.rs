@@ -53,6 +53,8 @@ pub struct AgentActivity {
     pub reopens_in_flight: usize,
     /// Sessions the agent works in outside a prompt turn.
     pub unprompted_sessions: usize,
+    /// Commands the agent left running after their tool call or turn ended.
+    pub running_background_commands: usize,
     /// When any of the above, a session update, or a prompt send last
     /// happened.
     pub last_active_at: Instant,
@@ -71,6 +73,7 @@ impl AgentActivity {
             || self.running_subagents > 0
             || self.reopens_in_flight > 0
             || self.unprompted_sessions > 0
+            || self.running_background_commands > 0
     }
 
     /// True when no evidence exists and the agent has been quiet for the whole

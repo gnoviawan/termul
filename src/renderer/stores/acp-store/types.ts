@@ -24,6 +24,8 @@ import type {
   AuthMethod,
   AvailableCommand,
   acpApi,
+  BackgroundCommandList,
+  BackgroundCommandsEvent,
   BrowserAgentTabEvent,
   BrowserOpenRequestEvent,
   BrowserStopChangedEvent,
@@ -188,6 +190,11 @@ export interface OpenHistoryOptions {
   forceNewAgent?: boolean
 }
 
+/** A session's background commands as the agent that reported them listed them. */
+export interface HeldBackgroundCommands extends BackgroundCommandList {
+  agentId: AgentId
+}
+
 export interface AcpSession {
   id: SessionId
   agentId: AgentId
@@ -214,6 +221,12 @@ export interface AcpSession {
    * The chat shows busy and queues what the user sends. Ephemeral.
    */
   agentWorking?: boolean
+  /**
+   * The commands the agent left running (the host's `background_commands`
+   * event), stamped with the agent that reported them: a list from an agent
+   * the chat no longer runs on is stale. Ephemeral.
+   */
+  backgroundCommands?: HeldBackgroundCommands
   /** Project-scoped MCP attachments active for this session when known. */
   mcpServerCount?: number
   /**
@@ -1042,6 +1055,8 @@ export interface AcpState {
   _onPromptComplete: (e: PromptCompleteEvent, eventSeq?: number) => void
   /** The agent started or stopped working outside a prompt turn. */
   _onAgentWorking: (e: AgentWorkingEvent) => void
+  /** The commands the agent left running in a session changed. */
+  _onBackgroundCommands: (e: BackgroundCommandsEvent) => void
   _onAgentError: (e: AgentErrorEvent) => void
   /** Story 1.9 FR26: typed crash event → `status: 'error'` + manual restart. */
   _onAgentCrashed: (e: AgentCrashedEvent) => void

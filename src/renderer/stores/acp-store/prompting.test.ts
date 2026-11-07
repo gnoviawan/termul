@@ -1737,6 +1737,75 @@ describe('read-only GitHub chats (CAP-6)', () => {
     expect(useAcpStore.getState().sessions['s1']?.agentWorking).toBeFalsy()
   })
 
+  it('keeps sends going while a command runs in the background', async () => {
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) =>
+      cmd === 'acp_send_prompt' ? 'end_turn' : undefined
+    )
+    const command = {
+      toolCallId: 'exec-1',
+      title: 'npm run watch',
+      command: 'npm run watch',
+      startedAtMs: 1_000,
+      state: 'running' as const
+    }
+    useAcpStore.getState()._onBackgroundCommands({
+      agentId: 'agent-old',
+      sessionId: 's1',
+      revision: 9,
+      commands: [command]
+    })
+    expect(useAcpStore.getState().sessions['s1']?.backgroundCommands).toBeUndefined()
+    useAcpStore.getState()._onBackgroundCommands({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      revision: 1,
+      commands: [command]
+    })
+    expect(useAcpStore.getState().sessions['s1']?.backgroundCommands).toEqual({
+      agentId: 'agent-1',
+      revision: 1,
+      commands: [command]
+    })
+
+    await useAcpStore.getState().sendPrompt('s1', 'meanwhile')
+    expect(invoke).toHaveBeenCalledWith(
+      'acp_send_prompt',
+      expect.objectContaining({ agentId: 'agent-1', sessionId: 's1' })
+    )
+  })
+
+  it('keeps the newer command list when an older one arrives after it', () => {
+    seedSession('s1', 'agent-1', false)
+    const running = {
+      toolCallId: 'exec-1',
+      title: 'npm run watch',
+      command: 'npm run watch',
+      startedAtMs: 1_000,
+      state: 'running' as const
+    }
+    const ended = { ...running, state: 'ended' as const, endedAtMs: 5_000 }
+    // The turn task listed the command (revision 1) but the notification
+    // handler's end (revision 2) reached the client first.
+    const report = (revision: number, commands: (typeof running | typeof ended)[]) =>
+      useAcpStore
+        .getState()
+        ._onBackgroundCommands({ agentId: 'agent-1', sessionId: 's1', revision, commands })
+    report(2, [ended])
+    report(1, [running])
+    expect(useAcpStore.getState().sessions['s1']?.backgroundCommands).toEqual({
+      agentId: 'agent-1',
+      revision: 2,
+      commands: [ended]
+    })
+    report(3, [])
+    expect(useAcpStore.getState().sessions['s1']?.backgroundCommands).toEqual({
+      agentId: 'agent-1',
+      revision: 3,
+      commands: []
+    })
+  })
+
   it('Stop cancels agent work while no prompt turn is open', async () => {
     seedSession('s1', 'agent-1', false)
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)

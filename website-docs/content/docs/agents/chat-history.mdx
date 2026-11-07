@@ -62,6 +62,8 @@ Deleting a chat removes it and its history, and closes its tab. You cannot undo 
 
 After you change an agent's settings, such as its MCP servers or skills, a running chat still uses the old ones. To apply them, right-click the chat's tab and choose **Reload this chat**. Termul restarts the agent for this chat and keeps the conversation. It does not send your last message again.
 
+When background agents or commands of the chat are still running, Termul asks you to confirm the reload, because the reload stops them.
+
 **Reload this chat** is off while the agent is working, waiting for you, or has queued messages. It is also off for a stopped chat and for agents that cannot reload a conversation. When the message box shows an **MCP** badge, its popover has the same **Reload this chat** button.
 
 ## Link to a chat

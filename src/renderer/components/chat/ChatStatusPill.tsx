@@ -1,6 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, ChevronRight, FileDiff } from '@/components/icons'
+import { Bot, ChevronRight, FileDiff, TerminalSquare } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { DiffStatCounts } from '@/components/ui/diff-stat-counts'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -8,8 +8,11 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/s
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { ToolCall } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
+import { useAcpStore } from '@/stores/acp-store'
 import type { ChatMessage } from '@/stores/acp-store/types'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
+import { BackgroundCommandCountParts, BackgroundCommandRow } from './BackgroundCommandRow'
+import { sessionBackgroundCommands } from './background-commands'
 import { ChangedFilesRows, openChangedFile } from './ChangedFilesList'
 import { CHAT_SPRING_SOFT } from './chat-motion'
 import { SlidingTabs } from './SlidingTabs'
@@ -23,10 +26,10 @@ import { SubagentRowStop } from './SubagentRowStop'
 import { useChatChangedFiles } from './use-chat-changed-files'
 import { useBackgroundWait, useCurrentTurnSubagents } from './use-current-turn-subagents'
 
-export type StatusTab = 'files' | 'subagents'
+export type StatusTab = 'files' | 'subagents' | 'background'
 
 /** Tab order; a tab is listed only while it has rows. */
-const STATUS_TABS: readonly StatusTab[] = ['files', 'subagents']
+const STATUS_TABS: readonly StatusTab[] = ['files', 'subagents', 'background']
 
 interface ChatStatusPillProps {
   sessionId: string
@@ -67,15 +70,22 @@ function CountBadge({ count }: { count: number }): React.JSX.Element {
   )
 }
 
+const SEGMENT_DOT = (
+  <span aria-hidden="true" className="text-muted-foreground/40">
+    ·
+  </span>
+)
+
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`
 }
 
 /**
  * Floating top-right status pill for the chat: the current turn's subagents
- * (and older ones still running in the background) and the files the chat
- * changed. Takes no layout height. Opens one popover (desktop) or bottom sheet
- * (phone); with both kinds present its content has a tab per kind, and
+ * (and older ones still running in the background), the commands the agent
+ * left running, and the files the chat changed. Takes no layout height.
+ * Opens one popover (desktop) or bottom sheet (phone); with more than one
+ * kind present its content has a tab per kind, and
  * switching tabs slides inside the open overlay. Narrow panes collapse the
  * pill to icons and totals via the chat `@container`.
  */
@@ -108,8 +118,26 @@ export function ChatStatusPill({
   )
   const waiting = useBackgroundWait(sessionId, backgroundRunning, turnActive)
   const waitingLabel = waiting > 0 ? `Waiting on ${plural(waiting, 'background subagent')}` : null
+  const commands = useAcpStore((s) => sessionBackgroundCommands(s.sessions[sessionId]))
+  const commandsRunning = commands.filter((command) => command.state === 'running').length
+  const commandsEnded = commands.length - commandsRunning
+  const commandSummary = [
+    commandsRunning > 0 && `${commandsRunning} running`,
+    commandsEnded > 0 && `${commandsEnded} ended`
+  ]
+    .filter(Boolean)
+    .join(', ')
+  const backgroundLabel =
+    commandsRunning > 0
+      ? `${commandsRunning === 1 ? '1 command' : `${commandsRunning} commands`} running in the background`
+      : null
   const fileCount = changes.files.length
-  const tabs = STATUS_TABS.filter((tab) => (tab === 'files' ? fileCount > 0 : subagents.length > 0))
+  const rowCount: Record<StatusTab, number> = {
+    files: fileCount,
+    subagents: subagents.length,
+    background: commands.length
+  }
+  const tabs = STATUS_TABS.filter((tab) => rowCount[tab] > 0)
   const activeTab = pickedTab && tabs.includes(pickedTab) ? pickedTab : tabs[0]
   const shown = tabs.length > 0 && !hidden
 
@@ -221,6 +249,34 @@ export function ChatStatusPill({
           </ul>
         </>
       )
+    },
+    background: {
+      title: 'Background',
+      icon: <TerminalSquare size={13} className="shrink-0" aria-hidden="true" />,
+      count: commands.length,
+      caption: 'Commands the agent left running',
+      meta: <BackgroundCommandCountParts running={commandsRunning} ended={commandsEnded} />,
+      rows: (
+        <>
+          <ul
+            className={cn(
+              'scroller-thin flex flex-col overflow-y-auto overscroll-contain',
+              listClassName
+            )}
+          >
+            {commands.map((command) => (
+              <li key={command.toolCallId} className="min-w-0">
+                <BackgroundCommandRow sessionId={sessionId} command={command} onOpen={close} />
+              </li>
+            ))}
+          </ul>
+          {commandsRunning > 0 && (
+            <p className="px-2.5 pb-1 pt-1 text-2xs text-muted-foreground">
+              The agent gets each result when the command ends.
+            </p>
+          )}
+        </>
+      )
     }
   }
 
@@ -289,17 +345,24 @@ export function ChatStatusPill({
   const triggerLabel = [
     subagents.length > 0 && `subagents ${subagentSummary}`,
     waitingLabel?.toLowerCase(),
+    commands.length > 0 && `background commands ${commandSummary}`,
     fileCount > 0 && plural(fileCount, 'changed file')
   ]
     .filter(Boolean)
     .join('; ')
+
+  const liveText = !shown
+    ? ''
+    : subagents.length > 0
+      ? (waitingLabel ?? `Subagents: ${subagentSummary}`)
+      : (backgroundLabel ?? '')
 
   const trigger = (
     <button
       ref={triggerRef}
       type="button"
       aria-label={`Session status: ${triggerLabel}`}
-      title={waitingLabel ?? undefined}
+      title={backgroundLabel ?? waitingLabel ?? undefined}
       className={cn(
         'pointer-events-auto relative flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-popover/90 px-2.5 text-2xs font-medium shadow-pill backdrop-blur-md transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring data-[state=open]:bg-muted',
         "after:absolute after:-inset-2 after:content-[''] pointer-coarse:after:-inset-y-2.5"
@@ -327,11 +390,34 @@ export function ChatStatusPill({
           </span>
         </>
       )}
-      {subagents.length > 0 && fileCount > 0 && (
-        <span aria-hidden="true" className="text-muted-foreground/40">
-          ·
-        </span>
+      {subagents.length > 0 && (commands.length > 0 || fileCount > 0) && SEGMENT_DOT}
+      {commands.length > 0 && (
+        <>
+          {commandsRunning > 0 ? (
+            <SubagentStatusIcon status="running" />
+          ) : (
+            <TerminalSquare
+              size={13}
+              className="shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+          )}
+          {!isMobile && (
+            <span className="flex items-center gap-1 tabular-nums @max-[420px]:hidden">
+              <BackgroundCommandCountParts running={commandsRunning} ended={commandsEnded} />
+            </span>
+          )}
+          <span
+            className={cn(
+              'tabular-nums text-foreground',
+              !isMobile && 'hidden @max-[420px]:inline'
+            )}
+          >
+            {commands.length}
+          </span>
+        </>
       )}
+      {commands.length > 0 && fileCount > 0 && SEGMENT_DOT}
       {fileCount > 0 && (
         <>
           <FileDiff size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -349,7 +435,7 @@ export function ChatStatusPill({
   return (
     <>
       <span aria-live="polite" className="sr-only">
-        {shown && subagents.length > 0 ? (waitingLabel ?? `Subagents: ${subagentSummary}`) : ''}
+        {liveText}
       </span>
       <AnimatePresence initial={false}>
         {shown && (

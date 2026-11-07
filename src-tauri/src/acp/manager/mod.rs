@@ -99,6 +99,8 @@ pub(crate) use test_driver::{FakeAuth, FakeDriver, FakeTurn};
 #[cfg(test)]
 mod agent_tools_loop_tests;
 #[cfg(test)]
+mod background_commands_tests;
+#[cfg(test)]
 mod native_subagents_loop_tests;
 #[cfg(test)]
 mod native_subagents_tests;
@@ -283,6 +285,11 @@ enum AcpCommand {
     WorkingSessionIds {
         reply: oneshot::Sender<Result<Vec<String>, String>>,
     },
+    /// The commands the agent left running, per owned session that lists any
+    /// (`session::background_commands`).
+    BackgroundCommands {
+        reply: oneshot::Sender<Result<crate::acp::session::BackgroundCommandsSnapshot, String>>,
+    },
     /// The canonical workspace root of every session registered on this
     /// agent's driver (`(session id, root)`), for the destructive-operation
     /// guard.
@@ -422,6 +429,9 @@ pub struct AgentSummary {
     /// Owned sessions the agent works in outside a prompt turn now, so a
     /// client that opens one later shows it busy. Always serialized.
     pub working_sessions: Vec<String>,
+    /// The commands the agent left running, by owned session, so a client
+    /// that opens the chat later lists them. Always serialized.
+    pub background_commands: crate::acp::session::BackgroundCommandsSnapshot,
     /// The `commandId` of the `spawn_agent` that created this agent. In-process
     /// only: never serialized to clients.
     #[serde(skip)]
@@ -985,6 +995,7 @@ impl AcpManager {
                 capabilities: entry.capabilities.clone(),
                 owns_session: Vec::new(),
                 working_sessions: Vec::new(),
+                background_commands: Default::default(),
                 command_id: entry.stamp.command_id.clone(),
             })
             .collect()
@@ -1039,6 +1050,11 @@ impl AcpManager {
                     send_command(&tx, |reply| AcpCommand::WorkingSessionIds { reply }).await
                 {
                     summary.working_sessions = ids;
+                }
+                if let Ok(commands) =
+                    send_command(&tx, |reply| AcpCommand::BackgroundCommands { reply }).await
+                {
+                    summary.background_commands = commands;
                 }
             }
         }
@@ -2088,6 +2104,7 @@ impl AcpManager {
                 running_subagents: 0,
                 reopens_in_flight: 0,
                 unprompted_sessions: 0,
+                running_background_commands: 0,
                 last_active_at: std::time::Instant::now(),
             }),
             probes: Mutex::new(0),

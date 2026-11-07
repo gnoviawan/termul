@@ -6,6 +6,7 @@
 
 import type { BugReportSubmitRequest } from '@shared/types/bug-report.types'
 import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
+import { runningBackgroundCommands } from '@/components/chat/background-commands'
 import {
   flattenConfigOptionValues,
   MODEL_CATEGORY,
@@ -1918,17 +1919,25 @@ export function dropEphemeralSessionState(
   }
 }
 
-/** Checked last, so a caller can tell that nothing else blocks. */
+/** Checked last with the commands reason, so a caller can tell that nothing else blocks. */
 export const BACKGROUND_SUBAGENTS_BLOCK_REASON =
   'background subagents are still running — switching would stop them'
+
+export const BACKGROUND_COMMANDS_BLOCK_REASON =
+  'commands are still running in the background — switching would stop them'
+
+/** Whether only background work (subagents or commands) blocks the switch. */
+export function isBackgroundWorkBlock(reason: string | null): boolean {
+  return reason === BACKGROUND_SUBAGENTS_BLOCK_REASON || reason === BACKGROUND_COMMANDS_BLOCK_REASON
+}
 
 /**
  * Story 3 (spec-in-chat-agent-switch): the busy gate for a switch. True when
  * the old session has an active turn, an open turn, queued prompts, or a
  * pending permission/question — the "never kill a live turn" rule (CAP-4/CAP-6).
  * A pending browser-auth dialog also counts (the agent is waiting on the user),
- * and so do background subagents that outlive the turn: a new agent process
- * would kill them.
+ * and so do background subagents and commands that outlive the turn: a new
+ * agent process would kill them.
  */
 export function switchBlockedReason(
   state: Pick<
@@ -1977,6 +1986,7 @@ export function switchBlockedReason(
   ) {
     return BACKGROUND_SUBAGENTS_BLOCK_REASON
   }
+  if (runningBackgroundCommands(session) > 0) return BACKGROUND_COMMANDS_BLOCK_REASON
   return null
 }
 

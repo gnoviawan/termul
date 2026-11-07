@@ -49,6 +49,7 @@ import {
   type AskUserQuestionEvent,
   type AvailableCommand,
   acpApi,
+  type BackgroundCommandsEvent,
   type BrowserAgentTabEvent,
   type BrowserOpenRequestEvent,
   type BrowserStopChangedEvent,
@@ -629,6 +630,9 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<AgentWorkingEvent>(ACP_EVENTS.agentWorking, (e) =>
       useAcpStore.getState()._onAgentWorking(e)
+    ),
+    acpApi.onEvent<BackgroundCommandsEvent>(ACP_EVENTS.backgroundCommands, (e) =>
+      useAcpStore.getState()._onBackgroundCommands(e)
     ),
     acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, (e, eventSeq) =>
       useAcpStore.getState()._onPermissionRequest(e, eventSeq)
