@@ -11,7 +11,7 @@ export function ghRepoArg(repo: GithubRepoRef): string {
   return repo.host === 'github.com' ? slug : `${repo.host}/${slug}`
 }
 
-/** `acme/app#12`: Termul-built, so it may appear in trusted instructions. */
+/** `acme/app#12`: Troupe-built, so it may appear in trusted instructions. */
 export function itemReference(repo: GithubRepoRef, number: number): string {
   return `${repo.owner}/${repo.name}#${number}`
 }

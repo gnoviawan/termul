@@ -1,7 +1,7 @@
 import type { ThemeComponentTokens } from './component-tokens'
 
 /**
- * Termul brand blue, from Interfere's blue scale (Radix blue). Light and Dark
+ * Troupe brand blue, from Interfere's blue scale (Radix blue). Light and Dark
  * share the solid fill and its hover/pressed steps so buttons read the same in
  * both themes; only the text/link blue changes per appearance.
  */

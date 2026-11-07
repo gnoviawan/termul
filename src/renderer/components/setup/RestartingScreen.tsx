@@ -126,7 +126,7 @@ export function RestartingScreen({ host, port, webAuthToken }: RestartingScreenP
       <div className="flex w-full max-w-sm flex-col items-center gap-4 text-center">
         <Spinner size={24} label="Restarting" />
         <div className="flex flex-col gap-1.5">
-          <h1 className="text-lg font-semibold text-foreground">Restarting Termul</h1>
+          <h1 className="text-lg font-semibold text-foreground">Restarting Troupe</h1>
           <p className="text-sm text-muted-foreground">
             The server is coming back on its new address. You'll be taken there automatically — this
             usually takes a few seconds.

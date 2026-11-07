@@ -1,7 +1,7 @@
 import type { ThemeTerminalColors } from './types'
 
 /**
- * Terminal colors for the two Termul themes, frozen at the values the
+ * Terminal colors for the two Troupe themes, frozen at the values the
  * palette produced before the brand moved to the Interfere blue. Terminal
  * output stays the same when `primary` or `accent` changes.
  */

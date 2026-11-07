@@ -32,7 +32,7 @@ export function mcpCatalogReasonText(reason: McpCatalogReason): string {
     case 'no-install-options':
       return 'The registry lists only its source code, with no package or hosted URL to install.'
     case 'unparseable':
-      return "Termul couldn't read this server's registry entry."
+      return "Troupe couldn't read this server's registry entry."
     case 'insecure-url':
       return "Its hosted URL doesn't use https."
     case 'local-network-url':
@@ -40,29 +40,29 @@ export function mcpCatalogReasonText(reason: McpCatalogReason): string {
     case 'invalid-url':
       return "Its hosted URL isn't a valid web address."
     case 'unknown-remote-transport':
-      return `Its hosted URL uses the "${reason.transport}" transport, which Termul doesn't support.`
+      return `Its hosted URL uses the "${reason.transport}" transport, which Troupe doesn't support.`
     case 'secret-in-url':
-      return 'Its hosted URL must carry a secret, and Termul never stores secrets in URLs.'
+      return 'Its hosted URL must carry a secret, and Troupe never stores secrets in URLs.'
     case 'secret-in-arguments':
-      return 'Its launch arguments must carry a secret, and Termul never stores secrets in arguments.'
+      return 'Its launch arguments must carry a secret, and Troupe never stores secrets in arguments.'
     case 'runtime-arguments':
-      return 'It needs extra options passed to its runtime, which Termul does not allow.'
+      return 'It needs extra options passed to its runtime, which Troupe does not allow.'
     case 'runtime-hint-mismatch':
       return `It asks to run with "${reason.runtimeHint}", which doesn't match its package type.`
     case 'denied-env':
-      return `It sets ${reason.name}, an environment variable Termul blocks because it can change what runs.`
+      return `It sets ${reason.name}, an environment variable Troupe blocks because it can change what runs.`
     case 'invalid-env-name':
       return `It uses "${reason.name}", which isn't a valid environment variable name.`
     case 'unsupported-registry-type':
-      return `Its package comes from ${reason.registryType}, which Termul can't install from.`
+      return `Its package comes from ${reason.registryType}, which Troupe can't install from.`
     case 'non-stdio-transport':
-      return `Its package talks over "${reason.transport}". Termul runs packages over stdio only.`
+      return `Its package talks over "${reason.transport}". Troupe runs packages over stdio only.`
     case 'unpinned-version':
-      return "Its package has no fixed version, so Termul can't pin what it runs."
+      return "Its package has no fixed version, so Troupe can't pin what it runs."
     case 'invalid-package':
       return "Its package name or version isn't valid."
     case 'unsupported-registry':
-      return `Its package is hosted on ${reason.registry}, which Termul doesn't download from.`
+      return `Its package is hosted on ${reason.registry}, which Troupe doesn't download from.`
     case 'invalid-command':
       return 'Its command starts with "-", so it would be read as an option.'
     case 'invalid-header-name':
@@ -72,9 +72,9 @@ export function mcpCatalogReasonText(reason: McpCatalogReason): string {
     case 'duplicate-name':
       return `It lists "${reason.name}" more than once.`
     case 'unsupported-launch-argument':
-      return `It passes ${reason.argument} to ${reason.command}, which Termul doesn't allow because it can change what runs.`
+      return `It passes ${reason.argument} to ${reason.command}, which Troupe doesn't allow because it can change what runs.`
     case 'unsupported-runner':
-      return `It runs its package through ${reason.command}, which Termul can't check. Use npx, uvx, docker or dotnet dnx instead.`
+      return `It runs its package through ${reason.command}, which Troupe can't check. Use npx, uvx, docker or dotnet dnx instead.`
     case 'cmd-metacharacter':
       return `Its ${reason.field} holds a character Windows reads as a command operator (& | < > ^ % ! " ( or )).`
   }

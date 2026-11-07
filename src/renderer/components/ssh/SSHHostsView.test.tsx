@@ -181,7 +181,7 @@ describe('SSHHostsView', () => {
     tauriRef.current = false
     const props = renderView()
     expect(
-      screen.getByText(/Connecting to them works in the Termul desktop app/)
+      screen.getByText(/Connecting to them works in the Troupe desktop app/)
     ).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /^Edit lab,/ }))
     expect(props.actions.edit).toHaveBeenCalledWith(profiles[2])

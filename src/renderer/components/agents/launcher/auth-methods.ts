@@ -1,7 +1,7 @@
 import type { AuthMethod } from '@/lib/acp-api'
 
 /**
- * An agent's advertised sign-in methods by what Termul can do with them.
+ * An agent's advertised sign-in methods by what Troupe can do with them.
  * `runnable`: 'agent' (and untyped, the pre-extension wire) and 'terminal'
  * methods, which a button drives. `apiKey`: agent methods that take a key
  * the user types. `gateway`: the gateway method, which needs a base URL

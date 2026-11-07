@@ -44,7 +44,7 @@ function termulDarkChrome(): ThemeChrome {
   }
 }
 
-/** Neutral ramp for the default Termul dark theme. */
+/** Neutral ramp for the default Troupe dark theme. */
 export const TERMUL_DARK_CHROME: ThemeChrome = termulDarkChrome()
 
 /** Map the explicit ramp onto the shared surface slots. */

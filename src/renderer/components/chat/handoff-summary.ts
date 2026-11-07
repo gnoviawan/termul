@@ -485,6 +485,6 @@ export function buildConversationContext(input: ConversationContextInput): strin
   const body = buildTranscriptBody(input.messages, input.toolCalls, CONVERSATION_CONTEXT_BUDGET)
   const agent = capContextFragment(input.agentName ?? '') || 'an agent'
   const title = capContextFragment(input.title)
-  const intro = `Transcript of the Termul chat "${title}" with ${agent}, attached by the user as context.`
+  const intro = `Transcript of the Troupe chat "${title}" with ${agent}, attached by the user as context.`
   return body.length > 0 ? `${intro}\n\n${body}` : `${intro}\n\n(This chat has no messages yet.)`
 }

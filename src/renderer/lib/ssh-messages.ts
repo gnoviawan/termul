@@ -145,13 +145,13 @@ export function describeSSHError(code: string, profile: HostContext): SSHMessage
       return msg(
         'Private key not found',
         profile.privateKeyPath
-          ? `Termul can't find ${profile.privateKeyPath}. Choose the key again in the host settings.`
+          ? `Troupe can't find ${profile.privateKeyPath}. Choose the key again in the host settings.`
           : 'Choose a private key in the host settings.',
         true
       )
     case 'SSH_KEY_INVALID':
       return msg(
-        "Termul can't use this key",
+        "Troupe can't use this key",
         'Choose an OpenSSH or PEM private key. Convert PuTTY .ppk keys with PuTTYgen first.',
         true
       )
@@ -175,7 +175,7 @@ export function describeSSHError(code: string, profile: HostContext): SSHMessage
     case 'WEB_UNSUPPORTED':
       return msg(
         'SSH runs in the desktop app',
-        'Open Termul on your computer to connect to this host.'
+        'Open Troupe on your computer to connect to this host.'
       )
     default:
       return msg(

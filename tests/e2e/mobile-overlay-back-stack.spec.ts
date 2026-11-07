@@ -240,7 +240,7 @@ async function pressSystemBack(page: Page): Promise<void> {
 
 async function openDrawer(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Open menu' }).tap()
-  await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Troupe', exact: true })).toBeVisible()
 }
 
 /**
@@ -331,7 +331,7 @@ test('system back closes the open drawer and leaves the page where it was', asyn
 
   await pressSystemBack(page)
 
-  await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'Troupe', exact: true })).toBeHidden()
   // Back landed on the page entry itself: same hash, no sentinel on top.
   await expectHistory(page, { index: base.index, hash: '#/', sentinelDepth: 0 })
 })
@@ -342,7 +342,7 @@ for (const method of ['its close button', 'Esc'] as const) {
     page
   }) => {
     const { base } = await bootMobileShell(page)
-    const drawer = page.getByRole('dialog', { name: 'Termul', exact: true })
+    const drawer = page.getByRole('dialog', { name: 'Troupe', exact: true })
     await openDrawer(page)
     await expectHistory(page, { index: base.index + 1, sentinelDepth: 1 })
 
@@ -392,7 +392,7 @@ test('drawer to Settings swaps in one tap: one entry, back closes Settings', asy
   await openDrawer(page)
   await page.getByRole('button', { name: 'Settings', exact: true }).tap()
   await expect(settings).toBeVisible()
-  await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'Troupe', exact: true })).toBeHidden()
   await settleBackStack(page)
   // The drawer's sentinel now serves Settings: no traversal, no second push.
   await expectHistory(page, { index: base.index + 1, hash: '#/', sentinelDepth: 1 })
@@ -932,7 +932,7 @@ test('a reload with an overlay open lands on a stale sentinel and the shell step
   // leftover sentinel of ours: the shell traverses back to the page entry
   // instead of leaving it for a dead back press.
   await expect(projectSubtitle(page)).toContainText(name)
-  await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'Troupe', exact: true })).toBeHidden()
   await expectHistory(page, { index: base.index, hash: '#/', sentinelDepth: 0 })
 })
 
@@ -969,7 +969,7 @@ test.describe('a History API that misbehaves', () => {
       }
     })
     const { base } = await bootMobileShell(page)
-    const drawer = page.getByRole('dialog', { name: 'Termul', exact: true })
+    const drawer = page.getByRole('dialog', { name: 'Troupe', exact: true })
 
     await openDrawer(page)
     await expect
@@ -1000,7 +1000,7 @@ test.describe('a History API that misbehaves', () => {
       History.prototype.back = () => {}
     })
     const { base } = await bootMobileShell(page)
-    const drawer = page.getByRole('dialog', { name: 'Termul', exact: true })
+    const drawer = page.getByRole('dialog', { name: 'Troupe', exact: true })
     const misses = (): number => logs.filter((message) => message.includes('no popstate')).length
 
     await openDrawer(page)

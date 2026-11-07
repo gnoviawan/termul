@@ -26,8 +26,8 @@ function statusShortLabel(status: ProbeStatus | undefined): string {
 }
 
 function statusLabel(status: ProbeStatus | undefined): string {
-  if (status === 'connected') return 'Connected (Termul can reach this server)'
-  if (status === 'disconnected') return 'Disconnected (Termul could not reach this server)'
+  if (status === 'connected') return 'Connected (Troupe can reach this server)'
+  if (status === 'disconnected') return 'Disconnected (Troupe could not reach this server)'
   if (status === 'authRequired') return 'Authentication required — connect in MCP Server settings'
   return 'Not probed yet — click to test'
 }
@@ -200,9 +200,9 @@ export function McpServerRow({
           ) : probeStatus === 'disconnected' ? (
             <p
               className="text-xs text-destructive"
-              title={probeError ?? 'Termul could not reach this server.'}
+              title={probeError ?? 'Troupe could not reach this server.'}
             >
-              Termul could not reach this server.
+              Troupe could not reach this server.
             </p>
           ) : probeStatus === 'connected' ? (
             <p className="text-2xs text-muted-foreground">No tools available.</p>
