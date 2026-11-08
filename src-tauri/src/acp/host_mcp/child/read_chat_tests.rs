@@ -10,15 +10,19 @@ use crate::acp::session_persistence::{PersistedEventRecord, SESSION_SCHEMA_VERSI
 /// 2025-11-08T10:00:00Z.
 const BASE: u64 = 1_762_596_000_000;
 
-fn record(seq: u64, type_: &str, payload: Value) -> PersistedEventRecord {
+fn record_in(session_id: &str, seq: u64, type_: &str, payload: Value) -> PersistedEventRecord {
     PersistedEventRecord {
         schema_version: SESSION_SCHEMA_VERSION,
-        session_id: "chat-b".to_string(),
+        session_id: session_id.to_string(),
         seq,
         type_: type_.to_string(),
         recorded_at: BASE + seq * 1000,
         payload,
     }
+}
+
+fn record(seq: u64, type_: &str, payload: Value) -> PersistedEventRecord {
+    record_in("chat-b", seq, type_, payload)
 }
 
 /// `(is_error, text)` of one `read_chat` call.
@@ -114,6 +118,65 @@ Step 2 failed.
                     true,
                     "No chat with ID nope on this Troupe host.".to_string()
                 )
+            );
+        },
+    ));
+}
+
+#[test]
+fn a_read_follows_an_agent_switch_into_the_linked_chat() {
+    let (harness, configs) = Harness::new(&[
+        ("chat-a", Some("proj-a")),
+        ("chat-b", Some("proj-b")),
+        ("chat-c", Some("proj-b")),
+    ]);
+    let persistence = harness.persistence();
+    for record in [
+        record_in(
+            "chat-b",
+            1,
+            "user_prompt",
+            json!({ "content": [{ "type": "text", "text": "Start here." }] }),
+        ),
+        record_in(
+            "chat-b",
+            2,
+            "agent_switch",
+            json!({ "fromConfigId": "x", "toConfigId": "y", "newSessionId": "chat-c" }),
+        ),
+        // The linked chat opens with its summary-only handoff prompt.
+        record_in(
+            "chat-c",
+            1,
+            "user_prompt",
+            json!({ "content": [{ "type": "text", "text": "# Conversation handoff\n\nsummary" }] }),
+        ),
+        record_in(
+            "chat-c",
+            2,
+            "message_chunk",
+            json!({ "role": "agent", "content": { "type": "text", "text": "Continuing here." } }),
+        ),
+    ] {
+        persistence.enqueue_event(record).unwrap();
+    }
+    harness.runtime.block_on(async {
+        persistence.flush_session("chat-b").await.unwrap();
+        persistence.flush_session("chat-c").await.unwrap();
+    });
+    let caller = configs[0].clone();
+    harness.runtime.block_on(with_mcp_session(
+        caller,
+        |mut writer, mut reader| async move {
+            let (is_error, text) =
+                read_chat(&mut writer, &mut reader, 2, json!({ "chat_id": "chat-b" })).await;
+            assert!(!is_error, "{text}");
+            let body = text.split_once('\n').unwrap().1;
+            assert!(
+                body.ends_with(
+                    "Messages 1-2 of 2.\n\n[1] user · 2025-11-08T10:00:01Z\nStart here.\n\n[2] assistant · 2025-11-08T10:00:02Z\nContinuing here."
+                ),
+                "{text}"
             );
         },
     ));

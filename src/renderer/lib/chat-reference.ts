@@ -1,3 +1,4 @@
+import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
 import { copyTextWithToast } from '@/lib/copy-text'
 import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -9,7 +10,8 @@ import { useProjectStore } from '@/stores/project-store'
 export interface ChatReference {
   chatId: string
   title: string
-  project?: { id: string; name: string }
+  /** `name` is dropped when the registry no longer knows the id. */
+  project?: { id: string; name?: string }
   cwd?: string
 }
 
@@ -21,7 +23,11 @@ const READ_HINT = 'Read it with the Troupe read_chat tool.'
  */
 export function formatChatReference({ chatId, title, project, cwd }: ChatReference): string {
   const lines = [`Troupe chat: ${title.replace(/\s+/g, ' ').trim()}`, `Chat ID: ${chatId}`]
-  if (project) lines.push(`Project: ${project.name} (ID ${project.id})`)
+  if (project) {
+    lines.push(
+      project.name ? `Project: ${project.name} (ID ${project.id})` : `Project: ID ${project.id}`
+    )
+  }
   if (cwd) lines.push(`Folder: ${cwd}`)
   lines.push(READ_HINT)
   return lines.join('\n')
@@ -31,19 +37,25 @@ export function formatChatReference({ chatId, title, project, cwd }: ChatReferen
  * The reference of one chat from the stores at call time: the live session
  * first, then its index entry. An open chat can belong to another project than
  * the active one, so the project comes from the chat, never from the view.
+ * The id stays even when the project's name is gone (a removed project); the
+ * host's unassigned sentinel names no project.
  */
 export function resolveChatReference(chatId: string, title: string): ChatReference {
   const { sessions, sessionIndex } = useAcpStore.getState()
   const live = sessions?.[chatId]
   const indexed = sessionIndex?.find((e) => e.id === chatId)
   const projectId = live?.projectId || indexed?.projectId
-  const project = projectId
-    ? useProjectStore.getState().projects.find((p) => p.id === projectId)
-    : undefined
+  const named =
+    projectId && projectId !== UNASSIGNED_PROJECT_ID
+      ? useProjectStore.getState().projects.find((p) => p.id === projectId)
+      : undefined
   return {
     chatId,
     title,
-    project: project ? { id: project.id, name: project.name } : undefined,
+    project:
+      projectId && projectId !== UNASSIGNED_PROJECT_ID
+        ? { id: projectId, name: named?.name }
+        : undefined,
     cwd: live?.cwd || indexed?.cwd || undefined
   }
 }

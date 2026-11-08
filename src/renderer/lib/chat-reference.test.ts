@@ -93,4 +93,20 @@ describe('resolveChatReference', () => {
       cwd: undefined
     })
   })
+
+  it('keeps the project id when its name is gone', () => {
+    useAcpStore.setState({
+      sessionIndex: [mockSessionIndexEntry({ id: 'h2', projectId: 'p-removed' })]
+    })
+    const reference = resolveChatReference('h2', 'Old chat')
+    expect(reference.project).toEqual({ id: 'p-removed', name: undefined })
+    expect(formatChatReference(reference)).toContain('Project: ID p-removed')
+  })
+
+  it('names no project for the unassigned sentinel', () => {
+    useAcpStore.setState({
+      sessionIndex: [mockSessionIndexEntry({ id: 'h3', projectId: '__unassigned__' })]
+    })
+    expect(resolveChatReference('h3', 'Loose chat').project).toBeUndefined()
+  })
 })

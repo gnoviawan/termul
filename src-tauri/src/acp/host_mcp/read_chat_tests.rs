@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-use super::read_chat::{chat_from_records, render_page, Names, TEXT_BUDGET};
+use super::read_chat::{chat_from_records, render_page, switch_target, Names, TEXT_BUDGET};
 use crate::acp::session_persistence::{
     PersistedEventRecord, PersistedSessionStatus, SessionMetadata, SESSION_SCHEMA_VERSION,
 };
@@ -296,6 +296,79 @@ fn a_message_over_the_budget_is_cut_so_the_page_still_moves_on() {
             "y".repeat(59_928)
         )
     );
+}
+
+#[test]
+fn a_type_less_text_block_still_renders() {
+    // Imported prompts can carry a text block with no `type`; the fold reads
+    // it as text.
+    let records = vec![prompt(1, json!([{ "text": "pasted text" }]))];
+    let chat = chat_from_records(&metadata(), &records, names());
+    assert!(render_page(&chat, None, None).text.contains("pasted text"));
+}
+
+#[test]
+fn a_handoff_turn_with_only_tools_keeps_them_as_a_tool_only_entry() {
+    // A summary-only handoff prompt folds to a boundary row; its turn's tool
+    // calls must not vanish with it.
+    let records = vec![
+        prompt(
+            1,
+            json!([{ "type": "text", "text": "# Conversation handoff\n\nsummary" }]),
+        ),
+        tool(
+            2,
+            "tool_call",
+            json!({ "toolCallId": "t1", "kind": "read", "status": "in_progress" }),
+        ),
+        tool(
+            3,
+            "tool_call_update",
+            json!({ "toolCallId": "t1", "status": "completed" }),
+        ),
+    ];
+    let chat = chat_from_records(&metadata(), &records, names());
+    assert_eq!(
+        body(&render_page(&chat, None, None).text),
+        "Messages 1-1 of 1.\n\n[1] user · 2025-11-08T10:00:01Z\n\n  tool: read (completed)"
+    );
+}
+
+#[test]
+fn tool_calls_before_any_message_become_a_tool_only_entry() {
+    let records = vec![tool(
+        1,
+        "tool_call",
+        json!({ "toolCallId": "t1", "kind": "execute", "status": "completed" }),
+    )];
+    let chat = chat_from_records(&metadata(), &records, names());
+    assert_eq!(
+        body(&render_page(&chat, None, None).text),
+        "Messages 1-1 of 1.\n\n[1] assistant · 2025-11-08T10:00:01Z\n\n  tool: execute (completed)"
+    );
+}
+
+#[test]
+fn switch_target_names_the_last_linked_session() {
+    assert_eq!(switch_target(&[]), None);
+    let records = vec![
+        record(
+            3,
+            "agent_switch",
+            json!({ "newSessionId": "chat-c", "fromConfigId": "a", "toConfigId": "b" }),
+        ),
+        record(
+            4,
+            "agent_switch",
+            json!({ "newSessionId": "chat-d", "fromConfigId": "b", "toConfigId": "c" }),
+        ),
+        record(
+            5,
+            "agent_switch",
+            json!({ "newSessionId": "", "fromConfigId": "c", "toConfigId": "d" }),
+        ),
+    ];
+    assert_eq!(switch_target(&records).as_deref(), Some("chat-d"));
 }
 
 #[test]

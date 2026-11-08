@@ -99,18 +99,25 @@ pub fn chat_from_records(
     names: Names,
 ) -> Chat {
     let (folded, _switches) = fold_session_records(records);
-    let mut messages: Vec<(u64, Message)> = folded
+    // Every folded row is a potential tool-line anchor until the lines land:
+    // a filtered or boundary row that owns calls stays as a tool-only entry
+    // rather than dropping the turn's actions.
+    let mut entries: Vec<(u64, bool, Message)> = folded
         .into_iter()
-        .filter(|message| !message.handoff_boundary)
         .filter_map(|message| {
             let role = match message.role {
                 "user" => Role::User,
                 "agent" => Role::Assistant,
                 _ => return None,
             };
-            let body = message_body(&message.blocks);
-            (!body.trim().is_empty()).then_some((
+            let body = if message.handoff_boundary {
+                String::new()
+            } else {
+                message_body(&message.blocks)
+            };
+            Some((
                 message.seq,
+                message.handoff_boundary,
                 Message {
                     role,
                     timestamp: message.timestamp,
@@ -120,11 +127,30 @@ pub fn chat_from_records(
             ))
         })
         .collect();
-    for (seq, line) in tool_lines(records) {
-        if let Some((_, owner)) = messages.iter_mut().rev().find(|(at, _)| *at < seq) {
-            owner.tools.push(line);
+    let mut orphan: Option<Message> = None;
+    for (seq, recorded_at, line) in tool_lines(records) {
+        match entries.iter_mut().rev().find(|(at, _, _)| *at < seq) {
+            Some((_, _, owner)) => owner.tools.push(line),
+            None => orphan
+                .get_or_insert_with(|| Message {
+                    role: Role::Assistant,
+                    timestamp: recorded_at,
+                    body: String::new(),
+                    tools: Vec::new(),
+                })
+                .tools
+                .push(line),
         }
     }
+    let mut messages: Vec<Message> = orphan.into_iter().collect();
+    messages.extend(
+        entries
+            .into_iter()
+            .filter(|(_, boundary, message)| {
+                !message.tools.is_empty() || (!boundary && !message.body.trim().is_empty())
+            })
+            .map(|(_, _, message)| message),
+    );
     let project = metadata
         .project_id
         .clone()
@@ -153,8 +179,27 @@ pub fn chat_from_records(
         status: metadata.status.clone(),
         created_at: metadata.created_at,
         last_activity_at: metadata.last_activity_at,
-        messages: messages.into_iter().map(|(_, message)| message).collect(),
+        messages,
     }
+}
+
+/// The session this chat's last agent switch continues in, when the records
+/// link one. `read_chat` follows it so a switched chat is not read as the
+/// whole conversation.
+#[must_use]
+pub fn switch_target(records: &[PersistedEventRecord]) -> Option<String> {
+    records.iter().rev().find_map(|record| {
+        (record.type_ == "agent_switch")
+            .then(|| {
+                record
+                    .payload
+                    .get("newSessionId")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+            })
+            .flatten()
+            .map(str::to_string)
+    })
 }
 
 /// Text blocks verbatim, attachments as `attachment:` lines; other blocks
@@ -165,7 +210,8 @@ fn message_body(blocks: &[Value]) -> String {
     for block in blocks {
         let field = |key: &str| block.get(key).and_then(Value::as_str);
         match field("type") {
-            Some("text") => text.extend(field("text")),
+            // The fold treats a missing type as text (imported prompts drop it).
+            Some("text") | None => text.extend(field("text")),
             Some("resource_link") => {
                 attachments.extend(field("name").or(field("uri")).map(str::to_string));
             }
@@ -193,15 +239,17 @@ fn message_body(blocks: &[Value]) -> String {
 /// A tool call as its records left it.
 struct ToolCall {
     seq: u64,
+    recorded_at: u64,
     kind: Option<String>,
     status: Option<String>,
     paths: Vec<String>,
     subagent: bool,
 }
 
-/// `(seq of the first record, line)` per tool call of the chat's own agent,
-/// in call order. A subagent's own calls are left out; its dispatch shows.
-fn tool_lines(records: &[PersistedEventRecord]) -> Vec<(u64, String)> {
+/// `(seq of the first record, its time, line)` per tool call of the chat's
+/// own agent, in call order. A subagent's own calls are left out; its
+/// dispatch shows.
+fn tool_lines(records: &[PersistedEventRecord]) -> Vec<(u64, u64, String)> {
     let mut calls: Vec<ToolCall> = Vec::new();
     let mut index_by_id: HashMap<String, usize> = HashMap::new();
     for record in records {
@@ -229,6 +277,7 @@ fn tool_lines(records: &[PersistedEventRecord]) -> Vec<(u64, String)> {
                 index_by_id.insert(id.to_string(), calls.len());
                 calls.push(ToolCall {
                     seq: record.seq,
+                    recorded_at: record.recorded_at,
                     kind: None,
                     status: None,
                     paths: Vec::new(),
@@ -269,7 +318,7 @@ fn tool_lines(records: &[PersistedEventRecord]) -> Vec<(u64, String)> {
             if let Some(status) = call.status {
                 line.push_str(&format!(" ({status})"));
             }
-            (call.seq, line)
+            (call.seq, call.recorded_at, line)
         })
         .collect()
 }
