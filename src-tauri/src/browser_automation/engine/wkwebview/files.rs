@@ -3,6 +3,7 @@
 //! with the narrowest read scope the host chose for it.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use objc2_foundation::{NSString, NSURL};
@@ -15,7 +16,9 @@ use crate::browser_automation::budgets::EVAL_STEP;
 use crate::browser_tab_manager::BrowserTabManager;
 
 /// Start loading the file `url` in `tab`, its page allowed to read
-/// `read_access`. Fails when WebKit refuses to start the load.
+/// `read_access`. Fails when WebKit refuses to start the load. A load the
+/// main thread gets to only after the wait ran out is not started: the
+/// caller already reported it failed.
 pub async fn load(
     tabs: &Arc<BrowserTabManager>,
     tab: &str,
@@ -30,8 +33,15 @@ pub async fn load(
         .webview(tab)
         .map_err(|_| EngineError::new(EngineErrorKind::TabNotFound))?;
     let (tx, rx) = oneshot::channel::<Result<(), EngineErrorKind>>();
+    let abandoned = Arc::new(AtomicBool::new(false));
+    let late = Arc::clone(&abandoned);
+    let tab_label = tab.to_string();
     webview
         .with_webview(move |platform| {
+            if late.load(Ordering::Acquire) {
+                log::info!("[browser-tab] local file load dropped tab={tab_label} reason=caller_gave_up");
+                return;
+            }
             // SAFETY: tauri hands out the tab's live WKWebView, and this
             // closure runs on the main thread that owns it.
             let webview = unsafe { &*platform.inner().cast::<WKWebView>() };
@@ -44,8 +54,8 @@ pub async fn load(
                 Ok(())
             } else {
                 log::warn!(
-                    "[browser-tab] WKWebView did not start loading a local file path={}",
-                    path.display()
+                    "[browser-tab] WKWebView did not start loading a local file tab={tab_label} kind={:?}",
+                    EngineErrorKind::Dispatch
                 );
                 Err(EngineErrorKind::Dispatch)
             };
@@ -56,6 +66,9 @@ pub async fn load(
         Ok(Ok(Ok(()))) => Ok(()),
         Ok(Ok(Err(kind))) => Err(EngineError::new(kind)),
         Ok(Err(_)) => Err(EngineError::new(EngineErrorKind::NoReply)),
-        Err(_) => Err(EngineError::new(EngineErrorKind::Timeout)),
+        Err(_) => {
+            abandoned.store(true, Ordering::Release);
+            Err(EngineError::new(EngineErrorKind::Timeout))
+        }
     }
 }

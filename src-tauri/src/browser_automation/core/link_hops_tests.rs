@@ -300,13 +300,44 @@ async fn a_tab_keeps_at_most_the_newest_notes() {
     let d = dirs();
     let (h, _perms) = harness(d.project.path());
     let tab = open_index(&h, &d).await;
+    let (from, epoch) = {
+        let registry = h.host.registry.lock();
+        let record = registry.get(&tab).unwrap();
+        (record.url.parse::<Url>().unwrap(), record.epoch)
+    };
     for n in 0..(MAX_NOTES + 4) {
         let url: Url = format!("file:///nowhere/{n}.html").parse().unwrap();
-        h.host.note_file_link(&tab, &url, "file_not_found");
+        let hop = Hop { label: &tab, session_id: "s1", from: &from, epoch, url: &url };
+        h.host.note_file_link(&hop, "file_not_found");
     }
     let registry = h.host.registry.lock();
     let notes = &registry.get(&tab).unwrap().file_links;
     assert_eq!(notes.len(), MAX_NOTES);
     assert!(notes[MAX_NOTES - 1].url.ends_with(&format!("{}.html", MAX_NOTES + 3)), "the newest is kept");
     assert!(notes[0].url.ends_with("/4.html"), "the oldest went first");
+}
+
+/// A note belongs to the document the link was on: one for a page the tab
+/// already left is dropped, and a new document clears the old notes.
+#[tokio::test]
+async fn notes_are_bound_to_the_document_they_were_made_on() {
+    let d = dirs();
+    let (h, _perms) = harness(d.project.path());
+    let tab = open_index(&h, &d).await;
+    let (from, epoch) = {
+        let registry = h.host.registry.lock();
+        let record = registry.get(&tab).unwrap();
+        (record.url.parse::<Url>().unwrap(), record.epoch)
+    };
+    let target: Url = file_url(&d.outside.path().join("a.html")).parse().unwrap();
+    let stale = Hop { label: &tab, session_id: "s1", from: &from, epoch: epoch + 1, url: &target };
+    h.host.note_file_link(&stale, "outside_project");
+    assert!(h.host.registry.lock().get(&tab).is_some_and(|r| r.file_links.is_empty()), "a stale document gets no note");
+
+    let current = Hop { label: &tab, session_id: "s1", from: &from, epoch, url: &target };
+    h.host.note_file_link(&current, "outside_project");
+    assert_eq!(h.host.registry.lock().get(&tab).map(|r| r.file_links.len()), Some(1));
+    let away = h.call_as("s1", "navigate", json!({ "url": "http://localhost:3000/" })).await;
+    assert!(away["page"].get("fileLinks").is_none(), "the new page does not inherit the old page's notes: {away}");
+    assert!(h.host.registry.lock().get(&tab).is_some_and(|r| r.file_links.is_empty()));
 }

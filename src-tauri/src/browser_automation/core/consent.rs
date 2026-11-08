@@ -351,8 +351,25 @@ impl ConsentGate {
         })
     }
 
+    /// The host sent `tab` to the file `url` (see
+    /// [`SessionGrants::file_load_dispatched`]).
+    pub fn file_load_dispatched(&self, session_id: &str, tab: &str, url: &Url) {
+        self.grants.file_load_dispatched(session_id, tab, url);
+    }
+
+    /// The load of the file `url` failed (see
+    /// [`SessionGrants::file_load_failed`]).
+    pub fn file_load_failed(&self, session_id: &str, tab: Option<&str>, url: &Url) {
+        if self.grants.file_load_failed(session_id, tab, url) {
+            log::info!(
+                "[browser-agent] allow-once file grant ended reason=load_failed session={}",
+                crate::logging::redact_session_id(session_id)
+            );
+        }
+    }
+
     /// Tab `tab` of the session committed `url`, or closed (`None`): end
-    /// the "allow once" file grants no tab shows any longer.
+    /// the "allow once" file grants no tab holds any longer.
     pub fn tab_moved(&self, session_id: &str, tab: &str, url: Option<&Url>) {
         let ended = self.grants.tab_moved(session_id, tab, url);
         if ended > 0 {

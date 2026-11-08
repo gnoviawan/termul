@@ -227,6 +227,90 @@ fn an_allow_once_file_ends_when_its_tab_leaves_it() {
     assert_eq!(grants.check_hop("s1", &file), HopVerdict::Deny(DenyReason::FileNotGranted));
 }
 
+fn once(grants: &SessionGrants, file: &Url) {
+    grants.grant_file_once("s1", file, std::path::Path::new("C:/notes/a.html"));
+}
+
+#[test]
+fn a_tab_closed_before_its_load_committed_ends_the_grant() {
+    let grants = SessionGrants::default();
+    let file = url("file:///C:/notes/a.html");
+    once(&grants, &file);
+    grants.file_load_dispatched("s1", "tab-1", &file);
+    assert_eq!(grants.tab_moved("s1", "tab-1", None), 1);
+    assert_eq!(grants.check_hop("s1", &file), HopVerdict::Deny(DenyReason::FileNotGranted));
+}
+
+#[test]
+fn a_failed_load_ends_the_grant() {
+    let grants = SessionGrants::default();
+    let file = url("file:///C:/notes/a.html");
+    once(&grants, &file);
+    grants.file_load_dispatched("s1", "tab-1", &file);
+    assert!(grants.file_load_failed("s1", Some("tab-1"), &file));
+    assert_eq!(grants.check_hop("s1", &file), HopVerdict::Deny(DenyReason::FileNotGranted));
+
+    once(&grants, &file);
+    assert!(grants.file_load_failed("s1", None, &file), "a load that never reached a tab ends it too");
+}
+
+#[test]
+fn a_failed_load_in_one_tab_keeps_a_grant_another_tab_holds() {
+    let grants = SessionGrants::default();
+    let file = url("file:///C:/notes/a.html");
+    once(&grants, &file);
+    grants.file_load_dispatched("s1", "tab-1", &file);
+    grants.tab_moved("s1", "tab-1", Some(&file));
+    grants.file_load_dispatched("s1", "tab-2", &file);
+    assert!(!grants.file_load_failed("s1", Some("tab-2"), &file));
+    assert_eq!(grants.check_hop("s1", &file), HopVerdict::Allow);
+}
+
+#[test]
+fn two_tabs_on_one_file_keep_it_until_both_leave() {
+    let grants = SessionGrants::default();
+    let file = url("file:///C:/notes/a.html");
+    once(&grants, &file);
+    for tab in ["tab-1", "tab-2"] {
+        grants.file_load_dispatched("s1", tab, &file);
+        grants.tab_moved("s1", tab, Some(&file));
+    }
+    assert_eq!(grants.tab_moved("s1", "tab-1", Some(&url("https://example.com/"))), 0);
+    assert_eq!(grants.check_hop("s1", &file), HopVerdict::Allow, "the other tab still shows it");
+    assert_eq!(grants.tab_moved("s1", "tab-2", None), 1);
+    assert_eq!(grants.check_hop("s1", &file), HopVerdict::Deny(DenyReason::FileNotGranted));
+}
+
+/// A second tab that reached the granted file by a link holds it too.
+#[test]
+fn a_tab_that_reached_the_file_by_a_link_holds_it() {
+    let grants = SessionGrants::default();
+    let file = url("file:///C:/notes/a.html");
+    once(&grants, &file);
+    grants.file_load_dispatched("s1", "tab-1", &file);
+    grants.tab_moved("s1", "tab-1", Some(&file));
+    grants.tab_moved("s1", "tab-2", Some(&url("file:///C:/notes/a.html#more")));
+    assert_eq!(grants.tab_moved("s1", "tab-1", Some(&url("https://example.com/"))), 0);
+    assert_eq!(grants.check_hop("s1", &file), HopVerdict::Allow);
+    assert_eq!(grants.tab_moved("s1", "tab-2", Some(&url("https://example.com/"))), 1);
+}
+
+#[test]
+fn a_denied_prompt_or_a_revoke_ends_the_grant_whoever_holds_it() {
+    let grants = SessionGrants::default();
+    let file = url("file:///C:/notes/a.html");
+    once(&grants, &file);
+    grants.tab_moved("s1", "tab-1", Some(&file));
+    grants.revoke_file("s1", &file);
+    assert_eq!(grants.check_hop("s1", &file), HopVerdict::Deny(DenyReason::FileNotGranted));
+
+    once(&grants, &file);
+    grants.tab_moved("s1", "tab-1", Some(&file));
+    grants.revoke_session("s1");
+    assert_eq!(grants.check_hop("s1", &file), HopVerdict::Deny(DenyReason::FileNotGranted));
+    assert_eq!(grants.tab_moved("s1", "tab-1", None), 0, "nothing left to end");
+}
+
 /// A project file's grant is not an "allow once": leaving it keeps it.
 #[test]
 fn a_project_file_grant_survives_its_tab_leaving() {

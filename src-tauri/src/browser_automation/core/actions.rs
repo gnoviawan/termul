@@ -258,8 +258,12 @@ impl DesktopBrowserHost {
                 let url = self
                     .agent_target(session_id, &require_url_arg(args, "new_tab")?, deadline)
                     .await?;
-                let (label, rx) = self.open_agent_tab(session_id, &url).await?;
-                self.finish_navigation(&label, rx, deadline).await?;
+                let (label, rx) = self.open_agent_tab(session_id, &url).await.inspect_err(|_| {
+                    self.file_load_ended_badly(session_id, None, &url);
+                })?;
+                self.finish_navigation(&label, rx, deadline).await.inspect_err(|_| {
+                    self.file_load_ended_badly(session_id, Some(&label), &url);
+                })?;
                 Ok(Success {
                     page: self.page_meta(&label),
                     ..mutated(Fidelity::Trusted, self.tab_facts(&label)?)
@@ -422,12 +426,14 @@ impl DesktopBrowserHost {
         let (label, rx) = match target {
             Ok(Some(label)) => {
                 let rx = self.navigation_waiter(&label)?;
-                self.load_page(&label, url).await.map_err(BrowserError::internal)?;
+                self.load_page(&label, url.clone()).await.map_err(BrowserError::internal)?;
                 (label, rx)
             }
             // No tabId and the session has no default tab: open one whose
             // first navigation is this one.
-            Ok(None) => self.open_agent_tab(session_id, &url).await?,
+            Ok(None) => self.open_agent_tab(session_id, &url).await.inspect_err(|_| {
+                self.file_load_ended_badly(session_id, None, &url);
+            })?,
             // An explicit tabId that is not this session's live agent tab is
             // a caller error: never fall back to, or open, another tab.
             Err(e) => {
@@ -439,7 +445,9 @@ impl DesktopBrowserHost {
                 return Err(e);
             }
         };
-        self.finish_navigation(&label, rx, deadline).await?;
+        self.finish_navigation(&label, rx, deadline).await.inspect_err(|_| {
+            self.file_load_ended_badly(session_id, Some(&label), &url);
+        })?;
         Ok(Success {
             page: self.page_meta(&label),
             ..mutated(Fidelity::Trusted, self.tab_facts(&label)?)

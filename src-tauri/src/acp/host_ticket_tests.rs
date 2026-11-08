@@ -316,19 +316,27 @@ async fn a_file_ticket_names_the_file_and_offers_only_allow_once_or_deny() {
     waiting.abort();
 }
 
+/// How a hidden character reads in a prompt.
+fn shown(c: char) -> String {
+    format!("\u{27E8}U+{:04X}\u{27E9}", u32::from(c))
+}
+
 #[test]
 fn file_names_lose_the_characters_that_could_disguise_them() {
     // A right-to-left override shows `invoice\u{202E}lmth.exe` as
     // "invoiceexe.html".
-    assert_eq!(display_safe("invoice\u{202E}lmth.exe"), "invoice\\u{202E}lmth.exe");
+    assert_eq!(display_safe("invoice\u{202E}lmth.exe"), "invoice\u{27E8}U+202E\u{27E9}lmth.exe");
     assert_eq!(
-        display_safe("a\u{2066}b\u{2069}c\u{202A}d\u{200F}e\u{0007}f\u{009B}g\nh"),
-        "a\\u{2066}b\\u{2069}c\\u{202A}d\\u{200F}e\\u{0007}f\\u{009B}g\\u{000A}h"
+        display_safe("a\u{2066}b\u{0007}c\u{009B}d\ne"),
+        format!("a{}b{}c{}d{}e", shown('\u{2066}'), shown('\u{0007}'), shown('\u{009B}'), shown('\n'))
     );
-    assert_eq!(display_safe("C:\\Users\\me\\caf\u{e9} notes.html"), "C:\\Users\\me\\caf\u{e9} notes.html");
+    assert_eq!(
+        display_safe("C:\\Users\\me\\caf\u{e9} notes.html"),
+        "C:\\Users\\me\\caf\u{e9} notes.html",
+        "backslashes and ordinary letters stay as they are"
+    );
     for hidden in ['\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}', '\u{180E}', '\u{2028}', '\u{2029}'] {
-        let shown = display_safe(&format!("a{hidden}b"));
-        assert_eq!(shown, format!("a\\u{{{:04X}}}b", u32::from(hidden)), "{:04X}", u32::from(hidden));
+        assert_eq!(display_safe(&format!("a{hidden}b")), format!("a{}b", shown(hidden)));
     }
     assert_ne!(display_safe("ab"), display_safe("a\u{200B}b"), "different names never read the same");
 }
@@ -339,26 +347,38 @@ fn every_invisible_character_is_shown_as_an_escape() {
         '\u{00AD}', '\u{034F}', '\u{061C}', '\u{115F}', '\u{1160}', '\u{17B4}', '\u{17B5}', '\u{180B}',
         '\u{180F}', '\u{2061}', '\u{2064}', '\u{3164}', '\u{FFA0}', '\u{FE00}', '\u{FE0F}', '\u{E0100}',
         '\u{E01EF}', '\u{E0000}', '\u{E0041}', '\u{E007F}', '\u{FFF9}', '\u{FFFB}', '\u{0000}', '\u{007F}',
+        '\u{202A}', '\u{202E}', '\u{2069}', '\u{200E}',
     ] {
-        let shown = display_safe(&format!("a{hidden}b"));
-        assert_eq!(shown, format!("a\\u{{{:04X}}}b", u32::from(hidden)), "{:04X}", u32::from(hidden));
+        assert_eq!(display_safe(&format!("a{hidden}b")), format!("a{}b", shown(hidden)), "{:04X}", u32::from(hidden));
     }
+    assert_eq!(shown('\u{E0100}'), "\u{27E8}U+E0100\u{27E9}", "five digits stay five");
+    assert_eq!(shown('\u{0007}'), "\u{27E8}U+0007\u{27E9}", "at least four digits");
 }
 
-/// A literal `\u{202E}` typed into a file name must not read like the
-/// escape of a hidden override.
+/// Text that already looks like an escape must not read like one.
 #[test]
-fn a_literal_escape_in_a_name_reads_differently_from_a_hidden_character() {
-    let literal = display_safe("invoice\\u{202E}lmth.exe");
+fn a_literal_bracket_is_doubled_so_no_two_names_read_the_same() {
+    let literal = display_safe("invoice\u{27E8}U+202E\u{27E9}lmth.exe");
     let hidden = display_safe("invoice\u{202E}lmth.exe");
-    assert_eq!(literal, "invoice\\\\u{202E}lmth.exe");
-    assert_eq!(hidden, "invoice\\u{202E}lmth.exe");
+    assert_eq!(literal, "invoice\u{27E8}\u{27E8}U+202E\u{27E9}lmth.exe");
     assert_ne!(literal, hidden);
     assert_eq!(
-        display_safe("C:\\Users\\u\\notes.html"),
-        "C:\\Users\\u\\notes.html",
-        "a backslash before a plain `u` stays single"
+        display_safe("C:\\Users\\u{202E}\\notes.html"),
+        "C:\\Users\\u{202E}\\notes.html",
+        "a backslash escape typed into a name is plain text and stays as it is"
     );
+    let inputs = [
+        "a\u{202E}b",
+        "a\u{27E8}U+202E\u{27E9}b",
+        "a\u{27E8}\u{202E}b",
+        "a\u{27E8}\u{27E8}U+202E\u{27E9}b",
+        "a\\u{202E}b",
+        "ab",
+    ];
+    let mut seen = std::collections::HashSet::new();
+    for input in inputs {
+        assert!(seen.insert(display_safe(input)), "{input:?} reads like another name");
+    }
 }
 
 #[tokio::test]
@@ -376,15 +396,15 @@ async fn a_file_ticket_shows_its_path_and_upload_name_without_bidi_controls() {
     });
     raised(&tickets, &recorder).await;
     let payload = recorder.0.lock()[0].2.clone();
-    assert_eq!(payload["_meta"]["termul"]["browser"]["origin"], "/notes/invoice\\u{202E}lmth.exe");
+    assert_eq!(payload["_meta"]["termul"]["browser"]["origin"], "/notes/invoice\u{27E8}U+202E\u{27E9}lmth.exe");
     assert_eq!(
         payload["_meta"]["termul"]["browser"]["fileName"],
-        "invoice\\u{202E}lmth.exe",
+        "invoice\u{27E8}U+202E\u{27E9}lmth.exe",
         "the host names the file; no client splits the escaped path"
     );
     assert_eq!(
         payload["toolCall"]["title"],
-        "Open the file /notes/invoice\\u{202E}lmth.exe in the agent browser"
+        "Open the file /notes/invoice\u{27E8}U+202E\u{27E9}lmth.exe in the agent browser"
     );
     waiting.abort();
 }
@@ -406,7 +426,7 @@ async fn an_upload_ticket_shows_its_file_name_without_bidi_controls() {
     });
     raised(&tickets, &recorder).await;
     let payload = recorder.0.lock()[0].2.clone();
-    assert_eq!(payload["_meta"]["termul"]["browser"]["file"]["name"], "report\\u{202E}fdp.exe");
+    assert_eq!(payload["_meta"]["termul"]["browser"]["file"]["name"], "report\u{27E8}U+202E\u{27E9}fdp.exe");
     waiting.abort();
 }
 

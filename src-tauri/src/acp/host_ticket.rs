@@ -179,21 +179,22 @@ fn is_deceptive(c: char) -> bool {
     ) || c.is_control()
 }
 
-/// A file name or path as an approver reads it. Guaranteed: every
-/// character [`is_deceptive`] names is shown as the visible escape
-/// `\u{XXXX}` (its code point in hex), and a literal `\u{` already in the
-/// text is shown as `\\u{`, so an escape in the output always stands for
-/// a hidden character and two different names never read the same. Every
-/// other backslash (a Windows path's separators) is kept as it is. This is
-/// not `mcp_catalog::consent::escape_for_display`, which doubles every
-/// backslash and so would make every Windows path unreadable.
+/// A file name or path as an approver reads it. Every character
+/// [`is_deceptive`] names is shown as `⟨U+XXXX⟩` (U+27E8 and U+27E9 around
+/// its code point, uppercase hex, at least four digits), and every literal
+/// `⟨` in the text is doubled. Read left to right, `⟨⟨` is always a literal
+/// bracket and a single `⟨` always opens an escape, so the rendering can be
+/// undone: two different inputs never render the same. Backslashes are
+/// kept as they are, so a Windows path reads normally. This is not
+/// `mcp_catalog::consent::escape_for_display`, which doubles every
+/// backslash and would make every Windows path hard to read.
 pub(crate) fn display_safe(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    for (at, c) in text.char_indices() {
+    for c in text.chars() {
         if is_deceptive(c) {
-            out.push_str(&format!("\\u{{{:04X}}}", u32::from(c)));
-        } else if c == '\\' && text[at + 1..].starts_with("u{") {
-            out.push_str("\\\\");
+            out.push_str(&format!("\u{27E8}U+{:04X}\u{27E9}", u32::from(c)));
+        } else if c == '\u{27E8}' {
+            out.push_str("\u{27E8}\u{27E8}");
         } else {
             out.push(c);
         }

@@ -150,17 +150,18 @@ describe('BrowserConsentCard', () => {
     render(
       <BrowserConsentCard
         consent={ticket({
-          origin: '/home/me/invoice\\u{202E}report.html',
+          // The host escapes hidden characters as ⟨U+XXXX⟩; the card shows
+          // the name it sent, whatever the path holds.
+          origin: '/home/me/notes⟨U+2215⟩invoice⟨U+202E⟩report.html',
           targetKind: 'file',
-          fileName: 'invoice\\u{202E}report.html',
+          fileName: 'notes⟨U+2215⟩invoice⟨U+202E⟩report.html',
           targetUrl: 'file:///home/me/invoice%E2%80%AEreport.html',
           targetUrlBytes: 44,
           options: ['allow_session', 'deny']
         })}
       />
     )
-    expect(screen.getByText('invoice\\u{202E}report.html')).toBeInTheDocument()
-    expect(screen.queryByText('u{202E}report.html')).not.toBeInTheDocument()
+    expect(screen.getByText('notes⟨U+2215⟩invoice⟨U+202E⟩report.html')).toBeInTheDocument()
   })
 
   it('asks about one sensitive action and offers only what the host offered', () => {

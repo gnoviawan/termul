@@ -101,9 +101,16 @@ fn files_outside_the_root_missing_files_and_folders_are_refused() {
         Some(UploadRefusal::Missing)
     );
     assert_eq!(refusal(root, "docs"), Some(UploadRefusal::NotAFile));
+    // An NTFS stream is refused on Windows; elsewhere `:` is a legal file
+    // name character, so the name is simply a file that does not exist.
+    let stream_refusal = if std::path::MAIN_SEPARATOR == '\\' {
+        UploadRefusal::NotAFile
+    } else {
+        UploadRefusal::Missing
+    };
     assert_eq!(
         refusal(root, "docs/report.pdf:Zone.Identifier"),
-        Some(UploadRefusal::NotAFile)
+        Some(stream_refusal)
     );
 }
 

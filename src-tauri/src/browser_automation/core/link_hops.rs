@@ -169,9 +169,9 @@ impl DesktopBrowserHost {
         let checked = shared_check(root, url.to_string(), budgets::EVAL_STEP).await;
         let file = match checked {
             Ok(Ok(file)) if file.inside => file,
-            Ok(Ok(_)) => return self.note_file_link(label, url, "outside_project"),
-            Ok(Err(refusal)) => return self.note_file_link(label, url, refusal.reason()),
-            Err(stall) => return self.note_file_link(label, url, stall.reason()),
+            Ok(Ok(_)) => return self.note_file_link(hop, "outside_project"),
+            Ok(Err(refusal)) => return self.note_file_link(hop, refusal.reason()),
+            Err(stall) => return self.note_file_link(hop, stall.reason()),
         };
         match self.framing(label, url).await {
             Framing::NotFramed => {}
@@ -179,7 +179,7 @@ impl DesktopBrowserHost {
                 log::info!("[browser-agent] frame blocked tab={tab} reason=file_not_granted");
                 return;
             }
-            Framing::Unreadable => return self.note_file_link(label, url, "page_unreadable"),
+            Framing::Unreadable => return self.note_file_link(hop, "page_unreadable"),
         }
         // The document the link was clicked on must still be there: a new
         // document since (another page, or a reload of the same one) bumped
@@ -241,18 +241,24 @@ impl DesktopBrowserHost {
     }
 
     /// Keep the target cancelled, log why, and tell the agent in the tab's
-    /// next reply.
-    fn note_file_link(&self, label: &str, url: &Url, reason: &'static str) {
-        log::info!(
-            "[browser-agent] file link not followed tab={} reason={reason}",
-            label_prefix(label)
-        );
-        if let Some(record) = self.registry.lock().get_mut(label) {
-            if record.file_links.len() >= MAX_NOTES {
-                record.file_links.remove(0);
-            }
-            record.file_links.push(FileLinkNote::new(url, reason));
+    /// next reply. The note belongs to the document the link was on: once
+    /// the tab shows another one (or a reload of it), it is dropped, and a
+    /// new document drops the notes of the one before.
+    fn note_file_link(&self, hop: &Hop<'_>, reason: &'static str) {
+        let tab = label_prefix(hop.label);
+        log::info!("[browser-agent] file link not followed tab={tab} reason={reason}");
+        let mut registry = self.registry.lock();
+        let Some(record) = registry.get_mut(hop.label) else {
+            return;
+        };
+        if record.epoch != hop.epoch || record.url != hop.from.as_str() {
+            log::info!("[browser-agent] file link note dropped tab={tab} reason=page_changed");
+            return;
         }
+        if record.file_links.len() >= MAX_NOTES {
+            record.file_links.remove(0);
+        }
+        record.file_links.push(FileLinkNote::new(hop.url, reason));
     }
 }
 

@@ -231,6 +231,8 @@ impl TabRecord {
         self.url = url.to_string();
         if kind == CommitKind::NewDocument {
             self.epoch += 1;
+            // Notes about the last document's links are about a page gone.
+            self.file_links.clear();
         }
         let outcome = NavOutcome::Committed { epoch: self.epoch };
         self.finish_where(&outcome, |w| match nav_id {

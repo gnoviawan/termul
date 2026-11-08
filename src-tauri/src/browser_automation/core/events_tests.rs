@@ -120,3 +120,20 @@ fn log_lines_carry_only_a_label_prefix() {
     assert_eq!(label_prefix(AGENT), "agent-0b7c2d1e");
     assert_eq!(label_prefix("short"), "short");
 }
+
+#[test]
+fn commits_and_closes_move_a_tab_for_allow_once_files() {
+    let committed = |url: &str| TabEvent::NavCommitted {
+        nav_id: Some(1),
+        kind: CommitKind::NewDocument,
+        url: url.to_string(),
+    };
+    assert_eq!(
+        tab_move(&committed("file:///C:/notes/a.html")),
+        Some(Some("file:///C:/notes/a.html".parse().unwrap()))
+    );
+    assert_eq!(tab_move(&committed("not a url")), Some(None), "an unreadable commit shows no granted file");
+    assert_eq!(tab_move(&TabEvent::Closed), Some(None));
+    assert_eq!(tab_move(&TabEvent::LoadFinished), None);
+    assert_eq!(tab_move(&TabEvent::TitleChanged { title: "t".into() }), None);
+}

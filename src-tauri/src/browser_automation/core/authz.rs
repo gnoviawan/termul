@@ -247,12 +247,27 @@ pub fn file_key(url: &Url) -> Option<String> {
     Some(key)
 }
 
-/// An "allow once" file grant: the tabs showing the file, and whether the
-/// approved load has yet to land in one.
+/// An "allow once" file grant, held by the tabs it is loading in or
+/// showing. It ends when neither set holds a tab any longer.
 #[derive(Default)]
 struct OnceFile {
-    tabs: HashSet<String>,
-    loading: bool,
+    /// Tabs the file's load was dispatched to, not yet committed.
+    pending: HashSet<String>,
+    /// Tabs that committed the file and still show it.
+    holding: HashSet<String>,
+}
+
+impl OnceFile {
+    fn idle(&self) -> bool {
+        self.pending.is_empty() && self.holding.is_empty()
+    }
+
+    /// Forget `tab`; whether it was here.
+    fn release(&mut self, tab: &str) -> bool {
+        let pending = self.pending.remove(tab);
+        let holding = self.holding.remove(tab);
+        pending || holding
+    }
 }
 
 /// The policy a session's synchronous hop checks decide from, as of its
@@ -346,8 +361,9 @@ impl SessionGrants {
         true
     }
 
-    /// Grant the outside file `url` once: it stays granted while a tab that
-    /// loaded it after this grant stays on it.
+    /// Grant the outside file `url` once: it stays granted while a tab it
+    /// is loading in or showing holds it (see [`Self::file_load_dispatched`]
+    /// and [`Self::tab_moved`]).
     pub fn grant_file_once(&self, session_id: &str, url: &Url, read_access: &Path) {
         let Some(key) = file_key(url) else {
             return;
@@ -355,7 +371,48 @@ impl SessionGrants {
         let mut sessions = self.sessions.lock();
         let session = sessions.entry(session_id.to_string()).or_default();
         session.granted_files.insert(key.clone(), read_access.to_path_buf());
-        session.once_files.entry(key).or_default().loading = true;
+        session.once_files.entry(key).or_default();
+    }
+
+    /// The host sent tab `tab` to the file `url`: an "allow once" grant of
+    /// it is held by the tab until the load commits or fails.
+    pub fn file_load_dispatched(&self, session_id: &str, tab: &str, url: &Url) {
+        let Some(key) = file_key(url) else {
+            return;
+        };
+        if let Some(once) = self
+            .sessions
+            .lock()
+            .get_mut(session_id)
+            .and_then(|session| session.once_files.get_mut(&key))
+        {
+            once.pending.insert(tab.to_string());
+        }
+    }
+
+    /// The load of the file `url` failed, in `tab` if it got that far: an
+    /// "allow once" grant no tab holds any longer ends. Returns whether it
+    /// ended.
+    pub fn file_load_failed(&self, session_id: &str, tab: Option<&str>, url: &Url) -> bool {
+        let Some(key) = file_key(url) else {
+            return false;
+        };
+        let mut sessions = self.sessions.lock();
+        let Some(session) = sessions.get_mut(session_id) else {
+            return false;
+        };
+        let Some(once) = session.once_files.get_mut(&key) else {
+            return false;
+        };
+        if let Some(tab) = tab {
+            once.pending.remove(tab);
+        }
+        if !once.idle() {
+            return false;
+        }
+        session.once_files.remove(&key);
+        session.granted_files.remove(&key);
+        true
     }
 
     /// Drop the grant of the file `url` (a later prompt for it was denied).
@@ -369,9 +426,11 @@ impl SessionGrants {
         }
     }
 
-    /// Tab `tab` of the session committed `url` (or closed, with `None`):
-    /// an "allow once" file the tab showed and no tab shows any longer
-    /// loses its grant. Returns how many grants ended.
+    /// Tab `tab` of the session committed `url` (or closed, with `None`).
+    /// A tab that committed an "allow once" file now holds it, whether the
+    /// host sent it there or a link to the granted file did; a tab that
+    /// committed anything else, or closed, holds none. A grant no tab holds
+    /// any longer ends. Returns how many grants ended.
     pub fn tab_moved(&self, session_id: &str, tab: &str, url: Option<&Url>) -> usize {
         let landed = url.and_then(file_key);
         let mut sessions = self.sessions.lock();
@@ -381,11 +440,9 @@ impl SessionGrants {
         let mut ended = Vec::new();
         for (key, once) in &mut session.once_files {
             if landed.as_deref() == Some(key.as_str()) {
-                if once.loading {
-                    once.loading = false;
-                    once.tabs.insert(tab.to_string());
-                }
-            } else if once.tabs.remove(tab) && once.tabs.is_empty() && !once.loading {
+                once.pending.remove(tab);
+                once.holding.insert(tab.to_string());
+            } else if once.release(tab) && once.idle() {
                 ended.push(key.clone());
             }
         }

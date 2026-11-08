@@ -453,11 +453,14 @@ impl DesktopBrowserHost {
             .lock()
             .get(label)
             .and_then(|record| record.session_id().map(str::to_string));
-        let access = session.and_then(|session| self.gate.file_read_access(&session, &file));
-        let Some(read_access) = access else {
+        let access = session
+            .as_deref()
+            .and_then(|session| self.gate.file_read_access(session, &file));
+        let (Some(session), Some(read_access)) = (session, access) else {
             return Err("the file is not granted to this tab's session".to_string());
         };
-        match self.engine.load_file(label, &file, &read_access).await {
+        self.gate.file_load_dispatched(&session, label, &file);
+        let loaded = match self.engine.load_file(label, &file, &read_access).await {
             Ok(()) => Ok(()),
             Err(e) if e.kind == crate::browser_automation::engine::EngineErrorKind::Unsupported => {
                 self.surface.navigate(label, url)
@@ -469,6 +472,21 @@ impl DesktopBrowserHost {
                     e.kind
                 );
                 Err(format!("the engine did not load the file ({:?})", e.kind))
+            }
+        };
+        if loaded.is_err() {
+            self.gate.file_load_failed(&session, Some(label), &file);
+        }
+        loaded
+    }
+
+    /// A file load the host started in `label` (or, with `None`, never
+    /// got to start) ended without its page: release its "allow once"
+    /// hold.
+    pub(super) fn file_load_ended_badly(&self, session_id: &str, label: Option<&str>, url: &str) {
+        if let Ok(file) = url.parse::<Url>() {
+            if file.scheme() == "file" {
+                self.gate.file_load_failed(session_id, label, &file);
             }
         }
     }
