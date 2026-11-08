@@ -81,9 +81,19 @@ fn an_agent_reads_a_chat_of_another_project_by_its_id() {
     let created = chrono::DateTime::from_timestamp_millis(created as i64)
         .unwrap()
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    // `register_session` persists the canonicalized cwd without a `\\?\`
+    // verbatim prefix, and on Windows the temp dir's short-name form differs
+    // from the canonical one, so the expected Folder line is built the same
+    // way rather than from `harness.cwd` directly.
+    let canonical_cwd = harness
+        .cwd
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let expected_cwd = crate::path_validation::strip_verbatim_prefix(&canonical_cwd);
     let header = format!(
-        "Chat: Run the release skill\nChat ID: chat-b\nProject: ID proj-b\nFolder: {}\nAgent: test",
-        harness.cwd.display()
+        "Chat: Run the release skill\nChat ID: chat-b\nProject: ID proj-b\nFolder: {expected_cwd}\nAgent: test"
     );
     let caller = configs[0].clone();
     harness.runtime.block_on(with_mcp_session(
