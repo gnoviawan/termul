@@ -300,6 +300,26 @@ impl Engine {
         self.tickets.answers.lock().unwrap().insert(session.to_string(), answer);
     }
 
+    /// A fake file outside the project folder.
+    pub fn outside_file(&self) -> PathBuf {
+        self.project.outside_file.clone()
+    }
+
+    /// `rel` inside the project folder.
+    pub fn project_file(&self, rel: &str) -> PathBuf {
+        self.project.root.path().join(rel)
+    }
+
+    /// Write a page into the project folder; returns its path.
+    pub fn write_project_page(&self, rel: &str, html: &str) -> PathBuf {
+        let path = self.project_file(rel);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).expect("page dir");
+        }
+        std::fs::write(&path, html).expect("project page");
+        path
+    }
+
     /// Whether the outside-the-project symlink could be created here.
     pub fn has_symlink(&self) -> bool {
         self.project.linked

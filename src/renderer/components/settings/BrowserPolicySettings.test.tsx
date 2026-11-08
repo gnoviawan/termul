@@ -127,6 +127,18 @@ describe('BrowserPolicySettings', () => {
     expect(host.app.askBeforePasswordSubmit).toBe(true)
   })
 
+  it('opens new sites without asking until the user turns the prompt on', async () => {
+    render(<BrowserPolicySettings />)
+    const ask = await screen.findByRole('switch', { name: 'Ask before opening new sites' })
+    expect(ask).not.toBeChecked()
+    fireEvent.click(ask)
+    await waitFor(() => expect(ask).toBeChecked())
+    expect(host.app.askBeforeOpeningSites).toBe(true)
+    fireEvent.click(ask)
+    await waitFor(() => expect(ask).not.toBeChecked())
+    expect(host.app.askBeforeOpeningSites).toBe(false)
+  })
+
   it('says when agents browse logged out although the shared profile is requested', async () => {
     host.engineKeepsGlobal = false
     render(<BrowserPolicySettings />)

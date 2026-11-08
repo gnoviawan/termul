@@ -10,7 +10,7 @@ use std::sync::{Arc, Weak};
 use serde_json::{json, Value};
 use tauri::Url;
 
-use super::actions::check_url;
+use super::actions::check_web_url;
 use super::dialogs::Disposition;
 use super::dispatch::{self, ActionSpec, Verb};
 use super::events::label_prefix;
@@ -126,12 +126,12 @@ impl DesktopBrowserHost {
         result.map(|success| self.with_page_events(success))
     }
 
-    /// Add the dialog and popup outcomes of the reply's tab.
+    /// Add the dialog, popup and file-link outcomes of the reply's tab.
     fn with_page_events(&self, mut success: Success) -> Success {
         let Some(label) = success.tab.as_ref().map(|t| t.id.clone()) else {
             return success;
         };
-        let (dialog, popups, meta) = {
+        let (dialog, popups, file_links, meta) = {
             let mut registry = self.registry.lock();
             let Some(record) = registry.get_mut(&label) else {
                 return success;
@@ -140,17 +140,22 @@ impl DesktopBrowserHost {
             (
                 record.dialogs.report(),
                 std::mem::take(&mut record.popups),
+                std::mem::take(&mut record.file_links),
                 meta,
             )
         };
         if let Some(dialog) = dialog {
-            success.page.get_or_insert(meta).dialog = Some(dialog);
+            success.page.get_or_insert_with(|| meta.clone()).dialog = Some(dialog);
         }
         if !popups.is_empty() {
             let data = success.data.get_or_insert_with(|| json!({}));
             if let Some(map) = data.as_object_mut() {
                 map.insert("popups".to_string(), json!(popups));
             }
+        }
+        if !file_links.is_empty() {
+            let links = file_links.iter().map(|note| json!(note)).collect();
+            success.page.get_or_insert(meta).file_links = Some(links);
         }
         success
     }
@@ -276,7 +281,7 @@ impl DesktopBrowserHost {
         if dispatch::floor_gap(self.engine.facts()).is_some() {
             return refuse("engine_floor");
         }
-        let Ok(url) = check_url(url) else {
+        let Ok(url) = check_web_url(url) else {
             return refuse("popup_url_not_http");
         };
         let label = mint_agent_label();

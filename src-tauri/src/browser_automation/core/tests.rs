@@ -47,6 +47,8 @@ pub(super) struct FakePane {
     /// The data store each tab was built on, by label.
     pub(super) stores: Mutex<HashMap<String, DataStore>>,
     persistent_profile: Support,
+    /// Every local file a tab was sent to, with the read access it got.
+    pub(super) file_loads: Mutex<Vec<(String, PathBuf)>>,
 }
 
 /// The app's own dev server: the fake perimeter denies every hop to it.
@@ -90,7 +92,7 @@ impl FakePane {
     }
 
     /// The user clicks a link inside the tab: a navigation no verb asked for.
-    fn user_navigates(&self, tab: &str, url: &str) {
+    pub(super) fn user_navigates(&self, tab: &str, url: &str) {
         let mut tabs = self.tabs.lock();
         let fake = tabs.get_mut(tab).unwrap();
         let Some(landed) = load(&fake.events, url) else {
@@ -139,6 +141,10 @@ impl TabSurface for FakePane {
         }
         self.user_navigates(tab, &url);
         Ok(())
+    }
+    fn navigate_file(&self, tab: &str, url: String, read_access: PathBuf) -> Result<(), String> {
+        self.file_loads.lock().push((url.clone(), read_access));
+        self.navigate(tab, url)
     }
     fn history(&self, tab: &str, step: HistoryStep) -> Result<(), String> {
         let mut tabs = self.tabs.lock();
@@ -229,6 +235,12 @@ pub(super) struct FakeEngine {
     pub(super) focused_frame: Mutex<Value>,
     /// Every `set_input_files` call.
     files_set: Mutex<Vec<FilesSet>>,
+    /// Overlay hides and shows and captures, in order.
+    pub(super) overlay_log: Mutex<Vec<&'static str>>,
+    /// What the frame-sources helper reports: where the page's frames point.
+    pub(super) frame_sources: Mutex<Vec<String>>,
+    /// The next capture fails.
+    pub(super) fail_screenshot: Mutex<bool>,
 }
 
 impl FakeEngine {
@@ -293,6 +305,9 @@ impl FakeEngine {
             frame_card_fields: Mutex::new(false),
             focused_frame: Mutex::new(Value::Null),
             files_set: Mutex::new(Vec::new()),
+            overlay_log: Mutex::new(Vec::new()),
+            frame_sources: Mutex::new(Vec::new()),
+            fail_screenshot: Mutex::new(false),
         }
     }
 }
@@ -377,6 +392,12 @@ impl BrowserEngine for FakeEngine {
             "focused_frame" => self.focused_frame.lock().clone(),
             "viewport" => json!({ "w": 800.0, "h": 600.0 }),
             "focused_editable" => json!({ "editable": true }),
+            "frame_sources" => json!(*self.frame_sources.lock()),
+            "overlay_visibility" => {
+                let visible = script.params["visible"] == true;
+                self.overlay_log.lock().push(if visible { "show" } else { "hide" });
+                json!({ "ok": true, "found": 1 })
+            }
             _ => json!({ "ok": true }),
         };
         Box::pin(async move { Ok(out) })
@@ -420,7 +441,15 @@ impl BrowserEngine for FakeEngine {
         Box::pin(async { Ok(()) })
     }
     fn screenshot<'a>(&'a self, _tab: &'a str) -> EngineFuture<'a, Vec<u8>> {
-        Box::pin(async { Ok(vec![0x89, b'P', b'N', b'G']) })
+        self.overlay_log.lock().push("capture");
+        let fail = std::mem::take(&mut *self.fail_screenshot.lock());
+        Box::pin(async move {
+            if fail {
+                Err(EngineError::new(EngineErrorKind::Dispatch))
+            } else {
+                Ok(vec![0x89, b'P', b'N', b'G'])
+            }
+        })
     }
     fn answer_dialog<'a>(&'a self, _tab: &'a str, id: u64, answer: DialogAnswer) -> EngineFuture<'a, bool> {
         self.answers.lock().push((id, answer));
@@ -551,6 +580,7 @@ pub(super) fn harness_parts(
         published: Mutex::new(Vec::new()),
         stores: Mutex::new(HashMap::new()),
         persistent_profile,
+        file_loads: Mutex::new(Vec::new()),
     });
     let sink = Arc::new(AutoMountSink {
         host: OnceLock::new(),
@@ -635,7 +665,7 @@ impl Harness {
 }
 
 const REPLY_KEYS: [&str; 8] = ["ok", "code", "reason", "message", "fidelity", "tab", "page", "data"];
-const PAGE_KEYS: [&str; 8] = ["url", "title", "snapshot", "dialog", "console", "network", "text", "truncated"];
+const PAGE_KEYS: [&str; 9] = ["url", "title", "snapshot", "dialog", "console", "network", "text", "fileLinks", "truncated"];
 
 fn assert_closed_shape(reply: &Value) {
     let keys: Vec<&String> = reply.as_object().unwrap().keys().collect();
@@ -824,6 +854,26 @@ async fn failures_carry_code_reason_and_a_host_message_only() {
     for reply in [&stale, &missing, &unknown, &foreign] {
         assert_closed_shape(reply);
     }
+}
+
+#[tokio::test]
+async fn an_agent_screenshot_hides_the_overlay_and_restores_it_even_when_the_capture_fails() {
+    let h = harness_with(FakeEngine::new(webview2_like()));
+    let opened = h.call("navigate", json!({ "url": "http://localhost:3000/" })).await;
+    assert_eq!(opened["ok"], true, "{opened}");
+    let shot = h.call("screenshot", json!({})).await;
+    assert_eq!(shot["ok"], true, "{shot}");
+    assert_eq!(*h.engine.overlay_log.lock(), ["hide", "capture", "show"]);
+
+    h.engine.overlay_log.lock().clear();
+    *h.engine.fail_screenshot.lock() = true;
+    let failed = h.call("screenshot", json!({})).await;
+    assert_eq!(failed["ok"], false, "{failed}");
+    assert_eq!(
+        *h.engine.overlay_log.lock(),
+        ["hide", "capture", "show"],
+        "the overlay comes back after a failed capture"
+    );
 }
 
 #[tokio::test]

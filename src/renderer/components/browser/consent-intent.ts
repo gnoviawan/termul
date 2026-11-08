@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import {
   type BrowserConsentAction,
   type BrowserConsentOptionId,
+  type BrowserConsentTargetKind,
   type BrowserConsentTicket,
   CONSENT_ANSWER_FLOOR_MS
 } from '@/lib/browser-consent-api'
@@ -24,8 +25,11 @@ const TITLES: Record<BrowserConsentAction, string> = {
   tainted_exfil: 'Allow the agent to send page data to another site?'
 }
 
-export function browserConsentTitle(action: BrowserConsentAction): string {
-  return TITLES[action]
+export function browserConsentTitle(
+  action: BrowserConsentAction,
+  targetKind: BrowserConsentTargetKind = 'web'
+): string {
+  return targetKind === 'file' ? 'Allow the agent to open this file?' : TITLES[action]
 }
 
 /**
@@ -49,12 +53,32 @@ const ACTION_PHRASES: Record<BrowserConsentAction, string> = {
   tainted_exfil: 'send page data to'
 }
 
-/** e.g. `Claude wants to open https://example.com in the agent browser.` */
+/**
+ * e.g. `Claude wants to open https://example.com in the agent browser.`, or
+ * for a file outside the project `Claude wants to open the file C:\notes\a.html in the agent browser.`
+ */
 export function browserConsentSummary(
   agentName: string | undefined,
-  ticket: Pick<BrowserConsentTicket, 'action' | 'origin'>
+  ticket: Pick<BrowserConsentTicket, 'action' | 'origin'> & {
+    targetKind?: BrowserConsentTargetKind
+  }
 ): string {
-  return `${agentName ?? BROWSER_CONSENT_ACTOR} wants to ${ACTION_PHRASES[ticket.action]} ${ticket.origin} in the agent browser.`
+  const actor = agentName ?? BROWSER_CONSENT_ACTOR
+  if (ticket.targetKind === 'file') {
+    return `${actor} wants to open the file ${ticket.origin} in the agent browser.`
+  }
+  return `${actor} wants to ${ACTION_PHRASES[ticket.action]} ${ticket.origin} in the agent browser.`
+}
+
+/** The last segment of a file ticket's path: its file name. */
+export function browserConsentFileName(path: string): string {
+  const parts = path.split(/[\\/]/).filter((part) => part.length > 0)
+  return parts[parts.length - 1] ?? path
+}
+
+/** The label of the ticket's target row: the site, or the file. */
+export function browserConsentTargetLabel(targetKind: BrowserConsentTargetKind = 'web'): string {
+  return targetKind === 'file' ? 'File' : 'Site'
 }
 
 const PROFILE_LABELS: Record<BrowserConsentTicket['profile'], string> = {
@@ -91,11 +115,17 @@ const SENSITIVE_OPTION_LABELS: Record<BrowserConsentOptionId, string> = {
   deny: 'Deny'
 }
 
+/**
+ * Sensitive actions, and files outside the project, are allowed one action
+ * at a time.
+ */
 export function browserConsentOptionLabel(
   optionId: BrowserConsentOptionId,
-  action: BrowserConsentAction
+  action: BrowserConsentAction,
+  targetKind: BrowserConsentTargetKind = 'web'
 ): string {
-  return (isSensitiveConsent(action) ? SENSITIVE_OPTION_LABELS : ORIGIN_OPTION_LABELS)[optionId]
+  const oneAtATime = isSensitiveConsent(action) || targetKind === 'file'
+  return (oneAtATime ? SENSITIVE_OPTION_LABELS : ORIGIN_OPTION_LABELS)[optionId]
 }
 
 /**

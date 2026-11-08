@@ -96,13 +96,48 @@ pub struct TicketFile {
     pub bytes: u64,
 }
 
+/// What a ticket asks about: a web origin, or a local file the host
+/// checked (outside the session's project; project files never ask).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TicketTarget {
+    Web(CanonicalOrigin),
+    /// The file's real path, as the approver reads it.
+    File(String),
+}
+
+impl TicketTarget {
+    /// What the approver is shown as the target: the canonical origin, or
+    /// the file's path.
+    pub fn as_str(&self) -> &str {
+        match self {
+            TicketTarget::Web(origin) => origin.as_str(),
+            TicketTarget::File(path) => path,
+        }
+    }
+
+    /// `_meta.termul.browser.targetKind`: clients word a file ticket as
+    /// opening a file, never a site.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            TicketTarget::Web(_) => "web",
+            TicketTarget::File(_) => "file",
+        }
+    }
+}
+
+impl From<CanonicalOrigin> for TicketTarget {
+    fn from(origin: CanonicalOrigin) -> Self {
+        TicketTarget::Web(origin)
+    }
+}
+
 /// What a ticket shows the approver. Closed: never page title or text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TicketRequest {
     pub id: TicketId,
     pub session_id: String,
     pub project_id: String,
-    pub origin: CanonicalOrigin,
+    pub origin: TicketTarget,
     pub target_url: String,
     pub action: ActionClass,
     /// Agent-supplied intent, displayed as such and never classified.

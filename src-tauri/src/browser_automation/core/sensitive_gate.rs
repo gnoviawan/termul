@@ -5,7 +5,7 @@
 use serde_json::Value;
 use tauri::Url;
 
-use super::actions::{check_ref, check_url, tab_id_arg};
+use super::actions::{check_ref, check_web_url, tab_id_arg};
 use super::consent::SensitiveRequest;
 use super::dispatch::Verb;
 use super::reply::reported_failure;
@@ -51,7 +51,7 @@ impl DesktopBrowserHost {
         let target;
         let (gesture, probe) = match verb {
             Verb::Navigate | Verb::NewTab => {
-                let Some(Ok(url)) = text("url").map(check_url) else {
+                let Some(Ok(url)) = text("url").map(check_web_url) else {
                     return Ok(());
                 };
                 target = url

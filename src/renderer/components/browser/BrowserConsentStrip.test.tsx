@@ -121,6 +121,30 @@ describe('BrowserConsentStrip', () => {
     expect(screen.getByRole('button', { name: 'Deny' })).toBeInTheDocument()
   })
 
+  it('words a file outside the project as opening a file, allowed once at a time', () => {
+    acpState.pendingBrowserConsents = {
+      'req-1': consentEvent({
+        origin: '/home/me/notes/a.html',
+        targetKind: 'file',
+        targetUrl: 'file:///home/me/notes/a.html',
+        targetUrlBytes: 28,
+        options: ['allow_session', 'deny']
+      })
+    }
+    workspaceState.activeTab = browserTab()
+    render(<BrowserConsentStrip browserTabId={TAB_ID} />)
+    expect(screen.getByText('Allow the agent to open this file?')).toBeInTheDocument()
+    expect(
+      screen.getByText(/wants to open the file \/home\/me\/notes\/a\.html in the agent browser/)
+    ).toBeInTheDocument()
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Allow once', 'Deny'])
+    const name = screen.getByText('File: a.html')
+    expect(name).not.toHaveClass('truncate')
+    const target = screen.getByText('file:///home/me/notes/a.html')
+    expect(target).toHaveClass('break-all')
+    expect(target).not.toHaveClass('truncate')
+  })
+
   it('renders nothing when the focused pane’s active tab is not this browser tab', () => {
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
     workspaceState.activeTab = { type: 'terminal', id: 't-1', terminalId: 't-1' } as WorkspaceTab
@@ -402,36 +426,25 @@ describe('BrowserPanel strip mount', () => {
   })
 })
 
-describe('BrowserPanel agent border', () => {
-  it('applies the gradient frame class only while the tab is agent-controlled', () => {
+describe('BrowserPanel agent state', () => {
+  it('draws no ring or padding around the pane while an agent drives the tab', () => {
     useBrowserSessionStore.getState().createTab(TAB_ID, 'https://example.com')
     const { container, rerender } = render(<BrowserPanel browserTabId={TAB_ID} isVisible />)
     const root = container.firstElementChild as HTMLElement
-    expect(root.className).not.toContain('termul-agent-border')
+    const idle = root.className
 
     useBrowserSessionStore.getState().setAgentControlled(TAB_ID, true)
     rerender(<BrowserPanel browserTabId={TAB_ID} isVisible />)
-    expect(root.className).toContain('termul-agent-border')
-    expect(root.className).toContain('p-0.5')
-
-    useBrowserSessionStore.getState().setAgentControlled(TAB_ID, false)
-    rerender(<BrowserPanel browserTabId={TAB_ID} isVisible />)
     expect(root.className).not.toContain('termul-agent-border')
+    expect(root.className).not.toMatch(/(^|\s)p-/)
+    expect(root.className).toBe(idle)
   })
 })
 
 describe('agent border CSS', () => {
   const css = readFileSync(join(__dirname, '../../index.css'), 'utf8')
 
-  it('defines the animated gradient ring', () => {
-    expect(css).toContain('.termul-agent-border')
-    expect(css).toContain('@keyframes termul-agent-border-pan')
-    expect(css).toMatch(/\.termul-agent-border \{[^}]*animation: termul-agent-border-pan/)
-  })
-
-  it('disables the animation under prefers-reduced-motion', () => {
-    expect(css).toMatch(
-      /@media \(prefers-reduced-motion: reduce\) \{\s*\.termul-agent-border \{\s*animation: none;?\s*}\s*}/
-    )
+  it('no longer ships the gradient ring', () => {
+    expect(css).not.toContain('termul-agent-border')
   })
 })

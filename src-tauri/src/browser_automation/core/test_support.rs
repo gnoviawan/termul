@@ -45,10 +45,33 @@ impl PermissionRequest for ScriptedPermissions {
 }
 
 /// Policy store with the real revision compare-and-swap, held in memory.
-#[derive(Default)]
+/// It asks before opening new sites, so tests of the consent prompt see
+/// one; [`InMemoryPolicyStore::opening_sites_unasked`] is the app default.
 pub struct InMemoryPolicyStore {
     projects: Mutex<HashMap<String, ProjectPolicy>>,
     app: Mutex<AppPolicy>,
+}
+
+impl Default for InMemoryPolicyStore {
+    fn default() -> Self {
+        Self {
+            projects: Mutex::new(HashMap::new()),
+            app: Mutex::new(AppPolicy {
+                ask_before_opening_sites: true,
+                ..AppPolicy::default()
+            }),
+        }
+    }
+}
+
+impl InMemoryPolicyStore {
+    /// The shipped default: new sites open without a prompt.
+    pub fn opening_sites_unasked() -> Self {
+        Self {
+            projects: Mutex::new(HashMap::new()),
+            app: Mutex::new(AppPolicy::default()),
+        }
+    }
 }
 
 fn stale(current: u64, expected: u64) -> Result<(), PolicyRefusal> {

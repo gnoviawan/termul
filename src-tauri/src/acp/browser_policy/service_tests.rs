@@ -477,6 +477,42 @@ async fn asking_before_password_submits_is_an_app_switch_that_starts_off() {
 }
 
 #[tokio::test]
+async fn asking_before_opening_sites_is_an_app_switch_that_starts_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = fixture(dir.path(), vec![]);
+    let set = |revision: u64, enabled: bool| {
+        let service = f.service.clone();
+        async move {
+            service
+                .apply_app(
+                    &CallerScope::App,
+                    revision,
+                    &json!({"op": "set_ask_before_opening_sites", "enabled": enabled}),
+                )
+                .await
+        }
+    };
+    let initial = f.service.app_view(&CallerScope::App).await.unwrap();
+    let on = set(0, true).await.unwrap();
+    let off = set(1, false).await.unwrap();
+    assert_eq!(
+        (initial.ask_before_opening_sites, on.ask_before_opening_sites, on.revision, off.ask_before_opening_sites),
+        (false, true, 1, false)
+    );
+    let project_bound = f
+        .service
+        .apply_app(
+            &CallerScope::Project("p1".into()),
+            2,
+            &json!({"op": "set_ask_before_opening_sites", "enabled": true}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(project_bound, PolicyRefusal::AppScopeRequired);
+    assert_eq!(f.sink.payloads_of("acp:browser_policy_changed").len(), 2);
+}
+
+#[tokio::test]
 async fn project_pre_approvals_cover_credential_submits_for_ephemeral_tabs_only() {
     let dir = tempfile::tempdir().unwrap();
     let f = fixture(dir.path(), vec![]);

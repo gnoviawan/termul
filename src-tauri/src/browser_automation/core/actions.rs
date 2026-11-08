@@ -21,8 +21,9 @@ use crate::browser_automation::budgets::{self, Deadline};
 use crate::browser_automation::engine::assets::{self, Script};
 use crate::browser_automation::BrowserCall;
 
-/// Validate + normalize a navigation target. http(s) only.
-pub(super) fn check_url(url: &str) -> Result<String, BrowserError> {
+/// Validate + normalize a web target: http(s) only. Popups and the
+/// sensitive-action gate read only web pages.
+pub(super) fn check_web_url(url: &str) -> Result<String, BrowserError> {
     let parsed = url
         .parse::<tauri::Url>()
         .map_err(|_| BrowserError::invalid(format!("invalid url: {url}")).with_arg_keys(&["url"]))?;
@@ -32,6 +33,25 @@ pub(super) fn check_url(url: &str) -> Result<String, BrowserError> {
             "scheme '{other}' is not allowed (http/https only)"
         ))
         .with_arg_keys(&["url"])),
+    }
+}
+
+/// What `navigate` and `new_tab` may target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AgentTarget {
+    Web(String),
+    /// A `file://` URL, checked on disk and granted before it loads.
+    File(String),
+}
+
+/// Validate an agent target: http(s), or a `file://` URL.
+pub(super) fn check_target_url(url: &str) -> Result<AgentTarget, BrowserError> {
+    let parsed = url
+        .parse::<tauri::Url>()
+        .map_err(|_| BrowserError::invalid(format!("invalid url: {url}")).with_arg_keys(&["url"]))?;
+    match parsed.scheme() {
+        "file" => Ok(AgentTarget::File(parsed.to_string())),
+        _ => check_web_url(url).map(AgentTarget::Web),
     }
 }
 
@@ -231,7 +251,9 @@ impl DesktopBrowserHost {
         match verb {
             Verb::ListTabs => Ok(self.list_tabs(session_id)),
             Verb::NewTab => {
-                let url = check_url(&require_url_arg(args, "new_tab")?)?;
+                let url = self
+                    .agent_target(session_id, &require_url_arg(args, "new_tab")?, deadline)
+                    .await?;
                 let (label, rx) = self.open_agent_tab(session_id, &url).await?;
                 self.finish_navigation(&label, rx, deadline).await?;
                 Ok(Success {
@@ -278,7 +300,7 @@ impl DesktopBrowserHost {
             }
             Verb::Screenshot => {
                 let label = self.resolve_tab(session_id, args)?;
-                let path = self.screenshot(session_id, &label).await?;
+                let path = self.screenshot(session_id, &label, deadline).await?;
                 Ok(Success {
                     tab: Some(self.tab_facts(&label)?),
                     data: Some(json!({ "path": path })),
@@ -378,16 +400,25 @@ impl DesktopBrowserHost {
         }
     }
 
+    /// The URL `navigate` or `new_tab` loads: a web URL as given, or the
+    /// real-path URL of a granted file.
+    async fn agent_target(&self, session_id: &str, url: &str, deadline: Deadline) -> Result<String, BrowserError> {
+        match check_target_url(url)? {
+            AgentTarget::Web(url) => Ok(url),
+            AgentTarget::File(url) => self.granted_file_target(session_id, &url, deadline).await,
+        }
+    }
+
     async fn navigate(&self, session_id: &str, args: &Value, deadline: Deadline) -> Result<Success, BrowserError> {
-        let url = check_url(&require_url_arg(args, "navigate")?)?;
+        let url = self
+            .agent_target(session_id, &require_url_arg(args, "navigate")?, deadline)
+            .await?;
         let tab_id = tab_id_arg(args)?;
         let target = self.registry.lock().resolve(session_id, tab_id.as_deref());
         let (label, rx) = match target {
             Ok(Some(label)) => {
                 let rx = self.navigation_waiter(&label)?;
-                self.surface
-                    .navigate(&label, url)
-                    .map_err(BrowserError::internal)?;
+                self.load_page(&label, url).map_err(BrowserError::internal)?;
                 (label, rx)
             }
             // No tabId and the session has no default tab: open one whose
@@ -516,13 +547,40 @@ impl DesktopBrowserHost {
         Ok(element)
     }
 
-    /// Capture the tab and write the PNG under the session's artifact dir.
-    async fn screenshot(&self, session_id: &str, tab_id: &str) -> Result<String, BrowserError> {
-        let png = self
-            .engine
-            .screenshot(tab_id)
-            .await
-            .map_err(|e| engine_error(e, tab_id))?;
+    /// Hide or show the agent overlay on `tab_id` within `wait`. Best
+    /// effort: a page that removed it, a failed eval or a slow one is
+    /// logged and the capture goes on.
+    async fn set_overlay(&self, tab_id: &str, visible: bool, wait: std::time::Duration) {
+        let action = if visible { "show" } else { "hide" };
+        let toggled = tokio::time::timeout(wait, self.engine.evaluate(tab_id, assets::overlay_visibility(visible))).await;
+        match toggled {
+            Ok(Ok(out)) if out.get("found").and_then(Value::as_u64).unwrap_or(0) > 0 => {}
+            Ok(Ok(_)) => log::info!(
+                "[browser-agent] overlay {action}: no overlay on tab {}",
+                label_prefix(tab_id)
+            ),
+            Ok(Err(e)) => log::warn!(
+                "[browser-agent] overlay {action} failed on tab {} ({:?})",
+                label_prefix(tab_id),
+                e.kind
+            ),
+            Err(_) => log::warn!(
+                "[browser-agent] overlay {action} timed out on tab {}",
+                label_prefix(tab_id)
+            ),
+        }
+    }
+
+    /// Capture the tab, with the agent overlay hidden and restored even
+    /// when the capture fails, and write the PNG under the session's
+    /// artifact dir. The hide is bounded by the call's deadline; the
+    /// restore always gets its own short budget, so the overlay comes
+    /// back even after a capture that used up the call.
+    async fn screenshot(&self, session_id: &str, tab_id: &str, deadline: Deadline) -> Result<String, BrowserError> {
+        self.set_overlay(tab_id, false, deadline.clamp(budgets::OVERLAY_TOGGLE)).await;
+        let shot = self.engine.screenshot(tab_id).await;
+        self.set_overlay(tab_id, true, budgets::OVERLAY_TOGGLE).await;
+        let png = shot.map_err(|e| engine_error(e, tab_id))?;
         let root = self.surface.artifacts_root().map_err(BrowserError::internal)?;
         let dir = super::teardown::session_dir(&root, session_id);
         std::fs::create_dir_all(&dir).map_err(|e| BrowserError::internal(format!("artifact dir: {e}")))?;

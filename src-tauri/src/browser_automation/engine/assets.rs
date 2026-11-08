@@ -66,6 +66,11 @@ pub const OWNER_PATH: Helper = helper!("owner_path");
 pub const CONSOLE_PULL: Helper = helper!("console_pull");
 pub const SENSITIVITY: Helper = helper!("sensitivity");
 pub const CARD_FIELDS: Helper = helper!("card_fields");
+pub const OVERLAY_VISIBILITY: Helper = helper!("overlay_visibility");
+pub const FRAME_SOURCES: Helper = helper!("frame_sources");
+/// The conformance suite's probe of the agent overlay.
+#[cfg(any(test, feature = "conformance"))]
+pub const OVERLAY_STATE: Helper = helper!("overlay_state");
 /// Only CDP engines set a file input through the element itself.
 #[cfg(any(test, target_os = "windows"))]
 pub const FILE_INPUT: Helper = helper!("file_input");
@@ -89,6 +94,17 @@ pub const END_INPUT_WATCH: Helper = helper!("end_input_watch");
 #[cfg_attr(target_os = "windows", allow(dead_code, reason = "WebView2 reads the console through CDP"))]
 pub const CONSOLE_SHIM: &str = include_str!("assets/console_shim.js");
 
+/// Main-world script every agent tab's main frame runs at document start:
+/// the "Iris" agent-control overlay, a pointer-transparent pixel grid on a
+/// closed shadow root under `<html>`. Page script can find or tamper with
+/// it (accepted); the trusted agent indicators live outside the page.
+pub const AGENT_OVERLAY: &str = include_str!("assets/agent_overlay.js");
+
+/// The tag of the overlay's host element, which [`overlay_visibility`]
+/// finds it by.
+#[cfg(test)]
+pub const OVERLAY_TAG: &str = "termul-agent-overlay";
+
 /// A helper with its parameters, ready for an engine.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Script {
@@ -100,6 +116,33 @@ impl Script {
     fn new(helper: Helper, params: Value) -> Self {
         Self { helper, params }
     }
+}
+
+/// Hide (`false`) or show the agent overlay. Hiding resolves after two
+/// frames, so a capture taken next has no overlay in it, and the overlay
+/// shows itself again after [`OVERLAY_SELF_RESTORE`] unless a show came
+/// first.
+pub fn overlay_visibility(visible: bool) -> Script {
+    let restore_ms = u64::try_from(OVERLAY_SELF_RESTORE.as_millis()).unwrap_or(u64::MAX);
+    Script::new(
+        OVERLAY_VISIBILITY,
+        json!({ "visible": visible, "restoreMs": restore_ms }),
+    )
+}
+
+/// How long a hidden overlay waits for the host's show before it shows
+/// itself: a failed, timed-out or dropped restore cannot leave it hidden.
+pub const OVERLAY_SELF_RESTORE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// How many agent overlays hang off `<html>`, and whether the first shows.
+#[cfg(any(test, feature = "conformance"))]
+pub fn overlay_state() -> Script {
+    Script::new(OVERLAY_STATE, json!({}))
+}
+
+/// The absolute URLs the document's frames, objects and embeds point at.
+pub fn frame_sources() -> Script {
+    Script::new(FRAME_SOURCES, json!({}))
 }
 
 /// `document.readyState`, to settle after a navigation.

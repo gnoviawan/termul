@@ -43,7 +43,7 @@ pub static REGISTRY: [ActionSpec; 26] = [
         one_of: &[],
         requires: &[Cap::Screenshot],
         mutating: false,
-        budget: budgets::ACTION_EVAL,
+        budget: budgets::ACTION_SCREENSHOT,
         summary: "save a PNG of the visible page; the file path is data.path.",
     },
     ActionSpec {

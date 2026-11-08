@@ -24,6 +24,7 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import {
   browserConsentFileLine,
+  browserConsentFileName,
   browserConsentOptionLabel,
   browserConsentProfileLabel,
   browserConsentSummary,
@@ -105,15 +106,29 @@ export function BrowserConsentStrip({
     <AlertOnceStripFrame
       key={first.requestId}
       requestId={first.requestId}
-      title={browserConsentTitle(first.action)}
+      title={browserConsentTitle(first.action, first.targetKind)}
     >
       <ShieldAlert size={14} className="shrink-0 text-warning" />
       <div className="min-w-0 flex-1 text-2xs">
-        <span className="font-medium text-foreground">{browserConsentTitle(first.action)}</span>{' '}
+        <span className="font-medium text-foreground">
+          {browserConsentTitle(first.action, first.targetKind)}
+        </span>{' '}
         <span className="break-words text-muted-foreground">
           {browserConsentSummary(agentName, first)}
         </span>
-        <span className="block truncate font-mono text-muted-foreground" title={first.targetUrl}>
+        {first.targetKind === 'file' ? (
+          <span className="block break-all font-medium text-foreground">
+            File: {browserConsentFileName(first.origin)}
+          </span>
+        ) : null}
+        <span
+          className={
+            first.targetKind === 'file'
+              ? 'block break-all font-mono text-muted-foreground'
+              : 'block truncate font-mono text-muted-foreground'
+          }
+          title={first.targetUrl}
+        >
           {browserConsentTargetLine(first)}
         </span>
         {first.file ? (
@@ -138,7 +153,7 @@ export function BrowserConsentStrip({
           onClick={() => respond(first.requestId, optionId)}
           className="shrink-0 text-2xs"
         >
-          {browserConsentOptionLabel(optionId, first.action)}
+          {browserConsentOptionLabel(optionId, first.action, first.targetKind)}
         </Button>
       ))}
     </AlertOnceStripFrame>

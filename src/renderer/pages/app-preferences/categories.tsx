@@ -355,6 +355,26 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   },
   {
     categoryId: 'browser',
+    label: 'Ask before opening new sites',
+    description: 'Off: agents open public sites and devices on your local network without asking.',
+    keywords: [
+      'browser',
+      'site',
+      'website',
+      'open',
+      'navigate',
+      'prompt',
+      'ask',
+      'allow',
+      'local network',
+      'lan',
+      'device',
+      'automation'
+    ],
+    anchorId: BROWSER_ANCHORS.appSitePrompt
+  },
+  {
+    categoryId: 'browser',
     label: 'Ask before an agent submits a password',
     description: 'Have agents ask you before they sign in to a site.',
     keywords: ['browser', 'password', 'sign in', 'login', 'prompt', 'ask', 'automation'],

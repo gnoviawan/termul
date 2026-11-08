@@ -37,6 +37,12 @@ pub trait TabSurface: Send + Sync {
         store: DataStore,
     ) -> SurfaceFuture<'a, Result<(), String>>;
     fn navigate(&self, tab: &str, url: String) -> Result<(), String>;
+    /// Send `tab` to the host-checked local file `url`, whose page may read
+    /// `read_access` (a folder, or the file itself) where the engine
+    /// scopes file reads (WKWebView).
+    fn navigate_file(&self, tab: &str, url: String, _read_access: PathBuf) -> Result<(), String> {
+        self.navigate(tab, url)
+    }
     fn history(&self, tab: &str, step: HistoryStep) -> Result<(), String>;
     /// The host perimeter's verdict for one navigation hop of `tab`. Runs
     /// on the UI thread inside the engine's navigation hook.
@@ -93,6 +99,10 @@ impl TabSurface for PaneSurface {
 
     fn navigate(&self, tab: &str, url: String) -> Result<(), String> {
         self.tabs.navigate(tab, url)
+    }
+
+    fn navigate_file(&self, tab: &str, url: String, read_access: PathBuf) -> Result<(), String> {
+        self.tabs.navigate_file(tab, url, read_access)
     }
 
     fn history(&self, tab: &str, step: HistoryStep) -> Result<(), String> {

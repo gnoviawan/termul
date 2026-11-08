@@ -318,6 +318,21 @@ impl BrowserTabManager {
         Ok(())
     }
 
+    /// Load a host-checked local file into an agent tab. WKWebView reads
+    /// files only with an explicit read-access scope; other engines
+    /// navigate as usual.
+    pub fn navigate_file(
+        &self,
+        tab_id: &str,
+        url: String,
+        read_access: std::path::PathBuf,
+    ) -> Result<(), String> {
+        let webview = self.get_webview(tab_id)?;
+        let parsed_url: tauri::Url = url.parse().map_err(|e| format!("Invalid URL: {}", e))?;
+        crate::host_perimeter::check_tab_target(&self.app_handle, tab_id, &parsed_url)?;
+        crate::browser_automation::engine::file_pages::load(&webview, parsed_url, read_access)
+    }
+
     pub fn resize(&self, tab_id: &str, bounds: BrowserBounds) -> Result<(), String> {
         let webview = self.get_webview(tab_id)?;
 

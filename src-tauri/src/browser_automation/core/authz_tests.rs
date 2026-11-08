@@ -126,13 +126,151 @@ fn hop_verdict_honours_session_grants() {
     let class = classify(&target, |_| false, &[]);
     let origin = CanonicalOrigin::parse("https://example.org").unwrap();
     assert_eq!(
-        hop_verdict(&target, class, |_| false),
+        hop_verdict(&target, class, true, |_| false),
         HopVerdict::Ungranted(PromptKind::Unlisted, origin.clone())
     );
     assert_eq!(
-        hop_verdict(&target, class, |o| *o == origin),
+        hop_verdict(&target, class, true, |o| *o == origin),
         HopVerdict::Allow
     );
+}
+
+#[test]
+fn with_the_site_prompt_off_promptable_origins_open_without_a_grant() {
+    for target in ["https://new.example/", "http://192.168.1.1/"] {
+        let target = url(target);
+        let class = classify(&target, |_| false, &[]);
+        assert!(matches!(class, OriginClass::Prompt(_)), "the class stays promptable");
+        assert_eq!(hop_verdict(&target, class, false, |_| false), HopVerdict::Allow);
+    }
+    for (target, reason) in [
+        ("http://169.254.169.254/", DenyReason::MetadataAddress),
+        ("http://0.0.0.0/", DenyReason::UnspecifiedAddress),
+        ("http://tauri.localhost/", DenyReason::AppOrigin),
+        ("ftp://example.org/", DenyReason::Scheme),
+    ] {
+        let target = url(target);
+        let class = classify(&target, |_| false, &[]);
+        assert_eq!(
+            hop_verdict(&target, class, false, |_| false),
+            HopVerdict::Deny(reason),
+            "hard denies stay hard with the prompt off"
+        );
+    }
+}
+
+#[test]
+fn the_session_snapshot_decides_whether_new_sites_ask() {
+    let grants = SessionGrants::default();
+    assert!(
+        matches!(grants.check_hop("s1", &url("https://new.example/")), HopVerdict::Ungranted(..)),
+        "a session with no snapshot asks"
+    );
+    grants.set_policy("s1", Vec::new(), false);
+    assert_eq!(grants.check_hop("s1", &url("https://new.example/")), HopVerdict::Allow);
+    assert_eq!(grants.check_hop("s1", &url("http://192.168.1.1/")), HopVerdict::Allow);
+    assert!(grants.opened_unasked("s1", &url("https://new.example/")));
+    assert!(!grants.opened_unasked("s1", &url("http://localhost:3000/")), "loopback is vouched");
+    assert_eq!(
+        grants.class_of("s1", &url("https://new.example/")),
+        OriginClass::Prompt(PromptKind::Unlisted),
+        "opened unasked is not allow-listed"
+    );
+    assert_eq!(
+        grants.check_hop("s1", &url("http://127.0.0.1:61379/")),
+        HopVerdict::Allow
+    );
+    grants.set_policy("s1", Vec::new(), true);
+    assert!(
+        matches!(grants.check_hop("s1", &url("https://new.example/")), HopVerdict::Ungranted(..)),
+        "turning the switch on asks again"
+    );
+    assert!(!grants.opened_unasked("s1", &url("https://new.example/")));
+}
+
+#[test]
+fn file_urls_pass_only_on_an_exact_grant() {
+    let grants = SessionGrants::default();
+    grants.set_policy("s1", Vec::new(), false);
+    let page = url("file:///C:/proj/dist/index.html");
+    assert_eq!(
+        grants.check_hop("s1", &page),
+        HopVerdict::Deny(DenyReason::FileNotGranted),
+        "no prompt-free pass for files"
+    );
+    grants.grant_file("s1", &page, std::path::Path::new("C:/proj"));
+    assert_eq!(grants.check_hop("s1", &page), HopVerdict::Allow);
+    assert_eq!(
+        grants.check_hop("s1", &url("file:///C:/proj/dist/index.html?x=1#top")),
+        HopVerdict::Allow,
+        "query and fragment are not part of the grant"
+    );
+    for other in [
+        "file:///C:/proj/dist/other.html",
+        "file:///C:/proj/dist/",
+        "file:///C:/Users/me/.ssh/id_rsa",
+        "file://server/share/dist/index.html",
+    ] {
+        assert_eq!(
+            grants.check_hop("s1", &url(other)),
+            HopVerdict::Deny(DenyReason::FileNotGranted),
+            "{other}: grants are per exact file"
+        );
+    }
+    assert_eq!(
+        grants.check_hop("s2", &page),
+        HopVerdict::Deny(DenyReason::FileNotGranted),
+        "file grants are per session"
+    );
+    assert_eq!(
+        grants.file_read_access("s1", &page),
+        Some(std::path::PathBuf::from("C:/proj"))
+    );
+    grants.revoke_session("s1");
+    assert_eq!(grants.check_hop("s1", &page), HopVerdict::Deny(DenyReason::FileNotGranted));
+    assert_eq!(grants.file_read_access("s1", &page), None);
+}
+
+#[test]
+fn a_unc_file_url_has_no_grant_key() {
+    assert_eq!(file_key(&url("file://server/share/x.html")), None);
+    assert_eq!(file_key(&url("https://example.org/")), None);
+    assert_eq!(
+        file_key(&url("file:///tmp/a.html#frag")),
+        file_key(&url("file:///tmp/a.html?x=1")),
+        "query and fragment are not part of the key"
+    );
+}
+
+/// The engine, a page link and the host's own real-path URL may spell one
+/// file differently: percent-encoded or not, upper- or lowercase hex, and
+/// the drive letter in either case.
+#[test]
+fn one_file_has_one_grant_key_however_its_url_is_spelled() {
+    let grants = SessionGrants::default();
+    let granted = url("file:///C:/proj/my%20dir/caf%C3%A9.html");
+    grants.grant_file("s1", &granted, std::path::Path::new("C:/proj"));
+    for spelling in [
+        "file:///C:/proj/my dir/café.html",
+        "file:///C:/proj/my%20dir/caf%c3%a9.html",
+        "file:///c:/proj/my%20dir/caf%C3%A9.html",
+        "file:///c:/proj/my dir/café.html#top",
+    ] {
+        assert_eq!(grants.check_hop("s1", &url(spelling)), HopVerdict::Allow, "{spelling}");
+        assert!(grants.file_read_access("s1", &url(spelling)).is_some(), "{spelling}");
+    }
+    assert_eq!(
+        grants.check_hop("s1", &url("file:///C:/proj/my%20dir/cafe.html")),
+        HopVerdict::Deny(DenyReason::FileNotGranted),
+        "another file is another key"
+    );
+}
+
+#[test]
+fn a_lowercase_drive_letter_meets_an_uppercase_grant() {
+    let grants = SessionGrants::default();
+    grants.grant_file("s1", &url("file:///c:/proj/index.html"), std::path::Path::new("c:/proj"));
+    assert_eq!(grants.check_hop("s1", &url("file:///C:/proj/index.html")), HopVerdict::Allow);
 }
 
 #[test]
@@ -174,9 +312,10 @@ fn a_redirect_hop_to_an_ungranted_origin_is_not_allowed() {
 #[test]
 fn hop_checks_read_the_allow_list_snapshot_and_revocation_clears_grants() {
     let grants = SessionGrants::default();
-    grants.set_allow_list(
+    grants.set_policy(
         "s1",
         vec![OriginPattern::parse("https://*.corp.example").unwrap()],
+        true,
     );
     assert_eq!(
         grants.check_hop("s1", &url("https://wiki.corp.example/x")),

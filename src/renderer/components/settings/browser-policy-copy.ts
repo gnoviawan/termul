@@ -41,6 +41,7 @@ export function describeFailure(failure: BrowserPolicyFailure): string {
 /** Row ids that settings search jumps to. */
 export const BROWSER_ANCHORS = {
   appProfile: 'setting-browser-shared-profile',
+  appSitePrompt: 'setting-browser-site-prompt',
   appPasswordPrompt: 'setting-browser-password-prompt',
   appPreapprovals: 'setting-browser-app-preapprovals',
   appClear: 'setting-browser-clear-profile',

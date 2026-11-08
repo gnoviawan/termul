@@ -6,6 +6,7 @@
 mod downloads;
 mod eval;
 pub mod events;
+pub mod files;
 pub mod input;
 mod screenshot;
 mod ui_delegate;

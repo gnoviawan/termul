@@ -42,7 +42,7 @@ fn ticket(session: &str, url: &str) -> TicketRequest {
         id: TicketId::mint(),
         session_id: session.into(),
         project_id: "p1".into(),
-        origin: CanonicalOrigin::parse(url).unwrap(),
+        origin: CanonicalOrigin::parse(url).unwrap().into(),
         target_url: url.into(),
         action: ActionClass::Navigate,
         element: Some("Docs link".into()),
@@ -278,6 +278,111 @@ async fn an_upload_ticket_names_the_file_by_base_name_and_size() {
         payload["_meta"]["termul"]["browser"]["file"],
         json!({ "name": "report.pdf", "bytes": 9 })
     );
+    waiting.abort();
+}
+
+#[tokio::test]
+async fn a_file_ticket_names_the_file_and_offers_only_allow_once_or_deny() {
+    let (recorder, tickets) = tickets(Duration::ZERO);
+    let request = TicketRequest {
+        origin: TicketTarget::File("C:\\notes\\a.html".into()),
+        target_url: "file:///C:/notes/a.html".into(),
+        options: &ConsentOption::ONCE_OR_DENY,
+        ..ticket("s1", "https://unused.example")
+    };
+    let waiting = tokio::spawn({
+        let tickets = tickets.clone();
+        async move { tickets.request(request, Duration::from_secs(5)).await }
+    });
+    raised(&tickets, &recorder).await;
+    let payload = recorder.0.lock()[0].2.clone();
+    assert_eq!(payload["toolCall"]["title"], "Open the file C:\\notes\\a.html in the agent browser");
+    let browser = &payload["_meta"]["termul"]["browser"];
+    assert_eq!(browser["targetKind"], "file");
+    assert_eq!(browser["origin"], "C:\\notes\\a.html");
+    assert_eq!(browser["targetUrl"], "file:///C:/notes/a.html");
+    assert_eq!(
+        payload["options"],
+        json!([
+            { "optionId": "allow_session", "name": "Allow once", "kind": "allow_once",
+              "_meta": { "termul": { "scope": "once" } } },
+            { "optionId": "deny", "name": "Deny", "kind": "reject_once" },
+        ])
+    );
+    waiting.abort();
+}
+
+#[test]
+fn file_names_lose_the_characters_that_could_disguise_them() {
+    // A right-to-left override shows `invoice\u{202E}lmth.exe` as
+    // "invoiceexe.html".
+    assert_eq!(display_safe("invoice\u{202E}lmth.exe"), "invoice\\u{202E}lmth.exe");
+    assert_eq!(
+        display_safe("a\u{2066}b\u{2069}c\u{202A}d\u{200F}e\u{0007}f\u{009B}g\nh"),
+        "a\\u{2066}b\\u{2069}c\\u{202A}d\\u{200F}e\\u{0007}f\\u{009B}g\\u{000A}h"
+    );
+    assert_eq!(display_safe("C:\\Users\\me\\caf\u{e9} notes.html"), "C:\\Users\\me\\caf\u{e9} notes.html");
+    for hidden in ['\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}', '\u{180E}', '\u{2028}', '\u{2029}'] {
+        let shown = display_safe(&format!("a{hidden}b"));
+        assert_eq!(shown, format!("a\\u{{{:04X}}}b", u32::from(hidden)), "{:04X}", u32::from(hidden));
+    }
+    assert_ne!(display_safe("ab"), display_safe("a\u{200B}b"), "different names never read the same");
+}
+
+#[tokio::test]
+async fn a_file_ticket_shows_its_path_and_upload_name_without_bidi_controls() {
+    let (recorder, tickets) = tickets(Duration::ZERO);
+    let request = TicketRequest {
+        origin: TicketTarget::File("/notes/invoice\u{202E}lmth.exe".into()),
+        target_url: "file:///notes/invoice%E2%80%AElmth.exe".into(),
+        options: &ConsentOption::ONCE_OR_DENY,
+        ..ticket("s1", "https://unused.example")
+    };
+    let waiting = tokio::spawn({
+        let tickets = tickets.clone();
+        async move { tickets.request(request, Duration::from_secs(5)).await }
+    });
+    raised(&tickets, &recorder).await;
+    let payload = recorder.0.lock()[0].2.clone();
+    assert_eq!(payload["_meta"]["termul"]["browser"]["origin"], "/notes/invoice\\u{202E}lmth.exe");
+    assert_eq!(
+        payload["toolCall"]["title"],
+        "Open the file /notes/invoice\\u{202E}lmth.exe in the agent browser"
+    );
+    waiting.abort();
+}
+
+#[tokio::test]
+async fn an_upload_ticket_shows_its_file_name_without_bidi_controls() {
+    let (recorder, tickets) = tickets(Duration::ZERO);
+    let request = TicketRequest {
+        action: ActionClass::Upload,
+        file: Some(TicketFile {
+            name: "report\u{202E}fdp.exe".into(),
+            bytes: 9,
+        }),
+        ..ticket("s1", "https://files.example/upload")
+    };
+    let waiting = tokio::spawn({
+        let tickets = tickets.clone();
+        async move { tickets.request(request, Duration::from_secs(5)).await }
+    });
+    raised(&tickets, &recorder).await;
+    let payload = recorder.0.lock()[0].2.clone();
+    assert_eq!(payload["_meta"]["termul"]["browser"]["file"]["name"], "report\\u{202E}fdp.exe");
+    waiting.abort();
+}
+
+#[tokio::test]
+async fn a_site_ticket_says_it_targets_the_web() {
+    let (recorder, tickets) = tickets(Duration::ZERO);
+    let waiting = tokio::spawn({
+        let tickets = tickets.clone();
+        async move { tickets.request(ticket("s1", "https://docs.example"), Duration::from_secs(5)).await }
+    });
+    raised(&tickets, &recorder).await;
+    let payload = recorder.0.lock()[0].2.clone();
+    assert_eq!(payload["_meta"]["termul"]["browser"]["targetKind"], "web");
     waiting.abort();
 }
 

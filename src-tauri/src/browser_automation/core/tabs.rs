@@ -129,6 +129,10 @@ pub struct TabRecord {
     pub dialogs: TabDialogs,
     /// Popup outcomes not yet reported to the agent.
     pub popups: Vec<PopupNote>,
+    /// File links the host did not follow, not yet reported.
+    pub file_links: Vec<super::link_hops::FileLinkNote>,
+    /// A cancelled file link is being checked; others wait their turn.
+    pub file_link_busy: bool,
     pub observed: super::observe::Observations,
 }
 
@@ -157,6 +161,8 @@ impl TabRecord {
             popup_of: None,
             dialogs: TabDialogs::default(),
             popups: Vec::new(),
+            file_links: Vec::new(),
+            file_link_busy: false,
             observed: super::observe::Observations::default(),
         }
     }

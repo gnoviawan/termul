@@ -14,6 +14,25 @@ pub fn home_dir() -> Option<PathBuf> {
     std::fs::canonicalize(home?).ok()
 }
 
+/// Open `path` for reading without waiting on it: a FIFO swapped in after
+/// the caller's metadata check opens at once instead of blocking for a
+/// writer, and the caller's handle checks then refuse it. Regular files
+/// read the same either way.
+#[cfg(unix)]
+pub fn open_nonblocking(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+}
+
+/// Windows has no FIFOs a path open could block on.
+#[cfg(windows)]
+pub fn open_nonblocking(path: &Path) -> io::Result<File> {
+    File::open(path)
+}
+
 /// How many directory entries name the open file. More than one means
 /// another name, maybe outside the folder the file was opened through,
 /// reaches the same bytes.

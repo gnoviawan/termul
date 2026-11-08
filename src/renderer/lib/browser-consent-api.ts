@@ -29,11 +29,16 @@ export type BrowserConsentAction =
   | 'download'
   | 'tainted_exfil'
 
+/** What a ticket asks about: a site, or a local file outside the project. */
+export type BrowserConsentTargetKind = 'web' | 'file'
+
 export interface BrowserConsentTicket {
   requestId: string
   sessionId: string
-  /** Host-canonical origin, e.g. `https://example.com`. */
+  /** Host-canonical origin, e.g. `https://example.com`; a file's path for a file ticket. */
   origin: string
+  /** Absent reads as `web`. */
+  targetKind?: BrowserConsentTargetKind
   /** Full target URL with a long query cut by the host. */
   targetUrl: string
   /** Byte length of the uncut target URL. */
@@ -87,6 +92,7 @@ export function parseBrowserConsentTicket(event: unknown): BrowserConsentTicket 
     requestId,
     sessionId,
     origin: browser.origin,
+    targetKind: browser.targetKind === 'file' ? 'file' : 'web',
     targetUrl: browser.targetUrl,
     targetUrlBytes:
       typeof browser.targetUrlBytes === 'number'

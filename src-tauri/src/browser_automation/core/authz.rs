@@ -7,8 +7,16 @@
 //! order: denied (never promptable), loopback (auto-granted except on
 //! ports termul itself listens on), allow-listed (auto-granted), private
 //! network (prompt), everything else (prompt once per session).
+//!
+//! While the app's "ask before opening new sites" switch is off (the
+//! default) a promptable origin is allowed without a prompt, but it is not
+//! granted: its class stays promptable, so the sensitive-action gates still
+//! treat it as unvouched. `file://` URLs never get an origin class: a hop
+//! to one is allowed only by an exact grant of its real-path URL, made by
+//! the consent gate after the host checked the file.
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use parking_lot::Mutex;
@@ -33,6 +41,8 @@ pub enum DenyReason {
     UnspecifiedAddress,
     MetadataAddress,
     LinkLocal,
+    /// A `file://` URL the session holds no grant for.
+    FileNotGranted,
 }
 
 impl DenyReason {
@@ -44,6 +54,7 @@ impl DenyReason {
             DenyReason::UnspecifiedAddress => "unspecified_address",
             DenyReason::MetadataAddress => "metadata_address",
             DenyReason::LinkLocal => "link_local_address",
+            DenyReason::FileNotGranted => "file_not_granted",
         }
     }
 }
@@ -195,9 +206,12 @@ pub enum HopVerdict {
 }
 
 /// Fold a class and the session's grants into a verdict for one hop.
+/// `ask_sites` is the app's "ask before opening new sites" switch: off,
+/// a promptable origin is allowed without being granted.
 pub fn hop_verdict(
     url: &Url,
     class: OriginClass,
+    ask_sites: bool,
     granted: impl Fn(&CanonicalOrigin) -> bool,
 ) -> HopVerdict {
     match class {
@@ -205,18 +219,58 @@ pub fn hop_verdict(
         OriginClass::Denied(reason) => HopVerdict::Deny(reason),
         OriginClass::Prompt(kind) => match CanonicalOrigin::parse(url.as_str()) {
             Ok(origin) if granted(&origin) => HopVerdict::Allow,
+            Ok(_) if !ask_sites => HopVerdict::Allow,
             Ok(origin) => HopVerdict::Ungranted(kind, origin),
             Err(_) => HopVerdict::Deny(DenyReason::Scheme),
         },
     }
 }
 
-#[derive(Default)]
+/// The key a `file://` URL is granted under: its decoded local path, with
+/// any drive letter lowercased, so every spelling of one file (engine,
+/// page link, `Url::from_file_path`) meets one grant. Query and fragment
+/// are not part of it. `None` for any other scheme, for a file URL with a
+/// host (a UNC share), and for one that names no local path: none is ever
+/// granted.
+pub fn file_key(url: &Url) -> Option<String> {
+    if url.scheme() != "file" || url.host_str().is_some_and(|h| !h.is_empty()) {
+        return None;
+    }
+    let path = url.to_file_path().ok()?;
+    let mut key: Vec<char> = path.to_string_lossy().chars().collect();
+    // `C:` on Windows; `/C:` where the host renders such a URL as a
+    // rooted path.
+    let drive = if key.first() == Some(&'/') { 1 } else { 0 };
+    if key.get(drive + 1) == Some(&':') {
+        if let Some(letter) = key.get_mut(drive) {
+            *letter = letter.to_ascii_lowercase();
+        }
+    }
+    Some(key.into_iter().collect())
+}
+
+/// The policy a session's synchronous hop checks decide from, as of its
+/// last authorized call, and the grants it holds.
 struct SessionAuthz {
     granted: HashSet<CanonicalOrigin>,
-    /// Allow-list as of the session's last authorized call: what the
-    /// synchronous navigation hook decides from.
+    /// Exact real-path `file://` URLs (see [`file_key`]) the agent opened,
+    /// each with the directory WebKit may let its page read.
+    granted_files: HashMap<String, PathBuf>,
     allow_list: Vec<OriginPattern>,
+    /// The app's "ask before opening new sites" switch. Asks until the
+    /// session's first authorized call read it.
+    ask_sites: bool,
+}
+
+impl Default for SessionAuthz {
+    fn default() -> Self {
+        Self {
+            granted: HashSet::new(),
+            granted_files: HashMap::new(),
+            allow_list: Vec::new(),
+            ask_sites: true,
+        }
+    }
 }
 
 /// Per-session origin grants, keyed `(session, origin)`. They end at
@@ -236,9 +290,35 @@ impl SessionGrants {
             .insert(origin);
     }
 
+    /// Grant the exact file `url`, whose page may read `read_access`.
+    pub fn grant_file(&self, session_id: &str, url: &Url, read_access: &Path) {
+        let Some(key) = file_key(url) else {
+            return;
+        };
+        self.sessions
+            .lock()
+            .entry(session_id.to_string())
+            .or_default()
+            .granted_files
+            .insert(key, read_access.to_path_buf());
+    }
+
+    /// The directory the granted file `url`'s page may read; `None` when
+    /// the session holds no grant for it.
+    pub fn file_read_access(&self, session_id: &str, url: &Url) -> Option<PathBuf> {
+        let key = file_key(url)?;
+        self.sessions
+            .lock()
+            .get(session_id)?
+            .granted_files
+            .get(&key)
+            .cloned()
+    }
+
     pub fn revoke_session(&self, session_id: &str) {
         if let Some(session) = self.sessions.lock().get_mut(session_id) {
             session.granted.clear();
+            session.granted_files.clear();
         }
     }
 
@@ -246,12 +326,26 @@ impl SessionGrants {
         self.sessions.lock().remove(session_id);
     }
 
-    pub fn set_allow_list(&self, session_id: &str, allow_list: Vec<OriginPattern>) {
-        self.sessions
-            .lock()
-            .entry(session_id.to_string())
-            .or_default()
-            .allow_list = allow_list;
+    /// The sessions holding a snapshot.
+    pub fn session_ids(&self) -> Vec<String> {
+        self.sessions.lock().keys().cloned().collect()
+    }
+
+    /// Replace the snapshot of a session that has one; a session that
+    /// ended in the meantime stays gone.
+    pub fn refresh_policy(&self, session_id: &str, allow_list: Vec<OriginPattern>, ask_sites: bool) {
+        if let Some(session) = self.sessions.lock().get_mut(session_id) {
+            session.allow_list = allow_list;
+            session.ask_sites = ask_sites;
+        }
+    }
+
+    /// Snapshot the policy the synchronous hop checks decide from.
+    pub fn set_policy(&self, session_id: &str, allow_list: Vec<OriginPattern>, ask_sites: bool) {
+        let mut sessions = self.sessions.lock();
+        let session = sessions.entry(session_id.to_string()).or_default();
+        session.allow_list = allow_list;
+        session.ask_sites = ask_sites;
     }
 
     /// The origin class of `url` against the session's allow-list snapshot.
@@ -264,7 +358,7 @@ impl SessionGrants {
     }
 
     /// The verdict for one navigation hop of a session-owned tab, from the
-    /// grants and allow-list snapshot alone (no I/O: the engine hook that
+    /// grants and policy snapshot alone (no I/O: the engine hook that
     /// calls this cannot wait). `about:blank` is the engine's own empty
     /// document and carries no request.
     pub fn check_hop(&self, session_id: &str, url: &Url) -> HopVerdict {
@@ -273,11 +367,36 @@ impl SessionGrants {
         }
         let sessions = self.sessions.lock();
         let session = sessions.get(session_id);
+        if url.scheme() == "file" {
+            let granted = file_key(url)
+                .is_some_and(|key| session.is_some_and(|s| s.granted_files.contains_key(&key)));
+            return if granted {
+                HopVerdict::Allow
+            } else {
+                HopVerdict::Deny(DenyReason::FileNotGranted)
+            };
+        }
         let allow_list = session.map_or(&[][..], |s| s.allow_list.as_slice());
+        let ask_sites = session.is_none_or(|s| s.ask_sites);
         let class = classify(url, crate::host_perimeter::is_owned_port, allow_list);
-        hop_verdict(url, class, |origin| {
+        hop_verdict(url, class, ask_sites, |origin| {
             session.is_some_and(|s| s.granted.contains(origin))
         })
+    }
+
+    /// Whether `url` passes only because the session opens new sites
+    /// without asking: allowed, yet neither granted nor vouched for.
+    pub fn opened_unasked(&self, session_id: &str, url: &Url) -> bool {
+        let sessions = self.sessions.lock();
+        let Some(session) = sessions.get(session_id) else {
+            return false;
+        };
+        if session.ask_sites {
+            return false;
+        }
+        let class = classify(url, crate::host_perimeter::is_owned_port, &session.allow_list);
+        matches!(class, OriginClass::Prompt(_))
+            && CanonicalOrigin::parse(url.as_str()).is_ok_and(|origin| !session.granted.contains(&origin))
     }
 }
 

@@ -116,6 +116,35 @@ describe('BrowserConsentCard', () => {
     ])
   })
 
+  it('words a file outside the project as opening a file, allowed once at a time', () => {
+    render(
+      <BrowserConsentCard
+        consent={ticket({
+          origin: '/home/me/notes/a.html',
+          targetKind: 'file',
+          targetUrl: 'file:///home/me/notes/a.html',
+          targetUrlBytes: 28,
+          options: ['allow_session', 'deny']
+        })}
+      />
+    )
+    expect(screen.getByText('Allow the agent to open this file?')).toBeInTheDocument()
+    expect(
+      screen.getByText(/wants to open the file \/home\/me\/notes\/a\.html in the agent browser/)
+    ).toBeInTheDocument()
+    expect(screen.getByText('File')).toBeInTheDocument()
+    expect(screen.queryByText('Site')).not.toBeInTheDocument()
+    // The name stands on its own line and the full path wraps: neither is
+    // cut at the end.
+    const name = screen.getByText('a.html')
+    expect(name).toHaveClass('break-all')
+    expect(name).not.toHaveClass('truncate')
+    const path = screen.getByText('/home/me/notes/a.html')
+    expect(path).toHaveClass('break-all')
+    expect(path).not.toHaveClass('truncate')
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Allow once', 'Deny'])
+  })
+
   it('asks about one sensitive action and offers only what the host offered', () => {
     render(
       <BrowserConsentCard

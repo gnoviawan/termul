@@ -18,6 +18,8 @@ use crate::fixture_server::{FixtureServer, REDIRECT_PATH, REDIRECT_TARGET_PATH};
 
 #[path = "event_cases.rs"]
 mod events;
+#[path = "file_page_cases.rs"]
+mod file_pages;
 #[path = "form_cases.rs"]
 mod forms;
 #[path = "frame_cases.rs"]
@@ -121,6 +123,9 @@ pub const CAPABILITIES: &[Capability] = &[
     cap("frame_upload", &["snapshot"]),
     cap("frame_file_chooser", &["click"]),
     cap("frame_denied_origin", &["snapshot"]),
+    cap("file_pages", &["snapshot", "screenshot"]),
+    cap("file_link_hops", &["click"]),
+    cap("agent_overlay", &["screenshot"]),
 ];
 
 pub fn ids() -> Vec<&'static str> {
@@ -650,6 +655,9 @@ pub async fn run(
         "frame_upload" => frames::frame_upload(&ctx).await,
         "frame_file_chooser" => frames::frame_file_chooser(&ctx).await,
         "frame_denied_origin" => frames::frame_denied_origin(&ctx).await,
+        "file_pages" => file_pages::file_pages(&ctx).await,
+        "file_link_hops" => file_pages::file_link_hops(&ctx).await,
+        "agent_overlay" => file_pages::agent_overlay(&ctx).await,
         other => Err(mismatch(format!("no case named {other}"))),
     };
     engine.end_session(&ctx.session);

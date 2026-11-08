@@ -13,58 +13,21 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use uuid::Uuid;
 
+use super::local_files::{is_broad, is_secret, names_a_stream, open_regular, OpenRefusal};
 use super::ports::TicketFile;
 use super::reply::engine_error;
 use super::tabs::RefNode;
 use super::teardown::session_dir;
 use super::{BrowserError, DesktopBrowserHost};
-use crate::browser_automation::engine::files;
 use crate::process_util::hide_console;
 
 /// Largest file an agent may upload.
 pub const MAX_UPLOAD_BYTES: u64 = 50 * 1024 * 1024;
-
-/// Directory names whose contents are never uploaded.
-const SECRET_DIRS: [&str; 7] = [
-    ".git", ".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker",
-];
-const SECRET_NAMES: [&str; 10] = [
-    ".npmrc",
-    ".pypirc",
-    ".netrc",
-    "_netrc",
-    ".git-credentials",
-    ".htpasswd",
-    ".pgpass",
-    ".dockercfg",
-    "known_hosts",
-    "authorized_keys",
-];
-const SECRET_PREFIXES: [&str; 6] = [
-    ".env",
-    "id_rsa",
-    "id_dsa",
-    "id_ecdsa",
-    "id_ed25519",
-    "credentials",
-];
-const SECRET_SUFFIXES: [&str; 10] = [
-    ".pem",
-    ".key",
-    ".p12",
-    ".pfx",
-    ".jks",
-    ".keystore",
-    ".kdbx",
-    ".keychain",
-    ".keychain-db",
-    ".ppk",
-];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadRefusal {
@@ -127,36 +90,6 @@ impl UploadRefusal {
     }
 }
 
-fn name_is_secret(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    SECRET_NAMES.contains(&name.as_str())
-        || SECRET_PREFIXES.iter().any(|p| name.starts_with(p))
-        || SECRET_SUFFIXES.iter().any(|s| name.ends_with(s))
-}
-
-/// Whether any component of `path` is on the secrets deny-list.
-pub fn is_secret(path: &Path) -> bool {
-    let names: Vec<String> = path
-        .components()
-        .filter_map(|c| match c {
-            Component::Normal(name) => Some(name.to_string_lossy().to_ascii_lowercase()),
-            _ => None,
-        })
-        .collect();
-    let Some((file, dirs)) = names.split_last() else {
-        return false;
-    };
-    dirs.iter().any(|d| SECRET_DIRS.contains(&d.as_str()))
-        || SECRET_DIRS.contains(&file.as_str())
-        || name_is_secret(file)
-}
-
-/// A path component carrying a `:` names an NTFS alternate data stream.
-fn names_a_stream(path: &Path) -> bool {
-    path.components()
-        .any(|c| matches!(c, Component::Normal(name) if name.to_string_lossy().contains(':')))
-}
-
 /// Whether the project's git ignores `rel`. No git, or no repository,
 /// ignores nothing.
 fn git_ignores(root: &Path, rel: &Path) -> bool {
@@ -190,12 +123,6 @@ impl OpenSource {
             bytes: self.len,
         }
     }
-}
-
-/// A root no project lives at: a drive or filesystem root, or the home
-/// folder itself.
-fn is_broad(canonical: &Path) -> bool {
-    canonical.parent().is_none() || files::home_dir().is_some_and(|home| home == canonical)
 }
 
 /// Keep the base name readable but harmless as one path component.
@@ -238,21 +165,13 @@ pub fn open_source(root: &Path, requested: &str) -> Result<OpenSource, UploadRef
     if is_secret(named) {
         return Err(UploadRefusal::SecretFile);
     }
-    let at = root.join(named);
-    let file = File::open(&at).map_err(|e| match e.kind() {
-        io::ErrorKind::NotFound => UploadRefusal::Missing,
-        // Windows refuses to open a folder as a file.
-        _ if at.is_dir() => UploadRefusal::NotAFile,
-        _ => UploadRefusal::Io,
+    let opened = open_regular(&root.join(named)).map_err(|refusal| match refusal {
+        OpenRefusal::Missing => UploadRefusal::Missing,
+        OpenRefusal::NotAFile => UploadRefusal::NotAFile,
+        OpenRefusal::HardLinked => UploadRefusal::HardLinked,
+        OpenRefusal::Io => UploadRefusal::Io,
     })?;
-    let meta = file.metadata().map_err(|_| UploadRefusal::Io)?;
-    if !meta.is_file() {
-        return Err(UploadRefusal::NotAFile);
-    }
-    if files::link_count(&file).map_err(|_| UploadRefusal::Io)? > 1 {
-        return Err(UploadRefusal::HardLinked);
-    }
-    let real = files::opened_path(&file).map_err(|_| UploadRefusal::Io)?;
+    let (file, meta, real) = (opened.file, opened.meta, opened.real);
     let rel = real
         .strip_prefix(&canonical)
         .map_err(|_| UploadRefusal::OutsideRoot)?;

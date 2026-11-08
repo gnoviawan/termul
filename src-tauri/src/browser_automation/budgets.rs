@@ -68,10 +68,18 @@ pub const UPLOAD_WATCH: Duration = EVAL_STEP
     .saturating_add(UPLOAD_SETTLE)
     .saturating_add(EVAL_STEP);
 
+/// How long hiding or showing the agent overlay around a screenshot may
+/// take. The hide waits two frames at most; a throttled tab skips them.
+pub const OVERLAY_TOGGLE: Duration = Duration::from_millis(750);
+
 /// Per-verb action budgets, referenced by the action registry. Each is the
 /// worst case of the steps the verb runs.
 pub const ACTION_INSTANT: Duration = secs(1);
 pub const ACTION_EVAL: Duration = EVAL_STEP;
+/// Hide the overlay, capture, show it again.
+pub const ACTION_SCREENSHOT: Duration = EVAL_STEP
+    .saturating_add(OVERLAY_TOGGLE)
+    .saturating_add(OVERLAY_TOGGLE);
 /// How long the core waits for an element to become actionable, and how
 /// often it reads the element's facts again.
 pub const ACTIONABILITY_WAIT: Duration = secs(5);
