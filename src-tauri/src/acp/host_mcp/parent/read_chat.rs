@@ -31,7 +31,8 @@ impl HostPlanServer {
         };
         match load(persistence, &input.chat_id).await {
             Ok((metadata, records)) => {
-                let names = names(&metadata);
+                let registry = crate::web::project_registry::installed();
+                let names = names(&metadata, registry.as_deref());
                 let chat = chat_from_records(&metadata, &records, names);
                 let page = render_page(&chat, input.offset, input.limit);
                 log::info!(
@@ -72,13 +73,14 @@ async fn load(
     Ok((metadata, records))
 }
 
-/// The project's name from the host's registry and the agent's name from
-/// the agents this host has launched, when either knows the id.
-fn names(metadata: &SessionMetadata) -> Names {
+/// The project's name from `registry` and the agent's name from the agents
+/// this host has launched, when either knows the id.
+pub(super) fn names(
+    metadata: &SessionMetadata,
+    registry: Option<&crate::web::project_registry::ProjectRegistry>,
+) -> Names {
     let project = metadata.project_id.as_deref().and_then(|id| {
-        crate::web::project_registry::installed()?
-            .get(id)
-            .map(|project| project.name)
+        registry?.get(id).map(|project| project.name)
     });
     let agent = metadata
         .stable_agent_namespace

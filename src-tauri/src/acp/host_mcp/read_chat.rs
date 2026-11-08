@@ -6,6 +6,8 @@
 //! `normalize_durable_payload`), so a tool call shows as its kind, any
 //! changed file paths and its status.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, SecondsFormat};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
@@ -190,7 +192,6 @@ fn message_body(blocks: &[Value]) -> String {
 
 /// A tool call as its records left it.
 struct ToolCall {
-    id: String,
     seq: u64,
     kind: Option<String>,
     status: Option<String>,
@@ -202,6 +203,7 @@ struct ToolCall {
 /// in call order. A subagent's own calls are left out; its dispatch shows.
 fn tool_lines(records: &[PersistedEventRecord]) -> Vec<(u64, String)> {
     let mut calls: Vec<ToolCall> = Vec::new();
+    let mut index_by_id: HashMap<String, usize> = HashMap::new();
     for record in records {
         let key = match record.type_.as_str() {
             "tool_call" => "toolCall",
@@ -221,11 +223,11 @@ fn tool_lines(records: &[PersistedEventRecord]) -> Vec<(u64, String)> {
         {
             continue;
         }
-        let index = match calls.iter().position(|call| call.id == id) {
-            Some(index) => index,
+        let index = match index_by_id.get(id) {
+            Some(&index) => index,
             None if key == "toolCall" => {
+                index_by_id.insert(id.to_string(), calls.len());
                 calls.push(ToolCall {
-                    id: id.to_string(),
                     seq: record.seq,
                     kind: None,
                     status: None,

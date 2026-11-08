@@ -297,3 +297,34 @@ fn a_message_over_the_budget_is_cut_so_the_page_still_moves_on() {
         )
     );
 }
+
+#[test]
+fn a_subagent_dispatch_is_one_subagent_line_and_its_own_calls_are_left_out() {
+    let records = vec![
+        chunk(1, "agent", "Delegating."),
+        tool(
+            2,
+            "tool_call",
+            json!({ "toolCallId": "s1", "kind": "task", "status": "in_progress",
+                    "_meta": { "termul/subagent": { "name": "explore" } } }),
+        ),
+        tool(
+            3,
+            "tool_call",
+            json!({ "toolCallId": "s2", "kind": "read",
+                    "_meta": { "claudeCode": { "parentToolUseId": "s1" } } }),
+        ),
+        tool(
+            4,
+            "tool_call_update",
+            json!({ "toolCallId": "s1", "status": "completed" }),
+        ),
+    ];
+    let chat = chat_from_records(&metadata(), &records, names());
+    let page = render_page(&chat, None, None);
+    let tools: Vec<&str> = body(&page.text)
+        .lines()
+        .filter(|line| line.starts_with("  tool:"))
+        .collect();
+    assert_eq!(tools, ["  tool: subagent (completed)"]);
+}
