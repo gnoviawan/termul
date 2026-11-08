@@ -897,20 +897,22 @@ One durable `ProjectRegistry` per host owns the project list: `troupe-server` ke
 - Registry file: schema 4 (`imported: bool` added to v3). A v1-v3 file loads and is copied to `<name>.pre-v4-<ts>.bak` before its first rewrite; a newer schema is refused and never overwritten; a corrupt file is copied to `<name>.corrupt-<ts>.bak`. The synthetic seed project (only from the removed `--project-root` / `$TERMUL_PROJECT_ROOT`) lives in memory only; the desktop never seeds one.
 - Tauri: `project_registry_import({projects: ProjectSummary[], defaultProjectId?}) -> {imported: boolean}` is the desktop's one-shot import of the renderer's old project list. It runs only while the file says nothing was imported, adds ids that are not registered (existing ids are kept, never overwritten), applies the default only when none is set (the synthetic seed does not count as one) and sets `imported` durably even for an empty list; a repeat replies `{imported: false}`. The renderer imports once at the first desktop start after the upgrade, then deletes its old `projects` key and keeps its per-project settings, groups and order under the device key `project-prefs`. `remote_sync_projects` (full-list push) and `set_host_default_project` no longer exist: the renderer, on the browser and the desktop alike, reads the list from the `projects` watch and changes it with the `/ws` requests above (`path` on `update_project` moves a root).
 
-### MCP and OAuth operations name a project
+### MCP server list and OAuth operations
 
-The MCP server list is a file per project, `{project root}/.termul/mcp-servers.json`; there is no single host project root. Every operation names `projectId`, resolved through `ProjectRegistry::canonical_root`: an unknown, archived or pathless project (or one whose folder is gone) is refused `NOT_FOUND` and nothing is read or written.
+The MCP server list is one host-wide value, the same on the desktop, the desktop shared-live host and `troupe-server`: the logical persistence key `acp/mcp-servers` (host store key `shared/lww/acp/mcp-servers`), an array of `{id, enabled?, name, type?, command?, args?, env?, url?, headers?, catalog?}` in the `{_version, data}` envelope. Every client reads and writes it with `store_read` / `store_write` like any shared key, so a write needs the connection's write capability (the same remote-write predicate as `check_local_only`: a non-loopback peer only with `--allow-remote-writes`, never in shared-live mode). There is no `/mcp-servers` read or write route and no per-project list.
+
+On its first start with no stored list, `troupe-server` merges each registered, non-archived project's legacy `<project root>/.termul/mcp-servers.json` into the store once, in registry order: a later entry with an id already taken, or with a taken name and the same launch (transport, command and args or URL, env or header names), is dropped; a taken name with a different launch gets the first free `<name>-<n>` (n from 2). Unreadable or malformed files are skipped with a warning. The files stay on disk and nothing reads them afterwards. The import writes once, even an empty list, so a restart does nothing.
+
+OAuth requests still name the project they act for, resolved through `ProjectRegistry::canonical_root`: an unknown, archived or pathless project (or one whose folder is gone) is refused `NOT_FOUND`.
 
 | Operation | HTTP | Request | Reply |
 | --- | --- | --- | --- |
-| Read the list | `GET /mcp-servers?projectId=` | n/a | `[McpServer…]` (empty when the file is absent) |
-| Write the list | `PUT /mcp-servers?projectId=` | JSON array | `{}`; a write guard (`FORBIDDEN`) applies before the project is resolved |
-| Start OAuth | `POST /mcp-servers/oauth/start` | `{projectId, serverUrl}` | `{authUrl, redirectUri}`; the URL must be an enabled http/sse entry of THAT project's list, else `UNAUTHORIZED_SERVER_URL` |
+| Start OAuth | `POST /mcp-servers/oauth/start` | `{projectId, serverUrl}` | `{authUrl, redirectUri}`; the URL must be an enabled http/sse entry of the host list, else `UNAUTHORIZED_SERVER_URL` |
 | OAuth status | `POST /mcp-servers/oauth/status` | `{projectId, serverUrl}` | `{hasToken}` |
 | OAuth disconnect | `POST /mcp-servers/oauth/disconnect` | `{projectId, serverUrl}` | `{}` |
 
 - OAuth tokens stay keyed by server URL and are host-global (`acp/mcp_oauth.rs`): a token is the host's credential for that URL, not a project's. `status` and `disconnect` validate the project but read and delete the one URL-keyed token.
-- Tauri: `remote_sync_mcp_registry({projectId, registry})` writes that project's file (same refusal as above, no default-project or home-directory fallback). The desktop OAuth/probe commands (`acp_mcp_oauth_*`, `acp_probe_mcp_server`) authorize and write nothing, so they take the server URL / config only. `POST /mcp-servers/probe` is unchanged.
+- Automation `mcp_tool` steps read the same host list on every host. The desktop OAuth/probe commands (`acp_mcp_oauth_*`, `acp_probe_mcp_server`) authorize and write nothing, so they take the server URL / config only. `POST /mcp-servers/probe` is unchanged.
 - `--project-root` (and `$TERMUL_PROJECT_ROOT`) are removed options: still parsed for one minor release with a startup warning, they only seed one in-memory project while the registry has no usable project. No flag, no seed; the onboard wizard no longer asks for a root.
 
 ### Host offline

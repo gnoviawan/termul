@@ -6,8 +6,6 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Switch } from '@/components/ui/switch'
 import { remoteServerApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { useAcpStore } from '@/stores/acp-store'
-import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatus, useRemoteStatusStore } from '@/stores/remote-status-store'
 
 /**
@@ -47,16 +45,8 @@ export function RemoteAccessPopover(): React.JSX.Element {
       const result = enable ? await remoteServerApi.start() : await remoteServerApi.stop()
       if (result.success) {
         useRemoteStatusStore.getState().setStatus(result.data)
-        // The host registry is durable and the desktop reads it through the
-        // `projects` watch, so there is no project list to seed. Copy the
-        // desktop MCP servers to the active project's file (best-effort, interim
-        // bridge). Desktop-hosted browser history reads the durable Rust
-        // provider directly, so no renderer transcript seed is needed either.
-        if (enable) {
-          void useAcpStore
-            .getState()
-            .syncMcpRegistryToProjectFile(useProjectStore.getState().activeProjectId)
-        }
+        // Browsers read the project list, the MCP servers and chat history
+        // from the host directly, so nothing is seeded here.
       } else {
         setRemoteError(result.error)
       }

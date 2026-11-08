@@ -529,10 +529,7 @@ export interface AcpState {
 
   // Global MCP server registry (persisted)
   mcpServers: StoredMcpServer[]
-  // True once `loadMcpServers` has resolved at least once. Guards
-  // `syncMcpRegistryToProjectFile` against syncing the initial empty state
-  // (which would overwrite a project's `.termul/mcp-servers.json` with `[]`
-  // before the app-store registry is loaded — CAP-7 race guard).
+  // True once `loadMcpServers` has resolved at least once.
   mcpServersLoaded: boolean
 
   // MCP probe state — on-demand only (no persistent always-on connections).
@@ -883,19 +880,9 @@ export interface AcpState {
    * writes, no partial prefix left behind to duplicate on retry.
    */
   importMcpServers: (servers: StoredMcpServer[]) => Promise<void>
-  saveCatalogInstall: (
-    result: McpInstallCommitResult,
-    projectId: string
-  ) => Promise<StoredMcpServer>
+  saveCatalogInstall: (result: McpInstallCommitResult) => Promise<StoredMcpServer>
   setMcpServerEnabled: (id: string, enabled: boolean) => Promise<void>
   deleteMcpServer: (id: string) => Promise<void>
-  /**
-   * CAP-7: mirror the app-store MCP registry to the named project's
-   * `.termul/mcp-servers.json` (best-effort, non-fatal). Called when the host
-   * project list lands and when shared-live starts, so the web route reads the
-   * desktop's app-store registry for that project.
-   */
-  syncMcpRegistryToProjectFile: (projectId: string) => Promise<void>
 
   // Actions — MCP probe (on-demand, read-only). State slices above.
   /**

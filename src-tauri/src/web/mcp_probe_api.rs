@@ -1,9 +1,9 @@
 //! `POST /mcp-servers/probe` — on-demand MCP client probe (web parity).
 //!
-//! Mirrors `mcp_servers_api.rs`'s handler shape and `IpcBody<T>` contract so
-//! the renderer facade (`acp-mcp-probe.ts`) returns the same shape on desktop
-//! (Tauri command) and web (HTTP route). The probe runs on the termul-server
-//! host — where stdio commands execute (matches GH-287's web-parity decision).
+//! Returns an `IpcBody<T>` so the renderer facade (`acp-mcp-probe.ts`) gets
+//! the same shape on desktop (Tauri command) and web (HTTP route). The probe
+//! runs on the termul-server host — where stdio commands execute (matches
+//! GH-287's web-parity decision).
 //!
 //! The route only returns `IpcBody::err` when the request body cannot be
 //! deserialized into a `McpServerConfig`. A *reachable-but-disconnected*

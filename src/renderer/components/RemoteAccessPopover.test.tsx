@@ -28,24 +28,6 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
-vi.mock('@/stores/project-store', () => ({
-  useProjectStore: { getState: () => ({ activeProjectId: 'p-active' }) }
-}))
-
-const { syncMcpRegistryToProjectFile } = vi.hoisted(() => ({
-  syncMcpRegistryToProjectFile: vi.fn(async () => {})
-}))
-vi.mock('@/stores/acp-store', () => ({
-  useAcpStore: {
-    getState: () => ({
-      loadSessionIndex: vi.fn(async () => {}),
-      sessionIndex: [],
-      messages: {},
-      syncMcpRegistryToProjectFile
-    })
-  }
-}))
-
 vi.mock('@/lib/acp-history-persistence', () => ({
   toPersistedSessionSummaries: vi.fn(() => [])
 }))
@@ -125,7 +107,7 @@ describe('RemoteAccessPopover', () => {
     expect(screen.queryByTestId('qr')).toBeNull()
   })
 
-  it('starts remote access with no bind-mode arg on toggle on and mirrors the MCP servers', async () => {
+  it('starts remote access with no bind-mode arg on toggle on', async () => {
     startMock.mockResolvedValueOnce({ success: true, data: RUNNING })
     renderPopover()
 
@@ -138,13 +120,9 @@ describe('RemoteAccessPopover', () => {
     })
     expect(startMock).toHaveBeenCalledWith()
     expect(setStatus).toHaveBeenCalledWith(RUNNING)
-    // The host registry is durable: no project list is pushed. The desktop MCP
-    // servers are mirrored to the active project's file.
-    expect(syncMcpRegistryToProjectFile).toHaveBeenCalledTimes(1)
-    expect(syncMcpRegistryToProjectFile).toHaveBeenCalledWith('p-active')
   })
 
-  it('does not mirror the MCP servers when turning remote access off', async () => {
+  it('stops remote access on toggle off', async () => {
     vi.mocked(useRemoteStatus).mockReturnValue(RUNNING)
     stopMock.mockResolvedValueOnce({ success: true, data: { ...RUNNING, running: false } })
     renderPopover()
@@ -155,6 +133,6 @@ describe('RemoteAccessPopover', () => {
     await waitFor(() => {
       expect(stopMock).toHaveBeenCalledTimes(1)
     })
-    expect(syncMcpRegistryToProjectFile).not.toHaveBeenCalled()
+    expect(setStatus).toHaveBeenCalledWith({ ...RUNNING, running: false })
   })
 })

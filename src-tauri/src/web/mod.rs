@@ -48,7 +48,7 @@ pub mod mcp_catalog_api;
 pub(crate) mod log_capture;
 pub mod mcp_oauth_api;
 pub mod mcp_probe_api;
-pub mod mcp_servers_api;
+pub mod mcp_registry;
 pub mod openapi;
 pub mod origin;
 pub mod permissions;
@@ -184,7 +184,7 @@ pub async fn serve(
         let roots_registry = registry.clone();
         let project_roots: crate::automation::engine::ProjectRoots =
             Arc::new(move |project_id| roots_registry.canonical_root(project_id));
-        let mcp_servers = crate::automation::mcp::project_file_servers(project_roots.clone());
+        let mcp_servers = crate::automation::mcp::store_servers(store.clone());
         match crate::automation::service::AutomationService::open(
             &cfg.service_account_state_dir(),
             acp.clone(),

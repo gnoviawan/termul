@@ -448,6 +448,13 @@ fn main() -> ExitCode {
             );
             Arc::new(ProjectRegistry::new())
         };
+        // The MCP server list is one host-wide store value; a host that kept
+        // one list per project file merges them into it once.
+        if let Err(error) = termul_manager_lib::web::mcp_registry::import_registered_project_files(
+            &store, &registry,
+        ) {
+            warn!("troupe-server: could not import the per-project MCP server lists: {error}");
+        }
         // The standalone binary owns its interactive PTYs and kills them only
         // after Axum drains. Desktop shared-live passes its existing manager and
         // never reaches that cleanup path.

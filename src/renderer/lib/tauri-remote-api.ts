@@ -6,7 +6,6 @@ import type {
 } from '@shared/types/ipc.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import type { PersistedSessionSummary } from '@shared/types/web-protocol.types'
-import type { StoredMcpServer } from './acp-mcp-persistence'
 import { invokeIpc } from './ipc/tauri'
 
 /**
@@ -61,26 +60,6 @@ export async function projectRegistryImport(
   return invokeIpc<{ imported: boolean }>('project_registry_import', {
     payload: { projects, defaultProjectId }
   })
-}
-
-/**
- * Mirror the desktop app-store MCP registry to the named project's
- * `.termul/mcp-servers.json` (CAP-7 — registry sync gap). The Rust
- * `remote_sync_mcp_registry` command resolves `projectId` through the shared
- * `ProjectRegistry` (an unknown, archived or pathless project is refused
- * `NOT_FOUND`) and writes the registry via `atomic_file::replace`, so the web
- * `GET /mcp-servers?projectId=` route (file-based) serves the same registry the
- * desktop app store holds.
- *
- * Best-effort: the result is `IpcResult<void>` (never throws — invoke errors map
- * to `{ success: false, code: 'INVOKE_ERROR' }`). Callers log a failure but never
- * let it block the app-store save or the project switch.
- */
-export async function syncMcpRegistryToProject(
-  projectId: string,
-  registry: StoredMcpServer[]
-): Promise<IpcResult<void>> {
-  return invokeIpc<void>('remote_sync_mcp_registry', { projectId, registry })
 }
 
 /**

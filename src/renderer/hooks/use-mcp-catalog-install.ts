@@ -19,8 +19,6 @@ export interface McpInstallTarget {
   version: string
   title: string
   choice: McpCatalogDefaultOption
-  /** The project open when the install started or started over; the web client saves into its list. */
-  projectId: string
 }
 
 export type McpInstallFailure =
@@ -104,8 +102,7 @@ function targetOf(row: McpCatalogRow, choice: McpCatalogDefaultOption): McpInsta
     name: row.name,
     version: row.version,
     title: row.title ?? row.name.slice(row.name.lastIndexOf('/') + 1),
-    choice,
-    projectId: useProjectStore.getState().activeProjectId
+    choice
   }
 }
 
@@ -271,7 +268,7 @@ export function useMcpCatalogInstall(): McpCatalogInstall {
     if (!committed.success) return fail(target, 'commit', hostFailure(committed.code))
     let server: StoredMcpServer
     try {
-      server = await useAcpStore.getState().saveCatalogInstall(committed.data, target.projectId)
+      server = await useAcpStore.getState().saveCatalogInstall(committed.data)
     } catch {
       return fail(target, 'save', { kind: 'save' })
     }
@@ -303,7 +300,7 @@ export function useMcpCatalogInstall(): McpCatalogInstall {
   const startOver = useCallback(() => {
     const state = current.current
     if (state.step !== 'failed' || !canStartOver(state.failure)) return
-    void describe({ ...state.target, projectId: useProjectStore.getState().activeProjectId })
+    void describe(state.target)
   }, [describe])
 
   return {

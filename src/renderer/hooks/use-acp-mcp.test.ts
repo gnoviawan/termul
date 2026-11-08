@@ -35,9 +35,6 @@ vi.mock('@/lib/log-api', () => ({
   logFrontendError: mocks.logFrontendError
 }))
 
-const runtime = vi.hoisted(() => ({ tauri: false }))
-vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => runtime.tauri }))
-
 import { _resetAutoProbedMcpServersForTesting, useAcpMcp } from './use-acp-mcp'
 
 const stdioServer = (id: string, enabled?: boolean): StoredMcpServer => {
@@ -71,25 +68,11 @@ describe('useAcpMcp — auto-probe pass', () => {
     expect(mocks.probeMcpServer).not.toHaveBeenCalled()
   })
 
-  it('a web client reloads the registry when the active project changes; the desktop does not', async () => {
+  it('does not reload the registry when the active project changes', () => {
     useProjectStore.setState({ activeProjectId: 'p1' })
-    const web = renderHook(() => useAcpMcp())
-    expect(mocks.loadMcpServers).toHaveBeenCalledTimes(1)
+    renderHook(() => useAcpMcp())
     act(() => useProjectStore.setState({ activeProjectId: 'p2' }))
-    expect(mocks.loadMcpServers).toHaveBeenCalledTimes(2)
-    web.unmount()
-
-    runtime.tauri = true
-    try {
-      mocks.loadMcpServers.mockClear()
-      const desktop = renderHook(() => useAcpMcp())
-      expect(mocks.loadMcpServers).toHaveBeenCalledTimes(1)
-      act(() => useProjectStore.setState({ activeProjectId: 'p3' }))
-      expect(mocks.loadMcpServers).toHaveBeenCalledTimes(1)
-      desktop.unmount()
-    } finally {
-      runtime.tauri = false
-    }
+    expect(mocks.loadMcpServers).toHaveBeenCalledTimes(1)
   })
 
   it('probes every enabled server once after the registry loads (deferred to idle)', async () => {
@@ -199,24 +182,6 @@ describe('useAcpMcp — auto-probe pass', () => {
     await vi.advanceTimersByTimeAsync(2_000)
 
     expect(mocks.probeMcpServer.mock.calls).toEqual([['a'], ['b'], ['a']])
-  })
-
-  it('does not re-probe the servers of a project a web client left and returns to', async () => {
-    useProjectStore.setState({ activeProjectId: 'p1' })
-    state.mcpServers = [stdioServer('a')]
-    state.mcpServersLoaded = true
-    const { rerender } = renderHook(() => useAcpMcp())
-    await vi.advanceTimersByTimeAsync(2_000)
-
-    state.mcpServers = [stdioServer('other')]
-    act(() => useProjectStore.setState({ activeProjectId: 'p2' }))
-    rerender()
-    state.mcpServers = [stdioServer('a')]
-    act(() => useProjectStore.setState({ activeProjectId: 'p1' }))
-    rerender()
-    await vi.advanceTimersByTimeAsync(2_000)
-
-    expect(mocks.probeMcpServer.mock.calls).toEqual([['a'], ['other']])
   })
 
   it('logs the boundary line when the pass runs and stays silent when idle', async () => {

@@ -158,6 +158,9 @@ pub enum WriteOutcome {
     },
 }
 
+/// `clientInstanceId` of a record the host itself wrote.
+const HOST_CLIENT_INSTANCE: &str = "host";
+
 /// Maximum size of the `data` payload a write may persist.
 const MAX_DATA_BYTES: usize = 10 * 1024 * 1024;
 
@@ -531,6 +534,37 @@ impl WebStore {
     /// client identity, so no presence touch, adoption or flush.
     pub fn peek(&self, key: &str) -> Result<Option<Value>, StoreError> {
         self.with_state(|state| Ok(state.data.get(key).map(|record| record.v.clone())))
+    }
+
+    /// Store `value` under the `shared/lww/` `key` unless the key already
+    /// holds a value, as a host-side writer: no client identity, so no
+    /// presence touch or adoption. Returns whether it wrote.
+    pub fn insert_if_absent(
+        &self,
+        key: &str,
+        value: Value,
+        now_ms: u64,
+    ) -> Result<bool, StoreError> {
+        if !key.starts_with("shared/lww/") {
+            return Err(StoreError::Invalid(format!(
+                "'{key}' is not a shared/lww key"
+            )));
+        }
+        self.with_state(|state| {
+            if state.data.contains_key(key) {
+                return Ok(false);
+            }
+            let record = Record {
+                v: value,
+                rev: state.host.deleted_revs.get(key).copied().unwrap_or(0) + 1,
+                cid: HOST_CLIENT_INSTANCE.to_string(),
+                cmd: None,
+                fields: None,
+            };
+            self.put(state, key, record, now_ms)?;
+            state.host.deleted_revs.remove(key);
+            Ok(true)
+        })
     }
 
     /// Write `value` under `key` with the semantics of the key's scope.

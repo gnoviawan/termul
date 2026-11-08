@@ -9,13 +9,10 @@ import {
   catalogInstallEntry,
   loadMcpServers as loadMcpServersFromDisk,
   type StoredMcpServer,
-  saveMcpServers as saveMcpServersToDisk,
-  syncMcpRegistryToProjectBestEffort
+  saveMcpServers as saveMcpServersToDisk
 } from '@/lib/acp-mcp-persistence'
 import { logFrontendError } from '@/lib/log-api'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
-import { useProjectStore } from '@/stores/project-store'
 import type { AcpState } from '../types'
 
 // MCP registry mutations (save/import/toggle/delete) are serialized through a
@@ -26,11 +23,6 @@ import type { AcpState } from '../types'
 // The queue guarantees each mutation reads, writes, and (on failure) rolls back
 // against the registry state as of its own turn.
 let mcpRegistryQueue: Promise<unknown> = Promise.resolve()
-
-/** The project the host MCP file is addressed through (`''` until one is selected). */
-function activeProjectId(): string {
-  return useProjectStore.getState().activeProjectId
-}
 
 function runSerializedMcpRegistryMutation<T>(mutation: () => Promise<T>): Promise<T> {
   const run = mcpRegistryQueue.then(mutation)
@@ -56,18 +48,12 @@ type McpSliceState = Pick<
   | 'saveCatalogInstall'
   | 'setMcpServerEnabled'
   | 'deleteMcpServer'
-  | 'syncMcpRegistryToProjectFile'
   | 'probeMcpServer'
   | 'loadMcpTools'
   | 'connectMcpOAuth'
   | 'checkMcpOAuthStatus'
   | 'disconnectMcpOAuth'
 >
-
-// A project-file mirror requested before the MCP registry finished loading is
-// kept (with the project it named) and performed as soon as the registry loads
-// (mirroring the empty pre-load state would clobber the project's file).
-let projectFileMirrorPending: string | null = null
 
 function probeConfigOf(server: StoredMcpServer): McpServerConfig {
   const { id: _id, enabled: _enabled, catalog: _catalog, ...config } = server
@@ -101,9 +87,9 @@ function withoutProbeState(s: McpProbeState, id: string): McpProbeState {
 }
 
 // Per-id count of completed deletions. Absence from `mcpServers` alone does not
-// mean deleted: a web project switch swaps in another project's list. A probe
-// or OAuth call compares the count across its await, so a deleted id's result
-// never lands, even on a server re-added under the same id.
+// mean deleted: a reload replaces the whole list. A probe or OAuth call
+// compares the count across its await, so a deleted id's result never lands,
+// even on a server re-added under the same id.
 const deletionCounts = new Map<string, number>()
 
 export function mcpServerDeletionCount(id: string): number {
@@ -187,13 +173,8 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
 
   loadMcpServers: async () => {
     try {
-      const list = await loadMcpServersFromDisk(activeProjectId())
+      const list = await loadMcpServersFromDisk()
       set({ mcpServers: list, mcpServersLoaded: true })
-      if (projectFileMirrorPending) {
-        const projectId = projectFileMirrorPending
-        projectFileMirrorPending = null
-        await syncMcpRegistryToProjectBestEffort(projectId, list)
-      }
     } catch (err) {
       void logFrontendError({
         source: 'acp-store.loadMcpServers',
@@ -214,7 +195,7 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
           : list.map((item) => (item.id === server.id ? nextServer : item))
       set({ mcpServers: next })
       try {
-        await saveMcpServersToDisk(next, activeProjectId())
+        await saveMcpServersToDisk(next)
       } catch (err) {
         set({ mcpServers: list })
         void logFrontendError({
@@ -235,7 +216,7 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
       const next = [...list, ...servers]
       set({ mcpServers: next })
       try {
-        await saveMcpServersToDisk(next, activeProjectId())
+        await saveMcpServersToDisk(next)
       } catch (err) {
         set({ mcpServers: list })
         void logFrontendError({
@@ -247,12 +228,9 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
     })
   },
 
-  saveCatalogInstall: (result, projectId) =>
+  saveCatalogInstall: (result) =>
     runSerializedMcpRegistryMutation(async () => {
       if (!get().mcpServersLoaded) throw new Error('The MCP server list has not loaded yet')
-      if (!isTauriContext() && activeProjectId() !== projectId) {
-        throw new Error('The open project changed during the install')
-      }
       const list = get().mcpServers
       const entry = catalogInstallEntry(
         result,
@@ -263,7 +241,7 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
       const next = [...list, entry]
       set({ mcpServers: next })
       try {
-        await saveMcpServersToDisk(next, activeProjectId())
+        await saveMcpServersToDisk(next)
       } catch (err) {
         set({ mcpServers: list })
         void logFrontendError({
@@ -286,7 +264,7 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
       const next = list.map((server) => (server.id === id ? { ...server, enabled } : server))
       set({ mcpServers: next })
       try {
-        await saveMcpServersToDisk(next, activeProjectId())
+        await saveMcpServersToDisk(next)
       } catch (err) {
         set({ mcpServers: list })
         void logFrontendError({
@@ -303,7 +281,7 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
       const next = list.filter((server) => server.id !== id)
       set({ mcpServers: next })
       try {
-        await saveMcpServersToDisk(next, activeProjectId())
+        await saveMcpServersToDisk(next)
       } catch (err) {
         set({ mcpServers: list })
         void logFrontendError({
@@ -319,21 +297,6 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
         mcpOAuthConnecting: omitKey(s.mcpOAuthConnecting, id)
       }))
     }),
-
-  // CAP-7: mirror the app-store MCP registry to the named project's
-  // `.termul/mcp-servers.json` so the web `GET /mcp-servers?projectId=` route
-  // (file-based) serves the same registry. Invoked by `useProjectRegistry` when
-  // the `projects` watch reports a new default while shared-live runs, and when
-  // shared-live starts. Best-effort + non-fatal — the wrapper logs failures and
-  // never throws.
-  syncMcpRegistryToProjectFile: async (projectId) => {
-    if (!isTauriContext()) return
-    if (!get().mcpServersLoaded) {
-      projectFileMirrorPending = projectId
-      return
-    }
-    await syncMcpRegistryToProjectBestEffort(projectId, get().mcpServers)
-  },
 
   // MCP probe (on-demand, read-only). No persistence, no rollback. Dedupes
   // concurrent probes per server id via `mcpProbing`.

@@ -7,8 +7,8 @@
 //!
 //! Every request names the `projectId` it acts for; an unknown, archived or
 //! pathless project is refused `NOT_FOUND`. `start` authorizes the server URL
-//! against THAT project's `.termul/mcp-servers.json` only. The token store
-//! itself stays keyed by server URL and host-global (`acp::mcp_oauth`): a token
+//! against the host's one MCP server list (`web::mcp_registry`). The token
+//! store stays keyed by server URL and host-global (`acp::mcp_oauth`): a token
 //! belongs to the host's credential for that URL, not to a project, so
 //! `status`/`disconnect` validate the project but read and delete the one
 //! URL-keyed token.
@@ -22,9 +22,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::acp::mcp_oauth;
 use crate::acp::safe_url::{check_safe_url, Opener, MCP_UNSAFE_URL};
+use crate::automation::mcp::parse_registry;
 use crate::web::fs_api::{check_local_only, IpcBody};
-use crate::web::mcp_servers_api::project_root_or_not_found;
+use crate::web::mcp_registry::STORE_KEY;
+use crate::web::project_registry::ProjectRegistry;
+use crate::web::store::WebStore;
 use crate::web::ws::AppState;
+
+/// The `NOT_FOUND` refusal for an unknown, archived or pathless project, or
+/// one whose folder is gone.
+fn check_project<T>(registry: &ProjectRegistry, project_id: &str) -> Result<(), IpcBody<T>> {
+    if !project_id.is_empty() && registry.canonical_root(project_id).is_some() {
+        return Ok(());
+    }
+    tracing::warn!("MCP OAuth request names an unknown, archived or pathless project");
+    Err(IpcBody::err(
+        "project not found or not available",
+        "NOT_FOUND",
+    ))
+}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -57,18 +73,13 @@ pub async fn oauth_start(
     ) {
         return Json(err);
     }
+    if let Err(body) = check_project::<OAuthStartResponse>(&state.registry, &request.project_id) {
+        return Json(body);
+    }
     // Restrict OAuth discovery to a configured MCP server URL so a web
     // client cannot make the host probe an attacker-selected internal
-    // service. Resolve the URL against the persisted MCP server registry
-    // (`.termul/mcp-servers.json`) — reject if no enabled HTTP/SSE entry
-    // matches.
-    let project_root =
-        match project_root_or_not_found::<OAuthStartResponse>(&state.registry, &request.project_id)
-        {
-            Ok(root) => root,
-            Err(body) => return Json(body),
-        };
-    if !is_authorized_mcp_server_url(&project_root, &request.server_url).await {
+    // service.
+    if !is_authorized_mcp_server_url(state.store.as_deref(), &request.server_url) {
         log::warn!(
             "[mcp-oauth] web flow start rejected: server URL not in authorized registry (url redacted)"
         );
@@ -220,7 +231,7 @@ pub async fn oauth_status(
     ) {
         return Json(err);
     }
-    if let Err(body) = project_root_or_not_found(&state.registry, &request.project_id) {
+    if let Err(body) = check_project(&state.registry, &request.project_id) {
         return Json(body);
     }
     let has_token = mcp_oauth::load_stored_token(&request.server_url)
@@ -242,7 +253,7 @@ pub async fn oauth_disconnect(
     ) {
         return Json(err);
     }
-    if let Err(body) = project_root_or_not_found(&state.registry, &request.project_id) {
+    if let Err(body) = check_project(&state.registry, &request.project_id) {
         return Json(body);
     }
     match mcp_oauth::delete_stored_token(&request.server_url) {
@@ -260,30 +271,20 @@ pub async fn oauth_disconnect(
     }
 }
 
-/// Check whether the given `server_url` matches an enabled HTTP/SSE entry in
-/// the persisted MCP server registry (`{project_root}/.termul/mcp-servers.json`) of the named project.
-/// This prevents a web client from using the OAuth start endpoint to make the
-/// host discover OAuth metadata for an attacker-selected URL.
-async fn is_authorized_mcp_server_url(project_root: &std::path::Path, server_url: &str) -> bool {
-    let path = crate::web::mcp_servers_api::registry_path(project_root);
-    let Ok(bytes) = tokio::fs::read(&path).await else {
-        return false;
-    };
-    let Ok(entries) = serde_json::from_slice::<Vec<serde_json::Value>>(&bytes) else {
+/// Whether `server_url` is an enabled HTTP/SSE entry of the host's MCP
+/// server list. A host without a store, or without a list, authorizes none.
+fn is_authorized_mcp_server_url(store: Option<&WebStore>, server_url: &str) -> bool {
+    let Some(Ok(Some(value))) = store.map(|store| store.peek(STORE_KEY)) else {
         return false;
     };
     let normalized = server_url.trim_end_matches('/');
-    entries.iter().any(|entry| {
-        let r#type = entry
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("stdio");
-        let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
-        let enabled = entry
-            .get("enabled")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-        enabled && (r#type == "http" || r#type == "sse") && url.trim_end_matches('/') == normalized
+    parse_registry(&value).iter().any(|entry| {
+        matches!(entry.config.r#type.as_deref(), Some("http" | "sse"))
+            && entry
+                .config
+                .url
+                .as_deref()
+                .is_some_and(|url| url.trim_end_matches('/') == normalized)
     })
 }
 
