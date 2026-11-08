@@ -317,6 +317,7 @@ async fn every_session_tools_are_always_loaded() {
     assert_eq!(always_load("plan"), Some(true));
     assert_eq!(always_load("set_session_title"), Some(true));
     assert_eq!(always_load("ask_user"), None);
+    assert_eq!(always_load("read_chat"), None);
     assert_eq!(always_load("create_node"), None);
 }
 
@@ -649,7 +650,7 @@ fn without_a_host_the_browser_tool_is_advertised_fail_closed() {
     }
 }
 
-const HOST_TOOLS: [&str; 13] = [
+const HOST_TOOLS: [&str; 14] = [
     "ask_user",
     "automation_apply_ops",
     "automation_capabilities",
@@ -662,6 +663,7 @@ const HOST_TOOLS: [&str; 13] = [
     "get_canvas_style",
     "plan",
     "read_canvas_guide",
+    "read_chat",
     "set_session_title",
 ];
 

@@ -192,6 +192,8 @@ pub enum FrameKind {
     /// An `automation_*` tool call, answered by the host automation service
     /// for the session's project.
     Automation,
+    /// A `read_chat` tool call: any chat on this host, rendered as text.
+    ReadChat,
 }
 
 /// One option the agent offers in an `ask_user` question.
@@ -393,6 +395,9 @@ pub struct FrameRequest {
     /// An `Automation` frame's tool arguments, parsed by the parent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub automation_input: Option<serde_json::Value>,
+    /// The chat and page a `ReadChat` frame asks for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_chat: Option<read_chat::ReadChatInput>,
 }
 
 /// Parent reply frame (one per connection). `result` carries the browser
