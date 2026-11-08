@@ -183,11 +183,10 @@ export function RailCollapsed({
         {rail.showTrack && (
           <div
             data-testid="rail-column-tab-track"
-            onClickCapture={rail.onTrackClickCapture}
             // 10px = the 8px buttons inside + the 2px padding (concentric).
             className="flex flex-col items-center gap-0.5 rounded-[10px] border border-border bg-card p-0.5"
           >
-            <RailColumnIcons activeProject={activeProject} />
+            <RailColumnIcons activeProject={activeProject} onOpenPanel={rail.onTabOpensPanel} />
           </div>
         )}
 

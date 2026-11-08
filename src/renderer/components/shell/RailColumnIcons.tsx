@@ -38,9 +38,12 @@ function focusPanelTab(tab: ShellLastColumnTab): void {
  * Every write goes through the shell-layout store.
  */
 export function RailColumnIcons({
-  activeProject
+  activeProject,
+  onOpenPanel
 }: {
   activeProject: Project | undefined
+  /** Called when a tab click is about to open the Side panel. */
+  onOpenPanel?: (event: React.MouseEvent) => void
 }): React.JSX.Element {
   const projectId = activeProject?.id
   const hasProject = Boolean(activeProject)
@@ -52,10 +55,11 @@ export function RailColumnIcons({
   const { runningProjectIds } = useAgentChatProjectSignals()
   const isRunning = projectId ? runningProjectIds.has(projectId) : false
 
-  const select = (tab: ShellLastColumnTab): void => {
+  const select = (tab: ShellLastColumnTab, event: React.MouseEvent): void => {
     if (!projectId) return
     if (!sshOpen) useShellLayoutStore.getState().setLastColumnTab(projectId, tab)
     if (!panelVisible) {
+      onOpenPanel?.(event)
       void updatePanelVisibility('fileExplorerVisible', true)
         .then(() => {
           if (!sshOpen) focusPanelTab(tab)
@@ -75,7 +79,7 @@ export function RailColumnIcons({
         hint={hasProject ? undefined : NEED_PROJECT}
         aria-label="Chats"
         disabled={!hasProject}
-        onClick={() => select('chats')}
+        onClick={(event) => select('chats', event)}
         badge={
           isRunning ? (
             <span
@@ -93,7 +97,7 @@ export function RailColumnIcons({
         hint={hasProject ? undefined : NEED_PROJECT}
         aria-label="Explorer"
         disabled={!hasProject}
-        onClick={() => select('explorer')}
+        onClick={(event) => select('explorer', event)}
       >
         <FolderTree size={16} />
       </RailButton>
@@ -103,7 +107,7 @@ export function RailColumnIcons({
         hint={hasProject ? undefined : NEED_PROJECT}
         aria-label="Changes"
         disabled={!hasProject}
-        onClick={() => select('changes')}
+        onClick={(event) => select('changes', event)}
         badge={
           hasProject && changedCount > 0 ? (
             <CountBadge
@@ -123,7 +127,7 @@ export function RailColumnIcons({
         hint={hasProject ? undefined : NEED_PROJECT}
         aria-label="GitHub"
         disabled={!hasProject}
-        onClick={() => select('github')}
+        onClick={(event) => select('github', event)}
       >
         <Github size={16} />
       </RailButton>

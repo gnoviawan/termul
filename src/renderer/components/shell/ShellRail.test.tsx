@@ -510,8 +510,11 @@ describe('ShellRail', () => {
       const rail = () => screen.getByTestId('rail-top-band').parentElement as HTMLElement
       const openSidePanel = () =>
         act(() => useShellLayoutStore.setState({ sidePanelVisible: true }))
-      const clickTab = (name: string) =>
-        fireEvent.click(within(track() as HTMLElement).getByRole('button', { name, exact: true }))
+      // `detail` 1 = a pointer click; Enter or Space on a focused tab fires a click with `detail` 0.
+      const clickTab = (name: string, detail = 1) =>
+        fireEvent.click(within(track() as HTMLElement).getByRole('button', { name, exact: true }), {
+          detail
+        })
 
       beforeEach(() => {
         useShellLayoutStore.setState({ sidePanelVisible: false })
@@ -555,6 +558,28 @@ describe('ShellRail', () => {
         fireEvent.pointerDown(within(rail()).getByRole('button', { name: 'Search' }))
         expect(track()).toBeInTheDocument()
         fireEvent.pointerDown(document.body)
+        expect(track()).not.toBeInTheDocument()
+      })
+
+      it('removes the tabs at once after a keyboard tab activation with no pointer on the Rail', () => {
+        clickTab('Explorer', 0)
+        openSidePanel()
+        expect(track()).not.toBeInTheDocument()
+      })
+
+      it('keeps the tabs after a keyboard tab activation while the pointer rests on the Rail', () => {
+        fireEvent.pointerEnter(rail(), { pointerId: 1 })
+        clickTab('Explorer', 0)
+        openSidePanel()
+        expect(track()).toBeInTheDocument()
+        fireEvent.pointerLeave(rail(), { pointerId: 1 })
+        expect(track()).not.toBeInTheDocument()
+      })
+
+      it('does not hold after a click on the track padding', () => {
+        fireEvent.pointerEnter(rail(), { pointerId: 1 })
+        fireEvent.click(track() as HTMLElement, { detail: 1 })
+        openSidePanel()
         expect(track()).not.toBeInTheDocument()
       })
 

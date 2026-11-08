@@ -8,8 +8,8 @@ export interface TabTrackHold {
   railRef: React.RefObject<HTMLDivElement>
   onPointerEnter: (event: React.PointerEvent) => void
   onPointerLeave: (event: React.PointerEvent) => void
-  /** Put on the tab track: a tab click arms the hold. */
-  onTrackClickCapture: () => void
+  /** Call when a Rail tab click opens the Side panel: it arms the hold. */
+  onTabOpensPanel: (event: React.MouseEvent) => void
 }
 
 /**
@@ -20,7 +20,8 @@ export interface TabTrackHold {
  * Search, Canvas or Automations (#1725). After a tab click the track stays
  * until the last pointer leaves the Rail or a press lands outside it (a touch
  * tap fires `pointerleave` before `click`). Opening the Side panel any other
- * way removes the track at once.
+ * way, or from the keyboard with no pointer on the Rail, removes the track at
+ * once.
  */
 export function useTabTrackHold(sidePanelOnScreen: boolean): TabTrackHold {
   const railRef = useRef<HTMLDivElement>(null)
@@ -54,8 +55,13 @@ export function useTabTrackHold(sidePanelOnScreen: boolean): TabTrackHold {
       pointersInside.current.delete(event.pointerId)
       if (pointersInside.current.size === 0) setHeld(false)
     },
-    onTrackClickCapture: () => {
-      if (!sidePanelOnScreen) setHeld(true)
+    onTabOpensPanel: (event) => {
+      if (sidePanelOnScreen) return
+      // Enter or Space on a focused tab fires a click with `detail` 0. Hold
+      // then only if a pointer rests on the Rail, where the buttons would
+      // move under it; otherwise the track would stay until an outside press.
+      if (event.detail === 0 && pointersInside.current.size === 0) return
+      setHeld(true)
     }
   }
 }
