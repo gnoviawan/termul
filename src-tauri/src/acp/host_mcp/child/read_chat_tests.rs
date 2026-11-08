@@ -184,10 +184,70 @@ fn a_read_follows_an_agent_switch_into_the_linked_chat() {
             let body = text.split_once('\n').unwrap().1;
             assert!(
                 body.ends_with(
-                    "Messages 1-2 of 2.\n\n[1] user · 2025-11-08T10:00:01Z\nStart here.\n\n[2] assistant · 2025-11-08T10:00:02Z\nContinuing here."
+                    "Messages 1-3 of 3.\n\n[1] user · 2025-11-08T10:00:01Z\nStart here.\n\n[2] assistant · 2025-11-08T10:00:02Z\n--- agent switch: test → test (chat chat-c) ---\n\n[3] assistant · 2025-11-08T10:00:02Z\nContinuing here."
                 ),
                 "{text}"
             );
+        },
+    ));
+}
+
+#[test]
+fn an_agent_switch_cycle_stops_instead_of_looping_forever() {
+    let (harness, configs) = Harness::new(&[
+        ("chat-a", Some("proj-a")),
+        ("chat-b", Some("proj-b")),
+        ("chat-c", Some("proj-b")),
+    ]);
+    let persistence = harness.persistence();
+    for record in [
+        record_in(
+            "chat-b",
+            1,
+            "user_prompt",
+            json!({ "content": [{ "type": "text", "text": "Start here." }] }),
+        ),
+        record_in(
+            "chat-b",
+            2,
+            "agent_switch",
+            json!({ "fromConfigId": "x", "toConfigId": "y", "newSessionId": "chat-c" }),
+        ),
+        record_in(
+            "chat-c",
+            1,
+            "message_chunk",
+            json!({ "role": "agent", "content": { "type": "text", "text": "Middle." } }),
+        ),
+        // The cycle back to chat-b ends the chain, not the transcript.
+        record_in(
+            "chat-c",
+            2,
+            "agent_switch",
+            json!({ "fromConfigId": "y", "toConfigId": "x", "newSessionId": "chat-b" }),
+        ),
+    ] {
+        persistence.enqueue_event(record).unwrap();
+    }
+    harness.runtime.block_on(async {
+        persistence.flush_session("chat-b").await.unwrap();
+        persistence.flush_session("chat-c").await.unwrap();
+    });
+    let caller = configs[0].clone();
+    harness.runtime.block_on(with_mcp_session(
+        caller,
+        |mut writer, mut reader| async move {
+            let (is_error, text) =
+                read_chat(&mut writer, &mut reader, 2, json!({ "chat_id": "chat-b" })).await;
+            assert!(!is_error, "{text}");
+            let body = text.split_once('\n').unwrap().1;
+            assert!(
+                body.ends_with(
+                    "Messages 1-3 of 3.\n\n[1] user · 2025-11-08T10:00:01Z\nStart here.\n\n[2] assistant · 2025-11-08T10:00:02Z\n--- agent switch: test → test (chat chat-c) ---\n\n[3] assistant · 2025-11-08T10:00:01Z\nMiddle."
+                ),
+                "{text}"
+            );
+            assert!(!text.contains("Note:"), "{text}");
         },
     ));
 }

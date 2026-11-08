@@ -57,6 +57,10 @@ pub struct Chat {
     /// Only messages with something to read: no thoughts, no handoff
     /// boundary rows, no empty bubbles.
     pub messages: Vec<Message>,
+    /// Caveats the header must carry, e.g. the chat continues in a linked
+    /// session that could not be read, or the durable tail may lag live.
+    /// Without one the transcript claims to be complete.
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,9 +133,12 @@ pub fn chat_from_records(
         .collect();
     let mut orphan: Option<Message> = None;
     for (seq, recorded_at, line) in tool_lines(records) {
-        match entries.iter_mut().rev().find(|(at, _, _)| *at < seq) {
-            Some((_, _, owner)) => owner.tools.push(line),
-            None => orphan
+        // `entries` is seq-sorted: the owner is the last entry before `seq`.
+        let owner = entries.partition_point(|(at, _, _)| *at < seq);
+        if owner > 0 {
+            entries[owner - 1].2.tools.push(line);
+        } else {
+            orphan
                 .get_or_insert_with(|| Message {
                     role: Role::Assistant,
                     timestamp: recorded_at,
@@ -139,7 +146,7 @@ pub fn chat_from_records(
                     tools: Vec::new(),
                 })
                 .tools
-                .push(line),
+                .push(line);
         }
     }
     let mut messages: Vec<Message> = orphan.into_iter().collect();
@@ -180,14 +187,15 @@ pub fn chat_from_records(
         created_at: metadata.created_at,
         last_activity_at: metadata.last_activity_at,
         messages,
+        notes: Vec::new(),
     }
 }
 
-/// The session this chat's last agent switch continues in, when the records
-/// link one. `read_chat` follows it so a switched chat is not read as the
-/// whole conversation.
+/// The session this chat's last agent switch continues in and when it was
+/// recorded, when the records link one. `read_chat` follows it so a switched
+/// chat is not read as the whole conversation.
 #[must_use]
-pub fn switch_target(records: &[PersistedEventRecord]) -> Option<String> {
+pub fn switch_link(records: &[PersistedEventRecord]) -> Option<(String, u64)> {
     records.iter().rev().find_map(|record| {
         (record.type_ == "agent_switch")
             .then(|| {
@@ -196,9 +204,9 @@ pub fn switch_target(records: &[PersistedEventRecord]) -> Option<String> {
                     .get("newSessionId")
                     .and_then(Value::as_str)
                     .filter(|id| !id.is_empty())
+                    .map(|id| (id.to_string(), record.recorded_at))
             })
             .flatten()
-            .map(str::to_string)
     })
 }
 
@@ -403,6 +411,9 @@ fn header(chat: &Chat) -> String {
         iso(chat.created_at),
         iso(chat.last_activity_at)
     ));
+    for note in &chat.notes {
+        lines.push(format!("Note: {note}"));
+    }
     lines.join("\n")
 }
 

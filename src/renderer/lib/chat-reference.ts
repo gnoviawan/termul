@@ -1,6 +1,6 @@
-import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
 import { copyTextWithToast } from '@/lib/copy-text'
 import { useAcpStore } from '@/stores/acp-store'
+import { sessionProjectId } from '@/stores/acp-store/helpers'
 import { useProjectStore } from '@/stores/project-store'
 
 /**
@@ -24,9 +24,8 @@ const READ_HINT = 'Read it with the Troupe read_chat tool.'
 export function formatChatReference({ chatId, title, project, cwd }: ChatReference): string {
   const lines = [`Troupe chat: ${title.replace(/\s+/g, ' ').trim()}`, `Chat ID: ${chatId}`]
   if (project) {
-    lines.push(
-      project.name ? `Project: ${project.name} (ID ${project.id})` : `Project: ID ${project.id}`
-    )
+    const name = project.name?.replace(/\s+/g, ' ').trim()
+    lines.push(name ? `Project: ${name} (ID ${project.id})` : `Project: ID ${project.id}`)
   }
   if (cwd) lines.push(`Folder: ${cwd}`)
   lines.push(READ_HINT)
@@ -41,22 +40,17 @@ export function formatChatReference({ chatId, title, project, cwd }: ChatReferen
  * host's unassigned sentinel names no project.
  */
 export function resolveChatReference(chatId: string, title: string): ChatReference {
-  const { sessions, sessionIndex } = useAcpStore.getState()
-  const live = sessions?.[chatId]
-  const indexed = sessionIndex?.find((e) => e.id === chatId)
-  const projectId = live?.projectId || indexed?.projectId
-  const named =
-    projectId && projectId !== UNASSIGNED_PROJECT_ID
-      ? useProjectStore.getState().projects.find((p) => p.id === projectId)
-      : undefined
+  const state = useAcpStore.getState()
+  const projectId = sessionProjectId(state, chatId)
+  const named = projectId
+    ? useProjectStore.getState().projects.find((p) => p.id === projectId)
+    : undefined
+  const { sessions, sessionIndex } = state
   return {
     chatId,
     title,
-    project:
-      projectId && projectId !== UNASSIGNED_PROJECT_ID
-        ? { id: projectId, name: named?.name }
-        : undefined,
-    cwd: live?.cwd || indexed?.cwd || undefined
+    project: projectId ? { id: projectId, name: named?.name } : undefined,
+    cwd: sessions?.[chatId]?.cwd || sessionIndex?.find((e) => e.id === chatId)?.cwd || undefined
   }
 }
 

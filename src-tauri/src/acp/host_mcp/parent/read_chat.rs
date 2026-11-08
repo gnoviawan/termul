@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::HostPlanServer;
 use crate::acp::host_mcp::read_chat::{
-    chat_from_records, render_page, switch_target, Names, ReadChatInput,
+    chat_from_records, render_page, switch_link, Message, Names, ReadChatInput, Role,
 };
 use crate::acp::host_mcp::FrameReply;
 use crate::acp::session_persistence::{
@@ -39,26 +39,44 @@ impl HostPlanServer {
             Ok(first) => {
                 // A chat that switched agents continues in the linked
                 // session; pull every segment before folding so the page does
-                // not stop at the switch.
-                let mut segments = vec![first];
+                // not stop at the switch. A chain that cannot be fully read
+                // is noted on the transcript rather than passed off as whole.
+                // Each segment after the first carries the switch record's
+                // time so the boundary line shows when the handoff happened.
+                let mut segments = vec![(0, first)];
                 let mut visited: std::collections::HashSet<String> =
                     [input.chat_id.clone()].into_iter().collect();
+                let mut continuation: Option<String> = None;
                 while segments.len() < MAX_LINKED_SEGMENTS {
-                    let Some(linked) = switch_target(&segments.last().expect("non-empty").1)
-                        .filter(|id| !visited.contains(id))
+                    let Some((linked, switch_at)) =
+                        switch_link(&segments.last().expect("non-empty").1.records)
+                            .filter(|(id, _)| !visited.contains(id))
                     else {
                         break;
                     };
                     visited.insert(linked.clone());
                     match load(persistence, &linked).await {
-                        Ok(segment) => segments.push(segment),
+                        Ok(segment) => segments.push((switch_at, segment)),
                         Err(error) => {
                             log::warn!(
                                 "[host-mcp] read_chat by session {caller} of chat {target}: linked chat {} unreadable: {error}",
                                 redact_session_id(&linked)
                             );
+                            continuation = Some(format!(
+                                "the chat continues in linked chat {linked}, which could not be read; retry or call read_chat with chat_id {linked}"
+                            ));
                             break;
                         }
+                    }
+                }
+                if continuation.is_none() {
+                    if let Some((next, _)) =
+                        switch_link(&segments.last().expect("non-empty").1.records)
+                            .filter(|(id, _)| !visited.contains(id))
+                    {
+                        continuation = Some(format!(
+                            "the chat's agent-switch chain exceeds {MAX_LINKED_SEGMENTS} chats; continue from chat {next} with read_chat"
+                        ));
                     }
                 }
                 // The fold and render are pure CPU; keep them off the
@@ -67,16 +85,51 @@ impl HostPlanServer {
                 let chat = match tokio::task::spawn_blocking(move || {
                     let registry = crate::web::project_registry::installed();
                     let mut iter = segments.into_iter();
-                    let (metadata, records) = iter.next().expect("one segment");
-                    let mut chat =
-                        chat_from_records(&metadata, &records, names(&metadata, registry.as_deref()));
-                    for (metadata, records) in iter {
-                        let segment = chat_from_records(
-                            &metadata,
-                            &records,
-                            names(&metadata, registry.as_deref()),
+                    let (_, first) = iter.next().expect("one segment");
+                    let mut stale = first.stale;
+                    let mut chat = chat_from_records(
+                        &first.metadata,
+                        &first.records,
+                        names(&first.metadata, registry.as_deref()),
+                    );
+                    let mut previous_agent = chat.agent.clone();
+                    for (switch_at, segment) in iter {
+                        let linked = chat_from_records(
+                            &segment.metadata,
+                            &segment.records,
+                            names(&segment.metadata, registry.as_deref()),
                         );
-                        chat.messages.extend(segment.messages);
+                        // A boundary line between segments so messages past a
+                        // switch are not attributed to the chat's first agent.
+                        chat.messages.push(Message {
+                            role: Role::Assistant,
+                            timestamp: switch_at,
+                            body: format!(
+                                "--- agent switch: {} → {} (chat {}) ---",
+                                previous_agent.as_deref().unwrap_or("unknown agent"),
+                                linked.agent.as_deref().unwrap_or("unknown agent"),
+                                linked.id
+                            ),
+                            tools: Vec::new(),
+                        });
+                        // The live end describes the chat now: status,
+                        // activity and agent come from the last segment while
+                        // identity stays the original chat's.
+                        chat.status = linked.status.clone();
+                        chat.last_activity_at = linked.last_activity_at;
+                        chat.agent = linked.agent.clone();
+                        previous_agent = linked.agent;
+                        chat.messages.extend(linked.messages);
+                        stale |= segment.stale;
+                    }
+                    if stale {
+                        chat.notes.push(
+                            "recent messages may be missing: the chat's writer could not flush its queue"
+                                .to_string(),
+                        );
+                    }
+                    if let Some(continuation) = continuation {
+                        chat.notes.push(continuation);
                     }
                     chat
                 })
@@ -115,25 +168,53 @@ impl HostPlanServer {
     }
 }
 
+/// One readable segment: the chat's metadata and every durable record, plus
+/// whether the durable tail may lag the live session.
+struct Loaded {
+    metadata: SessionMetadata,
+    records: Vec<PersistedEventRecord>,
+    /// `true` when the writer could not flush its queue — replay then works
+    /// but can end before the session's newest records.
+    stale: bool,
+}
+
 /// The chat's metadata and every durable record, after the writer flushed
-/// what it had queued. A failed flush only leaves the tail one batch stale —
-/// index persistence rides along in it and must not block reading a
-/// finalized chat.
+/// what it had queued. A failed data flush leaves the tail potentially stale
+/// (`stale`); a failed index write does not — durable records are already
+/// complete and must not block reading a finalized chat.
 async fn load(
     persistence: &Arc<SessionPersistence>,
     chat_id: &str,
-) -> Result<(SessionMetadata, Vec<PersistedEventRecord>), SessionPersistenceError> {
-    if let Err(error) = persistence.flush_session(chat_id).await {
-        log::warn!(
-            "[host-mcp] read_chat flush of chat {} failed, reading durable state: {error}",
-            redact_session_id(chat_id)
-        );
-    }
+) -> Result<Loaded, SessionPersistenceError> {
+    let stale = match persistence.flush_session(chat_id).await {
+        Ok(()) => false,
+        Err(
+            error @ (SessionPersistenceError::PersistenceUnhealthy(_)
+            | SessionPersistenceError::WriterStopped),
+        ) => {
+            log::warn!(
+                "[host-mcp] read_chat flush of chat {} failed, durable records may lag: {error}",
+                redact_session_id(chat_id)
+            );
+            true
+        }
+        Err(error) => {
+            log::warn!(
+                "[host-mcp] read_chat flush of chat {} failed, reading durable state: {error}",
+                redact_session_id(chat_id)
+            );
+            false
+        }
+    };
     let metadata = persistence.metadata(chat_id)?;
     let records = persistence
         .replay_after_async(chat_id.to_string(), 0)
         .await?;
-    Ok((metadata, records))
+    Ok(Loaded {
+        metadata,
+        records,
+        stale,
+    })
 }
 
 /// The project's name from `registry` and the agent's name from the agents

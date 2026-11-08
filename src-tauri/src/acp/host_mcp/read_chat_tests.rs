@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-use super::read_chat::{chat_from_records, render_page, switch_target, Names, TEXT_BUDGET};
+use super::read_chat::{chat_from_records, render_page, switch_link, Names, TEXT_BUDGET};
 use crate::acp::session_persistence::{
     PersistedEventRecord, PersistedSessionStatus, SessionMetadata, SESSION_SCHEMA_VERSION,
 };
@@ -349,8 +349,8 @@ fn tool_calls_before_any_message_become_a_tool_only_entry() {
 }
 
 #[test]
-fn switch_target_names_the_last_linked_session() {
-    assert_eq!(switch_target(&[]), None);
+fn switch_link_names_the_last_linked_session_and_when() {
+    assert_eq!(switch_link(&[]), None);
     let records = vec![
         record(
             3,
@@ -368,7 +368,10 @@ fn switch_target_names_the_last_linked_session() {
             json!({ "newSessionId": "", "fromConfigId": "c", "toConfigId": "d" }),
         ),
     ];
-    assert_eq!(switch_target(&records).as_deref(), Some("chat-d"));
+    assert_eq!(
+        switch_link(&records),
+        Some(("chat-d".to_string(), BASE + 4_000))
+    );
 }
 
 #[test]
