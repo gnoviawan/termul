@@ -1,11 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// The host as the web client reaches it: the shared store behind
-// `persistenceApi`, and the per-project MCP files behind `/mcp-servers`.
-const host = vi.hoisted(() => ({
-  store: new Map<string, unknown>(),
-  projectFiles: new Map<string, unknown>()
-}))
+// The host store as the web client reaches it through `persistenceApi`.
+const host = vi.hoisted(() => ({ store: new Map<string, unknown>() }))
 
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), warning: vi.fn(), success: vi.fn() }
@@ -37,19 +33,6 @@ vi.mock('@/lib/api', async (orig) => ({
     })
   }
 }))
-vi.mock('@/lib/web-server-api', async (orig) => ({
-  ...(await orig<typeof import('@/lib/web-server-api')>()),
-  webServerMcpServers: {
-    get: vi.fn(async (projectId: string) => ({
-      success: true,
-      data: host.projectFiles.get(projectId) ?? []
-    })),
-    put: vi.fn(async (projectId: string, registry: unknown) => {
-      host.projectFiles.set(projectId, registry)
-      return { success: true, data: undefined }
-    })
-  }
-}))
 
 import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -71,7 +54,6 @@ async function openProject(projectId: string): Promise<void> {
 describe('the web MCP server list is one list for every project', () => {
   beforeEach(() => {
     host.store.clear()
-    host.projectFiles.clear()
     useAcpStore.setState({ mcpServers: [], mcpServersLoaded: false })
   })
 

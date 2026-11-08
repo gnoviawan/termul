@@ -1,12 +1,11 @@
-use std::path::Path;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use super::registry::{desktop_store_servers, parse_registry, project_file_servers};
-use super::{McpServerConfig, McpServerEntry, DESKTOP_STORE_KEY};
+use super::registry::{parse_registry, store_servers};
+use super::{McpServerConfig, McpServerEntry};
 use crate::acp::mcp_probe::McpNameValuePair;
-use crate::automation::engine::ProjectRoots;
+use crate::web::mcp_registry::STORE_KEY;
 use crate::web::store::{Precondition, StorePolicy, WebStore};
 use crate::web::ws::ClientIdentity;
 
@@ -74,92 +73,35 @@ fn reads_the_renderer_envelope_and_nothing_from_other_shapes() {
     assert_eq!(parse_registry(&json!("x")), vec![]);
 }
 
-fn roots_at(root: &Path) -> ProjectRoots {
-    let root = root.to_path_buf();
-    Arc::new(move |project_id| (project_id == "p1").then(|| root.clone()))
-}
-
-fn write_project_file(root: &Path, value: &Value) {
-    let dir = root.join(".termul");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("mcp-servers.json"), value.to_string()).unwrap();
-}
-
-#[test]
-fn termul_server_reads_the_project_file() {
-    let root = tempfile::tempdir().unwrap();
-    let servers = project_file_servers(roots_at(root.path()));
-    assert_eq!(servers("p1"), vec![]);
-    write_project_file(root.path(), &stored_list());
-    assert_eq!(
-        ids(&servers("p1")),
-        vec![("srv-1", "Files"), ("srv-3", "Remote")]
-    );
-    assert_eq!(servers("other"), vec![]);
-    std::fs::write(root.path().join(".termul/mcp-servers.json"), "{not json").unwrap();
-    assert_eq!(servers("p1"), vec![]);
-    let oversized = format!("[{}]", " ".repeat(crate::web::mcp_servers_api::MAX_REGISTRY_BYTES));
-    std::fs::write(root.path().join(".termul/mcp-servers.json"), oversized).unwrap();
-    assert_eq!(servers("p1"), vec![]);
-}
-
-#[test]
-fn desktop_reads_the_store_key_and_falls_back_to_the_project_file() {
-    let root = tempfile::tempdir().unwrap();
-    write_project_file(
-        root.path(),
-        &json!([{ "id": "file-1", "name": "From file", "command": "x" }]),
-    );
-    let store =
-        Arc::new(WebStore::open(root.path().join("store.json"), StorePolicy::default()).unwrap());
-    let servers = desktop_store_servers(store.clone(), roots_at(root.path()));
-    assert_eq!(ids(&servers("p1")), vec![("file-1", "From file")]);
-
-    let desktop = ClientIdentity {
+fn write_list(store: &WebStore, value: Value) {
+    let client = ClientIdentity {
         device_id: "desktop-device".into(),
         client_instance_id: "tab-1".into(),
     };
-    store
-        .write(
-            DESKTOP_STORE_KEY,
-            json!({ "_version": 1, "data": stored_list() }),
-            Precondition::default(),
-            &desktop,
-            1,
-        )
-        .unwrap();
-    assert_eq!(
-        ids(&servers("p1")),
-        vec![("srv-1", "Files"), ("srv-3", "Remote")]
-    );
-    assert_eq!(
-        ids(&servers("any-project")),
-        vec![("srv-1", "Files"), ("srv-3", "Remote")]
-    );
+    let base = Precondition {
+        base_revision: Some(u64::MAX),
+        ..Precondition::default()
+    };
+    store.write(STORE_KEY, value, base, &client, 1).unwrap();
 }
 
 #[test]
-fn desktop_falls_back_to_the_project_file_when_the_store_value_is_not_a_list() {
-    let root = tempfile::tempdir().unwrap();
-    write_project_file(
-        root.path(),
-        &json!([{ "id": "file-1", "name": "From file", "command": "x" }]),
-    );
+fn every_project_reads_the_one_stored_list() {
+    let dir = tempfile::tempdir().unwrap();
     let store =
-        Arc::new(WebStore::open(root.path().join("store.json"), StorePolicy::default()).unwrap());
-    let desktop = ClientIdentity {
-        device_id: "desktop-device".into(),
-        client_instance_id: "tab-1".into(),
-    };
-    store
-        .write(
-            DESKTOP_STORE_KEY,
-            json!({ "_version": 1, "data": "not a list" }),
-            Precondition::default(),
-            &desktop,
-            1,
-        )
-        .unwrap();
-    let servers = desktop_store_servers(store, roots_at(root.path()));
-    assert_eq!(ids(&servers("p1")), vec![("file-1", "From file")]);
+        Arc::new(WebStore::open(dir.path().join("store.json"), StorePolicy::default()).unwrap());
+    let servers = store_servers(store.clone());
+    assert_eq!(servers("p1"), vec![]);
+
+    write_list(&store, json!({ "_version": 1, "data": stored_list() }));
+    for project in ["p1", "any-project", ""] {
+        assert_eq!(
+            ids(&servers(project)),
+            vec![("srv-1", "Files"), ("srv-3", "Remote")],
+            "{project}"
+        );
+    }
+
+    write_list(&store, json!({ "_version": 1, "data": "not a list" }));
+    assert_eq!(servers("p1"), vec![]);
 }

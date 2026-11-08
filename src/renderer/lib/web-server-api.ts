@@ -52,7 +52,6 @@ import {
   networkError,
   parseBody,
   postJson,
-  putJson,
   runIpcCommand,
   serverBase,
   worktreeCreateKey
@@ -447,21 +446,6 @@ export const webServerGit = {
 export const webServerShell = {
   async getAvailableShells(): Promise<IpcResult<DetectedShells>> {
     return getJson<DetectedShells>('/shells')
-  }
-}
-
-/**
- * MCP registry persistence shared by standalone and desktop-hosted web clients.
- * The host keeps one `.termul/mcp-servers.json` per project, so every call names
- * the `projectId` (an unknown or archived project is refused `NOT_FOUND`).
- */
-export const webServerMcpServers = {
-  async get(projectId: string): Promise<IpcResult<unknown>> {
-    return getJson<unknown>(`/mcp-servers?projectId=${encodeURIComponent(projectId)}`)
-  },
-
-  async put(projectId: string, registry: unknown[]): Promise<IpcResult<void>> {
-    return putJson<void>(`/mcp-servers?projectId=${encodeURIComponent(projectId)}`, registry)
   }
 }
 

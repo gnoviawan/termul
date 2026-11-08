@@ -16,10 +16,8 @@ import {
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useWebAuthGateOk } from '@/lib/web-auth-gate'
 import { reconcileProjectWorktrees } from '@/lib/worktree-reconciler'
-import { useAcpStore } from '@/stores/acp-store'
 import { applyRegistryList } from '@/stores/project-registry-feed'
 import { useProjectStore } from '@/stores/project-store'
-import { useRemoteStatusStore } from '@/stores/remote-status-store'
 import { useShellLayoutStore } from '@/stores/shell-layout-store'
 import type { Project, ProjectGroup } from '@/types/project'
 
@@ -281,7 +279,6 @@ export function useProjectRegistry(): void {
       if (cancelled) return
 
       const granted = new Set<string>()
-      let lastDefaultProjectId: string | null | undefined
       let queued: ProjectListPayload | null = null
       let draining = false
 
@@ -295,18 +292,6 @@ export function useProjectRegistry(): void {
             if (project.path) void reconcileProjectWorktrees(project.id)
           }
         }
-        // CAP-7 interim bridge: the host MCP file follows the host default, so
-        // mirror the MCP registry when the default moves while shared-live runs.
-        if (
-          lastDefaultProjectId !== undefined &&
-          lastDefaultProjectId !== list.defaultProjectId &&
-          useRemoteStatusStore.getState().status?.running
-        ) {
-          void useAcpStore
-            .getState()
-            .syncMcpRegistryToProjectFile(useProjectStore.getState().activeProjectId)
-        }
-        lastDefaultProjectId = list.defaultProjectId
       }
 
       // States and deltas both carry the whole list, so only the newest

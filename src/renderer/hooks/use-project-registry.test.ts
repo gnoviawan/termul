@@ -17,8 +17,7 @@ const h = vi.hoisted(() => {
     importLegacyProjects: vi.fn(),
     hydrateShellLayout: vi.fn(async () => {}),
     grantFsScope: vi.fn(),
-    reconcile: vi.fn(),
-    syncMcp: vi.fn(async () => {})
+    reconcile: vi.fn()
   }
 })
 
@@ -59,9 +58,6 @@ vi.mock('@/lib/project-registry-api', () => ({
   projectRegistryApi: {}
 }))
 vi.mock('@/lib/router-navigate', () => ({ clearChatRoute: vi.fn() }))
-vi.mock('@/stores/acp-store', () => ({
-  useAcpStore: { getState: () => ({ syncMcpRegistryToProjectFile: h.syncMcp }) }
-}))
 vi.mock('@/stores/shell-layout-store', () => ({
   useShellLayoutStore: { getState: () => ({ hydrate: h.hydrateShellLayout }) }
 }))
@@ -70,7 +66,6 @@ import { persistenceApi, secureStorageApi } from '@/lib/api'
 import { CLOSE_WRITE_TIMEOUT_MS, runCloseWriters } from '@/lib/close-flush'
 import { _resetProjectPrefsForTests } from '@/lib/project-prefs'
 import { useProjectStore } from '@/stores/project-store'
-import { useRemoteStatusStore } from '@/stores/remote-status-store'
 import { PREFS_SAVE_RETRY_MS, useProjectRegistry } from './use-project-registry'
 
 function summary(id: string, extra: Partial<ProjectSummary> = {}): ProjectSummary {
@@ -123,7 +118,6 @@ beforeEach(() => {
   h.grantFsScope.mockResolvedValue({ success: true, data: undefined })
   _resetProjectPrefsForTests()
   useProjectStore.setState({ projects: [], groups: [], activeProjectId: '', isLoaded: false })
-  useRemoteStatusStore.getState().setStatus(null)
 })
 
 describe('useProjectRegistry', () => {
@@ -630,31 +624,6 @@ describe('useProjectRegistry', () => {
         expect(useProjectStore.getState().projects.map((p) => p.id)).toEqual(['third'])
       )
       expect(h.grantFsScope).not.toHaveBeenCalledWith(['/work/second'])
-    })
-
-    it('mirrors the MCP registry when the host default moves while shared-live runs', async () => {
-      h.tauri.value = true
-      useRemoteStatusStore.getState().setStatus({ running: true } as never)
-      await mountAndDeliver(list([summary('a'), summary('b')], 'a'))
-      expect(h.syncMcp).not.toHaveBeenCalled()
-
-      act(() => watchHandlers().onDelta(list([summary('a'), summary('b')], 'a')))
-      expect(h.syncMcp).not.toHaveBeenCalled()
-
-      act(() => watchHandlers().onDelta(list([summary('a'), summary('b')], 'b')))
-      await waitFor(() => expect(h.syncMcp).toHaveBeenCalledTimes(1))
-      // The mirror names the device's active project, not the host default.
-      expect(h.syncMcp).toHaveBeenCalledWith('a')
-    })
-
-    it('does not mirror the MCP registry when shared-live is off', async () => {
-      h.tauri.value = true
-      await mountAndDeliver(list([summary('a'), summary('b')], 'a'))
-
-      act(() => watchHandlers().onDelta(list([summary('a'), summary('b')], 'b')))
-
-      await waitFor(() => expect(useProjectStore.getState().projects[1].isDefault).toBeDefined())
-      expect(h.syncMcp).not.toHaveBeenCalled()
     })
   })
 
