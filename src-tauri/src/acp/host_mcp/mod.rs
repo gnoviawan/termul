@@ -30,11 +30,14 @@ pub mod canvas_tools;
 pub mod child;
 pub mod parent;
 pub mod presence;
+pub mod read_chat;
 
 #[cfg(test)]
 mod automation_tools_tests;
 #[cfg(test)]
 mod gateway_harness;
+#[cfg(test)]
+mod read_chat_tests;
 
 use std::collections::HashMap;
 use std::sync::Arc;
