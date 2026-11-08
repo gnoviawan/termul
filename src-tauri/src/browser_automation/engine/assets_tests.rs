@@ -81,8 +81,14 @@ fn the_agent_overlay_is_inert_markup_free_and_frame_budgeted() {
 
 #[test]
 fn the_overlay_visibility_helper_finds_the_overlay_and_waits_two_frames_to_hide() {
-    assert_eq!(overlay_visibility(false).params, json!({ "visible": false, "restoreMs": 3000 }));
-    assert_eq!(overlay_visibility(true).params, json!({ "visible": true, "restoreMs": 3000 }));
+    let restore = crate::browser_automation::budgets::OVERLAY_SELF_RESTORE;
+    let restore_ms = u64::try_from(restore.as_millis()).unwrap();
+    assert_eq!(overlay_visibility(false).params, json!({ "visible": false, "restoreMs": restore_ms }));
+    assert_eq!(overlay_visibility(true).params, json!({ "visible": true, "restoreMs": restore_ms }));
+    assert!(
+        restore > crate::browser_automation::budgets::ACTION_SCREENSHOT,
+        "the overlay never shows itself mid-capture"
+    );
     let body = OVERLAY_VISIBILITY.body;
     assert!(body.contains(&format!(":scope > {OVERLAY_TAG}")));
     assert!(body.contains("frame().then(frame)"), "hiding waits for two frames");
@@ -98,9 +104,10 @@ fn the_overlay_visibility_helper_finds_the_overlay_and_waits_two_frames_to_hide(
 #[test]
 fn the_frame_and_overlay_probes_read_what_they_name() {
     assert_eq!(frame_sources().params, json!({}));
-    for tag in ["iframe", "frame", "embed", "object"] {
+    for tag in ["'iframe, ", " frame, ", " embed, ", " object'"] {
         assert!(FRAME_SOURCES.body.contains(tag), "frame sources misses {tag}");
     }
+    assert!(FRAME_SOURCES.body.contains("deepAll(document,"), "shadow roots and same-origin frames count");
     assert!(OVERLAY_STATE.body.contains(&format!(":scope > {OVERLAY_TAG}")));
     assert_eq!(overlay_state().helper, OVERLAY_STATE);
 }

@@ -143,9 +143,13 @@ fn option_scope(option: ConsentOption, one_at_a_time: bool) -> Option<&'static s
     }
 }
 
-/// Whether `c` could reorder, hide or split what an approver reads: bidi
-/// embeddings, overrides and isolates, directional marks, zero-width
-/// characters, line and paragraph separators, and C0/C1 controls.
+/// Whether `c` could reorder, hide or split what an approver reads: C0/C1
+/// controls; bidi embeddings, overrides, isolates and marks; zero-width and
+/// other invisible characters (joiners, word joiner and invisible
+/// operators, byte-order mark, soft hyphen, combining grapheme joiner,
+/// Hangul and Khmer fillers, Mongolian vowel separator and free variation
+/// selectors); line and paragraph separators; variation selectors; tag
+/// characters; and interlinear annotation marks.
 fn is_deceptive(c: char) -> bool {
     matches!(
         c,
@@ -155,28 +159,58 @@ fn is_deceptive(c: char) -> bool {
             | '\u{200F}'
             | '\u{061C}'
             | '\u{200B}'..='\u{200D}'
-            | '\u{2060}'
+            | '\u{2060}'..='\u{2064}'
             | '\u{FEFF}'
-            | '\u{180E}'
+            | '\u{00AD}'
+            | '\u{034F}'
+            | '\u{115F}'
+            | '\u{1160}'
+            | '\u{17B4}'
+            | '\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{3164}'
+            | '\u{FFA0}'
             | '\u{2028}'
             | '\u{2029}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{E0100}'..='\u{E01EF}'
+            | '\u{E0000}'..='\u{E007F}'
+            | '\u{FFF9}'..='\u{FFFB}'
     ) || c.is_control()
 }
 
-/// A file name or path as an approver reads it: every character that could
-/// disguise it (a right-to-left override turning `txt.exe` into `exe.txt`,
-/// say) shown as a visible `\u{...}` escape, so two different names never
-/// read the same.
+/// A file name or path as an approver reads it. Guaranteed: every
+/// character [`is_deceptive`] names is shown as the visible escape
+/// `\u{XXXX}` (its code point in hex), and a literal `\u{` already in the
+/// text is shown as `\\u{`, so an escape in the output always stands for
+/// a hidden character and two different names never read the same. Every
+/// other backslash (a Windows path's separators) is kept as it is. This is
+/// not `mcp_catalog::consent::escape_for_display`, which doubles every
+/// backslash and so would make every Windows path unreadable.
 pub(crate) fn display_safe(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
+    for (at, c) in text.char_indices() {
         if is_deceptive(c) {
             out.push_str(&format!("\\u{{{:04X}}}", u32::from(c)));
+        } else if c == '\\' && text[at + 1..].starts_with("u{") {
+            out.push_str("\\\\");
         } else {
             out.push(c);
         }
     }
     out
+}
+
+/// A file ticket's file name, taken from the raw path by the host (never
+/// split out of the escaped path by a client) and made safe to read.
+fn shown_file_name(ticket: &TicketRequest) -> Option<String> {
+    let TicketTarget::File(path) = &ticket.origin else {
+        return None;
+    };
+    let name = std::path::Path::new(path)
+        .file_name()
+        .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned());
+    Some(display_safe(&name))
 }
 
 /// The target as shown: a file's path made safe to read, an origin as is.
@@ -277,6 +311,7 @@ fn request_payload(ticket: &TicketRequest) -> Value {
             "browser": {
                 "origin": shown_target(ticket),
                 "targetKind": ticket.origin.kind(),
+                "fileName": shown_file_name(ticket),
                 "targetUrl": display_url(&ticket.target_url),
                 "targetUrlBytes": ticket.target_url.len(),
                 "action": action_id(ticket.action),

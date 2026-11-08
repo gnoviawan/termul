@@ -101,13 +101,14 @@ pub struct TicketFile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TicketTarget {
     Web(CanonicalOrigin),
-    /// The file's real path, as the approver reads it.
+    /// The file's real path, unsanitized.
     File(String),
 }
 
 impl TicketTarget {
-    /// What the approver is shown as the target: the canonical origin, or
-    /// the file's path.
+    /// The raw target: the canonical origin, or the file's path exactly as
+    /// the host found it, unsanitized. Anything shown to an approver goes
+    /// through `acp::host_ticket::display_safe` first.
     pub fn as_str(&self) -> &str {
         match self {
             TicketTarget::Web(origin) => origin.as_str(),

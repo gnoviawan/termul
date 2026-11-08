@@ -123,9 +123,9 @@ pub const CAPABILITIES: &[Capability] = &[
     cap("frame_upload", &["snapshot"]),
     cap("frame_file_chooser", &["click"]),
     cap("frame_denied_origin", &["snapshot"]),
-    cap("file_pages", &["snapshot", "screenshot"]),
-    cap("file_link_hops", &["click"]),
-    cap("agent_overlay", &["screenshot"]),
+    cap("file_pages", &["navigate", "snapshot", "screenshot"]),
+    cap("file_link_hops", &["navigate", "snapshot", "click"]),
+    cap("agent_overlay", &["snapshot", "screenshot"]),
 ];
 
 pub fn ids() -> Vec<&'static str> {
@@ -340,11 +340,17 @@ async fn tab_lifecycle(c: &Ctx<'_>) -> CaseResult {
 }
 
 async fn error_codes(c: &Ctx<'_>) -> CaseResult {
-    expect_code(
-        c.call("navigate", json!({ "url": "file:///etc/hosts" }))
-            .await,
+    // A file URL every OS refuses for the same reason: one that names no
+    // file (a real file outside the project would ask the user instead).
+    let missing = c.engine.project_file("no-such-page.html");
+    let missing = tauri::Url::from_file_path(&missing)
+        .map(|url| url.to_string())
+        .map_err(|()| mismatch("the fixture folder has no file URL"))?;
+    sensitive_cases::expect_refusal(
+        c.call("navigate", json!({ "url": missing })).await,
         "invalid_params",
-        "navigate to a file url",
+        "file_not_found",
+        "navigate to a missing file",
     )?;
     expect_code(
         c.call("navigate", json!({})).await,

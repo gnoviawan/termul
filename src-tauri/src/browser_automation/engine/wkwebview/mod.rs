@@ -134,4 +134,13 @@ impl BrowserEngine for WkWebViewEngine {
         }
         Box::pin(file_chooser::set_input_files(&self.tabs, tab, path, files, eval::call))
     }
+
+    fn load_file<'a>(
+        &'a self,
+        tab: &'a str,
+        url: &'a tauri::Url,
+        read_access: &'a std::path::Path,
+    ) -> EngineFuture<'a, ()> {
+        Box::pin(files::load(&self.tabs, tab, url, read_access))
+    }
 }

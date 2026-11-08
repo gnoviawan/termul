@@ -47,8 +47,6 @@ pub(super) struct FakePane {
     /// The data store each tab was built on, by label.
     pub(super) stores: Mutex<HashMap<String, DataStore>>,
     persistent_profile: Support,
-    /// Every local file a tab was sent to, with the read access it got.
-    pub(super) file_loads: Mutex<Vec<(String, PathBuf)>>,
 }
 
 /// The app's own dev server: the fake perimeter denies every hop to it.
@@ -142,10 +140,7 @@ impl TabSurface for FakePane {
         self.user_navigates(tab, &url);
         Ok(())
     }
-    fn navigate_file(&self, tab: &str, url: String, read_access: PathBuf) -> Result<(), String> {
-        self.file_loads.lock().push((url.clone(), read_access));
-        self.navigate(tab, url)
-    }
+
     fn history(&self, tab: &str, step: HistoryStep) -> Result<(), String> {
         let mut tabs = self.tabs.lock();
         let fake = tabs.get_mut(tab).ok_or("no tab")?;
@@ -239,6 +234,9 @@ pub(super) struct FakeEngine {
     pub(super) overlay_log: Mutex<Vec<&'static str>>,
     /// What the frame-sources helper reports: where the page's frames point.
     pub(super) frame_sources: Mutex<Vec<String>>,
+    /// Every local file the host loaded, with the read access it gave. The
+    /// fake reads files by plain navigation, as WebView2 and WebKitGTK do.
+    pub(super) file_loads: Mutex<Vec<(String, PathBuf)>>,
     /// The next capture fails.
     pub(super) fail_screenshot: Mutex<bool>,
 }
@@ -307,6 +305,7 @@ impl FakeEngine {
             files_set: Mutex::new(Vec::new()),
             overlay_log: Mutex::new(Vec::new()),
             frame_sources: Mutex::new(Vec::new()),
+            file_loads: Mutex::new(Vec::new()),
             fail_screenshot: Mutex::new(false),
         }
     }
@@ -451,6 +450,15 @@ impl BrowserEngine for FakeEngine {
             }
         })
     }
+    fn load_file<'a>(
+        &'a self,
+        _tab: &'a str,
+        url: &'a tauri::Url,
+        read_access: &'a std::path::Path,
+    ) -> EngineFuture<'a, ()> {
+        self.file_loads.lock().push((url.to_string(), read_access.to_path_buf()));
+        Box::pin(async { Err(EngineError::new(EngineErrorKind::Unsupported)) })
+    }
     fn answer_dialog<'a>(&'a self, _tab: &'a str, id: u64, answer: DialogAnswer) -> EngineFuture<'a, bool> {
         self.answers.lock().push((id, answer));
         Box::pin(async { Ok(true) })
@@ -580,7 +588,6 @@ pub(super) fn harness_parts(
         published: Mutex::new(Vec::new()),
         stores: Mutex::new(HashMap::new()),
         persistent_profile,
-        file_loads: Mutex::new(Vec::new()),
     });
     let sink = Arc::new(AutoMountSink {
         host: OnceLock::new(),

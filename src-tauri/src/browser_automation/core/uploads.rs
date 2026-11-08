@@ -67,7 +67,7 @@ impl UploadRefusal {
         match self {
             Self::NoProjectRoot => "this session has no project folder to upload from",
             Self::BroadRoot => {
-                "the session's folder is a home folder or a drive root; open a project folder to upload from it"
+                "the session's folder is a home folder, a folder that holds the home folder, or a drive root; open a project folder to upload from it"
             }
             Self::Missing => "no such file in the project",
             Self::NotAFile => "the upload path does not name a regular file",

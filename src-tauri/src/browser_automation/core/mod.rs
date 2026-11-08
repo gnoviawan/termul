@@ -15,7 +15,7 @@ mod frames;
 mod observe;
 mod input_actions;
 mod link_hops;
-mod local_files;
+pub(crate) mod local_files;
 mod page_events;
 pub mod ports;
 mod profile;
@@ -195,7 +195,7 @@ impl DesktopBrowserHost {
             });
         }
         if let FirstLoad::ViaBlank(url) = first {
-            if let Err(message) = self.load_page(label, url) {
+            if let Err(message) = self.load_page(label, url).await {
                 self.registry
                     .lock()
                     .fail_create(label, "the tab could not load its page");
@@ -271,7 +271,7 @@ impl NavPolicy for HopPolicy {
             NavVerdict::Allow
         } else {
             log::info!(
-                "[browser-agent] frame blocked tab={} reason=file_not_granted",
+                "[browser-agent] frame blocked tab={}",
                 events::label_prefix(tab)
             );
             NavVerdict::Deny

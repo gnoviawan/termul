@@ -118,7 +118,7 @@ export function BrowserConsentStrip({
         </span>
         {first.targetKind === 'file' ? (
           <span className="block break-all font-medium text-foreground">
-            File: {browserConsentFileName(first.origin)}
+            File: {browserConsentFileName(first)}
           </span>
         ) : null}
         <span

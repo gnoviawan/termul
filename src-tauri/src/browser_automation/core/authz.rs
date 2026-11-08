@@ -226,27 +226,33 @@ pub fn hop_verdict(
     }
 }
 
-/// The key a `file://` URL is granted under: its decoded local path, with
-/// any drive letter lowercased, so every spelling of one file (engine,
-/// page link, `Url::from_file_path`) meets one grant. Query and fragment
-/// are not part of it. `None` for any other scheme, for a file URL with a
-/// host (a UNC share), and for one that names no local path: none is ever
+/// The key a `file://` URL is granted under: its decoded local path, so
+/// every spelling of one file (engine, page link, `Url::from_file_path`)
+/// meets one grant. On Windows, where drive letters ignore case, the drive
+/// letter is lowercased. Query and fragment are not part of it. `None` for
+/// any other scheme, for a file URL with a host (a UNC share), and for one
+/// that names no local path or a path that is not UTF-8: none is ever
 /// granted.
 pub fn file_key(url: &Url) -> Option<String> {
     if url.scheme() != "file" || url.host_str().is_some_and(|h| !h.is_empty()) {
         return None;
     }
     let path = url.to_file_path().ok()?;
-    let mut key: Vec<char> = path.to_string_lossy().chars().collect();
-    // `C:` on Windows; `/C:` where the host renders such a URL as a
-    // rooted path.
-    let drive = if key.first() == Some(&'/') { 1 } else { 0 };
-    if key.get(drive + 1) == Some(&':') {
-        if let Some(letter) = key.get_mut(drive) {
-            *letter = letter.to_ascii_lowercase();
-        }
+    let mut key = path.to_str()?.to_string();
+    // Windows paths (backslash-separated) start with a case-blind drive.
+    let windows = std::path::MAIN_SEPARATOR == '\\';
+    if windows && key.as_bytes().get(1) == Some(&b':') {
+        key[..1].make_ascii_lowercase();
     }
-    Some(key.into_iter().collect())
+    Some(key)
+}
+
+/// An "allow once" file grant: the tabs showing the file, and whether the
+/// approved load has yet to land in one.
+#[derive(Default)]
+struct OnceFile {
+    tabs: HashSet<String>,
+    loading: bool,
 }
 
 /// The policy a session's synchronous hop checks decide from, as of its
@@ -256,10 +262,27 @@ struct SessionAuthz {
     /// Exact real-path `file://` URLs (see [`file_key`]) the agent opened,
     /// each with the directory WebKit may let its page read.
     granted_files: HashMap<String, PathBuf>,
+    /// Files outside the project allowed "once": each lasts while a tab
+    /// stays on it, and goes when the last such tab leaves it or a later
+    /// prompt for it is denied.
+    once_files: HashMap<String, OnceFile>,
     allow_list: Vec<OriginPattern>,
     /// The app's "ask before opening new sites" switch. Asks until the
     /// session's first authorized call read it.
     ask_sites: bool,
+    /// The policy generation the snapshot was read at.
+    generation: u64,
+}
+
+impl SessionAuthz {
+    fn replace_policy(&mut self, generation: u64, allow_list: Vec<OriginPattern>, ask_sites: bool) {
+        if generation < self.generation {
+            return;
+        }
+        self.generation = generation;
+        self.allow_list = allow_list;
+        self.ask_sites = ask_sites;
+    }
 }
 
 impl Default for SessionAuthz {
@@ -267,8 +290,10 @@ impl Default for SessionAuthz {
         Self {
             granted: HashSet::new(),
             granted_files: HashMap::new(),
+            once_files: HashMap::new(),
             allow_list: Vec::new(),
             ask_sites: true,
+            generation: 0,
         }
     }
 }
@@ -303,6 +328,74 @@ impl SessionGrants {
             .insert(key, read_access.to_path_buf());
     }
 
+    /// Grant the file `url` only while the session still holds `source`, in
+    /// one step under the session lock: a revoke cannot land between the
+    /// check and the grant. Returns whether it granted.
+    pub fn grant_file_if_held(&self, session_id: &str, source: &Url, url: &Url, read_access: &Path) -> bool {
+        let (Some(source), Some(key)) = (file_key(source), file_key(url)) else {
+            return false;
+        };
+        let mut sessions = self.sessions.lock();
+        let Some(session) = sessions.get_mut(session_id) else {
+            return false;
+        };
+        if !session.granted_files.contains_key(&source) {
+            return false;
+        }
+        session.granted_files.insert(key, read_access.to_path_buf());
+        true
+    }
+
+    /// Grant the outside file `url` once: it stays granted while a tab that
+    /// loaded it after this grant stays on it.
+    pub fn grant_file_once(&self, session_id: &str, url: &Url, read_access: &Path) {
+        let Some(key) = file_key(url) else {
+            return;
+        };
+        let mut sessions = self.sessions.lock();
+        let session = sessions.entry(session_id.to_string()).or_default();
+        session.granted_files.insert(key.clone(), read_access.to_path_buf());
+        session.once_files.entry(key).or_default().loading = true;
+    }
+
+    /// Drop the grant of the file `url` (a later prompt for it was denied).
+    pub fn revoke_file(&self, session_id: &str, url: &Url) {
+        let Some(key) = file_key(url) else {
+            return;
+        };
+        if let Some(session) = self.sessions.lock().get_mut(session_id) {
+            session.granted_files.remove(&key);
+            session.once_files.remove(&key);
+        }
+    }
+
+    /// Tab `tab` of the session committed `url` (or closed, with `None`):
+    /// an "allow once" file the tab showed and no tab shows any longer
+    /// loses its grant. Returns how many grants ended.
+    pub fn tab_moved(&self, session_id: &str, tab: &str, url: Option<&Url>) -> usize {
+        let landed = url.and_then(file_key);
+        let mut sessions = self.sessions.lock();
+        let Some(session) = sessions.get_mut(session_id) else {
+            return 0;
+        };
+        let mut ended = Vec::new();
+        for (key, once) in &mut session.once_files {
+            if landed.as_deref() == Some(key.as_str()) {
+                if once.loading {
+                    once.loading = false;
+                    once.tabs.insert(tab.to_string());
+                }
+            } else if once.tabs.remove(tab) && once.tabs.is_empty() && !once.loading {
+                ended.push(key.clone());
+            }
+        }
+        for key in &ended {
+            session.once_files.remove(key);
+            session.granted_files.remove(key);
+        }
+        ended.len()
+    }
+
     /// The directory the granted file `url`'s page may read; `None` when
     /// the session holds no grant for it.
     pub fn file_read_access(&self, session_id: &str, url: &Url) -> Option<PathBuf> {
@@ -319,6 +412,7 @@ impl SessionGrants {
         if let Some(session) = self.sessions.lock().get_mut(session_id) {
             session.granted.clear();
             session.granted_files.clear();
+            session.once_files.clear();
         }
     }
 
@@ -333,19 +427,19 @@ impl SessionGrants {
 
     /// Replace the snapshot of a session that has one; a session that
     /// ended in the meantime stays gone.
-    pub fn refresh_policy(&self, session_id: &str, allow_list: Vec<OriginPattern>, ask_sites: bool) {
+    pub fn refresh_policy(&self, session_id: &str, generation: u64, allow_list: Vec<OriginPattern>, ask_sites: bool) {
         if let Some(session) = self.sessions.lock().get_mut(session_id) {
-            session.allow_list = allow_list;
-            session.ask_sites = ask_sites;
+            session.replace_policy(generation, allow_list, ask_sites);
         }
     }
 
-    /// Snapshot the policy the synchronous hop checks decide from.
-    pub fn set_policy(&self, session_id: &str, allow_list: Vec<OriginPattern>, ask_sites: bool) {
+    /// Snapshot the policy the synchronous hop checks decide from, read at
+    /// policy `generation`. A snapshot of an older generation than the one
+    /// held is dropped.
+    pub fn set_policy(&self, session_id: &str, generation: u64, allow_list: Vec<OriginPattern>, ask_sites: bool) {
         let mut sessions = self.sessions.lock();
         let session = sessions.entry(session_id.to_string()).or_default();
-        session.allow_list = allow_list;
-        session.ask_sites = ask_sites;
+        session.replace_policy(generation, allow_list, ask_sites);
     }
 
     /// The origin class of `url` against the session's allow-list snapshot.

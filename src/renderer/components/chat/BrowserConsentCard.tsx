@@ -105,7 +105,7 @@ export function BrowserConsentCard({ consent }: BrowserConsentCardProps): React.
               // stands on its own line and the full path wraps.
               <dd className="min-w-0 text-foreground">
                 <span className="block break-all font-medium">
-                  {browserConsentFileName(consent.origin)}
+                  {browserConsentFileName(consent)}
                 </span>
                 <span className="block break-all font-mono text-muted-foreground">
                   {consent.origin}

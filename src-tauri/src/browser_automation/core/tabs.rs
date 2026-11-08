@@ -131,7 +131,8 @@ pub struct TabRecord {
     pub popups: Vec<PopupNote>,
     /// File links the host did not follow, not yet reported.
     pub file_links: Vec<super::link_hops::FileLinkNote>,
-    /// A cancelled file link is being checked; others wait their turn.
+    /// A cancelled file link is being checked; any other file link the page
+    /// starts meanwhile is dropped (and logged), not queued.
     pub file_link_busy: bool,
     pub observed: super::observe::Observations,
 }

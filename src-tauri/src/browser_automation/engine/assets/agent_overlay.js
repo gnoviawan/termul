@@ -32,6 +32,7 @@
   var attach = Element.prototype.attachShadow;
   var append = Node.prototype.appendChild;
   var listen = EventTarget.prototype.addEventListener;
+  var unlisten = EventTarget.prototype.removeEventListener;
   var connectedOf = own(Node.prototype, 'isConnected').get;
   var parentOf = own(Node.prototype, 'parentNode').get;
   var docElOf = own(Document.prototype, 'documentElement').get;
@@ -115,7 +116,8 @@
   var ctx = getContext.call(canvas, '2d');
   if (!ctx) return;
 
-  var reduce = !!(media && media('(prefers-reduced-motion: reduce)').matches);
+  var motionQuery = media ? media('(prefers-reduced-motion: reduce)') : null;
+  var reduce = !!(motionQuery && motionQuery.matches);
   var W = 0, H = 0, D = 0;
   var focus = { x: 0.5, y: 0.5 }, target = { x: 0.5, y: 0.5 };
   // Iris close: the clear circle starts wider than the viewport and closes.
@@ -186,6 +188,7 @@
 
   function tick(now) {
     running = false;
+    if (reduce) return;
     if (hiddenOf.call(doc)) return;
     schedule();
     if (now - last < FRAME_MS) return;
@@ -216,21 +219,46 @@
   }
 
   var opts = { capture: true, passive: true };
-  if (!reduce) {
-    listen.call(window, 'pointermove', function (e) {
-      if (!W || !H) return;
-      target = { x: min(1, max(0, e.clientX / W)), y: min(1, max(0, e.clientY / H)) };
-    }, opts);
-    // Leaving the page drifts the circle back to the centre.
-    listen.call(window, 'pointerout', function (e) {
-      if (!e.relatedTarget) target = { x: 0.5, y: 0.5 };
-    }, opts);
-    listen.call(window, 'blur', function () { target = { x: 0.5, y: 0.5 }; }, opts);
-    listen.call(doc, 'visibilitychange', function () {
-      if (!hiddenOf.call(doc)) { last = 0; schedule(); }
-    }, opts);
+  function onMove(e) {
+    if (!W || !H) return;
+    target = { x: min(1, max(0, e.clientX / W)), y: min(1, max(0, e.clientY / H)) };
   }
+  // Leaving the page drifts the circle back to the centre.
+  function onOut(e) {
+    if (!e.relatedTarget) target = { x: 0.5, y: 0.5 };
+  }
+  function onBlur() { target = { x: 0.5, y: 0.5 }; }
+  function onVisible() {
+    if (!hiddenOf.call(doc)) { last = 0; schedule(); }
+  }
+  // Pointer-follow and the animation loop only while motion is welcome.
+  function follow(on) {
+    var change = on ? listen : unlisten;
+    change.call(window, 'pointermove', onMove, opts);
+    change.call(window, 'pointerout', onOut, opts);
+    change.call(window, 'blur', onBlur, opts);
+    change.call(doc, 'visibilitychange', onVisible, opts);
+  }
+  if (!reduce) follow(true);
   listen.call(window, 'resize', function () { if (reduce) still(); }, opts);
+  // The user can change the motion setting while the page is open.
+  if (motionQuery && typeof motionQuery.addEventListener === 'function') {
+    listen.call(motionQuery, 'change', function (e) {
+      var wanted = !!e.matches;
+      if (wanted === reduce) return;
+      reduce = wanted;
+      follow(!reduce);
+      if (reduce) {
+        presence = 1;
+        focus = { x: 0.5, y: 0.5 };
+        target = { x: 0.5, y: 0.5 };
+        still();
+      } else {
+        last = 0;
+        start();
+      }
+    });
+  }
 
   if (place()) {
     start();

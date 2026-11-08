@@ -127,6 +127,11 @@ pub struct ConsentGate {
     /// One consent ticket per session at a time: a concurrent call for the
     /// same origin waits, then finds the grant instead of prompting again.
     prompts: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Bumped by every policy refresh. A snapshot carries the generation
+    /// current when its policy was read, and never replaces a newer one:
+    /// a call that read the policy before a refresh cannot write it back
+    /// over the refresh.
+    policy_generation: std::sync::atomic::AtomicU64,
 }
 
 impl ConsentGate {
@@ -141,6 +146,7 @@ impl ConsentGate {
             permissions,
             policy,
             prompts: Mutex::new(HashMap::new()),
+            policy_generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -193,6 +199,10 @@ impl ConsentGate {
     /// The policy changed: refresh the snapshot of every live session now,
     /// so page-started hops follow it before the agent's next call.
     pub async fn refresh_policies(&self, project_of: impl Fn(&str) -> String) {
+        let generation = self
+            .policy_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1;
         let sessions = self.grants.session_ids();
         if sessions.is_empty() {
             return;
@@ -200,7 +210,7 @@ impl ConsentGate {
         let ask_sites = self.asks_before_opening_sites().await;
         for session_id in sessions {
             let allow_list = self.allow_list(&project_of(&session_id)).await;
-            self.grants.refresh_policy(&session_id, allow_list, ask_sites);
+            self.grants.refresh_policy(&session_id, generation, allow_list, ask_sites);
         }
         log::info!("[browser-agent] live sessions picked up a browser policy change ask_sites={ask_sites}");
     }
@@ -209,9 +219,18 @@ impl ConsentGate {
     /// synchronous hop checks decide from. Callers hold the session's
     /// prompt lock.
     async fn snapshot_policy(&self, session_id: &str, project_id: &str) {
-        let allow_list = self.allow_list(project_id).await;
-        let ask_sites = self.asks_before_opening_sites().await;
-        self.grants.set_policy(session_id, allow_list, ask_sites);
+        use std::sync::atomic::Ordering;
+        // A refresh that lands while this reads makes the read stale: read
+        // again, so the snapshot is never older than the last refresh.
+        for _ in 0..3 {
+            let generation = self.policy_generation.load(Ordering::Acquire);
+            let allow_list = self.allow_list(project_id).await;
+            let ask_sites = self.asks_before_opening_sites().await;
+            self.grants.set_policy(session_id, generation, allow_list, ask_sites);
+            if self.policy_generation.load(Ordering::Acquire) == generation {
+                return;
+            }
+        }
     }
 
     /// The app's "ask before opening new sites" switch. A policy that
@@ -275,14 +294,18 @@ impl ConsentGate {
             outcome_label(&outcome)
         );
         match outcome {
-            TicketOutcome::Answered(ConsentOption::AllowSession) => {
-                self.keep_file_grant(token, req.session_id, file)
+            TicketOutcome::Answered(ConsentOption::AllowSession) => self.stop.commit(req.session_id, token, || {
+                self.grants.grant_file_once(req.session_id, &file.url, &file.read_access);
+            }),
+            // Never offered; an answer naming it is treated as a denial. A
+            // denial also ends an earlier "allow once" of the same file.
+            TicketOutcome::Answered(ConsentOption::AllowProject | ConsentOption::Deny) => {
+                self.grants.revoke_file(req.session_id, &file.url);
+                Err(confirmation(
+                    "denied_by_user",
+                    "the user did not allow the agent browser to open this file".to_string(),
+                ))
             }
-            // Never offered; an answer naming it is treated as a denial.
-            TicketOutcome::Answered(ConsentOption::AllowProject | ConsentOption::Deny) => Err(confirmation(
-                "denied_by_user",
-                "the user did not allow the agent browser to open this file".to_string(),
-            )),
             TicketOutcome::Unattended => Err(confirmation(
                 "unattended",
                 "no one can approve opening a file outside the project right now; ask the user, or copy it into the project".to_string(),
@@ -299,6 +322,23 @@ impl ConsentGate {
         }
     }
 
+    /// Grant the project file a page on `from` linked to, in one step with
+    /// the check that the session still holds `from`, under the locks Stop
+    /// and revokes take: `Ok(false)` when `from` lost its grant, an error
+    /// when Stop came first.
+    pub fn keep_linked_file_grant(
+        &self,
+        token: &StopToken,
+        session_id: &str,
+        from: &Url,
+        file: &LocalFile,
+    ) -> Result<bool, BrowserError> {
+        self.stop.commit(session_id, token, || {
+            self.grants
+                .grant_file_if_held(session_id, from, &file.url, &file.read_access)
+        })
+    }
+
     /// Keep the grant of the checked `file` unless Stop came first.
     pub fn keep_file_grant(
         &self,
@@ -309,6 +349,18 @@ impl ConsentGate {
         self.stop.commit(session_id, token, || {
             self.grants.grant_file(session_id, &file.url, &file.read_access);
         })
+    }
+
+    /// Tab `tab` of the session committed `url`, or closed (`None`): end
+    /// the "allow once" file grants no tab shows any longer.
+    pub fn tab_moved(&self, session_id: &str, tab: &str, url: Option<&Url>) {
+        let ended = self.grants.tab_moved(session_id, tab, url);
+        if ended > 0 {
+            log::info!(
+                "[browser-agent] allow-once file grant ended count={ended} reason=tab_left_file session={}",
+                crate::logging::redact_session_id(session_id)
+            );
+        }
     }
 
     /// Whether the session holds a grant for the exact file `url`, and the

@@ -6,6 +6,7 @@
 use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
+use tauri::Url;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::dialogs::Disposition;
@@ -190,7 +191,20 @@ pub(super) async fn consume(
 ) {
     while let Some((label, event)) = rx.recv().await {
         let kind = event_kind(&event);
+        // A tab that commits another page, or closes, may end an "allow
+        // once" file grant.
+        let moved = match &event {
+            TabEvent::NavCommitted { url, .. } => Some(url.parse::<Url>().ok()),
+            TabEvent::Closed => Some(None),
+            _ => None,
+        };
+        let session = moved
+            .as_ref()
+            .and_then(|_| registry.lock().get(&label).and_then(|r| r.session_id().map(str::to_string)));
         let applied = apply(&mut registry.lock(), &label, event);
+        if let (Some(url), Some(session), Some(host)) = (moved, session, host.upgrade()) {
+            host.gate.tab_moved(&session, &label, url.as_ref());
+        }
         // Observations arrive per request and per message: too many to log.
         if !matches!(kind, "console" | "network") {
             log::debug!("[browser-tab] {kind} on tab {}", label_prefix(&label));

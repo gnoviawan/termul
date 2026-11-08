@@ -23,7 +23,16 @@ pub fn attach(core: &ICoreWebView2, events: &TabEvents) -> bool {
         let mut uri = PWSTR::null();
         // SAFETY: COM calls on the event's own args, on the UI thread;
         // `take_pwstr` frees the returned string.
-        unsafe { args.Uri(&mut uri)? };
+        if unsafe { args.Uri(&mut uri) }.is_err() {
+            // A frame whose target cannot be read cannot be checked.
+            log::warn!(
+                "[browser-tab] frame navigation cancelled tab={} reason=uri_unreadable",
+                events.label()
+            );
+            // SAFETY: as above.
+            unsafe { args.SetCancel(true)? };
+            return Ok(());
+        }
         let uri = take_pwstr(uri);
         // Only file frames are guarded. A file URL the parser rejects
         // cannot be granted: refuse it.

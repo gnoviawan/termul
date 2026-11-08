@@ -16,8 +16,11 @@
 use std::fs::{File, Metadata};
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use tauri::Url;
+use tokio::sync::Semaphore;
 
 use super::{BrowserError, DesktopBrowserHost, ERR_CONFIRMATION, ERR_TIMEOUT};
 use crate::browser_automation::budgets::{self, Deadline};
@@ -84,10 +87,14 @@ pub fn is_secret(path: &Path) -> bool {
         || name_is_secret(file)
 }
 
-/// A path component carrying a `:` names an NTFS alternate data stream.
+/// On Windows, a path component carrying a `:` names an NTFS alternate
+/// data stream. Elsewhere `:` is an ordinary file-name character.
 pub fn names_a_stream(path: &Path) -> bool {
-    path.components()
-        .any(|c| matches!(c, Component::Normal(name) if name.to_string_lossy().contains(':')))
+    let windows = std::path::MAIN_SEPARATOR == '\\';
+    windows
+        && path
+            .components()
+            .any(|c| matches!(c, Component::Normal(name) if name.to_string_lossy().contains(':')))
 }
 
 /// A root no project lives at: a drive or filesystem root, the home folder
@@ -226,13 +233,21 @@ pub fn is_file_url(url: &str) -> bool {
     url.parse::<Url>().is_ok_and(|url| url.scheme() == "file")
 }
 
-/// A Windows verbatim path (`\\?\C:\...`) in its everyday spelling.
+/// A Windows verbatim drive path (`\\?\C:\...`) in its everyday spelling.
+/// Every other verbatim form (`\\?\UNC\...`, `\\?\Volume{...}\...`) has
+/// no everyday spelling and stays as it is.
 fn plain(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
     match text.strip_prefix(r"\\?\") {
-        Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
+        Some(rest) if is_drive_path(rest) => PathBuf::from(rest),
         _ => path.to_path_buf(),
     }
+}
+
+/// `X:\...`: a drive letter, a colon, a separator.
+fn is_drive_path(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/')
 }
 
 /// Check the `file://` URL `url`; `root` is the session's project folder.
@@ -283,6 +298,66 @@ pub fn check_local_file(root: Option<&Path>, url: &str) -> Result<LocalFile, Fil
     })
 }
 
+/// File checks that may run at once. A check on a hung mount can outlive
+/// its caller's timeout in a blocking worker; the permit leaves with that
+/// work, so a stuck disk holds at most this many workers.
+pub const MAX_FILE_CHECKS: usize = 4;
+
+static FILE_CHECKS: std::sync::LazyLock<Arc<Semaphore>> =
+    std::sync::LazyLock::new(|| Arc::new(Semaphore::new(MAX_FILE_CHECKS)));
+
+/// Why a bounded file check gave no answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckStall {
+    /// Every check slot stayed taken until the wait ran out.
+    Busy,
+    /// The check did not finish in time.
+    TimedOut,
+    /// The blocking worker failed.
+    Failed,
+}
+
+impl CheckStall {
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::Busy => "file_check_busy",
+            Self::TimedOut => "file_check_timeout",
+            Self::Failed => "file_check_failed",
+        }
+    }
+}
+
+/// [`check_local_file`] on a blocking worker, holding one of `slots` until
+/// the work itself ends (not when the caller stops waiting), all within
+/// `wait`.
+pub async fn bounded_check(
+    slots: &Arc<Semaphore>,
+    root: Option<PathBuf>,
+    url: String,
+    wait: Duration,
+) -> Result<Result<LocalFile, FileRefusal>, CheckStall> {
+    let until = tokio::time::Instant::now() + wait;
+    let permit = match tokio::time::timeout_at(until, Arc::clone(slots).acquire_owned()).await {
+        Ok(Ok(permit)) => permit,
+        Ok(Err(_)) => return Err(CheckStall::Failed),
+        Err(_) => return Err(CheckStall::Busy),
+    };
+    let work = tokio::task::spawn_blocking(move || {
+        let _slot = permit;
+        check_local_file(root.as_deref(), &url)
+    });
+    match tokio::time::timeout_at(until, work).await {
+        Ok(Ok(checked)) => Ok(checked),
+        Ok(Err(_)) => Err(CheckStall::Failed),
+        Err(_) => Err(CheckStall::TimedOut),
+    }
+}
+
+/// [`bounded_check`] on the host's shared slots.
+pub async fn shared_check(root: Option<PathBuf>, url: String, wait: Duration) -> Result<Result<LocalFile, FileRefusal>, CheckStall> {
+    bounded_check(&FILE_CHECKS, root, url, wait).await
+}
+
 impl DesktopBrowserHost {
     /// Check the file a `navigate` or `new_tab` call names, within the
     /// call's deadline.
@@ -293,21 +368,22 @@ impl DesktopBrowserHost {
         deadline: Deadline,
     ) -> Result<LocalFile, BrowserError> {
         let root = (self.root_of)(session_id);
-        let url = url.to_string();
-        let checking = tokio::task::spawn_blocking(move || check_local_file(root.as_deref(), &url));
-        let checked = match tokio::time::timeout(deadline.clamp(budgets::EVAL_STEP), checking).await {
-            Ok(joined) => joined.map_err(|_| BrowserError::internal("file check did not finish"))?,
-            Err(_) => {
+        let checked = match shared_check(root, url.to_string(), deadline.clamp(budgets::EVAL_STEP)).await {
+            Ok(checked) => checked,
+            Err(CheckStall::Failed) => return Err(BrowserError::internal("file check did not finish")),
+            Err(stall) => {
                 log::warn!(
-                    "[browser-agent] file target check timed out code={ERR_TIMEOUT} session={}",
+                    "[browser-agent] file target check stalled code={ERR_TIMEOUT} reason={} session={}",
+                    stall.reason(),
                     crate::logging::redact_session_id(session_id)
                 );
-                return Err(BrowserError::new(
-                    ERR_TIMEOUT,
-                    "the file could not be checked in time (a slow or unresponsive disk?)",
-                )
-                .with_reason("file_check_timeout")
-                .with_arg_keys(&["url"]));
+                let message = match stall {
+                    CheckStall::Busy => "other file checks are still running (a slow or unresponsive disk?); try again",
+                    _ => "the file could not be checked in time (a slow or unresponsive disk?)",
+                };
+                return Err(BrowserError::new(ERR_TIMEOUT, message)
+                    .with_reason(stall.reason())
+                    .with_arg_keys(&["url"]));
             }
         };
         match checked {
@@ -333,7 +409,8 @@ impl DesktopBrowserHost {
 
     /// The URL a granted `file://` target loads: checked again (a swap
     /// since consent changes the real path, which then holds no grant),
-    /// and always the real path's URL, never the agent's string.
+    /// and always the real path's URL, never the agent's path, with the
+    /// agent's query and fragment kept (the grant key ignores both).
     pub(super) async fn granted_file_target(
         &self,
         session_id: &str,
@@ -352,12 +429,18 @@ impl DesktopBrowserHost {
             )
             .with_reason("file_changed"));
         }
-        Ok(file.url.into())
+        let mut loaded = file.url;
+        if let Ok(asked) = url.parse::<Url>() {
+            loaded.set_query(asked.query());
+            loaded.set_fragment(asked.fragment());
+        }
+        Ok(loaded.into())
     }
 
-    /// Send tab `label` to `url`. A granted file loads with the read
-    /// access its grant names (WebKit reads files only that way).
-    pub(super) fn load_page(&self, label: &str, url: String) -> Result<(), String> {
+    /// Send tab `label` to `url`. A granted file loads through the engine
+    /// with the read access its grant names (WKWebView reads files only
+    /// that way); an engine without such a load navigates to it.
+    pub(super) async fn load_page(&self, label: &str, url: String) -> Result<(), String> {
         let file = url
             .parse::<Url>()
             .ok()
@@ -371,9 +454,22 @@ impl DesktopBrowserHost {
             .get(label)
             .and_then(|record| record.session_id().map(str::to_string));
         let access = session.and_then(|session| self.gate.file_read_access(&session, &file));
-        match access {
-            Some(read_access) => self.surface.navigate_file(label, url, read_access),
-            None => Err("the file is not granted to this tab's session".to_string()),
+        let Some(read_access) = access else {
+            return Err("the file is not granted to this tab's session".to_string());
+        };
+        match self.engine.load_file(label, &file, &read_access).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind == crate::browser_automation::engine::EngineErrorKind::Unsupported => {
+                self.surface.navigate(label, url)
+            }
+            Err(e) => {
+                log::warn!(
+                    "[browser-agent] local file load failed tab={} ({:?})",
+                    super::events::label_prefix(label),
+                    e.kind
+                );
+                Err(format!("the engine did not load the file ({:?})", e.kind))
+            }
         }
     }
 }

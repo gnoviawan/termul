@@ -39,6 +39,8 @@ fn the_agent_target_check_adds_file_urls_and_nothing_else() {
         assert_eq!(err.code, ERR_INVALID_PARAMS, "{bad}");
         assert_eq!(err.arg_keys, vec!["url"], "{bad}");
     }
+    let ftp = check_target_url("ftp://x.example/").unwrap_err();
+    assert!(ftp.message.contains("(http/https/file only)"), "{}", ftp.message);
 }
 
 #[test]

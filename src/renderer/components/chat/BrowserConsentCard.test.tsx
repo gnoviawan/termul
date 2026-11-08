@@ -122,6 +122,7 @@ describe('BrowserConsentCard', () => {
         consent={ticket({
           origin: '/home/me/notes/a.html',
           targetKind: 'file',
+          fileName: 'a.html',
           targetUrl: 'file:///home/me/notes/a.html',
           targetUrlBytes: 28,
           options: ['allow_session', 'deny']
@@ -143,6 +144,23 @@ describe('BrowserConsentCard', () => {
     expect(path).toHaveClass('break-all')
     expect(path).not.toHaveClass('truncate')
     expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Allow once', 'Deny'])
+  })
+
+  it('shows the host-sent file name, never one split out of the escaped path', () => {
+    render(
+      <BrowserConsentCard
+        consent={ticket({
+          origin: '/home/me/invoice\\u{202E}report.html',
+          targetKind: 'file',
+          fileName: 'invoice\\u{202E}report.html',
+          targetUrl: 'file:///home/me/invoice%E2%80%AEreport.html',
+          targetUrlBytes: 44,
+          options: ['allow_session', 'deny']
+        })}
+      />
+    )
+    expect(screen.getByText('invoice\\u{202E}report.html')).toBeInTheDocument()
+    expect(screen.queryByText('u{202E}report.html')).not.toBeInTheDocument()
   })
 
   it('asks about one sensitive action and offers only what the host offered', () => {

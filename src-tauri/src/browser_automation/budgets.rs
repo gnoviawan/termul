@@ -80,6 +80,10 @@ pub const ACTION_EVAL: Duration = EVAL_STEP;
 pub const ACTION_SCREENSHOT: Duration = EVAL_STEP
     .saturating_add(OVERLAY_TOGGLE)
     .saturating_add(OVERLAY_TOGGLE);
+/// How long a hidden agent overlay waits for the host's show before it
+/// shows itself: past the whole screenshot, so it never reappears mid-capture,
+/// yet a failed, timed-out or dropped restore cannot leave it hidden.
+pub const OVERLAY_SELF_RESTORE: Duration = ACTION_SCREENSHOT.saturating_add(secs(10));
 /// How long the core waits for an element to become actionable, and how
 /// often it reads the element's facts again.
 pub const ACTIONABILITY_WAIT: Duration = secs(5);

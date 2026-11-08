@@ -166,7 +166,7 @@ fn the_session_snapshot_decides_whether_new_sites_ask() {
         matches!(grants.check_hop("s1", &url("https://new.example/")), HopVerdict::Ungranted(..)),
         "a session with no snapshot asks"
     );
-    grants.set_policy("s1", Vec::new(), false);
+    grants.set_policy("s1", 0, Vec::new(), false);
     assert_eq!(grants.check_hop("s1", &url("https://new.example/")), HopVerdict::Allow);
     assert_eq!(grants.check_hop("s1", &url("http://192.168.1.1/")), HopVerdict::Allow);
     assert!(grants.opened_unasked("s1", &url("https://new.example/")));
@@ -180,7 +180,7 @@ fn the_session_snapshot_decides_whether_new_sites_ask() {
         grants.check_hop("s1", &url("http://127.0.0.1:61379/")),
         HopVerdict::Allow
     );
-    grants.set_policy("s1", Vec::new(), true);
+    grants.set_policy("s1", 0, Vec::new(), true);
     assert!(
         matches!(grants.check_hop("s1", &url("https://new.example/")), HopVerdict::Ungranted(..)),
         "turning the switch on asks again"
@@ -189,9 +189,77 @@ fn the_session_snapshot_decides_whether_new_sites_ask() {
 }
 
 #[test]
+fn a_linked_file_is_granted_only_while_its_source_is_held() {
+    let grants = SessionGrants::default();
+    let source = url("file:///C:/proj/index.html");
+    let target = url("file:///C:/proj/about.html");
+    let root = std::path::Path::new("C:/proj");
+    assert!(!grants.grant_file_if_held("s1", &source, &target, root), "no session, no grant");
+    grants.grant_file("s1", &source, root);
+    assert!(grants.grant_file_if_held("s1", &source, &target, root));
+    assert_eq!(grants.check_hop("s1", &target), HopVerdict::Allow);
+    grants.revoke_session("s1");
+    let next = url("file:///C:/proj/next.html");
+    assert!(!grants.grant_file_if_held("s1", &target, &next, root), "a revoked source grants nothing");
+    assert_eq!(grants.check_hop("s1", &next), HopVerdict::Deny(DenyReason::FileNotGranted));
+}
+
+/// An "allow once" file lasts while a tab stays on it.
+#[test]
+fn an_allow_once_file_ends_when_its_tab_leaves_it() {
+    let grants = SessionGrants::default();
+    let file = url("file:///C:/notes/a.html");
+    let root = std::path::Path::new("C:/notes/a.html");
+    grants.grant_file_once("s1", &file, root);
+    assert_eq!(grants.tab_moved("s1", "tab-1", Some(&url("file:///C:/notes/a.html#part"))), 0, "the approved load lands");
+    assert_eq!(grants.tab_moved("s1", "tab-1", Some(&url("file:///C:/notes/a.html?again"))), 0, "the same file again");
+    assert_eq!(grants.check_hop("s1", &file), HopVerdict::Allow, "usable while the tab stays");
+    assert_eq!(grants.tab_moved("s1", "tab-2", Some(&url("https://example.com/"))), 0, "another tab changes nothing");
+    assert_eq!(grants.tab_moved("s1", "tab-1", Some(&url("https://example.com/"))), 1);
+    assert_eq!(grants.check_hop("s1", &file), HopVerdict::Deny(DenyReason::FileNotGranted));
+
+    grants.grant_file_once("s1", &file, root);
+    grants.tab_moved("s1", "tab-3", Some(&file));
+    assert_eq!(grants.tab_moved("s1", "tab-3", None), 1, "closing the tab ends it too");
+
+    grants.grant_file_once("s1", &file, root);
+    grants.revoke_file("s1", &file);
+    assert_eq!(grants.check_hop("s1", &file), HopVerdict::Deny(DenyReason::FileNotGranted));
+}
+
+/// A project file's grant is not an "allow once": leaving it keeps it.
+#[test]
+fn a_project_file_grant_survives_its_tab_leaving() {
+    let grants = SessionGrants::default();
+    let file = url("file:///C:/proj/index.html");
+    grants.grant_file("s1", &file, std::path::Path::new("C:/proj"));
+    grants.tab_moved("s1", "tab-1", Some(&file));
+    assert_eq!(grants.tab_moved("s1", "tab-1", Some(&url("https://example.com/"))), 0);
+    assert_eq!(grants.check_hop("s1", &file), HopVerdict::Allow);
+}
+
+/// A call that read the policy before a refresh cannot write its older
+/// snapshot back over the refresh.
+#[test]
+fn an_older_policy_snapshot_never_replaces_a_newer_one() {
+    let grants = SessionGrants::default();
+    grants.set_policy("s1", 0, Vec::new(), false);
+    grants.refresh_policy("s1", 1, Vec::new(), true);
+    grants.set_policy("s1", 0, Vec::new(), false);
+    assert!(
+        matches!(grants.check_hop("s1", &url("https://new.example/")), HopVerdict::Ungranted(..)),
+        "the refresh's switch holds"
+    );
+    grants.set_policy("s1", 1, Vec::new(), false);
+    assert_eq!(grants.check_hop("s1", &url("https://new.example/")), HopVerdict::Allow, "a current read lands");
+    grants.refresh_policy("gone", 2, Vec::new(), true);
+    assert!(!grants.session_ids().contains(&"gone".to_string()), "a refresh creates no session");
+}
+
+#[test]
 fn file_urls_pass_only_on_an_exact_grant() {
     let grants = SessionGrants::default();
-    grants.set_policy("s1", Vec::new(), false);
+    grants.set_policy("s1", 0, Vec::new(), false);
     let page = url("file:///C:/proj/dist/index.html");
     assert_eq!(
         grants.check_hop("s1", &page),
@@ -250,12 +318,15 @@ fn one_file_has_one_grant_key_however_its_url_is_spelled() {
     let grants = SessionGrants::default();
     let granted = url("file:///C:/proj/my%20dir/caf%C3%A9.html");
     grants.grant_file("s1", &granted, std::path::Path::new("C:/proj"));
-    for spelling in [
+    let mut spellings = vec![
         "file:///C:/proj/my dir/café.html",
         "file:///C:/proj/my%20dir/caf%c3%a9.html",
-        "file:///c:/proj/my%20dir/caf%C3%A9.html",
-        "file:///c:/proj/my dir/café.html#top",
-    ] {
+        "file:///C:/proj/my dir/café.html#top",
+    ];
+    if WINDOWS {
+        spellings.extend(["file:///c:/proj/my%20dir/caf%C3%A9.html", "file:///c:/proj/my dir/café.html#top"]);
+    }
+    for spelling in spellings {
         assert_eq!(grants.check_hop("s1", &url(spelling)), HopVerdict::Allow, "{spelling}");
         assert!(grants.file_read_access("s1", &url(spelling)).is_some(), "{spelling}");
     }
@@ -266,11 +337,22 @@ fn one_file_has_one_grant_key_however_its_url_is_spelled() {
     );
 }
 
+/// Whether this host's paths are Windows paths (the core keeps no
+/// platform cfgs).
+const WINDOWS: bool = std::path::MAIN_SEPARATOR == '\\';
+
+/// Drive letters ignore case on Windows only; elsewhere `/C:` and `/c:`
+/// are two different folders.
 #[test]
-fn a_lowercase_drive_letter_meets_an_uppercase_grant() {
+fn a_lowercase_drive_letter_grant_meets_an_uppercase_url() {
     let grants = SessionGrants::default();
     grants.grant_file("s1", &url("file:///c:/proj/index.html"), std::path::Path::new("c:/proj"));
-    assert_eq!(grants.check_hop("s1", &url("file:///C:/proj/index.html")), HopVerdict::Allow);
+    let verdict = grants.check_hop("s1", &url("file:///C:/proj/index.html"));
+    if WINDOWS {
+        assert_eq!(verdict, HopVerdict::Allow);
+    } else {
+        assert_eq!(verdict, HopVerdict::Deny(DenyReason::FileNotGranted));
+    }
 }
 
 #[test]
@@ -314,6 +396,7 @@ fn hop_checks_read_the_allow_list_snapshot_and_revocation_clears_grants() {
     let grants = SessionGrants::default();
     grants.set_policy(
         "s1",
+        0,
         vec![OriginPattern::parse("https://*.corp.example").unwrap()],
         true,
     );

@@ -1,11 +1,14 @@
 //! Local `file://` pages on agent tabs: a page in the project opens without
-//! a prompt and loads by its real path; a frame or object on it that points
-//! at a file it holds no grant for is blocked; the agent's screenshot of it
-//! works with the agent overlay hidden and restored; secrets are refused
-//! and a file outside the project asks. A file page's link to another
-//! project page loads; one to an outside file stays cancelled and is
-//! reported. The agent overlay is mounted once, found by the hide and
-//! showing again after a capture.
+//! a prompt and loads by its real path; an iframe on it that points at a
+//! file it holds no grant for is blocked (the page also embeds the file as
+//! an `<object>`; the case checks that the file's text never reaches the
+//! outline, not how the engine renders the object); the agent's screenshot
+//! of it works; secrets are refused and a file outside the project asks. A
+//! file page's link to another project page loads; one to an outside file
+//! stays cancelled and is reported (on macOS WKWebView refuses it before the
+//! host's hook runs, so the case checks the tab stayed put instead). The agent overlay is mounted once,
+//! found by the hide, absent from the agent's capture and showing again
+//! after it.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -96,6 +99,13 @@ pub async fn file_pages(c: &Ctx<'_>) -> CaseResult {
 }
 
 const ABOUT_READY: &str = "About page ready";
+/// WKWebView loads a file page with read access to the project folder and
+/// refuses a link outside it on its own, before the host's navigation hook
+/// sees it, so no `page.fileLinks` note follows; the tab stays put. Every
+/// other engine hands the hop to the hook, which reports it.
+const ENGINE_REFUSES_OUTSIDE_FILE_LINKS: bool = cfg!(target_os = "macos");
+/// How long the case watches a WKWebView tab for a note that never comes.
+const WEBKIT_LINK_WAIT: Duration = Duration::from_secs(3);
 /// How long the iris may take to close on a new page.
 const OVERLAY_WAIT: Duration = Duration::from_secs(5);
 /// The square sampled at each corner of a capture, and its inset.
@@ -126,7 +136,7 @@ pub async fn file_link_hops(c: &Ctx<'_>) -> CaseResult {
     let outside_link = c.ref_of("link", "Outside").await?;
     // The check may finish before the click replies, which then reports it.
     let mut reply = c.call("click", json!({ "ref": outside_link })).await?;
-    let until = Instant::now() + LINK_WAIT;
+    let until = Instant::now() + if ENGINE_REFUSES_OUTSIDE_FILE_LINKS { WEBKIT_LINK_WAIT } else { LINK_WAIT };
     loop {
         let links = &reply["page"]["fileLinks"];
         if links[0]["url"].is_string() {
@@ -136,7 +146,17 @@ pub async fn file_link_hops(c: &Ctx<'_>) -> CaseResult {
             break;
         }
         if Instant::now() > until {
-            return Err(mismatch("the cancelled outside link was never reported"));
+            if !ENGINE_REFUSES_OUTSIDE_FILE_LINKS {
+                return Err(mismatch("the cancelled outside link was never reported"));
+            }
+            // WKWebView refuses the hop itself (outside the page's read
+            // access) before the navigation hook runs: nothing to report,
+            // and nothing may have loaded.
+            let snap = c.snapshot().await?;
+            if !snap.text.contains("Links page ready") {
+                return Err(mismatch(format!("the refused outside link left the page: {}", snap.text)));
+            }
+            break;
         }
         tokio::time::sleep(POLL).await;
         reply = c.call("snapshot", json!({})).await?;

@@ -2,8 +2,10 @@
 //! (decided by [`super::dialogs`], answered through the engine), popups
 //! (opened as owned popup tabs), and external-app launches (denied on
 //! every tab). Also the reply side: a dialog that opens while a call runs
-//! ends the call with the dialog in `page.dialog`, and popup outcomes
-//! reach the opener's next reply as `data.popups`.
+//! ends the call with the dialog in `page.dialog`, popup outcomes reach the
+//! opener's next reply as `data.popups`, and a file page's links the host
+//! did not follow reach the tab's next reply as `page.fileLinks` (their
+//! URLs are page-chosen).
 
 use std::sync::{Arc, Weak};
 

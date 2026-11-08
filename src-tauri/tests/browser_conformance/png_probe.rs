@@ -75,6 +75,9 @@ pub fn decode(bytes: &[u8]) -> Result<Image, String> {
         at += 12 + len;
     }
     let header = header.ok_or("no IHDR")?;
+    if header.len() != 13 {
+        return Err(format!("IHDR is {} bytes, not 13", header.len()));
+    }
     let (width, height) = (be32(&header[0..]), be32(&header[4..]));
     let channels = match (header[8], header[9], header[12]) {
         (8, 2, 0) => 3,

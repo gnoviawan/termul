@@ -39,6 +39,11 @@ export interface BrowserConsentTicket {
   origin: string
   /** Absent reads as `web`. */
   targetKind?: BrowserConsentTargetKind
+  /**
+   * For a file ticket, the file's name as the host extracted and escaped it.
+   * Clients never derive it from `origin`, whose escapes hold backslashes.
+   */
+  fileName?: string
   /** Full target URL with a long query cut by the host. */
   targetUrl: string
   /** Byte length of the uncut target URL. */
@@ -93,6 +98,7 @@ export function parseBrowserConsentTicket(event: unknown): BrowserConsentTicket 
     sessionId,
     origin: browser.origin,
     targetKind: browser.targetKind === 'file' ? 'file' : 'web',
+    fileName: typeof browser.fileName === 'string' ? browser.fileName : undefined,
     targetUrl: browser.targetUrl,
     targetUrlBytes:
       typeof browser.targetUrlBytes === 'number'

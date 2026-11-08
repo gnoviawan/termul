@@ -126,6 +126,7 @@ describe('BrowserConsentStrip', () => {
       'req-1': consentEvent({
         origin: '/home/me/notes/a.html',
         targetKind: 'file',
+        fileName: 'a.html',
         targetUrl: 'file:///home/me/notes/a.html',
         targetUrlBytes: 28,
         options: ['allow_session', 'deny']

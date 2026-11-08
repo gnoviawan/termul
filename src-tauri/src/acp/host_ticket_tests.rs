@@ -299,6 +299,10 @@ async fn a_file_ticket_names_the_file_and_offers_only_allow_once_or_deny() {
     assert_eq!(payload["toolCall"]["title"], "Open the file C:\\notes\\a.html in the agent browser");
     let browser = &payload["_meta"]["termul"]["browser"];
     assert_eq!(browser["targetKind"], "file");
+    let expected_name = std::path::Path::new("C:\\notes\\a.html")
+        .file_name()
+        .map_or("C:\\notes\\a.html".to_string(), |n| n.to_string_lossy().into_owned());
+    assert_eq!(browser["fileName"], expected_name.as_str());
     assert_eq!(browser["origin"], "C:\\notes\\a.html");
     assert_eq!(browser["targetUrl"], "file:///C:/notes/a.html");
     assert_eq!(
@@ -329,6 +333,34 @@ fn file_names_lose_the_characters_that_could_disguise_them() {
     assert_ne!(display_safe("ab"), display_safe("a\u{200B}b"), "different names never read the same");
 }
 
+#[test]
+fn every_invisible_character_is_shown_as_an_escape() {
+    for hidden in [
+        '\u{00AD}', '\u{034F}', '\u{061C}', '\u{115F}', '\u{1160}', '\u{17B4}', '\u{17B5}', '\u{180B}',
+        '\u{180F}', '\u{2061}', '\u{2064}', '\u{3164}', '\u{FFA0}', '\u{FE00}', '\u{FE0F}', '\u{E0100}',
+        '\u{E01EF}', '\u{E0000}', '\u{E0041}', '\u{E007F}', '\u{FFF9}', '\u{FFFB}', '\u{0000}', '\u{007F}',
+    ] {
+        let shown = display_safe(&format!("a{hidden}b"));
+        assert_eq!(shown, format!("a\\u{{{:04X}}}b", u32::from(hidden)), "{:04X}", u32::from(hidden));
+    }
+}
+
+/// A literal `\u{202E}` typed into a file name must not read like the
+/// escape of a hidden override.
+#[test]
+fn a_literal_escape_in_a_name_reads_differently_from_a_hidden_character() {
+    let literal = display_safe("invoice\\u{202E}lmth.exe");
+    let hidden = display_safe("invoice\u{202E}lmth.exe");
+    assert_eq!(literal, "invoice\\\\u{202E}lmth.exe");
+    assert_eq!(hidden, "invoice\\u{202E}lmth.exe");
+    assert_ne!(literal, hidden);
+    assert_eq!(
+        display_safe("C:\\Users\\u\\notes.html"),
+        "C:\\Users\\u\\notes.html",
+        "a backslash before a plain `u` stays single"
+    );
+}
+
 #[tokio::test]
 async fn a_file_ticket_shows_its_path_and_upload_name_without_bidi_controls() {
     let (recorder, tickets) = tickets(Duration::ZERO);
@@ -345,6 +377,11 @@ async fn a_file_ticket_shows_its_path_and_upload_name_without_bidi_controls() {
     raised(&tickets, &recorder).await;
     let payload = recorder.0.lock()[0].2.clone();
     assert_eq!(payload["_meta"]["termul"]["browser"]["origin"], "/notes/invoice\\u{202E}lmth.exe");
+    assert_eq!(
+        payload["_meta"]["termul"]["browser"]["fileName"],
+        "invoice\\u{202E}lmth.exe",
+        "the host names the file; no client splits the escaped path"
+    );
     assert_eq!(
         payload["toolCall"]["title"],
         "Open the file /notes/invoice\\u{202E}lmth.exe in the agent browser"

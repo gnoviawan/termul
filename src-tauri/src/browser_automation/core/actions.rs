@@ -51,7 +51,11 @@ pub(super) fn check_target_url(url: &str) -> Result<AgentTarget, BrowserError> {
         .map_err(|_| BrowserError::invalid(format!("invalid url: {url}")).with_arg_keys(&["url"]))?;
     match parsed.scheme() {
         "file" => Ok(AgentTarget::File(parsed.to_string())),
-        _ => check_web_url(url).map(AgentTarget::Web),
+        "http" | "https" => check_web_url(url).map(AgentTarget::Web),
+        other => Err(BrowserError::invalid(format!(
+            "scheme '{other}' is not allowed (http/https/file only)"
+        ))
+        .with_arg_keys(&["url"])),
     }
 }
 
@@ -418,7 +422,7 @@ impl DesktopBrowserHost {
         let (label, rx) = match target {
             Ok(Some(label)) => {
                 let rx = self.navigation_waiter(&label)?;
-                self.load_page(&label, url).map_err(BrowserError::internal)?;
+                self.load_page(&label, url).await.map_err(BrowserError::internal)?;
                 (label, rx)
             }
             // No tabId and the session has no default tab: open one whose

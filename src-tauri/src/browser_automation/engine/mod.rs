@@ -17,7 +17,6 @@ pub mod dialogs;
 pub mod events;
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
 pub mod file_chooser;
-pub mod file_pages;
 pub mod files;
 pub mod hooks;
 pub mod observe;
@@ -317,6 +316,19 @@ pub trait BrowserEngine: Send + Sync {
     }
     /// Run a helper in `frame`'s isolated world (`isolated_eval`).
     fn evaluate_in_frame<'a>(&'a self, _tab: &'a str, _frame: &'a str, _script: Script) -> EngineFuture<'a, Value> {
+        Box::pin(async { Err(EngineError::new(EngineErrorKind::Unsupported)) })
+    }
+    /// Load the host-checked local file `url` into `tab`, letting its page
+    /// read `read_access` (the project folder for a project file, the file
+    /// itself otherwise), on engines that read files only through such a
+    /// scope (WKWebView). `Unsupported` means the engine reads files through
+    /// an ordinary navigation, which the caller then makes.
+    fn load_file<'a>(
+        &'a self,
+        _tab: &'a str,
+        _url: &'a tauri::Url,
+        _read_access: &'a std::path::Path,
+    ) -> EngineFuture<'a, ()> {
         Box::pin(async { Err(EngineError::new(EngineErrorKind::Unsupported)) })
     }
     /// Set `files` (host-staged paths) on the file input at `path` in

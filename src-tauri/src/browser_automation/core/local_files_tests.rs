@@ -1,4 +1,8 @@
 use std::fs;
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::sync::Semaphore;
 
 use super::*;
 
@@ -139,13 +143,48 @@ fn network_shares_and_other_schemes_are_refused() {
     }
 }
 
-// `names_a_stream` refuses any `:` in a path component on every platform,
-// so this runs everywhere (core stays free of platform cfgs).
+/// Whether this host's paths are Windows paths (the core keeps no
+/// platform cfgs, so the platform is read at run time).
+const WINDOWS: bool = std::path::MAIN_SEPARATOR == '\\';
+
+/// `index.html:hidden` names a stream on Windows; elsewhere it is just a
+/// file name, here a missing one.
 #[test]
-fn an_ntfs_stream_is_refused() {
+fn an_ntfs_stream_is_refused_on_windows_only() {
     let d = dirs();
     let url = format!("{}:hidden", file_url(&d.project.path().join("dist/index.html")));
-    assert_eq!(check_local_file(Some(d.project.path()), &url).unwrap_err(), FileRefusal::Stream);
+    let expected = if WINDOWS { FileRefusal::Stream } else { FileRefusal::Missing };
+    assert_eq!(check_local_file(Some(d.project.path()), &url).unwrap_err(), expected);
+}
+
+#[test]
+fn a_colon_in_a_file_name_is_a_stream_on_windows_only() {
+    assert_eq!(names_a_stream(Path::new("notes:v2.html")), WINDOWS);
+    assert_eq!(names_a_stream(Path::new("site/notes:v2.html")), WINDOWS);
+    assert!(!names_a_stream(Path::new("site/notes-v2.html")));
+}
+
+#[test]
+fn only_a_verbatim_drive_path_loses_its_prefix() {
+    assert_eq!(plain(Path::new(r"\\?\C:\proj\a.html")), PathBuf::from(r"C:\proj\a.html"));
+    for kept in [r"\\?\UNC\server\share\a.html", r"\\?\Volume{0b1c}\proj\a.html", "/home/me/a.html"] {
+        assert_eq!(plain(Path::new(kept)), PathBuf::from(kept), "{kept}");
+    }
+}
+
+#[tokio::test]
+async fn file_checks_are_admitted_only_while_a_slot_is_free() {
+    let d = dirs();
+    let page = file_url(&d.project.path().join("dist/index.html"));
+    let full = Arc::new(Semaphore::new(0));
+    let busy = bounded_check(&full, Some(d.project.path().to_path_buf()), page.clone(), Duration::from_millis(50)).await;
+    assert_eq!(busy.err(), Some(CheckStall::Busy));
+    assert_eq!(CheckStall::Busy.reason(), "file_check_busy");
+
+    let one = Arc::new(Semaphore::new(1));
+    let checked = bounded_check(&one, Some(d.project.path().to_path_buf()), page, Duration::from_secs(5)).await;
+    assert!(checked.is_ok_and(|file| file.is_ok_and(|file| file.inside)));
+    assert_eq!(one.available_permits(), 1, "the slot comes back once the work ends");
 }
 
 #[test]
@@ -160,7 +199,7 @@ fn the_shared_deny_list_still_marks_upload_secrets() {
     assert!(is_secret(Path::new("home/.aws/config")));
     assert!(is_secret(Path::new("deploy.KEY")));
     assert!(!is_secret(Path::new("environment.md")));
-    assert!(names_a_stream(Path::new("a.txt:stream")));
+    assert_eq!(names_a_stream(Path::new("a.txt:stream")), WINDOWS);
 }
 
 /// The host end to end: the agent's file target is checked, granted and
@@ -199,7 +238,7 @@ mod host {
         assert_eq!(reply["ok"], true, "{reply}");
         assert!(perms.requests.lock().is_empty(), "no prompt for a project file");
         let real = Url::from_file_path(fs::canonicalize(page.as_path()).unwrap()).unwrap().to_string();
-        let loads = h.pane.file_loads.lock().clone();
+        let loads = h.engine.file_loads.lock().clone();
         assert_eq!(loads.len(), 1, "{loads:?}");
         assert_eq!(loads[0].0, real, "the engine gets the real path, never the agent's string");
         assert_eq!(loads[0].1, plain(&fs::canonicalize(d.project.path()).unwrap()));
@@ -223,7 +262,7 @@ mod host {
         let reply = h.call_as("s1", "new_tab", json!({ "url": file_url(&page) })).await;
         assert_eq!(reply["ok"], true, "{reply}");
         assert!(perms.requests.lock().is_empty());
-        assert_eq!(h.pane.file_loads.lock().len(), 1);
+        assert_eq!(h.engine.file_loads.lock().len(), 1);
     }
 
     #[tokio::test]
@@ -238,7 +277,7 @@ mod host {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].0.origin.kind(), "file");
         assert_eq!(requests[0].0.action, ActionClass::Navigate);
-        assert!(h.pane.file_loads.lock().is_empty(), "nothing loaded");
+        assert!(h.engine.file_loads.lock().is_empty(), "nothing loaded");
     }
 
     #[tokio::test]
@@ -258,7 +297,7 @@ mod host {
         let note = d.outside.path().join("a.html");
         let reply = h.call_as("s1", "navigate", json!({ "url": file_url(&note) })).await;
         assert_eq!(reply["ok"], true, "{reply}");
-        let loads = h.pane.file_loads.lock().clone();
+        let loads = h.engine.file_loads.lock().clone();
         assert_eq!(loads[0].1, plain(&fs::canonicalize(note.as_path()).unwrap()));
     }
 
@@ -280,7 +319,7 @@ mod host {
             );
         }
         assert!(perms.requests.lock().is_empty());
-        assert!(h.pane.file_loads.lock().is_empty());
+        assert!(h.engine.file_loads.lock().is_empty());
     }
 
     #[tokio::test]
@@ -344,7 +383,7 @@ mod host {
             (Some("confirmation_required"), Some("file_changed")),
             "{reply}"
         );
-        assert!(h.pane.file_loads.lock().is_empty(), "the swapped file never loads");
+        assert!(h.engine.file_loads.lock().is_empty(), "the swapped file never loads");
     }
 
     #[tokio::test]
@@ -376,5 +415,85 @@ mod host {
             (Some("invalid_params"), Some("file_not_granted")),
             "{after_revoke}"
         );
+    }
+
+    /// The agent's query and fragment reach the page; the grant ignores
+    /// them.
+    #[tokio::test]
+    async fn a_query_and_fragment_survive_to_the_loaded_url() {
+        let d = dirs();
+        let (h, _perms) = harness(d.project.path());
+        let page = d.project.path().join("dist/index.html");
+        let asked = format!("{}?tab=2#intro", file_url(&page));
+        let reply = h.call_as("s1", "navigate", json!({ "url": asked })).await;
+        assert_eq!(reply["ok"], true, "{reply}");
+        let loads = h.engine.file_loads.lock().clone();
+        assert!(loads[0].0.ends_with("index.html?tab=2#intro"), "{loads:?}");
+        let real = Url::from_file_path(fs::canonicalize(page.as_path()).unwrap()).unwrap();
+        assert!(h.host.gate.file_read_access("s1", &real).is_some(), "the grant is the bare real path");
+    }
+
+    fn allowing(project: &Path, answers: Vec<TicketOutcome>) -> (Harness, Arc<ScriptedPermissions>) {
+        let root = project.to_path_buf();
+        let permissions = Arc::new(ScriptedPermissions::answering(answers));
+        let services = HostServices {
+            permissions: permissions.clone(),
+            policy: Arc::new(InMemoryPolicyStore::opening_sites_unasked()),
+            project_of: Arc::new(|_| "p1".to_string()),
+            root_of: Arc::new(move |_| Some(root.clone())),
+        };
+        let h = harness_parts(FakeEngine::new(webview2_like()), false, services, Support::Trusted);
+        (h, permissions)
+    }
+
+    fn allow() -> TicketOutcome {
+        TicketOutcome::Answered(crate::browser_automation::core::ports::ConsentOption::AllowSession)
+    }
+
+    #[tokio::test]
+    async fn an_allowed_outside_file_keeps_working_while_its_tab_stays_on_it() {
+        let d = dirs();
+        let (h, _perms) = allowing(d.project.path(), vec![allow()]);
+        let note = d.outside.path().join("a.html");
+        let reply = h.call_as("s1", "navigate", json!({ "url": file_url(&note) })).await;
+        assert_eq!(reply["ok"], true, "{reply}");
+        h.settle_events().await;
+        for verb in ["snapshot", "screenshot", "read_text"] {
+            let reply = h.call_as("s1", verb, json!({})).await;
+            assert_eq!(reply["ok"], true, "{verb}: {reply}");
+        }
+    }
+
+    #[tokio::test]
+    async fn leaving_an_allowed_outside_file_ends_its_grant() {
+        let d = dirs();
+        let (h, _perms) = allowing(d.project.path(), vec![allow()]);
+        let note = d.outside.path().join("a.html");
+        let opened = h.call_as("s1", "navigate", json!({ "url": file_url(&note) })).await;
+        let tab = tab_of(&opened);
+        h.settle_events().await;
+        let away = h.call_as("s1", "navigate", json!({ "url": "http://localhost:3000/" })).await;
+        assert_eq!(away["ok"], true, "{away}");
+        h.settle_events().await;
+        let real = Url::from_file_path(fs::canonicalize(note.as_path()).unwrap()).unwrap();
+        assert!(h.host.gate.file_read_access("s1", &real).is_none(), "the page left the file");
+        h.pane.user_navigates(&tab, real.as_str());
+        h.settle_events().await;
+        let url = h.host.registry.lock().get(&tab).map(|r| r.url.clone());
+        assert_eq!(url.as_deref(), Some("http://localhost:3000/"), "a page-started hop back is denied");
+    }
+
+    #[tokio::test]
+    async fn denying_a_later_prompt_ends_an_earlier_allow_once() {
+        let d = dirs();
+        let deny = TicketOutcome::Answered(crate::browser_automation::core::ports::ConsentOption::Deny);
+        let (h, _perms) = allowing(d.project.path(), vec![allow(), deny]);
+        let note = d.outside.path().join("a.html");
+        let first = h.call_as("s1", "navigate", json!({ "url": file_url(&note) })).await;
+        assert_eq!(first["ok"], true, "{first}");
+        let second = h.call_as("s1", "navigate", json!({ "url": file_url(&note) })).await;
+        assert_eq!(second["reason"], "denied_by_user", "{second}");
+        let real = Url::from_file_path(fs::canonicalize(note.as_path()).unwrap()).unwrap();
+        assert!(h.host.gate.file_read_access("s1", &real).is_none());
     }
 }

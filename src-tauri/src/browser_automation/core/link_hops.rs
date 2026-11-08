@@ -20,7 +20,7 @@ use tauri::Url;
 
 use super::authz::file_key;
 use super::events::label_prefix;
-use super::local_files::check_local_file;
+use super::local_files::shared_check;
 use super::stop::StopToken;
 use super::DesktopBrowserHost;
 use crate::browser_automation::budgets;
@@ -43,25 +43,50 @@ pub struct FileLinkNote {
     /// [`MAX_NOTE_URL_BYTES`].
     pub url: String,
     pub reason: &'static str,
-    pub message: &'static str,
+    pub message: String,
+    /// The URL was cut: its prefix may name another file, so the note
+    /// never says to open it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 impl FileLinkNote {
     fn new(url: &Url, reason: &'static str) -> Self {
-        let mut url = url.to_string();
-        if url.len() > MAX_NOTE_URL_BYTES {
-            let mut cut = MAX_NOTE_URL_BYTES;
-            while !url.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            url.truncate(cut);
+        let mut text = url.to_string();
+        if text.len() <= MAX_NOTE_URL_BYTES {
+            return Self {
+                url: text,
+                reason,
+                message: NAVIGATE_YOURSELF.to_string(),
+                truncated: false,
+            };
         }
+        let length = text.len();
+        let mut cut = MAX_NOTE_URL_BYTES;
+        while !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        text.truncate(cut);
         Self {
-            url,
+            url: text,
             reason,
-            message: NAVIGATE_YOURSELF,
+            message: format!(
+                "the page linked to a local file whose URL is too long to report ({length} bytes); the host did not follow it"
+            ),
+            truncated: true,
         }
     }
+}
+
+/// A cancelled hop being followed: the tab, the document it left (its URL
+/// and epoch), and the target.
+#[derive(Clone, Copy)]
+struct Hop<'a> {
+    label: &'a str,
+    session_id: &'a str,
+    from: &'a Url,
+    epoch: u64,
+    url: &'a Url,
 }
 
 /// What the page says about the hop.
@@ -100,8 +125,9 @@ impl DesktopBrowserHost {
                 return;
             }
             record.file_link_busy = true;
-            from
+            (from, record.epoch)
         };
+        let (from, epoch) = from;
         let started = self
             .me
             .upgrade()
@@ -112,7 +138,14 @@ impl DesktopBrowserHost {
         };
         let (label, session_id, url) = (tab_id.to_string(), session_id.to_string(), url.clone());
         super::spawn(async move {
-            me.follow_file_link(&label, &session_id, &from, &url, &token).await;
+            let hop = Hop {
+                label: &label,
+                session_id: &session_id,
+                from: &from,
+                epoch,
+                url: &url,
+            };
+            me.follow_file_link(&hop, &token).await;
             me.end_file_link(&label);
         });
     }
@@ -123,28 +156,22 @@ impl DesktopBrowserHost {
         }
     }
 
-    async fn follow_file_link(
-        &self,
-        label: &str,
-        session_id: &str,
-        from: &Url,
-        url: &Url,
-        token: &StopToken,
-    ) {
+    async fn follow_file_link(&self, hop: &Hop<'_>, token: &StopToken) {
+        let Hop {
+            label,
+            session_id,
+            from,
+            epoch,
+            url,
+        } = *hop;
         let tab = label_prefix(label);
         let root = (self.root_of)(session_id);
-        let target = url.to_string();
-        let checked = tokio::time::timeout(
-            budgets::EVAL_STEP,
-            tokio::task::spawn_blocking(move || check_local_file(root.as_deref(), &target)),
-        )
-        .await;
+        let checked = shared_check(root, url.to_string(), budgets::EVAL_STEP).await;
         let file = match checked {
-            Ok(Ok(Ok(file))) if file.inside => file,
-            Ok(Ok(Ok(_))) => return self.note_file_link(label, url, "outside_project"),
-            Ok(Ok(Err(refusal))) => return self.note_file_link(label, url, refusal.reason()),
-            Ok(Err(_)) => return self.note_file_link(label, url, "file_check_failed"),
-            Err(_) => return self.note_file_link(label, url, "file_check_timeout"),
+            Ok(Ok(file)) if file.inside => file,
+            Ok(Ok(_)) => return self.note_file_link(label, url, "outside_project"),
+            Ok(Err(refusal)) => return self.note_file_link(label, url, refusal.reason()),
+            Err(stall) => return self.note_file_link(label, url, stall.reason()),
         };
         match self.framing(label, url).await {
             Framing::NotFramed => {}
@@ -154,26 +181,32 @@ impl DesktopBrowserHost {
             }
             Framing::Unreadable => return self.note_file_link(label, url, "page_unreadable"),
         }
+        // The document the link was clicked on must still be there: a new
+        // document since (another page, or a reload of the same one) bumped
+        // the tab's epoch.
         let still_there = self
             .registry
             .lock()
             .get(label)
-            .is_some_and(|record| record.url == from.as_str());
+            .is_some_and(|record| record.epoch == epoch && record.url == from.as_str());
         if !still_there {
             log::info!("[browser-agent] file link dropped tab={tab} reason=page_changed");
             return;
         }
-        // A revoke since the hop (Stop, profile change) took the source
-        // page's grant with it.
-        if self.gate.file_read_access(session_id, from).is_none() {
-            log::info!("[browser-agent] file link dropped tab={tab} reason=source_not_granted");
-            return;
+        // One step under the locks Stop and revokes take: the source page's
+        // grant is still held, and the target is granted.
+        match self.gate.keep_linked_file_grant(token, session_id, from, &file) {
+            Ok(true) => {}
+            Ok(false) => {
+                log::info!("[browser-agent] file link dropped tab={tab} reason=source_not_granted");
+                return;
+            }
+            Err(_) => {
+                log::info!("[browser-agent] file link dropped tab={tab} reason=stopped_by_user");
+                return;
+            }
         }
-        if self.gate.keep_file_grant(token, session_id, &file).is_err() {
-            log::info!("[browser-agent] file link dropped tab={tab} reason=stopped_by_user");
-            return;
-        }
-        match self.load_page(label, file.url.to_string()) {
+        match self.load_page(label, file.url.to_string()).await {
             Ok(()) => log::info!("[browser-agent] project file link followed tab={tab}"),
             Err(_) => log::warn!("[browser-agent] project file link could not load tab={tab}"),
         }

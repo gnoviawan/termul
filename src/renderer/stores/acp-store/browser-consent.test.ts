@@ -159,6 +159,7 @@ describe('browser consent tickets on the permission contract', () => {
       sessionId: 'sess-1',
       origin: 'https://docs.example.com',
       targetKind: 'web',
+      fileName: undefined,
       targetUrl: 'https://docs.example.com/start?q=1',
       targetUrlBytes: 34,
       action: 'navigate',
@@ -177,10 +178,12 @@ describe('browser consent tickets on the permission contract', () => {
     }) as unknown as { _meta: { termul: { browser: Record<string, unknown> } } }
     request._meta.termul.browser.origin = '/home/me/notes/a.html'
     request._meta.termul.browser.targetKind = 'file'
+    request._meta.termul.browser.fileName = 'a.html'
     request._meta.termul.browser.targetUrl = 'file:///home/me/notes/a.html'
     useAcpStore.getState()._onPermissionRequest(request as never)
     const ticket = useAcpStore.getState().pendingBrowserConsents[TICKET_ID]
     expect(ticket?.targetKind).toBe('file')
+    expect(ticket?.fileName).toBe('a.html')
     expect(ticket?.options).toEqual(['allow_session', 'deny'])
   })
 

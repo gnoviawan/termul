@@ -8,12 +8,16 @@
 //! pins a fingerprint of the element (its telling attributes, the text of
 //! the list item or card holding it, and for an element with no name the
 //! text before it), so a path that now leads to another element finds
-//! nothing. Helpers keep no state between calls, save one exception: an
-//! upload's `input`/`change` watch leaves the hook that ends it early on
-//! the agent world's own document wrapper, where page script cannot reach
-//! it, and removes it when it ends.
+//! nothing. Helpers keep no state between calls, save two exceptions, both
+//! kept on the agent world's own document wrapper, where page script cannot
+//! reach them: an upload's `input`/`change` watch leaves the hook that ends
+//! it early, and removes it when it ends; and hiding the agent overlay
+//! leaves the timer that shows it again should the host's show never come,
+//! which the show clears.
 
 use serde_json::{json, Value};
+
+use crate::browser_automation::budgets;
 
 /// The isolated script world every helper runs in.
 pub const WORLD_NAME: &str = "termul_agent";
@@ -118,21 +122,18 @@ impl Script {
     }
 }
 
-/// Hide (`false`) or show the agent overlay. Hiding resolves after two
-/// frames, so a capture taken next has no overlay in it, and the overlay
-/// shows itself again after [`OVERLAY_SELF_RESTORE`] unless a show came
-/// first.
+/// Hide (`false`) or show the agent overlay. Best effort: hiding waits for
+/// two frames, or 100ms when the tab's frames are throttled, and none on a
+/// hidden tab; a hide that fails or times out lets the capture go ahead
+/// with the overlay in it. A hidden overlay shows itself again after
+/// [`budgets::OVERLAY_SELF_RESTORE`] unless a show came first.
 pub fn overlay_visibility(visible: bool) -> Script {
-    let restore_ms = u64::try_from(OVERLAY_SELF_RESTORE.as_millis()).unwrap_or(u64::MAX);
+    let restore_ms = u64::try_from(budgets::OVERLAY_SELF_RESTORE.as_millis()).unwrap_or(u64::MAX);
     Script::new(
         OVERLAY_VISIBILITY,
         json!({ "visible": visible, "restoreMs": restore_ms }),
     )
 }
-
-/// How long a hidden overlay waits for the host's show before it shows
-/// itself: a failed, timed-out or dropped restore cannot leave it hidden.
-pub const OVERLAY_SELF_RESTORE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// How many agent overlays hang off `<html>`, and whether the first shows.
 #[cfg(any(test, feature = "conformance"))]

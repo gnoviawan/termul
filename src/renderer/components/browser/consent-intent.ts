@@ -70,10 +70,11 @@ export function browserConsentSummary(
   return `${actor} wants to ${ACTION_PHRASES[ticket.action]} ${ticket.origin} in the agent browser.`
 }
 
-/** The last segment of a file ticket's path: its file name. */
-export function browserConsentFileName(path: string): string {
-  const parts = path.split(/[\\/]/).filter((part) => part.length > 0)
-  return parts[parts.length - 1] ?? path
+/** A file ticket's file name as the host sent it; the full path without one. */
+export function browserConsentFileName(
+  ticket: Pick<BrowserConsentTicket, 'fileName' | 'origin'>
+): string {
+  return ticket.fileName ?? ticket.origin
 }
 
 /** The label of the ticket's target row: the site, or the file. */
