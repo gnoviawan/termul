@@ -85,7 +85,8 @@ or update a todo list, send the full list with each item's status every time, an
 list of your own. In the first turn, once the user's intent is clear, call `set_session_title` \
 once with a short title and a kebab-case `branch` slug. When you need a decision or missing \
 details from the user, ask with the `ask_user` tool or your client's own question tool, not in \
-plain text.";
+plain text. When the user gives you a Troupe chat ID or a copied chat reference, read that chat \
+with the `read_chat` tool.";
 
 /// The context budget Claude Code gives a server's `instructions`: it keeps
 /// this many UTF-16 code units (`CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`,
