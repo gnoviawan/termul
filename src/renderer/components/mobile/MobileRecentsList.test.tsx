@@ -10,7 +10,16 @@ import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
 import { useProjectStore } from '@/stores/project-store'
 import { MobileRecentsList } from './MobileRecentsList'
 
-const { workspaceRef, mockCloseAgentChat, mockAddAgentChatTab, mockNavigate } = vi.hoisted(() => ({
+const {
+  workspaceRef,
+  mockCloseAgentChat,
+  mockAddAgentChatTab,
+  mockNavigate,
+  mockWriteText,
+  mockToastSuccess
+} = vi.hoisted(() => ({
+  mockWriteText: vi.fn(),
+  mockToastSuccess: vi.fn(),
   mockNavigate: vi.fn(),
   workspaceRef: {
     current: {
@@ -49,6 +58,13 @@ vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
   return { ...actual, useNavigate: () => mockNavigate }
 })
+
+vi.mock('@/lib/clipboard-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/clipboard-api')>()),
+  clipboardApi: { writeText: mockWriteText }
+}))
+
+vi.mock('sonner', () => ({ toast: { success: mockToastSuccess, error: vi.fn() } }))
 
 vi.mock('@/lib/agent-chat-close', () => ({
   closeAgentChat: mockCloseAgentChat
@@ -128,6 +144,8 @@ beforeEach(() => {
   onNavigate.mockReset()
   mockNavigate.mockReset()
   mockAddAgentChatTab.mockReset()
+  mockWriteText.mockReset().mockResolvedValue({ success: true })
+  mockToastSuccess.mockReset()
   mockOpenHistorySession.mockReset().mockResolvedValue(undefined)
   mockDeleteHistorySession.mockReset().mockResolvedValue(undefined)
   mockCloseAgentChat
@@ -410,6 +428,49 @@ describe('MobileRecentsList row actions', () => {
     fireEvent.click(within(confirm).getByRole('button', { name: 'Delete' }))
     expect(mockDeleteHistorySession).toHaveBeenCalledWith('h1')
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  })
+
+  it('copies the reference of a history chat', async () => {
+    seedHistory([{ id: 'h1', title: 'Past chat' }])
+    renderList()
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Past chat' }))
+    const sheet = await screen.findByRole('dialog', { name: 'Past chat' })
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Copy chat reference' }))
+
+    await waitFor(() =>
+      expect(mockWriteText).toHaveBeenCalledWith(
+        'Troupe chat: Past chat\nChat ID: h1\nProject: termul (ID p1)\nFolder: /work'
+      )
+    )
+    expect(mockToastSuccess).toHaveBeenCalledWith('Chat reference copied', { description: 'h1' })
+  })
+
+  it('copies the reference of an open chat under its own project and live title', async () => {
+    useProjectStore.setState({
+      projects: [
+        ...useProjectStore.getState().projects,
+        { id: 'p2', name: 'skills-lab', color: 'blue', path: '/lab', worktrees: [] }
+      ]
+    })
+    seedHistory([])
+    seedOptionsSession('s7', 'agent-1', {
+      title: 'Other project chat',
+      projectId: 'p2',
+      cwd: '/lab'
+    })
+    seedTabs([{ type: 'agent-chat', id: 'tab-7', sessionId: 's7' }])
+    renderList()
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^Other project chat/ }))
+    const sheet = await screen.findByRole('dialog', { name: 'Other project chat' })
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Copy chat reference' }))
+
+    await waitFor(() =>
+      expect(mockWriteText).toHaveBeenCalledWith(
+        'Troupe chat: Other project chat\nChat ID: s7\nProject: skills-lab (ID p2)\nFolder: /lab'
+      )
+    )
   })
 
   it('a touch held still opens the actions and swallows the click that ends it', async () => {
