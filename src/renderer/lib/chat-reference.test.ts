@@ -6,6 +6,8 @@ import { useProjectStore } from '@/stores/project-store'
 import type { Project } from '@/types/project'
 import { formatChatReference, resolveChatReference } from './chat-reference'
 
+const HINT = '\nRead it with the Troupe read_chat tool.'
+
 describe('formatChatReference', () => {
   it('writes every known line', () => {
     expect(
@@ -20,7 +22,8 @@ describe('formatChatReference', () => {
         'Troupe chat: Test the release skill',
         'Chat ID: b7c1e2a4-0001',
         'Project: skills-lab (ID p-skills)',
-        'Folder: /home/me/skills-lab'
+        'Folder: /home/me/skills-lab',
+        'Read it with the Troupe read_chat tool.'
       ].join('\n')
     )
   })
@@ -32,18 +35,18 @@ describe('formatChatReference', () => {
         title: 'No folder',
         project: { id: 'p1', name: 'Repo' }
       })
-    ).toBe('Troupe chat: No folder\nChat ID: c1\nProject: Repo (ID p1)')
+    ).toBe(`Troupe chat: No folder\nChat ID: c1\nProject: Repo (ID p1)${HINT}`)
   })
 
   it('leaves out the project when it is unknown', () => {
     expect(formatChatReference({ chatId: 'c1', title: 'Loose chat', cwd: '/tmp/x' })).toBe(
-      'Troupe chat: Loose chat\nChat ID: c1\nFolder: /tmp/x'
+      `Troupe chat: Loose chat\nChat ID: c1\nFolder: /tmp/x${HINT}`
     )
   })
 
   it('keeps a multi-line title on its one line', () => {
     expect(formatChatReference({ chatId: 'c1', title: '  Fix\nthe   build ' })).toBe(
-      'Troupe chat: Fix the build\nChat ID: c1'
+      `Troupe chat: Fix the build\nChat ID: c1${HINT}`
     )
   })
 })

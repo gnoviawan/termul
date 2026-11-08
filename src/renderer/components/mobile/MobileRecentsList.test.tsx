@@ -440,7 +440,7 @@ describe('MobileRecentsList row actions', () => {
 
     await waitFor(() =>
       expect(mockWriteText).toHaveBeenCalledWith(
-        'Troupe chat: Past chat\nChat ID: h1\nProject: termul (ID p1)\nFolder: /work'
+        'Troupe chat: Past chat\nChat ID: h1\nProject: termul (ID p1)\nFolder: /work\nRead it with the Troupe read_chat tool.'
       )
     )
     expect(mockToastSuccess).toHaveBeenCalledWith('Chat reference copied', { description: 'h1' })
@@ -468,7 +468,7 @@ describe('MobileRecentsList row actions', () => {
 
     await waitFor(() =>
       expect(mockWriteText).toHaveBeenCalledWith(
-        'Troupe chat: Other project chat\nChat ID: s7\nProject: skills-lab (ID p2)\nFolder: /lab'
+        'Troupe chat: Other project chat\nChat ID: s7\nProject: skills-lab (ID p2)\nFolder: /lab\nRead it with the Troupe read_chat tool.'
       )
     )
   })

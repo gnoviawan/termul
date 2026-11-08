@@ -3,8 +3,8 @@ import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 
 /**
- * What another chat's agent needs to find this chat's transcript: the agent's
- * own session id (for Claude Code, the transcript file name) and where it ran.
+ * What another chat's agent needs to read this chat: its id, which the host
+ * `read_chat` tool takes, and where it ran.
  */
 export interface ChatReference {
   chatId: string
@@ -13,11 +13,17 @@ export interface ChatReference {
   cwd?: string
 }
 
-/** A short labeled plain-text block; lines with an unknown value are left out. */
+const READ_HINT = 'Read it with the Troupe read_chat tool.'
+
+/**
+ * A short labeled plain-text block ending in how to read the chat; lines with
+ * an unknown value are left out.
+ */
 export function formatChatReference({ chatId, title, project, cwd }: ChatReference): string {
   const lines = [`Troupe chat: ${title.replace(/\s+/g, ' ').trim()}`, `Chat ID: ${chatId}`]
   if (project) lines.push(`Project: ${project.name} (ID ${project.id})`)
   if (cwd) lines.push(`Folder: ${cwd}`)
+  lines.push(READ_HINT)
   return lines.join('\n')
 }
 

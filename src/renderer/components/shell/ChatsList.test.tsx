@@ -502,7 +502,7 @@ describe('ChatsList interactions', () => {
     fireEvent.click(await screen.findByText('Copy Chat Reference'))
     await waitFor(() =>
       expect(mocks.writeText).toHaveBeenCalledWith(
-        'Troupe chat: Chat a\nChat ID: a\nProject: Repo (ID p1)\nFolder: /repo/src'
+        'Troupe chat: Chat a\nChat ID: a\nProject: Repo (ID p1)\nFolder: /repo/src\nRead it with the Troupe read_chat tool.'
       )
     )
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Chat reference copied', { description: 'a' })
