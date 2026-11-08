@@ -1,7 +1,7 @@
 import { ChatEntryIcon } from '@/components/chat/ChatHistoryEntryRow'
 import { sessionModelSnapshot } from '@/components/chat/chat-input-bar-config'
 import { ReloadChatMenuItem } from '@/components/chat/ReloadChatMenuItem'
-import { Columns2, Copy, FolderOpen, GitBranch, Terminal, Trash2 } from '@/components/icons'
+import { Columns2, Copy, FolderOpen, GitBranch, Hash, Terminal, Trash2 } from '@/components/icons'
 import {
   ChatRowTrail,
   type ProjectChatEntry,
@@ -193,6 +193,13 @@ export function ChatCard({
           }}
         >
           <Copy className="mr-2 h-4 w-4" /> Copy Path
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => void actions.onCopyChatReference(entry)}>
+          <Copy className="mr-2 h-4 w-4" /> Copy Chat Reference
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => void actions.onCopyChatId(entry)}>
+          <Hash className="mr-2 h-4 w-4" /> Copy Chat ID
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem variant="destructive" onSelect={() => onRequestDelete(entry)}>
