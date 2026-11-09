@@ -322,7 +322,12 @@ export function useChatHistoryEntries({
   // standalone row in another scope's view.
   const deleteEntry = useCallback(
     (id: string) => {
-      for (const memberId of membersOf(sessionChainIndex(sessionIndex), id)) {
+      // Read at call time: a switch completing after render must not leave
+      // the newest continuation behind (membership from the FULL index —
+      // a member outside the current scope would otherwise resurface as a
+      // standalone row in another scope's view).
+      const { sessionIndex: fullIndex } = useAcpStore.getState()
+      for (const memberId of membersOf(sessionChainIndex(fullIndex), id)) {
         void deleteHistorySession(memberId).catch(() => {
           toast.error('Could not delete that chat. Try again.')
           void logFrontendError({
@@ -333,7 +338,7 @@ export function useChatHistoryEntries({
         })
       }
     },
-    [deleteHistorySession, logSource, sessionIndex]
+    [deleteHistorySession, logSource]
   )
 
   return {

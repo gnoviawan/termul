@@ -4,6 +4,7 @@ import type { ProjectChatEntry } from '@/components/sidebar/project-chat-row'
 import { clipboardApi, openerApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { openAgentChatPlaced } from '@/lib/open-agent-chat'
+import { membersOf, sessionChainIndex } from '@/lib/session-chain'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { useAcpStore } from '@/stores/acp-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -61,12 +62,15 @@ export function useChatCardActions(projectId: string): ChatCardActions {
     openAgentChatPlaced(entry.id, LOG_SOURCE, { paneId: activePaneId, zone: 'right' })
   }, [])
 
-  // A folded chain row deletes as one conversation: `chainIds` names every
-  // member session so an absorbed pre-switch source cannot resurface as a
-  // standalone row on the next index refresh.
+  // A folded chain row deletes as one conversation. Membership is resolved
+  // at click time, not from the rendered `chainIds` snapshot: a switch that
+  // completes while the confirm dialog is open extends the chain, and a
+  // stale snapshot would leave the newest continuation behind (CodeRabbit
+  // 4515372916).
   const onDelete = useCallback(
     (entry: ProjectChatEntry) => {
-      for (const memberId of entry.chainIds ?? [entry.id]) {
+      const { sessionIndex } = useAcpStore.getState()
+      for (const memberId of membersOf(sessionChainIndex(sessionIndex), entry.id)) {
         void deleteHistorySession(memberId).catch((error: unknown) => {
           warnFailure('delete', error)
           toast.error('Could not delete that chat. Try again.')

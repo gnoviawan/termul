@@ -114,8 +114,11 @@ the agent the conversation ended with:
   lookup that avoids scanning every transcript. Sessions switched before the
   edge existed are backfilled by a one-time startup migration that reads
   their markers, and the renderer heals the edge whenever it installs a
-  payload that carries one. Opening any chain member lands on the newest
-  session; opening the newest session directly splices the earlier
+  payload that carries one. Opening any chain member from history — the
+  sidebar, cards, mention picker, or a project-switch restore — lands on
+  the newest session via the fold or the marker redirect; a live tab
+  already pinned to a pre-switch member id can still reattach that member
+  directly. Opening the newest session directly splices the earlier
   transcript back in via the same edge.
 - The pre-switch transcript remains visible above the separator; new prompts
   go to the current agent.
