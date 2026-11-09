@@ -183,19 +183,23 @@ export function useChatHistoryEntries({
     // member of a folded chain row (an open pre-switch tab must not double).
     const listed = new Set(entries.flatMap((e) => (e.chainIds !== undefined ? e.chainIds : [e.id])))
     const merged = entries.map((e) => {
-      const extra =
-        extraById.get(e.id) ??
-        (e.chainIds !== undefined
+      const direct = extraById.get(e.id)
+      if (direct !== undefined) {
+        // The row IS the open chat — its live title is what the user sees.
+        return direct.title !== e.title ? { ...e, title: direct.title } : e
+      }
+      const memberExtra =
+        e.chainIds !== undefined
           ? e.chainIds.map((memberId) => extraById.get(memberId)).find((x) => x !== undefined)
-          : undefined)
+          : undefined
       // An absorbed member's live title fills in only when the folded row has
       // no real one — an open pre-switch tab's placeholder must not override
       // the fold's newest real title.
-      return extra !== undefined &&
-        extra.title !== e.title &&
+      return memberExtra !== undefined &&
+        memberExtra.title !== e.title &&
         UNTITLED_PATTERN.test(e.title.trim()) &&
-        !UNTITLED_PATTERN.test(extra.title.trim())
-        ? { ...e, title: extra.title }
+        !UNTITLED_PATTERN.test(memberExtra.title.trim())
+        ? { ...e, title: memberExtra.title }
         : e
     })
     const extras = extraEntries.filter((e) => !listed.has(e.id))
