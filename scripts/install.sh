@@ -10,6 +10,39 @@ die() {
   return 1
 }
 
+# Settings read from the environment. TROUPE_<name> wins; the old
+# TERMUL_<name> still works.
+INSTALL_ENV_NAMES=(INSTALL_YES INSTALL_APPLICATIONS_DIR INSTALL_BIN_DIR INSTALL_DESKTOP_DIR)
+
+brand_env() {
+  local new="TROUPE_$1"
+  local old="TERMUL_$1"
+
+  local value="${!new:-}"
+
+  if [[ -n "${value//[[:space:]]/}" ]]; then
+    printf '%s' "$value"
+  else
+    printf '%s' "${!old:-}"
+  fi
+}
+
+note_legacy_env() {
+  local name
+  local new
+  local old
+  local value
+
+  for name in "${INSTALL_ENV_NAMES[@]}"; do
+    new="TROUPE_${name}"
+    old="TERMUL_${name}"
+    value="${!new:-}"
+    if [[ -z "${value//[[:space:]]/}" && -n "${!old:-}" ]]; then
+      printf '%s is deprecated; rename it to %s (%s still works for now)\n' "$old" "$new" "$old" >&2
+    fi
+  done
+}
+
 detect_os() {
   local os
   os="$(uname -s)"
@@ -72,7 +105,7 @@ require_tools() {
       done
       ;;
     linux)
-      for tool in cp chmod mkdir; do
+      for tool in cp chmod mkdir ln od tr; do
         if ! command -v "$tool" >/dev/null 2>&1; then
           missing+=("$tool")
         fi
@@ -121,6 +154,23 @@ asset_version() {
   printf '%s\n' "${version#v}"
 }
 
+# 0.5.0 renamed the app from "Termul Manager" to Troupe. Release assets carry the
+# product name with spaces turned into dots, and the DMG holds "<name>.app".
+product_name() {
+  local core major minor
+
+  core="$(asset_version "$1")"
+  core="${core%%[-+]*}"
+  IFS=. read -r major minor _ <<<"$core"
+  if ((major > 0 || minor >= 5)); then
+    printf '%s\n' "Troupe"
+  else
+    printf '%s\n' "Termul Manager"
+  fi
+}
+
+LEGACY_PRODUCT_NAME="Termul Manager"
+
 hash_file() {
   local file="$1"
 
@@ -154,19 +204,19 @@ confirm_install() {
   local prompt="$1"
   local reply
 
-  if [[ "${TERMUL_INSTALL_YES:-}" == "1" ]]; then
-    printf 'TERMUL_INSTALL_YES=1: %s\n' "$prompt"
+  if [[ "$(brand_env INSTALL_YES)" == "1" ]]; then
+    printf 'TROUPE_INSTALL_YES=1: %s\n' "$prompt"
     return 0
   fi
 
   if [[ ! -r /dev/tty ]]; then
-    die "Interactive confirmation requires /dev/tty. Set TERMUL_INSTALL_YES=1 to install non-interactively."
+    die "Interactive confirmation requires /dev/tty. Set TROUPE_INSTALL_YES=1 to install non-interactively."
     return 1
   fi
 
   printf '%s [y/N] ' "$prompt" >/dev/tty
   if ! IFS= read -r reply </dev/tty; then
-    die "Interactive confirmation requires /dev/tty. Set TERMUL_INSTALL_YES=1 to install non-interactively."
+    die "Interactive confirmation requires /dev/tty. Set TROUPE_INSTALL_YES=1 to install non-interactively."
     return 1
   fi
 
@@ -197,9 +247,13 @@ install_macos() {
   local tmpdir
   local dmg_path
   local mount_dir
-  local applications_dir="${TERMUL_INSTALL_APPLICATIONS_DIR:-/Applications}"
+  local applications_dir
+  applications_dir="$(brand_env INSTALL_APPLICATIONS_DIR)"
+  applications_dir="${applications_dir:-/Applications}"
   local app_source
   local app_target
+  local legacy_target
+  local name
 
   case "$arch" in
     aarch64)
@@ -215,7 +269,8 @@ install_macos() {
   esac
 
   normalized_version="$(asset_version "$version")"
-  asset_name="Termul.Manager_${normalized_version}_${suffix}.dmg"
+  name="$(product_name "$version")"
+  asset_name="${name// /.}_${normalized_version}_${suffix}.dmg"
   tmpdir="$(mktemp -d)"
   dmg_path="${tmpdir}/${asset_name}"
   mount_dir="${tmpdir}/mount"
@@ -239,8 +294,8 @@ install_macos() {
     hdiutil attach -nobrowse -mountpoint "$mount_dir" "$dmg_path" || exit 1
     termul_macos_mounted=1
 
-    app_source="${mount_dir}/Termul Manager.app"
-    app_target="${applications_dir}/Termul Manager.app"
+    app_source="${mount_dir}/${name}.app"
+    app_target="${applications_dir}/${name}.app"
     if [[ -e "$app_target" ]]; then
       if ! rm -rf "$app_target"; then
         sudo rm -rf "$app_target" || exit 1
@@ -253,8 +308,17 @@ install_macos() {
 
     hdiutil detach "$mount_dir" || exit 1
     termul_macos_mounted=0
+
+    # Troupe replaces the pre-0.5.0 bundle. App data lives under the bundle
+    # identifier, which did not change, so removing the old bundle keeps it.
+    legacy_target="${applications_dir}/${LEGACY_PRODUCT_NAME}.app"
+    if [[ "$legacy_target" != "$app_target" && -e "$legacy_target" ]]; then
+      if ! rm -rf "$legacy_target"; then
+        sudo rm -rf "$legacy_target" || exit 1
+      fi
+    fi
     xattr -dr com.apple.quarantine "$app_target" 2>/dev/null || true
-    printf 'Installed Termul Manager to %s\n' "$app_target"
+    printf 'Installed %s to %s\n' "$name" "$app_target"
   )
 }
 
@@ -266,10 +330,16 @@ install_linux() {
   local asset_name
   local tmpdir
   local appimage_path
-  local bin_dir="${TERMUL_INSTALL_BIN_DIR:-${HOME}/.local/bin}"
-  local desktop_dir="${TERMUL_INSTALL_DESKTOP_DIR:-${HOME}/.local/share/applications}"
-  local target_path="${bin_dir}/termul-manager"
-  local desktop_path="${desktop_dir}/termul-manager.desktop"
+  local bin_dir
+  local desktop_dir
+  bin_dir="$(brand_env INSTALL_BIN_DIR)"
+  bin_dir="${bin_dir:-${HOME}/.local/bin}"
+  desktop_dir="$(brand_env INSTALL_DESKTOP_DIR)"
+  desktop_dir="${desktop_dir:-${HOME}/.local/share/applications}"
+  local target_path="${bin_dir}/troupe"
+  local appimage_target="${bin_dir}/troupe.AppImage"
+  local desktop_path="${desktop_dir}/troupe.desktop"
+  local name
 
   if [[ "$arch" != "x86_64" ]]; then
     die "Unsupported Linux architecture: ${arch}"
@@ -277,7 +347,8 @@ install_linux() {
   fi
 
   normalized_version="$(asset_version "$version")"
-  asset_name="Termul.Manager_${normalized_version}_amd64.AppImage"
+  name="$(product_name "$version")"
+  asset_name="${name// /.}_${normalized_version}_amd64.AppImage"
   tmpdir="$(mktemp -d)"
   appimage_path="${tmpdir}/${asset_name}"
 
@@ -295,14 +366,79 @@ install_linux() {
     verify_sha256 "$appimage_path" "$asset_name" "$sums_file" || exit 1
 
     mkdir -p "$bin_dir" "$desktop_dir" || exit 1
-    cp "$appimage_path" "$target_path" || exit 1
+    cp "$appimage_path" "$appimage_target" || exit 1
+    chmod 755 "$appimage_target" || exit 1
+    cat >"$target_path" <<'LAUNCHER'
+#!/usr/bin/env bash
+set -e
+
+# The AppImage bundles a libwayland-client that Mesa 25 and later cannot create
+# an EGL display with, which leaves the window blank on Wayland (#1682).
+# Preloading the host copy fixes it. TERMUL_LAUNCHER_PRELOAD records the entry
+# added here so Termul removes exactly that entry from its terminals.
+unset TERMUL_LAUNCHER_PRELOAD
+if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+  # TROUPE_WAYLAND_CLIENT_LIB wins; the old TERMUL_ name still works.
+  _wayland_var=TERMUL_WAYLAND_CLIENT_LIB
+  _troupe_lib="${TROUPE_WAYLAND_CLIENT_LIB:-}"
+  [[ -z "${_troupe_lib//[[:space:]]/}" ]] || _wayland_var=TROUPE_WAYLAND_CLIENT_LIB
+  _wayland_lib="${!_wayland_var:-}"
+  if [[ -n "$_wayland_lib" ]]; then
+    _candidates=("$_wayland_lib")
+  else
+    _candidates=(
+      /usr/lib64/libwayland-client.so.0
+      /usr/lib/x86_64-linux-gnu/libwayland-client.so.0
+      /usr/lib/libwayland-client.so.0
+    )
+  fi
+  # Only a 64-bit library (ELF class byte 0x02) can be preloaded into the
+  # 64-bit AppImage; ld.so ignores a 32-bit copy and the window stays blank.
+  _elf64() { [[ "$(od -An -tx1 -j4 -N1 "$1" 2>/dev/null | tr -d ' \n')" == 02 ]]; }
+  for _lib in "${_candidates[@]}"; do
+    if [[ ! -f "$_lib" ]] || ! _elf64 "$_lib"; then
+      if [[ -n "$_wayland_lib" ]]; then
+        echo "troupe: ${_wayland_var}=${_lib} is not a 64-bit library; starting without the Wayland preload" >&2
+      fi
+      continue
+    fi
+    case " ${LD_PRELOAD//:/ } " in
+      *" ${_lib} "*) ;;
+      *)
+        export LD_PRELOAD="${LD_PRELOAD:+${LD_PRELOAD}:}${_lib}"
+        export TERMUL_LAUNCHER_PRELOAD="$_lib"
+        ;;
+    esac
+    break
+  done
+fi
+
+_self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null)" || _self=""
+[[ -n "$_self" ]] || _self="${BASH_SOURCE[0]}"
+exec "${_self%/*}/troupe.AppImage" "$@"
+LAUNCHER
     chmod 755 "$target_path" || exit 1
     cat >"$desktop_path" <<DESKTOP
 [Desktop Entry]
 Type=Application
-Name=Termul Manager
+Name=${name}
 Exec=${target_path}
 Terminal=false
+Categories=Development;Utility;
+DESKTOP
+
+    # Pre-0.5.0 installs used the termul-manager names. Keep them pointing at
+    # Troupe so shell aliases, scripts and dock pins still work; the hidden
+    # entry avoids a second menu item.
+    ln -sfn troupe "${bin_dir}/termul-manager" || exit 1
+    ln -sfn troupe.AppImage "${bin_dir}/termul-manager.AppImage" || exit 1
+    cat >"${desktop_dir}/termul-manager.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=${name}
+Exec=${target_path}
+Terminal=false
+NoDisplay=true
 Categories=Development;Utility;
 DESKTOP
 
@@ -310,11 +446,11 @@ DESKTOP
       *":${bin_dir}:"*)
         ;;
       *)
-        printf 'Warning: %s is not in PATH. Add it to run termul-manager from your shell.\n' "$bin_dir" >&2
+        printf 'Warning: %s is not in PATH. Add it to run troupe from your shell.\n' "$bin_dir" >&2
         ;;
     esac
 
-    printf 'Installed Termul Manager to %s\n' "$target_path"
+    printf 'Installed %s to %s\n' "$name" "$target_path"
   )
 }
 
@@ -324,7 +460,9 @@ main() {
   local version
   local sums_file
   local tmpdir
+  local install_dir
 
+  note_legacy_env
   os="$(detect_os)" || return 1
   arch="$(detect_arch)" || return 1
   require_tools "$os" || return 1
@@ -332,10 +470,12 @@ main() {
 
   case "$os" in
     darwin)
-      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${TERMUL_INSTALL_APPLICATIONS_DIR:-/Applications}?" || return 1
+      install_dir="$(brand_env INSTALL_APPLICATIONS_DIR)"
+      confirm_install "Install $(product_name "$version") ${version} (${os}-${arch}) to ${install_dir:-/Applications}?" || return 1
       ;;
     linux)
-      confirm_install "Install Termul Manager ${version} (${os}-${arch}) to ${TERMUL_INSTALL_BIN_DIR:-${HOME}/.local/bin}?" || return 1
+      install_dir="$(brand_env INSTALL_BIN_DIR)"
+      confirm_install "Install $(product_name "$version") ${version} (${os}-${arch}) to ${install_dir:-${HOME}/.local/bin}?" || return 1
       ;;
     *)
       die "Unsupported operating system: ${os}"

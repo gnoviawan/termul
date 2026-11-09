@@ -119,7 +119,7 @@ export function BrandScale() {
       </Row>
       <Caption>
         Live row reads the running theme. Ratios: fills against their label, link against the card.
-        Termul pins the fill to blue-11; other themes derive it from their palette.
+        Troupe pins the fill to blue-11; other themes derive it from their palette.
       </Caption>
     </Pad>
   )
@@ -160,7 +160,7 @@ export function ElevationLadder() {
       </div>
       <Caption>
         E0 tiles are outlined only to show their footprint; the rest are lifted by their
-        --elevation-* token alone. Termul Light maps sm to Interfere s-default, md/lg to s-large,
+        --elevation-* token alone. Troupe Light maps sm to Interfere s-default, md/lg to s-large,
         xl/2xl to s-extra-large.
       </Caption>
     </Pad>

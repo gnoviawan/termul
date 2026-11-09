@@ -35,6 +35,10 @@ test.describe('desktop', () => {
     await launchChat(page, `${title} ${PROMPT_MARKERS}`)
     const pane = page.locator('[data-pane-content]').filter({ has: chatTab(page, title) })
     const pill = pane.getByRole('button', { name: /^Session status: subagents/ })
+    // Earlier proj-c chats (background-subagents, subagent-history, an earlier
+    // run of this test) end with the same sentence and stay mounted, invisible,
+    // behind this tab. The role query skips them.
+    const transcript = pane.getByRole('log')
     await expect(pill).toHaveAccessibleName(/subagents 2 working/)
 
     await pill.click()
@@ -50,8 +54,8 @@ test.describe('desktop', () => {
     await expect(panel.getByRole('button', { name: /^Stop/ })).toHaveCount(0)
     await expect(pill).toHaveAccessibleName(/subagents 1 working, 1 stopped/)
 
-    await expect(pane.getByText(TURN_END).first()).toBeVisible({ timeout: 20_000 })
-    await expect(pane.getByText(/\[CANCELLED after/)).toHaveCount(0)
+    await expect(transcript.getByText(TURN_END)).toBeVisible({ timeout: 20_000 })
+    await expect(transcript.getByText(/\[CANCELLED after/)).toHaveCount(0)
     await expect(pill).toHaveAccessibleName(/subagents 1 working, 1 stopped/)
   })
 })

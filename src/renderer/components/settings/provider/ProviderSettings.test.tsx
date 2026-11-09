@@ -303,7 +303,7 @@ describe('ProviderSettings', () => {
       render(<ProviderSettings />)
       await screen.findByTestId('claude-account-ab12')
       expect(screen.getByRole('button', { name: /add account/i })).toBeInTheDocument()
-      expect(screen.queryByText(/termul-server claude account/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/-server claude account/)).not.toBeInTheDocument()
       expect(screen.getByRole('switch', { name: 'Switch accounts automatically' })).toBeEnabled()
       openMenu('Work')
       const items = await screen.findAllByRole('menuitem')
@@ -322,6 +322,7 @@ describe('ProviderSettings', () => {
       expect(screen.queryByRole('button', { name: /add account/i })).not.toBeInTheDocument()
       expect(within(work).queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument()
       expect(screen.getByText(/This server is read-only for remote clients/)).toBeInTheDocument()
+      expect(screen.getByText('troupe-server claude account')).toBeInTheDocument()
       expect(screen.getByText('termul-server claude account')).toBeInTheDocument()
       expect(
         screen.queryByText('Choose an account per project in Project settings → Accounts.')

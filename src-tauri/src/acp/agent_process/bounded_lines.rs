@@ -1,7 +1,7 @@
 //! Newline-delimited reader for agent stdout with a hard per-line cap.
 //!
 //! `AsyncBufReadExt::lines` buffers a whole line before yielding it, so one
-//! agent that never writes a newline makes Termul allocate without bound
+//! agent that never writes a newline makes Troupe allocate without bound
 //! (#1597). This reader stops buffering at [`MAX_AGENT_STDOUT_LINE_BYTES`]
 //! and fails the stream instead of truncating: a cut JSON-RPC message would
 //! only resurface later as a confusing parse error.

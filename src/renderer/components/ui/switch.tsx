@@ -8,7 +8,7 @@ import { FOCUS_RING_CLASS } from './panel-styles'
  * On/off switch. Track and thumb colors come from per-theme `--switch-*`
  * tokens (`.switch-track`, `.switch-thumb` in index.css). Most themes keep
  * the neutral switch: foreground track + background thumb when checked,
- * input track + muted thumb when not. Termul themes use the brand blue.
+ * input track + muted thumb when not. Troupe themes use the brand blue.
  */
 export type SwitchSize = 'default' | 'sm'
 
@@ -58,4 +58,23 @@ const Switch = React.forwardRef<
 })
 Switch.displayName = SwitchPrimitives.Root.displayName
 
-export { Switch }
+/**
+ * The look of `Switch`, for a menu item that is itself the control. The item's
+ * highlight and press drive the track's hover and active colors (`.switch-mark`).
+ */
+function SwitchMark({ on }: { on: boolean }): React.JSX.Element {
+  const state = on ? 'checked' : 'unchecked'
+  const { track, thumb } = switchClasses('sm')
+  return (
+    <span
+      aria-hidden="true"
+      data-state={state}
+      data-switch-size="sm"
+      className={cn(track, 'switch-mark')}
+    >
+      <span data-state={state} className={thumb} />
+    </span>
+  )
+}
+
+export { Switch, SwitchMark }

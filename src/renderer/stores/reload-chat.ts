@@ -1,7 +1,7 @@
 /**
  * Reload one Agent chat onto a new process without closing its tab.
  *
- * Termul MCP is sent on the reopen. A new process rereads CLI agent config
+ * Troupe MCP is sent on the reopen. A new process rereads CLI agent config
  * (MCP, skills, plugins). Other open chats keep the old process.
  * The control stays disabled while a reply, queue, or question is open.
  * Running background agents ask for a confirm instead (`use-reload-chat`).
@@ -19,6 +19,7 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { ephemeralSessionIds } from '@/stores/acp-store/ephemeral-ids'
+import { recordRegistryMcpServers } from '@/stores/acp-store/registry-mcp-fingerprints'
 import { liveSiblingCount, reloadInFlight } from '@/stores/acp-store/reload-guard'
 import { cancelRunningSubagents } from '@/stores/acp-store/subagent-lifecycle'
 import { sessionAgentConfigId } from '@/stores/claude-account-switch'
@@ -161,6 +162,9 @@ export async function reloadAgentChat(sessionId: SessionId): Promise<void> {
 
     const reopened = useAcpStore.getState().sessions[sessionId]
     if (reopened?.status !== 'active') return
+    // The reopen passed an explicit list, which records no fingerprint. It is
+    // the list's current selection, so record it: the chat is no longer stale.
+    recordRegistryMcpServers(sessionId, mcpServers)
     const after = useAcpStore.getState()
     const messages = after.messages[sessionId] ?? []
     const afterMessageId = messages.length > 0 ? (messages[messages.length - 1]?.id ?? null) : null

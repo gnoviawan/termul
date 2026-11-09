@@ -45,7 +45,7 @@ describe('terminal-url-navigation', () => {
     expect(root.tabs).toHaveLength(0)
   })
 
-  it('opens URLs in a new Termul browser tab when mode is termul', async () => {
+  it('opens URLs in a new Troupe browser tab when mode is termul', async () => {
     useAppSettingsStore.setState((state) => ({
       ...state,
       settings: { ...state.settings, terminalUrlOpenMode: 'termul' }

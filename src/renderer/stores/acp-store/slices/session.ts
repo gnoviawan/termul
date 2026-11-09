@@ -33,9 +33,8 @@ import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transpo
 import { classifySetupError } from '@/lib/agents/acp-spawn-errors'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
-import { serializeSelectionContexts } from '@/lib/composer/selection-context'
+import { retryWireBlocks } from '@/lib/composer/retry-wire'
 import { logFrontendError } from '@/lib/log-api'
-import { sanitizeDisplayText } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useProjectStore } from '@/stores/project-store'
 import {
@@ -1172,7 +1171,7 @@ async function openHistorySessionInner(
 
   // Issue #1420: a reopen (idle-stop auto-resume, manual Resume chat, a
   // history-row open — any path but Reload this chat) must re-attach the host
-  // `termul` plan server and the user's configured MCP servers, exactly as
+  // `troupe` plan server and the user's configured MCP servers, exactly as
   // Reload does (see reload-chat.ts). With no list the host treats the reopen
   // as "no MCP" and the agent loses the canvas tools, plan, set_session_title,
   // ask_user and every configured MCP server. An explicit caller list (Reload)
@@ -1985,19 +1984,12 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       // Re-send the last user prompt to produce a fresh assistant turn (retry).
       const lastUserBlocks = lastOwnUserPromptBlocks(get().messages[sessionId] ?? [])
       if (!lastUserBlocks || lastUserBlocks.length === 0) return
-      // Sanitized WIRE blocks: the stored display text carries private-use
-      // pill sentinels (command/skill/file tokens); map each text block to
-      // readable wire text (`/name` / `(name)` / `(display)` — the token sits
-      // at the front of the display text, so the in-place replacement
-      // reproduces the fresh-send wire byte-identically for command-only
-      // turns). Non-text blocks (image/resource) pass through unchanged. The
-      // original (token) blocks stay as the display so the timeline keeps
-      // chips.
-      const wireBlocks: ContentBlock[] = lastUserBlocks.map((b) =>
-        b.type === 'text' && typeof b.text === 'string'
-          ? { type: 'text', text: sanitizeDisplayText(serializeSelectionContexts(b.text)) }
-          : b
-      )
+      // Rebuild the wire like a fresh send: the stored display text carries
+      // pill tokens, so mentioned files get their `resource_link` and mentioned
+      // conversations their transcript again. No skill paths are at hand here,
+      // so a skill pill reads `(name)`. The original (token) blocks stay as the
+      // display so the timeline keeps chips.
+      const wireBlocks = await retryWireBlocks(lastUserBlocks, [])
       const only = wireBlocks.length === 1 ? wireBlocks[0] : null
       await runPromptTurn(
         set,
@@ -2267,8 +2259,8 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       set((s) => ({ discoveredSessions: { ...s.discoveredSessions, [key]: all } }))
 
       // Discovery no longer promotes external sessions into host persistence:
-      // the Chats tab renders only Termul-created sessions (`discovered !== true`),
-      // and `session/list` results are external chats Termul did not create. The
+      // the Chats tab renders only Troupe-created sessions (`discovered !== true`),
+      // and `session/list` results are external chats Troupe did not create. The
       // function is retained so store coverage keeps exercising the `session/list`
       // path; it is no longer auto-triggered from the sidebar.
     } catch (e) {

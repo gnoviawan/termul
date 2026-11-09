@@ -273,7 +273,7 @@ pub(crate) fn search(
     let mut matches: Vec<(u32, &CatalogItem)> = catalog
         .items
         .iter()
-        .filter_map(|item| score(item, &query.terms).map(|score| (score, item)))
+        .filter_map(|item| score(item, &query.terms).map(|score| (score, item.as_ref())))
         .collect();
     // Items are sorted by name, and the sort is stable, so ties stay in name
     // order and every page of one query is deterministic.

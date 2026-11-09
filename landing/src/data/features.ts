@@ -40,7 +40,7 @@ export const features: Feature[] = [
     navTitle: 'MULTIPLE SHELLS',
     title: 'Multiple Shell Support',
     description:
-      'Switching between PowerShell, WSL, and Git Bash usually means remembering paths and editing configs. Termul detects your installed shells for you, so the right environment is always one click away.',
+      'Switching between PowerShell, WSL, and Git Bash usually means remembering paths and editing configs. Troupe detects your installed shells for you, so the right environment is always one click away.',
     video: {
       src: '/features/02-multiple-shells.mp4',
     },
@@ -50,7 +50,7 @@ export const features: Feature[] = [
     navTitle: 'PROJECT WORKSPACES',
     title: 'Project-Based Workspaces',
     description:
-      'Juggling three projects should not mean three sets of mismatched terminals. Termul groups every session, directory, and setting under the project it belongs to, so switching projects restores the exact context you left.',
+      'Juggling three projects should not mean three sets of mismatched terminals. Troupe groups every session, directory, and setting under the project it belongs to, so switching projects restores the exact context you left.',
     video: {
       src: '/features/03-project-workspaces.mp4',
     },
@@ -70,7 +70,7 @@ export const features: Feature[] = [
     navTitle: 'MARKDOWN EDITOR',
     title: 'Markdown-First Live Editor',
     description:
-      'Writing docs in one app and previewing in another breaks your flow. Termul renders markdown live as you type — headings, lists, tables, and Mermaid diagrams take shape side by side with your text, no save-and-refresh loop.',
+      'Writing docs in one app and previewing in another breaks your flow. Troupe renders markdown live as you type — headings, lists, tables, and Mermaid diagrams take shape side by side with your text, no save-and-refresh loop.',
     video: {
       src: '/features/05-markdown-builtin-preview.mp4',
     },

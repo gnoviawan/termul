@@ -418,7 +418,7 @@ impl AcpCatalogService {
         Ok(catalog)
     }
 
-    /// When OpenCode has no Termul-managed install, attach a v2 binary found
+    /// When OpenCode has no Troupe-managed install, attach a v2 binary found
     /// on PATH or under `~/.opencode/bin`. A managed install already in
     /// `installed` wins and this probe does not run.
     pub async fn apply_external_opencode(&self, catalog: &mut AcpCatalog) {
@@ -821,7 +821,7 @@ pub enum CatalogError {
     BundledParse(serde_json::Error),
     /// Filesystem read/write failure (permission, disk full, …).
     Io(io::Error),
-    /// The opt-in config was written by a NEWER Termul (AD-18): refused, the
+    /// The opt-in config was written by a NEWER Troupe (AD-18): refused, the
     /// file is left untouched.
     NewerSchema(NewerSchema),
 }
@@ -1088,7 +1088,7 @@ fn is_https_archive_url(url: &str) -> bool {
 
 /// Fill the OpenCode catalog row from an external v2 binary.
 ///
-/// A row that already has `installed` (the Termul install manifest) is left
+/// A row that already has `installed` (the Troupe install manifest) is left
 /// alone. `binary == None` leaves an install-required row unchanged. The
 /// reported `version` is the catalog pin, so a newer PATH binary does not
 /// show as a downgrade against that pin.

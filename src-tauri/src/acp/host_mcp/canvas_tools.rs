@@ -1,4 +1,4 @@
-//! figcraft's agent surface in the host `termul` MCP child (spine AD-18,
+//! figcraft's agent surface in the host `troupe` MCP child (spine AD-18,
 //! AD-21): its tools, resources and prompts, answered by `figcraft-mcp` itself
 //! over a [`Bridge`].
 //!
@@ -22,23 +22,26 @@ use crate::acp::host_mcp::child::ChildConfig;
 /// the server `instructions` to the model, and upstream's descriptions call
 /// the editor "FigCraft", so without this an agent cannot tell that
 /// `create_node` or `run_command` draw on the project's canvas.
-pub const DESCRIPTION_TAG: &str = "Termul Canvas (this project's design canvas, a .figcraft \
+pub const DESCRIPTION_TAG: &str = "Troupe Canvas (this project's design canvas, a .figcraft \
 document; change it only through these tools, never by editing files): ";
 
 /// The canvas section of the session `instructions`, followed by figcraft's
 /// own guide to its tools.
-const CANVAS_GUIDE: &str = "Design canvas: this project has a design canvas, Termul Canvas, a \
+const CANVAS_GUIDE: &str = "Design canvas: this project has a design canvas, Troupe Canvas, a \
 Figma-class editor. Its document is the project's .figcraft file (design.figcraft by default). \
 When the user asks for a design, mockup, wireframe, screen or anything \"on the canvas\", build it \
 with this server's canvas tools: create_node, set_properties, list_commands, run_command, batch, \
 list_issues, inspect_document, get_node, select, screenshot, export, undo and redo (pointer, key, \
-type_text and inspect_ui drive the editor UI and need the canvas on screen). save_file saves the document; \
-Termul chooses the file and ignores any path you pass. Do not create or edit .figcraft, .pen or \
+type_text and inspect_ui drive the editor UI and need the canvas on screen). wait_for_changes \
+returns new comment events only (layer edits are not reported, so a `document` topic never wakes \
+it) and waits up to `timeoutMs` (20 s by default, 25 s at most); pass the `cursor` it returns as \
+`after` on your next call. save_file saves the document; \
+Troupe chooses the file and ignores any path you pass. Do not create or edit .figcraft, .pen or \
 .op files on disk, do not call open_file, and do not look for other design tools, MCP servers or \
 canvas apps: these tools are the canvas. Agents cannot open the canvas. A CANVAS_CLOSED error \
-means it is not open, so ask the user to open it with the Canvas button in Termul's left rail, \
+means it is not open, so ask the user to open it with the Canvas button in Troupe's left rail, \
 then retry. Before your first canvas edit in a session, call read_canvas_guide with no topic to \
-read the termul-canvas skill index (SKILL.md), then call it again for the required topics \
+read the troupe-canvas skill index (SKILL.md), then call it again for the required topics \
 canvas-basics and working-protocol and for the guide that fits the request. When the user \
 gives no brand or style, call get_canvas_style, pick one, run its apply batch and tell the user \
 which style you chose. The canvas editor is FigCraft, and the rest of this section is its own \
@@ -50,17 +53,17 @@ pub fn instructions() -> String {
     format!("{CANVAS_GUIDE}\n\n{}", figcraft_mcp::INSTRUCTIONS)
 }
 
-/// What figcraft's `export` description says about `path`, and what Termul
+/// What figcraft's `export` description says about `path`, and what Troupe
 /// does with it instead.
 const EXPORT_PATH_UPSTREAM: &str = "(absolute path recommended)";
 const EXPORT_PATH_TERMUL: &str =
-    "(a path relative to the project; Termul writes only inside the project and may replace a file there)";
+    "(a path relative to the project; Troupe writes only inside the project and may replace a file there)";
 
 /// figcraft's tools as rmcp definitions, each description prefixed with
 /// [`DESCRIPTION_TAG`]. figcraft marks `export` read-only, but with a `path`
-/// Termul writes (and may replace) a project file, so it is advertised as
+/// Troupe writes (and may replace) a project file, so it is advertised as
 /// destructive, and its description no longer asks for an absolute path,
-/// which Termul refuses.
+/// which Troupe refuses.
 #[must_use]
 pub fn tools() -> Vec<Tool> {
     figcraft_mcp::tool_definitions()

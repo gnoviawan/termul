@@ -192,7 +192,7 @@ describe('McpCatalogBrowser', () => {
     expect(blocked.getByText('Deprecated')).toBeInTheDocument()
     expect(
       blocked.getByText(
-        'It sets NODE_OPTIONS, an environment variable Termul blocks because it can change what runs.'
+        'It sets NODE_OPTIONS, an environment variable Troupe blocks because it can change what runs.'
       )
     ).toBeInTheDocument()
 
@@ -276,7 +276,7 @@ describe('McpCatalogBrowser', () => {
       .mockResolvedValueOnce(page([installable]))
     render(<McpCatalogBrowser />)
 
-    expect(await screen.findByText("Termul couldn't load the MCP catalog.")).toBeInTheDocument()
+    expect(await screen.findByText("Troupe couldn't load the MCP catalog.")).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
 
     expect(await screen.findByText('1 server')).toBeInTheDocument()
@@ -313,6 +313,41 @@ describe('McpCatalogBrowser', () => {
 })
 
 describe('McpCatalogBrowser catalog source', () => {
+  it('holds the source card slot above the search box until the status arrives', async () => {
+    search.mockResolvedValue(page([installable]))
+    let answer: (result: IpcResult<McpCatalogStatus>) => void = () => {}
+    status.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve
+      })
+    )
+    render(<McpCatalogBrowser />)
+
+    const placeholder = screen.getByTestId('mcp-catalog-source-placeholder')
+    expect(placeholder).toHaveAttribute('aria-busy', 'true')
+    expect(placeholder.textContent).toBe('')
+    const searchBox = screen.getByRole('textbox', { name: 'Search the MCP catalog' })
+    expect(
+      placeholder.compareDocumentPosition(searchBox) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    await act(async () => answer(catalog()))
+
+    expect(await screen.findByText('Up to date.')).toBeInTheDocument()
+    expect(screen.queryByTestId('mcp-catalog-source-placeholder')).toBeNull()
+  })
+
+  it('drops the placeholder when the status cannot be read', async () => {
+    search.mockResolvedValue(page([installable]))
+    status.mockResolvedValue({ success: false, error: 'boom', code: 'IO' })
+    render(<McpCatalogBrowser />)
+
+    expect(
+      await screen.findByText("Troupe couldn't check where the catalog comes from.")
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('mcp-catalog-source-placeholder')).toBeNull()
+  })
+
   it('says the full catalog comes from the official MCP Registry and when it was updated', async () => {
     search.mockResolvedValue(page([installable]))
     status.mockResolvedValue(catalog())

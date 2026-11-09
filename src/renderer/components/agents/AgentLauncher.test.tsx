@@ -1790,10 +1790,15 @@ describe('AgentLauncher ACP new thread', () => {
       expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
     )
 
-    // Open the MCP servers popover and toggle the "Files" server off.
-    fireEvent.click(screen.getByRole('button', { name: /mcp servers/i }))
-    const filesSwitch = await screen.findByRole('switch', { name: /Disable Files/i })
-    fireEvent.click(filesSwitch)
+    // Open + > Connectors and toggle the "Files" server off.
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Add to chat' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    const connectors = await screen.findByRole('menuitem', { name: /Connectors/ })
+    act(() => connectors.focus())
+    fireEvent.keyDown(connectors, { key: 'ArrowRight' })
+    fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'Files' }))
 
     // The toggle persists to the registry, then cancels + re-prepares so the
     // next launch resolves MCP from the updated registry instead of the stale
@@ -2053,9 +2058,9 @@ describe('AgentLauncher ACP new thread', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }))
       const sheet = await screen.findByRole('dialog', { name: 'Add to chat' })
-      fireEvent.click(within(sheet).getByRole('button', { name: /MCP servers/ }))
+      fireEvent.click(within(sheet).getByRole('button', { name: /Connectors/ }))
       fireEvent.click(
-        await within(screen.getByRole('dialog', { name: 'MCP servers' })).findByRole('switch', {
+        await within(screen.getByRole('dialog', { name: 'Connectors' })).findByRole('switch', {
           name: /Disable Files/i
         })
       )
@@ -3095,11 +3100,9 @@ describe('AgentLauncher conversation pill launch', () => {
     renderLauncher()
     const editor = await screen.findByLabelText('Agent prompt')
     setComposerValue(`see ${conversationToken('Old chat', 'chat-9')} `)
-    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
 
     fireEvent.click(screen.getByLabelText('Start agent chat'))
     await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'false'))
-    expect(screen.getByRole('button', { name: 'Attach files' })).toBeDisabled()
     expect(mockCreateLaunchPlaceholder).not.toHaveBeenCalled()
 
     await act(async () => finishRead({ blocks: [], gaps: new Map([['chat-9', 'unavailable']]) }))
@@ -3113,7 +3116,6 @@ describe('AgentLauncher conversation pill launch', () => {
       )
     )
     expect(editor).toHaveAttribute('contenteditable', 'true')
-    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
   })
 
   it('ignores a starter pick while the launch holds the composer', async () => {
@@ -3589,6 +3591,39 @@ describe('AgentLauncher worktree isolation', () => {
     const base = screen.getByRole('combobox', { name: 'Base branch' }) as HTMLSelectElement
     fireEvent.change(base, { target: { value: branch } })
   }
+
+  it('re-enables launch when New chat re-shows the launcher while a worktree is still being created', async () => {
+    function PresenceHarness({ show }: { show: boolean }) {
+      return (
+        <TooltipProvider>
+          <MemoryRouter>
+            <AnimatePresence initial={false}>
+              {show ? (
+                <motion.div exit={{ opacity: 0 }} transition={{ duration: 5 }}>
+                  <AgentLauncher paneId="pane1" />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </MemoryRouter>
+        </TooltipProvider>
+      )
+    }
+    mockWorktreeCreate.mockReturnValueOnce(new Promise(() => {}))
+    const { rerender } = render(<PresenceHarness show />)
+    await chooseWorktreeBaseBranch('feat/x')
+    setComposerValue('first')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
+
+    // The chat opened and the worktree is still being created when New chat
+    // brings back this exiting launcher.
+    rerender(<PresenceHarness show={false} />)
+    rerender(<PresenceHarness show />)
+    setComposerValue('second')
+    expect(screen.getByLabelText('Start agent chat')).toBeEnabled()
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(2))
+  })
 
   // CAP-3: launch in worktree mode calls worktreeApi.create once with chat/{id}
   // then copyIncludeFiles, then threads cwd=worktreePath
@@ -4675,6 +4710,76 @@ describe('AgentLauncher exit handoff', () => {
     }
   })
 
+  it('launches again when re-shown while the previous launch is still exiting', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-ready-1' }
+    mockClaimPreparedChat
+      .mockReturnValueOnce('prepared-ready-1')
+      .mockReturnValueOnce('prepared-ready-2')
+    // session/prompt resolves at turn end: the first chat's turn keeps running.
+    mockSendPrompt.mockReturnValue(new Promise(() => {}))
+    try {
+      const { rerender } = render(<Harness show />)
+      await screen.findByText(/what should we do/i)
+      setComposerValue('first')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1))
+
+      // New chat inside the exit window: the boundary restores this instance.
+      simulateChatTabTakeover()
+      rerender(<Harness show={false} />)
+      rerender(<Harness show />)
+      setComposerValue('second')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+      expect(mockClaimPreparedChat).toHaveBeenCalledTimes(2)
+      expect(mockAddAgentChatTab).toHaveBeenLastCalledWith('prepared-ready-2', 'pane1')
+    } finally {
+      restorePaneRoot()
+    }
+  })
+
+  it('keeps the newer launch guarded when the earlier launch finishes during it', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-ready-1' }
+    mockClaimPreparedChat
+      .mockReturnValueOnce('prepared-ready-1')
+      .mockReturnValueOnce('prepared-ready-2')
+    let endFirstTurn: () => void = () => {}
+    mockSendPrompt
+      .mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          endFirstTurn = resolve
+        })
+      )
+      .mockReturnValue(new Promise(() => {}))
+    try {
+      const { rerender } = render(<Harness show />)
+      await screen.findByText(/what should we do/i)
+      setComposerValue('first')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1))
+
+      simulateChatTabTakeover()
+      rerender(<Harness show={false} />)
+      rerender(<Harness show />)
+      setComposerValue('second')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2))
+
+      // The first chat's turn ends while the second launch is still in flight.
+      await act(async () => endFirstTurn())
+      setComposerValue('third')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+      expect(mockClaimPreparedChat).toHaveBeenCalledTimes(2)
+    } finally {
+      restorePaneRoot()
+    }
+  })
+
   it('fades in place without diving when dismissed with no chat handoff', async () => {
     const { rerender } = render(<Harness show />)
     await screen.findByText(/what should we do/i)
@@ -4748,16 +4853,14 @@ describe('AgentLauncher Claude account chip', () => {
     mockMobileShell.current = null
   })
 
-  it("shows the project's account next to the attach button and switches it from the menu", async () => {
+  it("shows the project's account next to the + menu and switches it from the menu", async () => {
     renderLauncher()
 
     const chip = await screen.findByRole('button', {
       name: 'Claude account: Personal, 5-hour 37% used. Change account'
     })
     expect(chip).toHaveTextContent('Personal5h 37%')
-    expect(screen.getByRole('button', { name: 'Attach files' }).parentElement).toContainElement(
-      chip
-    )
+    expect(screen.getByRole('button', { name: 'Add to chat' }).parentElement).toContainElement(chip)
 
     fireEvent.pointerDown(chip, { button: 0, ctrlKey: false })
     expect(await screen.findByText('Account for this project')).toBeInTheDocument()

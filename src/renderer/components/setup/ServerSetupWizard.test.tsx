@@ -140,10 +140,10 @@ describe('ServerSetupWizard (setup mode)', () => {
   it('prefills the form from getStatus() defaults', async () => {
     render(<ServerSetupWizard mode="setup" />)
 
-    await waitFor(() => expect(screen.getByText('Set up Termul')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Set up Troupe')).toBeInTheDocument())
     expect(api.getStatus).toHaveBeenCalledTimes(1)
     expect(screen.getByLabelText('Port')).toHaveValue(8080)
-    expect(screen.getByLabelText('Where can Termul be reached?')).toHaveValue('127.0.0.1')
+    expect(screen.getByLabelText('Where can Troupe be reached?')).toHaveValue('127.0.0.1')
   })
 
   it('explains when a saved config could not be used', async () => {
@@ -171,14 +171,14 @@ describe('ServerSetupWizard (setup mode)', () => {
     // Loopback default: the question is skipped, like the CLI wizard.
     expect(screen.queryByRole('switch')).not.toBeInTheDocument()
 
-    fireEvent.change(screen.getByLabelText('Where can Termul be reached?'), {
+    fireEvent.change(screen.getByLabelText('Where can Troupe be reached?'), {
       target: { value: '0.0.0.0' }
     })
     expect(
       screen.getByRole('switch', { name: 'Let other devices make changes' })
     ).toBeInTheDocument()
 
-    fireEvent.change(screen.getByLabelText('Where can Termul be reached?'), {
+    fireEvent.change(screen.getByLabelText('Where can Troupe be reached?'), {
       target: { value: '127.0.0.1' }
     })
     expect(screen.queryByRole('switch')).not.toBeInTheDocument()
@@ -214,7 +214,7 @@ describe('ServerSetupWizard (setup mode)', () => {
     )
     render(<ServerSetupWizard mode="setup" initial={DEFAULT_ANSWERS} />)
 
-    fireEvent.submit(screen.getByRole('form', { name: 'Set up Termul' }))
+    fireEvent.submit(screen.getByRole('form', { name: 'Set up Troupe' }))
 
     await waitFor(() =>
       expect(screen.getByText('That port is already in use.')).toBeInTheDocument()
@@ -226,7 +226,7 @@ describe('ServerSetupWizard (setup mode)', () => {
     api.validate.mockResolvedValueOnce(fail('connection refused', 'NETWORK_ERROR'))
     render(<ServerSetupWizard mode="setup" initial={DEFAULT_ANSWERS} />)
 
-    fireEvent.submit(screen.getByRole('form', { name: 'Set up Termul' }))
+    fireEvent.submit(screen.getByRole('form', { name: 'Set up Troupe' }))
 
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent('Could not reach the server')
@@ -237,14 +237,14 @@ describe('ServerSetupWizard (setup mode)', () => {
   it('resets allowRemoteWrites when the bind goes back to loopback', async () => {
     render(<ServerSetupWizard mode="setup" initial={DEFAULT_ANSWERS} />)
 
-    fireEvent.change(screen.getByLabelText('Where can Termul be reached?'), {
+    fireEvent.change(screen.getByLabelText('Where can Troupe be reached?'), {
       target: { value: '0.0.0.0' }
     })
     fireEvent.click(screen.getByRole('switch', { name: 'Let other devices make changes' }))
-    fireEvent.change(screen.getByLabelText('Where can Termul be reached?'), {
+    fireEvent.change(screen.getByLabelText('Where can Troupe be reached?'), {
       target: { value: '127.0.0.1' }
     })
-    fireEvent.submit(screen.getByRole('form', { name: 'Set up Termul' }))
+    fireEvent.submit(screen.getByRole('form', { name: 'Set up Troupe' }))
 
     await waitFor(() => expect(api.validate).toHaveBeenCalled())
     expect(api.validate.mock.calls[0][0].allowRemoteWrites).toBe(false)
@@ -256,9 +256,9 @@ describe('ServerSetupWizard (setup mode)', () => {
     )
     render(<ServerSetupWizard mode="setup" initial={DEFAULT_ANSWERS} />)
 
-    fireEvent.submit(screen.getByRole('form', { name: 'Set up Termul' }))
+    fireEvent.submit(screen.getByRole('form', { name: 'Set up Troupe' }))
 
-    await waitFor(() => expect(screen.getByText('Restarting Termul')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Restarting Troupe')).toBeInTheDocument())
     expect(api.apply).toHaveBeenCalledWith(expect.objectContaining({ host: '127.0.0.1' }))
   })
 
@@ -271,7 +271,7 @@ describe('ServerSetupWizard (setup mode)', () => {
       expect(screen.getByText(/Could not load the server settings/)).toBeInTheDocument()
     )
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
-    await waitFor(() => expect(screen.getByText('Set up Termul')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Set up Troupe')).toBeInTheDocument())
     expect(api.getStatus).toHaveBeenCalledTimes(2)
   })
 })

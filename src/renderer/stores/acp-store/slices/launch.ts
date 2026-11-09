@@ -864,7 +864,7 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
             return acpApi.sendPromptBlocks(session.agentId, sessionId, blocks, turnId)
           },
           undefined,
-          { skipUserAppend: hadOptimisticUser }
+          { skipUserAppend: hadOptimisticUser, leadsQueue: true }
         )
       }
       flushNextQueuedPrompt(set, sessionId)

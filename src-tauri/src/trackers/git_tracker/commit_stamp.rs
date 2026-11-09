@@ -4,7 +4,7 @@
 //!
 //! The stamp is a real git trailer (parsed by git, exact value match): a prose
 //! line that merely looks like one is not a stamp. A commit and its head check
-//! run under one in-process lock per git dir, so two Termul commits naming one
+//! run under one in-process lock per git dir, so two Troupe commits naming one
 //! `expectedHead` cannot both pass the check.
 //!
 //! Limits of the stamp: a resend is found within the commits between
@@ -135,7 +135,7 @@ pub fn find_stamped_commit(
 }
 
 /// One lock per git dir (a linked worktree has its own), so the `expectedHead`
-/// check and the commit it guards are atomic against other Termul commits.
+/// check and the commit it guards are atomic against other Troupe commits.
 static REPO_LOCKS: std::sync::LazyLock<
     parking_lot::Mutex<HashMap<std::path::PathBuf, Arc<parking_lot::Mutex<()>>>>,
 > = std::sync::LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));

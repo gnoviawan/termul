@@ -3,7 +3,7 @@
 //! The channel is split: one task reads output, another writes keystrokes
 //! and resizes, so a large paste can never stall output (or the reverse).
 //! The shell is exposed to `PtyManager` through plain `Read`/`Write`/`Child`
-//! adapters, so it is a regular Termul terminal (xterm, scrollback replay,
+//! adapters, so it is a regular Troupe terminal (xterm, scrollback replay,
 //! claims, resize, kill).
 
 use super::connect::{ConnectError, ConnectErrorKind};
@@ -55,7 +55,7 @@ pub enum ShellEnd {
     Exited(Option<i32>),
     /// The connection broke (network loss, server gone).
     Lost(String),
-    /// Closed from Termul (tab closed, app exit).
+    /// Closed from Troupe (tab closed, app exit).
     Closed,
 }
 
@@ -214,7 +214,7 @@ fn describe(end: &ShellEnd) -> String {
     match end {
         ShellEnd::Exited(code) => format!("remote shell exited ({:?})", code),
         ShellEnd::Lost(detail) => format!("connection lost ({})", detail),
-        ShellEnd::Closed => "closed by Termul".to_string(),
+        ShellEnd::Closed => "closed by Troupe".to_string(),
     }
 }
 
@@ -286,7 +286,7 @@ pub async fn start(
     let writer_connection = connection.clone();
     tokio::spawn(async move {
         // A failed send means the connection broke: the reader must then
-        // report "lost", not a close from Termul.
+        // report "lost", not a close from Troupe.
         let mut closed_by_us = true;
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
@@ -308,7 +308,7 @@ pub async fn start(
                 ShellCmd::Close => break,
             }
         }
-        // Closed from Termul, or every handle to the terminal is gone.
+        // Closed from Troupe, or every handle to the terminal is gone.
         if closed_by_us {
             writer_closing.store(true, Ordering::Release);
         }

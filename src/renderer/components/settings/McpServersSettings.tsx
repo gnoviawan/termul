@@ -10,6 +10,7 @@ import {
   Trash2,
   Unlink
 } from '@/components/icons'
+import { useMcpServerDialog } from '@/components/settings/McpServerDialog'
 import { RowMenu } from '@/components/settings/RowMenu'
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { SettingsNotice } from '@/components/settings/SettingsNotice'
@@ -17,99 +18,28 @@ import { type StatusTone, StatusWord } from '@/components/settings/StatusWord'
 import { showUndoToast } from '@/components/settings/undo-toast'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle
-} from '@/components/ui/dialog'
 import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
 import { isMcpServerAutoProbed } from '@/hooks/use-acp-mcp'
 import { MCP_UNSAFE_URL, McpOAuthError } from '@/lib/acp-api'
-import { type StoredMcpServer, sameLaunch, transportOf } from '@/lib/acp-mcp-persistence'
+import { type StoredMcpServer, transportOf } from '@/lib/acp-mcp-persistence'
 import { logFrontendError } from '@/lib/log-api'
-import { parseMcpJsonImport } from '@/lib/mcp-json-import'
 import { cn } from '@/lib/utils'
-import { randomUUID } from '@/lib/uuid'
 import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 
-type McpDialogState = { mode: 'add' } | { mode: 'edit'; server: StoredMcpServer }
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 export function oauthFailureMessage(error: unknown): string {
   if (error instanceof McpOAuthError && error.code === MCP_UNSAFE_URL) {
-    return "This server's sign-in link isn't a secure https link, so Termul didn't open it."
+    return "This server's sign-in link isn't a secure https link, so Troupe didn't open it."
   }
   return 'OAuth flow failed. Check your browser for the authorization page.'
 }
-/**
- * Durable failure log for a rejected MCP JSON import (AGENTS.md renderer
- * logging rule). The parser rejects BEFORE any persistence, so without this
- * the rejection is invisible outside the dialog. Parser error strings contain
- * server names + fixed texts only — never env/header values.
- */
-function logMcpJsonRejection(errors: string[]): void {
-  void logFrontendError({
-    level: 'warn',
-    source: 'settings.McpServersSettings',
-    message: `MCP server JSON rejected: ${errors.join(' | ')}`
-  })
-}
-
-/**
- * Serialize a stored server to the single-object JSON the edit dialog accepts:
- * `{type, name, command, args, env, enabled}` (stdio) or
- * `{type, name, url, headers, enabled}` (http/sse). `env` is shown as a
- * Claude-Desktop-style map and `headers` as `[{name, value}]` pairs — the
- * parser accepts and normalizes both shapes for either field. Empty
- * `args`/`env`/`headers` are omitted.
- */
-function serverToJson(server: StoredMcpServer): string {
-  const enabled = server.enabled !== false
-  if (transportOf(server) === 'stdio') {
-    const stdio = server as Extract<StoredMcpServer, { type?: 'stdio' }>
-    const env: Record<string, string> = {}
-    for (const pair of stdio.env ?? []) env[pair.name] = pair.value
-    return JSON.stringify(
-      {
-        type: 'stdio',
-        name: server.name,
-        command: stdio.command,
-        ...(stdio.args && stdio.args.length > 0 ? { args: stdio.args } : {}),
-        ...(Object.keys(env).length > 0 ? { env } : {}),
-        enabled
-      },
-      null,
-      2
-    )
-  }
-  const remote = server as Extract<StoredMcpServer, { type: 'http' | 'sse' }>
-  return JSON.stringify(
-    {
-      type: transportOf(server),
-      name: server.name,
-      url: remote.url,
-      ...(remote.headers && remote.headers.length > 0 ? { headers: remote.headers } : {}),
-      enabled
-    },
-    null,
-    2
-  )
-}
 
 export function McpServersSettings(): React.JSX.Element {
+  const mcpDialog = useMcpServerDialog()
   const servers = useAcpStore((state) => state.mcpServers)
   const saveMcpServer = useAcpStore((state) => state.saveMcpServer)
-  const importMcpServers = useAcpStore((state) => state.importMcpServers)
   const setMcpServerEnabled = useAcpStore((state) => state.setMcpServerEnabled)
   const deleteMcpServer = useAcpStore((state) => state.deleteMcpServer)
   const probeMcpServer = useAcpStore((state) => state.probeMcpServer)
@@ -126,10 +56,6 @@ export function McpServersSettings(): React.JSX.Element {
   // OAuth host calls name the active project (the web host authorizes the URL
   // against that project's MCP list).
   const activeProjectId = useProjectStore((state) => state.activeProjectId)
-  const [dialog, setDialog] = useState<McpDialogState | null>(null)
-  const [jsonText, setJsonText] = useState('')
-  const [jsonErrors, setJsonErrors] = useState<string[]>([])
-  const [saving, setSaving] = useState(false)
   // Tracks which server rows have their tool list expanded (Settings surface).
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({})
 
@@ -160,121 +86,6 @@ export function McpServersSettings(): React.JSX.Element {
     }
   }, [servers.map((s) => s.id).join('|'), activeProjectId])
 
-  const closeDialog = (): void => {
-    setDialog(null)
-    setJsonText('')
-    setJsonErrors([])
-  }
-
-  const openAdd = (): void => {
-    setDialog({ mode: 'add' })
-    setJsonText('')
-    setJsonErrors([])
-  }
-
-  const openEdit = (server: StoredMcpServer): void => {
-    setDialog({ mode: 'edit', server })
-    setJsonText(serverToJson(server))
-    setJsonErrors([])
-  }
-
-  // Add mode: accepts a Claude Desktop `{"mcpServers": {...}}` wrapper or a
-  // bare single-server object. The input is validated as a whole BEFORE any
-  // persistence, and the accepted batch is committed through a single atomic
-  // store write — so fixing a rejected entry and re-saving can never duplicate
-  // previously saved entries, and a multi-server import triggers one registry
-  // update (one on-mount probe pass) instead of one per server.
-  const saveAdd = async (): Promise<void> => {
-    const { servers: parsedServers, errors } = parseMcpJsonImport(jsonText)
-    if (errors.length > 0) {
-      // All-or-nothing: nothing is persisted until every entry parses, so a
-      // corrected re-save starts from the same registry state.
-      logMcpJsonRejection(errors)
-      setJsonErrors(errors)
-      return
-    }
-    if (parsedServers.length === 0) {
-      const message = 'No MCP servers found in the JSON.'
-      logMcpJsonRejection([message])
-      setJsonErrors([message])
-      return
-    }
-    const batch = parsedServers.map((parsed) => ({
-      ...parsed,
-      id: randomUUID(),
-      enabled: true
-    }))
-    try {
-      await importMcpServers(batch)
-      toast.success(`Added ${batch.length} MCP server${batch.length === 1 ? '' : 's'}`)
-      closeDialog()
-    } catch {
-      // importMcpServers rolls back the whole batch on failure — nothing was
-      // persisted, so the dialog stays open for a safe retry.
-      toast.error('Could not save the MCP servers. Your previous settings were restored.')
-    }
-  }
-
-  // Edit mode: updates the same registry entry (same id). The wrapper is
-  // rejected — it would parse to N servers with fresh-name semantics, which
-  // is ambiguous for a single-entry update.
-  const saveEdit = async (target: StoredMcpServer): Promise<void> => {
-    // `enabled` is not part of `McpServerConfig`, so `parseMcpJsonImport`
-    // drops it like any unknown field — read an explicit boolean here first.
-    let explicitEnabled: boolean | undefined
-    try {
-      const raw: unknown = JSON.parse(jsonText)
-      if (isRecord(raw)) {
-        if (raw.mcpServers !== undefined) {
-          const message = 'Edit expects a single server object — remove the "mcpServers" wrapper.'
-          logMcpJsonRejection([message])
-          setJsonErrors([message])
-          return
-        }
-        if (typeof raw.enabled === 'boolean') explicitEnabled = raw.enabled
-      }
-    } catch {
-      // Invalid JSON — parseMcpJsonImport below reports the exact syntax error.
-    }
-    const { servers: parsedServers, errors } = parseMcpJsonImport(jsonText)
-    if (errors.length > 0) {
-      logMcpJsonRejection(errors)
-      setJsonErrors(errors)
-      return
-    }
-    const parsed = parsedServers[0]
-    if (!parsed || parsedServers.length !== 1) {
-      setJsonErrors(['Edit expects exactly one server object.'])
-      return
-    }
-    try {
-      await saveMcpServer({
-        ...parsed,
-        id: target.id,
-        enabled: explicitEnabled ?? target.enabled ?? true,
-        ...(target.catalog && sameLaunch(target, parsed) ? { catalog: target.catalog } : {})
-      })
-      toast.success('MCP server updated')
-      closeDialog()
-    } catch {
-      // The store already rolled back the in-memory list; keep the dialog
-      // open so the edit is not lost.
-      toast.error('Could not save the MCP server. Your previous settings were restored.')
-    }
-  }
-
-  const saveJson = async (): Promise<void> => {
-    if (!dialog || jsonText.trim().length === 0) return
-    setSaving(true)
-    setJsonErrors([])
-    try {
-      if (dialog.mode === 'add') await saveAdd()
-      else await saveEdit(dialog.server)
-    } finally {
-      setSaving(false)
-    }
-  }
-
   const deleteServer = (server: StoredMcpServer): void => {
     void deleteMcpServer(server.id)
       .then(() => {
@@ -301,7 +112,6 @@ export function McpServersSettings(): React.JSX.Element {
   }
 
   const enabledCount = servers.filter((server) => server.enabled !== false).length
-
   return (
     <div className="flex flex-col gap-6">
       <SettingsGroup
@@ -312,7 +122,7 @@ export function McpServersSettings(): React.JSX.Element {
         }
         actions={
           servers.length > 0 ? (
-            <Button type="button" size="sm" onClick={openAdd}>
+            <Button type="button" size="sm" onClick={mcpDialog.openAdd}>
               <Plus size={14} /> Add server
             </Button>
           ) : null
@@ -320,7 +130,7 @@ export function McpServersSettings(): React.JSX.Element {
         footnote={
           <>
             Agents can also advertise experimental MCP-over-ACP (<code>mcpCapabilities.acp</code>).
-            Termul does not read it yet.
+            Troupe does not read it yet.
           </>
         }
       >
@@ -337,7 +147,7 @@ export function McpServersSettings(): React.JSX.Element {
               Add a stdio, HTTP, or SSE server. New agent chats can then use its tools.
             </p>
             <div className="pt-2">
-              <Button type="button" size="sm" onClick={openAdd}>
+              <Button type="button" size="sm" onClick={mcpDialog.openAdd}>
                 <Plus size={14} /> Add server
               </Button>
             </div>
@@ -471,9 +281,9 @@ export function McpServersSettings(): React.JSX.Element {
                           <RefreshCw size={14} />
                           Test connection
                         </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => openEdit(server)}>
+                        <DropdownMenuItem onSelect={() => mcpDialog.openEdit(server)}>
                           <Pencil size={14} />
-                          Edit as JSON
+                          Edit
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
@@ -516,7 +326,7 @@ export function McpServersSettings(): React.JSX.Element {
                           </Button>
                         }
                       >
-                        Termul could not reach this server. Check the command, URL and environment
+                        Troupe could not reach this server. Check the command, URL and environment
                         values, then try again.
                         {mcpProbeError[server.id] ? (
                           <span className="mt-1 block break-words font-mono text-muted-foreground">
@@ -544,63 +354,7 @@ export function McpServersSettings(): React.JSX.Element {
           </SettingsCard>
         )}
       </SettingsGroup>
-
-      <Dialog
-        open={dialog !== null}
-        onOpenChange={(open) => {
-          // Block dismissal while a save is in flight — otherwise the in-flight
-          // completion handler would close a newly opened editor, and a failed
-          // save's JSON would be lost.
-          if (!open && !saving) closeDialog()
-        }}
-      >
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>
-              {dialog?.mode === 'edit' ? 'Edit MCP server' : 'Add MCP servers'}
-            </DialogTitle>
-            <DialogDescription>
-              {dialog?.mode === 'edit'
-                ? 'Edit this server as JSON. Unknown fields are dropped on save.'
-                : 'Paste a Claude Desktop "mcpServers" config or a single server object.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <label htmlFor="mcp-json" className="block space-y-1 text-sm">
-              <span>MCP JSON</span>
-              <Textarea
-                id="mcp-json"
-                rows={12}
-                value={jsonText}
-                onChange={(event) => setJsonText(event.target.value)}
-                placeholder='{"mcpServers": {"dokploy": {"command": "npx", "args": ["-y", "@dokploy/mcp"], "env": {"DOKPLOY_URL": "..."}}}}'
-                className="font-mono"
-              />
-            </label>
-            {jsonErrors.length > 0 && (
-              <ul role="alert" className="space-y-1 text-xs text-destructive">
-                {jsonErrors.map((error) => (
-                  <li key={error} className="break-words font-mono">
-                    {error}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" disabled={saving} onClick={closeDialog}>
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={jsonText.trim().length === 0 || saving}
-              onClick={() => void saveJson()}
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {mcpDialog.element}
     </div>
   )
 }

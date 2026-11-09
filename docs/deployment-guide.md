@@ -1,10 +1,10 @@
-# Termul Manager - Deployment Guide
+# Troupe - Deployment Guide
 
 **Date:** 2026-07-28
 
 ## Overview
 
-Termul Manager is distributed as a packaged Tauri desktop application. Releases are built on GitHub Actions, updater artifacts are signed with the existing Tauri minisign key, macOS bundles are additionally Developer ID signed and notarized, and one publish job owns every GitHub Release upload.
+Troupe is distributed as a packaged Tauri desktop application. Releases are built on GitHub Actions, updater artifacts are signed with the existing Tauri minisign key, macOS bundles are additionally Developer ID signed and notarized, and one publish job owns every GitHub Release upload.
 
 ## Packaging Model
 
@@ -58,7 +58,7 @@ The workflow order is:
 6. In one publish job, download every workflow artifact, reject conflicting asset names, deeply validate each updater `{url, signature}` record, reject conflicting duplicate platform records, require every supported updater key (desktop and both server keys), and authoritatively create `latest.json`.
 7. Upload all release assets and `latest.json` once, then publish the draft.
 8. Invoke the reusable Homebrew workflow for every release channel. It always generates `SHA256SUMS.txt`; only stable releases update the tap.
-9. Build the `linux/amd64` and `linux/arm64` container image from the published server assets and push it to `ghcr.io/gnoviawan/termul-server` with BuildKit provenance and an SBOM. Every release gets a version tag. Only a stable release moves `latest`. The nightly workflow pushes the `nightly` tag the same way, and the Insider-to-Stable `promote` dispatch retags `latest` from the stable version tag without a rebuild. See [Run in Docker](#run-in-docker).
+9. Build the `linux/amd64` and `linux/arm64` container image from the published server assets and push it to `ghcr.io/gnoviawan/troupe-server` and, for the 0.5 release cycle, to the old name `ghcr.io/gnoviawan/termul-server` (same digest), with BuildKit provenance and an SBOM. Every release gets a version tag. Only a stable release moves `latest`. The nightly workflow pushes the `nightly` tag the same way, and the Insider-to-Stable `promote` dispatch retags `latest` from the stable version tag without a rebuild. See [Run in Docker](#run-in-docker).
 
 No matrix/platform build job or standalone-server job is permitted to upload GitHub Release assets or write a shared `latest.json`.
 
@@ -77,8 +77,8 @@ The centralized merge validates the conventions used by Tauri and the historical
 - `darwin-aarch64-app`
 - `darwin-x86_64`
 - `darwin-x86_64-app`
-- `linux-x86_64-server` (asset `termul-server`)
-- `linux-aarch64-server` (asset `termul-server-linux-aarch64`)
+- `linux-x86_64-server` (asset `troupe-server`)
+- `linux-aarch64-server` (asset `troupe-server-linux-aarch64`)
 
 The two server keys come from the standalone-server job's per-architecture fragments. The aarch64 key is required, so a failed arm64 build fails the whole publish rather than shipping a release without it.
 
@@ -90,23 +90,35 @@ Every record must have a nonempty URL and minisign signature. Missing keys, malf
 
 Linux desktop and standalone-server builds preserve the current Ubuntu 22.04 dependency setup, including WebKitGTK 2.40 or later (the agent browser links a call added in 2.40), appindicator, SVG, D-Bus, and `patchelf`. The standalone server builds natively on both architectures: `ubuntu-22.04` for x64 and `ubuntu-22.04-arm` for arm64, with no cross-compilation. Both build paths create and validate `dist-web/index.html` before Rust compilation so the in-process browser client is embedded rather than relying on files outside the installation.
 
-#### Installing `termul-server`
+#### Installing `troupe-server`
 
-The x64 asset keeps the name `termul-server`; the arm64 asset is `termul-server-linux-aarch64`. Pick the one matching `uname -m`:
+The x64 asset is `troupe-server`; the arm64 asset is `troupe-server-linux-aarch64`. Pick the one matching `uname -m`:
 
 ```bash
 case "$(uname -m)" in
-  x86_64)          asset=termul-server ;;
-  aarch64|arm64)   asset=termul-server-linux-aarch64 ;;
+  x86_64)          asset=troupe-server ;;
+  aarch64|arm64)   asset=troupe-server-linux-aarch64 ;;
   *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
-curl -fL -o termul-server "https://github.com/gnoviawan/termul/releases/latest/download/$asset"
-chmod +x termul-server
+curl -fL -o troupe-server "https://github.com/gnoviawan/termul/releases/latest/download/$asset"
+chmod +x troupe-server
 ```
 
 `releases/latest/download/` resolves to the latest stable release only. For the nightly channel use `https://github.com/gnoviawan/termul/releases/download/nightly/$asset`. Each asset has a minisign signature next to it (`$asset.sig`) and is listed in the release's `SHA256SUMS.txt`. The arm64 binary is built on Ubuntu 22.04 (glibc 2.35 or newer required), so musl-based distributions such as Alpine are not supported.
 
 The opt-in self-updater selects its manifest key from the architecture the binary was built for (`linux-x86_64-server` or `linux-aarch64-server`), so each host updates to its own binary and keeps the installed filename.
+
+#### Upgrading from `termul-server`
+
+Releases before 0.5.0 named the server `termul-server`. An existing install keeps working without changes:
+
+- The self-updater replaces the file it runs from, so `/usr/local/bin/termul-server` updated by a 0.4.x server stays at that path and now holds `troupe-server`. Systemd units and scripts that call `termul-server` keep working.
+- Each release also publishes byte-identical copies named `termul-server` and `termul-server-linux-aarch64` (with their `.sig` files) for scripts that download by name. These copies are dropped after the 0.5 release cycle, so switch download scripts to the new names.
+- `troupe-server onboard` rewrites an existing `termul-server.service` unit instead of adding a second unit. A fresh host gets `troupe-server.service`.
+- The state directory (`~/.local/state/termul`) and the log file names do not change.
+- Log lines from the server's entry point now carry the `troupe_server` tracing target. Change a `RUST_LOG=termul_server=...` filter to `RUST_LOG=troupe_server=...`. Library targets such as `termul_manager_lib` keep their names.
+
+To use the new name for a manual install, install the new file next to the old one and keep a link: `ln -sf troupe-server /usr/local/bin/termul-server`. The updater follows the link and replaces `troupe-server`.
 
 ### Windows
 
@@ -119,12 +131,12 @@ Both `aarch64-apple-darwin` and `x86_64-apple-darwin` are built. For these targe
 The macOS collection gate requires exactly one `.app` and one DMG, resolves the app's declared `CFBundleExecutable`, and inspects that executable with `otool -L` and `otool -l`. It permits system libraries and relocatable `@rpath`, `@loader_path`, and `@executable_path` dependencies, but rejects Homebrew/local prefixes, runner-local absolute paths, unexpected relative load paths, and non-portable `LC_RPATH` entries. It then runs:
 
 ```bash
-codesign --verify --deep --strict --verbose=2 "Termul Manager.app"
-spctl --assess --type execute --verbose=4 "Termul Manager.app"
-xcrun stapler validate "Termul Manager.app"
-codesign --verify --strict --verbose=2 Termul.Manager_*.dmg
-spctl --assess --type open --context context:primary-signature --verbose=4 Termul.Manager_*.dmg
-xcrun stapler validate Termul.Manager_*.dmg
+codesign --verify --deep --strict --verbose=2 "Troupe.app"
+spctl --assess --type execute --verbose=4 "Troupe.app"
+xcrun stapler validate "Troupe.app"
+codesign --verify --strict --verbose=2 Troupe_*.dmg
+spctl --assess --type open --context context:primary-signature --verbose=4 Troupe_*.dmg
+xcrun stapler validate Troupe_*.dmg
 ```
 
 After maintainers provision the Apple secrets, repeat these checks against both architectures on a real release. Existing v0.4.8 GitHub assets cannot be retroactively notarized.
@@ -148,17 +160,17 @@ Version `0.4.8` is a narrow historical exception. Its unsigned/unnotarized DMGs 
 
 ## PWA / Installable Web Client
 
-The web bundle (`dist-web/`, served by `termul-server` and the desktop shared-live host) is installable as a Progressive Web App. `public/manifest.webmanifest`, `public/sw.js`, and `public/icons/` ship inside the bundle, and `index.html` links the manifest, favicon, `apple-touch-icon`, and the og/twitter card image.
+The web bundle (`dist-web/`, served by `troupe-server` and the desktop shared-live host) is installable as a Progressive Web App. `public/manifest.webmanifest`, `public/sw.js`, and `public/icons/` ship inside the bundle, and `index.html` links the manifest, favicon, `apple-touch-icon`, and the og/twitter card image.
 
 **Install requirements.** Service workers and browser install prompts are gated by the platform secure-context rule: the client must be reached over `https://` (for example through the cloudflared tunnel) or via `localhost`. A plain `http://<LAN-IP>` visit stays a normal browser tab — registration is skipped deliberately and logged via `console.info` (the backend `POST /log/frontend-error` endpoint is loopback-gated, so a report from a non-loopback origin would be refused anyway). The desktop app never registers a service worker.
 
 **Installing.** There is no in-app install button by design — use the browser-native affordance:
 
-- Desktop Chrome/Edge: the install icon in the address bar (or menu → "Install Termul").
+- Desktop Chrome/Edge: the install icon in the address bar (or menu → "Install Troupe").
 - Android Chrome: menu → "Add to Home screen" / install prompt.
 - iOS Safari: Share → "Add to Home Screen" (`apple-mobile-web-app-capable` + `black-translucent` status bar + opaque `apple-touch-icon` are set).
 
-Launched installed, the app runs `display: standalone` with the Termul name/icon. `start_url`/`scope` are `/`. Token auth normally carries over because `web-auth-token.ts` moves the `#token=` fragment into `localStorage` and strips it from the URL on first load.
+Launched installed, the app runs `display: standalone` with the Troupe name/icon. `start_url`/`scope` are `/`. Token auth normally carries over because `web-auth-token.ts` moves the `#token=` fragment into `localStorage` and strips it from the URL on first load.
 
 **iOS caveat.** Home-screen web apps get an isolated `localStorage` separate from Safari's. On a token-gated server the token stored in the browser tab does NOT carry into the installed iOS app — since `#token=` is consumed into `localStorage` on first load, the installed app may need the token re-entered once in its own storage. This is a web-auth limitation, not PWA-specific.
 
@@ -189,20 +201,20 @@ Server headers mirror the policy: the embedded release path serves `assets/` imm
 
 **Offline scope.** The app is a thin shell over a live server — offline startup reaches the normal connection-error UI; terminals and chat still require the host.
 
-**Manual verification.** Serve the client over `https://` or `localhost`, then in Chrome/Edge DevTools → **Application**: the Manifest tab shows name/icons with no errors; Service Workers shows `sw.js` activated and running; the install icon appears in the address bar (criteria met). `curl -I` on `/sw.js`, `/manifest.webmanifest`, `/index.html`, and an `/icons/*` file should show `Cache-Control: no-cache, must-revalidate` (and `application/manifest+json` for the manifest); a hashed `/assets/*` file shows `immutable`. On iOS, Share → "Add to Home Screen" should preview the opaque icon and "Termul" title.
+**Manual verification.** Serve the client over `https://` or `localhost`, then in Chrome/Edge DevTools → **Application**: the Manifest tab shows name/icons with no errors; Service Workers shows `sw.js` activated and running; the install icon appears in the address bar (criteria met). `curl -I` on `/sw.js`, `/manifest.webmanifest`, `/index.html`, and an `/icons/*` file should show `Cache-Control: no-cache, must-revalidate` (and `application/manifest+json` for the manifest); a hashed `/assets/*` file shows `immutable`. On iOS, Share → "Add to Home Screen" should preview the opaque icon and "Troupe" title.
 
 ## Standalone server origins
 
-`termul-server` checks an `Origin` header when a client sends one. The header must name the same host and port as the request's `Host` header, or an origin passed to `--allowed-origins` / `TERMUL_ALLOWED_ORIGINS`. The embedded web client is served by the same process, so its requests match without an extra entry. Clients that omit `Origin` are unchanged, and `--web-auth-token` / `TERMUL_WEB_AUTH_TOKEN` still apply on their own.
+`troupe-server` checks an `Origin` header when a client sends one. The header must name the same host and port as the request's `Host` header, or an origin passed to `--allowed-origins` / `TROUPE_ALLOWED_ORIGINS`. The embedded web client is served by the same process, so its requests match without an extra entry. Clients that omit `Origin` are unchanged, and `--web-auth-token` / `TROUPE_WEB_AUTH_TOKEN` still apply on their own.
 
 A reverse proxy that preserves the public `Host` header (Caddy and cloudflared do this by default) matches `https://<public-host>` with no extra origin. When the proxy rewrites `Host` to the upstream address, list the public origin explicitly:
 
 ```bash
-termul-server --host 127.0.0.1 --port 8080 \
+troupe-server --host 127.0.0.1 --port 8080 \
     --allowed-origins https://termul.example.com
 ```
 
-Comma-separate several origins, or repeat `--allowed-origins`. The flag replaces `TERMUL_ALLOWED_ORIGINS` when both are set. The server does not send `Access-Control-Allow-Origin`.
+Comma-separate several origins, or repeat `--allowed-origins`. The flag replaces `TROUPE_ALLOWED_ORIGINS` when both are set. The server does not send `Access-Control-Allow-Origin`.
 
 A server that runs without a bearer token also checks the `Host` header, so a DNS-rebinding page cannot reach it. It answers IP literals, `localhost`, and the hosts of `--allowed-origins`, and returns `403` for any other name. To reach a token-less server by a host name, such as a proxy that keeps the public `Host` header, list that origin with `--allowed-origins`. A server that requires the token accepts any `Host`, because a rebinding page cannot present the token.
 
@@ -210,12 +222,12 @@ The desktop app talks to the host through Tauri IPC, not these HTTP or WebSocket
 
 ## Run in Docker
 
-`Dockerfile` and `docker-compose.yml` at the repository root run `termul-server` in a container as the non-root user `termul`. The image holds the published release binary for `linux/amd64` or `linux/arm64`, plus `bash`, `git`, `ssh`, and `curl`. The build checks the binary's minisign signature against the updater public key in `src-tauri/tauri.conf.json`. Release tags publish the image to `ghcr.io/gnoviawan/termul-server`, and the nightly workflow publishes the `nightly` tag.
+`Dockerfile` and `docker-compose.yml` at the repository root run `troupe-server` in a container as the non-root user `termul`. The image holds the published release binary for `linux/amd64` or `linux/arm64`, plus `bash`, `git`, `ssh`, and `curl`. The build checks the binary's minisign signature against the updater public key in `src-tauri/tauri.conf.json`. Release tags publish the image to `ghcr.io/gnoviawan/troupe-server`, and the nightly workflow publishes the `nightly` tag. For the 0.5 release cycle every tag is also pushed to the old name `ghcr.io/gnoviawan/termul-server`. Inside the image `/usr/local/bin/termul-server` is a link to `/usr/local/bin/troupe-server`, so a Compose file whose `entrypoint` names the old binary keeps working. The image's own entrypoint is `/usr/bin/tini -- /usr/local/bin/troupe-server`, so keep `tini` in an override, and `command` holds only server options, as before. The Compose project, the `termul-server` service, and the `termul-home` volume keep their names, so `docker compose up -d` with the new file replaces the running container and keeps its state.
 
 ### Start the server
 
 1. In the directory that holds `docker-compose.yml`, create the workspace directory: `mkdir -p workspace`.
-2. Start the container: `docker compose up -d`. Compose pulls `ghcr.io/gnoviawan/termul-server:latest`. If it cannot pull the image, it builds one from the newest stable release.
+2. Start the container: `docker compose up -d`. Compose pulls `ghcr.io/gnoviawan/troupe-server:latest`. If it cannot pull the image, it builds one from the newest stable release.
 3. Read the auth token:
 
 	```bash
@@ -225,7 +237,7 @@ The desktop app talks to the host through Tauri IPC, not these HTTP or WebSocket
 4. Open `http://localhost:8080/#token=<token>`.
 5. In the web UI, add `/workspace` or a folder under it as a project.
 
-Inside the container the server binds `0.0.0.0`, so it always requires the token. On first start it generates the token, stores it in the `termul-home` volume, and never prints it. To set your own token, put `TERMUL_WEB_AUTH_TOKEN=<token>` in a `.env` file next to `docker-compose.yml`. The token then shows in `docker inspect` output.
+Inside the container the server binds `0.0.0.0`, so it always requires the token. On first start it generates the token, stores it in the `termul-home` volume, and never prints it. To set your own token, put `TROUPE_WEB_AUTH_TOKEN=<token>` in a `.env` file next to `docker-compose.yml`. The token then shows in `docker inspect` output. Each `TROUPE_*` setting also accepts its older `TERMUL_*` name, so an existing `.env` file keeps working. A `TROUPE_*` value that is not blank wins when both are set. The fallback needs Docker Compose v2.
 
 Compose publishes the port on `127.0.0.1` only. Changing the mapping to `8080:8080` exposes the server on every host network, over plain HTTP. For remote access, put an HTTPS reverse proxy in front instead.
 
@@ -236,26 +248,26 @@ The token is a full credential. A holder of the token gets a shell and can start
 | Path in the container | Source | Contents |
 | --- | --- | --- |
 | `/home/termul` | `termul-home` named volume | The state directory `.local/state/termul` (sessions, `projects.json`, `store.json`, `web-auth-token`), plus the home directory of the shells and agents the server starts: git config, SSH keys, agent logins. |
-| `/workspace` | `./workspace` bind mount, or `TERMUL_WORKSPACE` | Your projects. This is the only host directory the server can see. |
+| `/workspace` | `./workspace` bind mount, or `TROUPE_WORKSPACE` | Your projects. This is the only host directory the server can see. |
 | `/tmp` | tmpfs, mounted `exec` | Scratch files and helper binaries. Cleared when the container stops. |
 
-The root filesystem is read-only, the container drops every Linux capability, and `no-new-privileges` is set. If a tool you run in Termul must write somewhere else, remove `read_only: true` from `docker-compose.yml`.
+The root filesystem is read-only, the container drops every Linux capability, and `no-new-privileges` is set. If a tool you run in Troupe must write somewhere else, remove `read_only: true` from `docker-compose.yml`.
 
-Compose sets `TERMUL_SERVER_ALLOW_REMOTE_WRITES=true`. Browser requests reach the container from the Docker network, never from loopback. Without the setting, the server refuses project registration and every file and git write. With it, writes stay confined to registered projects, and the token is still required.
+Compose sets `TERMUL_SERVER_ALLOW_REMOTE_WRITES=true`. The key keeps its old name so an override file that sets the old name to `false` still replaces it. Browser requests reach the container from the Docker network, never from loopback. Without the setting, the server refuses project registration and every file and git write. With it, writes stay confined to registered projects, and the token is still required.
 
 ### Match the workspace owner
 
 The `termul` user has UID 1000 and GID 1000. It must be able to write to the workspace. If your host user has other IDs, build the image with them before the first start:
 
 ```bash
-TERMUL_UID=$(id -u) TERMUL_GID=$(id -g) docker compose up -d --build
+TROUPE_UID=$(id -u) TROUPE_GID=$(id -g) docker compose up -d --build
 ```
 
 The files in `termul-home` belong to the UID that created them. If you change the UID after the first start, run `chown -R` on the volume's files, or delete the volume with `docker compose down --volumes`. Deleting the volume also deletes the token, sessions, and project registry.
 
 ### Add agent CLIs
 
-The image contains no agent CLIs such as Claude Code or Codex. `PATH` starts with `/home/termul/.local/bin`, so a tool installed there persists in the `termul-home` volume. For tools that need system packages, build a derived image: start `FROM ghcr.io/gnoviawan/termul-server`, install as `root`, and end with `USER termul`.
+The image contains no agent CLIs such as Claude Code or Codex. `PATH` starts with `/home/termul/.local/bin`, so a tool installed there persists in the `termul-home` volume. For tools that need system packages, build a derived image: start `FROM ghcr.io/gnoviawan/troupe-server`, install as `root`, and end with `USER termul`.
 
 ### Put a reverse proxy in front
 
@@ -270,7 +282,7 @@ termul.example.com {
 If the proxy rewrites `Host` to the upstream address, add the public origin to `.env`:
 
 ```bash
-TERMUL_ALLOWED_ORIGINS=https://termul.example.com
+TROUPE_ALLOWED_ORIGINS=https://termul.example.com
 ```
 
 A proxy container on the same Compose network reaches the server at `termul-server:8080`. In that case, remove the `ports` entry.
@@ -282,9 +294,9 @@ docker compose pull
 docker compose up -d
 ```
 
-State stays in the `termul-home` volume. The image sets `TERMUL_SERVER_UPDATE_ENABLED=false`, and the server cannot replace its root-owned binary, so a new image is the only update path. To pin a version, set `TERMUL_IMAGE=ghcr.io/gnoviawan/termul-server:<version>` in `.env`. Use `:nightly` to follow the nightly channel.
+State stays in the `termul-home` volume. The image does not turn on self-update, and the server cannot replace its root-owned binary, so a new image is the only update path. To pin a version, set `TROUPE_IMAGE=ghcr.io/gnoviawan/troupe-server:<version>` in `.env`. Use `:nightly` to follow the nightly channel.
 
-To build the image yourself, set `TERMUL_RELEASE` to a release tag such as `v0.5.0` or `nightly`, then run `docker compose up -d --build`. The default, `latest`, is the newest stable release. An `arm64` build needs a release that publishes `termul-server-linux-aarch64`. v0.4.21 does not.
+To build the image yourself, set `TROUPE_RELEASE` to a release tag such as `v0.5.0` or `nightly`, then run `docker compose up -d --build`. The default, `latest`, is the newest stable release. An `arm64` build needs a release that publishes `troupe-server-linux-aarch64`, or `termul-server-linux-aarch64` before 0.5.0. v0.4.21 publishes neither.
 
 ## Operational Risks and Release Checklist
 
@@ -300,9 +312,9 @@ Recommended release checks:
 3. Confirm updater, Apple, and stable Homebrew secrets are provisioned for the intended channel.
 4. Push the release tag.
 5. Confirm both macOS portability/signing/notarization gates pass and that both `standalone-server` matrix entries (x64 and arm64) succeed.
-6. Confirm the centralized publish job reports every required updater platform and uploads installers, updater archives, `.sig` files, `termul-server`, `termul-server-linux-aarch64`, and `latest.json` exactly once.
+6. Confirm the centralized publish job reports every required updater platform and uploads installers, updater archives, `.sig` files, `troupe-server`, `troupe-server-linux-aarch64`, their `termul-server` copies, and `latest.json` exactly once.
 7. Confirm `SHA256SUMS.txt` exists; for stable releases, confirm the Homebrew cask update succeeds.
-8. Confirm the `Publish container image` job pushed `ghcr.io/gnoviawan/termul-server:<version>`, and `latest` for a stable release. Nightly runs push `:nightly`, and a `promote` dispatch retags `:latest` from the stable version tag. After the first publish, confirm that the package page on GitHub shows the package as public.
+8. Confirm the `Publish container image` job pushed `ghcr.io/gnoviawan/troupe-server:<version>` and `ghcr.io/gnoviawan/termul-server:<version>`, and `latest` for a stable release. Nightly runs push `:nightly`, and a `promote` dispatch retags `:latest` on both names from the stable version tag. A new package is private, so after the first `troupe-server` publish set the package to public on its GitHub package page.
 
 ## Local Validation
 

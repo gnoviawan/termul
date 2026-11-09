@@ -259,7 +259,7 @@ describe('ChatHistoryTab scoping', () => {
     render(<ChatHistoryTab />)
 
     // Discovered (external/CLI) sessions are never listed, so they can't be
-    // opened from the sidebar — only Termul-created sessions render.
+    // opened from the sidebar — only Troupe-created sessions render.
     expect(screen.queryByText('CLI chat')).not.toBeInTheDocument()
     expect(mockOpenDiscovered).not.toHaveBeenCalled()
   })

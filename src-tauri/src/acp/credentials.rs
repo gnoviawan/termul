@@ -6,7 +6,7 @@
 
 use keyring::Entry;
 
-/// One keyring service for all Termul agent credentials.
+/// One keyring service for all Troupe agent credentials.
 pub(crate) const KEYRING_SERVICE: &str = "com.termul.manager";
 
 /// Open a keyring entry for `account`, rejecting keyring's mock fallback

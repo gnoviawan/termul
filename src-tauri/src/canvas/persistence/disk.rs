@@ -1,8 +1,8 @@
-//! Changes to the document file made outside Termul (spine AD-27). Termul's
+//! Changes to the document file made outside Troupe (spine AD-27). Troupe's
 //! file watcher reports that the file changed; this module decides what that
-//! means against the file as Termul last read or wrote it (`MountState::disk`):
+//! means against the file as Troupe last read or wrote it (`MountState::disk`):
 //!
-//! - the file still matches: Termul's own atomic write, or no change;
+//! - the file still matches: Troupe's own atomic write, or no change;
 //! - it changed and the editor holds nothing unsaved: reload it silently;
 //! - it changed (or was deleted) and the editor holds unsaved work: a
 //!   conflict, autosave stops, and the user picks keep mine, take disk, or
@@ -62,7 +62,7 @@ pub struct ConflictView {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum DiskOutcome {
-    /// The file is as Termul last read or wrote it.
+    /// The file is as Troupe last read or wrote it.
     Unchanged { view: PersistenceView },
     /// The editor was clean at `view.contentVersion`: load `bytes` (base64)
     /// with `host.openDocument`. An editor that has moved past that version
@@ -192,8 +192,8 @@ impl CanvasPersistence {
         Ok(())
     }
 
-    /// Termul's watcher saw the document's file change. Serialized with the
-    /// mount's writes, so Termul's own write has landed and been recorded
+    /// Troupe's watcher saw the document's file change. Serialized with the
+    /// mount's writes, so Troupe's own write has landed and been recorded
     /// before the file is compared.
     pub async fn disk_changed(
         &self,

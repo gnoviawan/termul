@@ -110,7 +110,7 @@ export function useTerminalIdleNotification(): void {
       terminalState.setTerminalNeedsAttention(terminal.id, true)
 
       const project = useProjectStore.getState().projects.find((p) => p.id === terminal.projectId)
-      const title = sanitizeNotificationText(project?.name ?? 'Termul')
+      const title = sanitizeNotificationText(project?.name ?? 'Troupe')
       const terminalName = sanitizeNotificationText(terminal.name)
       void sendDesktopNotification(title, `${terminalName} — agent finished`, {
         onClick: () => activateNotifiedTerminal(terminal.id)

@@ -8,7 +8,10 @@
 //! pins a fingerprint of the element (its telling attributes, the text of
 //! the list item or card holding it, and for an element with no name the
 //! text before it), so a path that now leads to another element finds
-//! nothing. Helpers keep no state between calls.
+//! nothing. Helpers keep no state between calls, save one exception: an
+//! upload's `input`/`change` watch leaves the hook that ends it early on
+//! the agent world's own document wrapper, where page script cannot reach
+//! it, and removes it when it ends.
 
 use serde_json::{json, Value};
 
@@ -69,6 +72,15 @@ pub const FILE_INPUT: Helper = helper!("file_input");
 /// WebKit engines set a file input by answering the chooser it opens.
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
 pub const OPEN_FILE_CHOOSER: Helper = helper!("open_file_chooser");
+/// WebKit engines confirm the answered chooser filled the input.
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+pub const INPUT_FILE_COUNT: Helper = helper!("input_file_count");
+/// WebKit engines also hear the input change, for a page that clears it.
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+pub const WATCH_INPUT_FILES: Helper = helper!("watch_input_files");
+/// And end that watch once the upload settled.
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+pub const END_INPUT_WATCH: Helper = helper!("end_input_watch");
 
 /// Main-world script every agent tab frame runs at document start on
 /// engines whose console is observed by page script: it buffers console
@@ -206,6 +218,34 @@ pub fn file_input(path: &str) -> Script {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn open_file_chooser(path: &str) -> Script {
     Script::new(OPEN_FILE_CHOOSER, json!({ "path": path }))
+}
+
+/// How many files the file input at `path` holds; -1 when `path` names
+/// anything else.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub fn input_file_count(path: &str) -> Script {
+    Script::new(INPUT_FILE_COUNT, json!({ "path": path }))
+}
+
+/// Resolves true once the file input at `path` fires a trusted `input` or
+/// `change`, false after `wait`, when [`end_input_watch`] ends watch `id`,
+/// or at once when `path` names anything else. Issued before the chooser
+/// opens, so it hears the upload land even when the page clears the input
+/// in its handler.
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+pub fn watch_input_files(path: &str, id: u64, wait: std::time::Duration) -> Script {
+    let ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX);
+    Script::new(
+        WATCH_INPUT_FILES,
+        json!({ "path": path, "id": id.to_string(), "ms": ms }),
+    )
+}
+
+/// End watch `id` from [`watch_input_files`] now, releasing its listeners
+/// and timer; true when it was still listening.
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+pub fn end_input_watch(id: u64) -> Script {
+    Script::new(END_INPUT_WATCH, json!({ "id": id.to_string() }))
 }
 
 /// Up to `limit` UTF-16 units of the rendered text of the element at

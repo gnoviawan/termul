@@ -221,7 +221,7 @@ async fn legacy_initialize_still_lists_tools() {
 
 /// The `initialize` result must carry `instructions` advertising the chat
 /// renderer's markdown affordances and the design canvas: this is the channel
-/// that tells agents images embed inline, file links open in Termul's editor,
+/// that tells agents images embed inline, file links open in Troupe's editor,
 /// and the canvas tools draw on the project's canvas.
 #[tokio::test]
 async fn initialize_advertises_the_chat_and_canvas_instructions() {
@@ -260,7 +260,7 @@ async fn initialize_advertises_the_chat_and_canvas_instructions() {
             "Do not create or edit .figcraft, .pen or .op files",
             "do not look for other design tools",
             "CANVAS_CLOSED",
-            "Canvas button in Termul's left rail",
+            "Canvas button in Troupe's left rail",
             "read_canvas_guide",
             "get_canvas_style",
             "This looks repeatable. Want me to turn it into a scheduled background automation?",
@@ -286,7 +286,7 @@ async fn initialize_advertises_the_chat_and_canvas_instructions() {
 }
 
 /// Claude Code keeps only the first `CLAUDE_INSTRUCTIONS_BUDGET` UTF-16 code
-/// units of a server's instructions. Everything Termul writes must survive
+/// units of a server's instructions. Everything Troupe writes must survive
 /// that cut; only figcraft's guide, last, may be clipped.
 #[test]
 fn termul_instructions_fit_claude_codes_budget() {
@@ -297,7 +297,7 @@ fn termul_instructions_fit_claude_codes_budget() {
     let units = termul_owned.encode_utf16().count();
     assert!(
         units <= crate::acp::host_mcp::CLAUDE_INSTRUCTIONS_BUDGET,
-        "Termul-owned instructions are {units} UTF-16 code units, over the budget"
+        "Troupe-owned instructions are {units} UTF-16 code units, over the budget"
     );
 }
 
@@ -744,7 +744,7 @@ async fn tools_list_carries_figcraft_tools_by_name_with_the_canvas_tag() {
         let mut upstream = figcraft_mcp::TOOL_NAMES.to_vec();
         upstream.sort_unstable();
         assert_eq!(canvas, upstream);
-        assert_eq!(upstream.len(), 19);
+        assert_eq!(upstream.len(), 20);
         for definition in figcraft_mcp::tool_definitions() {
             let tool = tools
                 .iter()
@@ -775,13 +775,13 @@ async fn tools_list_carries_figcraft_tools_by_name_with_the_canvas_tag() {
             .expect("export is listed");
         assert_eq!(
             export["annotations"]["readOnlyHint"], false,
-            "Termul's export writes files"
+            "Troupe's export writes files"
         );
         assert_eq!(export["annotations"]["destructiveHint"], true);
         let description = export["description"].as_str().unwrap_or_default();
         assert!(
             !description.contains("absolute path"),
-            "Termul refuses absolute paths: {description}"
+            "Troupe refuses absolute paths: {description}"
         );
         assert!(
             description.contains("relative to the project"),
@@ -871,7 +871,11 @@ async fn resources_and_prompts_are_figcrafts_own() {
         let resources = ask(2, r#"{"jsonrpc":"2.0","id":2,"method":"resources/list"}"#).await;
         assert_eq!(
             listed(&resources, "resources", "uri"),
-            [figcraft_mcp::DOC_URI, figcraft_mcp::COMMANDS_URI]
+            [
+                figcraft_mcp::DOC_URI,
+                figcraft_mcp::COMMANDS_URI,
+                "figcraft://comments"
+            ]
         );
         let templates = ask(
             3,

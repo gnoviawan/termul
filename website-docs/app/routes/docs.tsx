@@ -16,7 +16,7 @@ import { getPageMarkdownUrl, source } from '@/lib/source'
 import type { Route } from './+types/docs'
 
 export async function loader({ params }: Route.LoaderArgs) {
-  const slugs = params['*'].split('/').filter((v) => v.length > 0)
+  const slugs = (params['*'] ?? '').split('/').filter((v) => v.length > 0)
   const page = source.getPage(slugs)
   if (!page) throw new Response('Not found', { status: 404 })
 

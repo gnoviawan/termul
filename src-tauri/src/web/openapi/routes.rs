@@ -499,10 +499,10 @@ pub static ROUTES: &[ApiRoute] = &[
     // Server admin
     ApiRoute::get("/server/config", Tag::ServerAdmin, "The running server's configuration")
         .ipc::<ServerConfigResponse>()
-        .describe("Standalone `termul-server` only."),
+        .describe("Standalone `troupe-server` only."),
     ApiRoute::post("/server/config", Tag::ServerAdmin, "Reconfigure and restart the server")
         .json::<ServerSetupAnswers>()
         .ipc::<ServerConfigApply>()
-        .describe("Standalone `termul-server` only. Invalid answers come back as `ok: false` with `fieldErrors`. On success the server restarts: reconnect to `host:port` with `webAuthToken`. A host without a token needs a loopback `Origin` header (`403 SERVER_CONFIG_LOCAL_ORIGIN_REQUIRED`). A second apply while a restart is pending answers `409 SERVER_CONFIG_APPLY_IN_PROGRESS`."),
+        .describe("Standalone `troupe-server` only. Invalid answers come back as `ok: false` with `fieldErrors`. On success the server restarts: reconnect to `host:port` with `webAuthToken`. A host without a token needs a loopback `Origin` header (`403 SERVER_CONFIG_LOCAL_ORIGIN_REQUIRED`). A second apply while a restart is pending answers `409 SERVER_CONFIG_APPLY_IN_PROGRESS`."),
 ];
 

@@ -18,7 +18,7 @@ import {
   SheetTitle,
   SheetTrigger
 } from '@/components/ui/sheet'
-import { Switch, switchClasses } from '@/components/ui/switch'
+import { Switch, SwitchMark } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { editButtonAccessibleName } from './selector-model'
 import {
@@ -134,17 +134,6 @@ export function thinkingLabel(sections: readonly ChoiceSection[]): string | unde
   const section = sections.find((s) => s.id === 'thinking')
   if (section?.kind !== 'radio' || section.value === undefined) return undefined
   return section.choices.find((choice) => choice.value === section.value)?.name
-}
-
-/** The look of `Switch`, for an item that is itself the control. */
-function SwitchMark({ on }: { on: boolean }): React.JSX.Element {
-  const state = on ? 'checked' : 'unchecked'
-  const { track, thumb } = switchClasses('sm')
-  return (
-    <span aria-hidden="true" data-state={state} data-switch-size="sm" className={track}>
-      <span data-state={state} className={thumb} />
-    </span>
-  )
 }
 
 /**

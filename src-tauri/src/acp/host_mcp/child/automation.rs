@@ -39,11 +39,11 @@ impl TermulPlanServer {
             Ok(Err(error)) => {
                 eprintln!("[host-mcp-child] {}: {error}", tool.name());
                 CallToolResult::error(vec![ContentBlock::text(format!(
-                    "the Termul host is unreachable: {error}"
+                    "the Troupe host is unreachable: {error}"
                 ))])
             }
             Err(_) => CallToolResult::error(vec![ContentBlock::text(
-                "the Termul host did not answer in time",
+                "the Troupe host did not answer in time",
             )]),
         }
     }

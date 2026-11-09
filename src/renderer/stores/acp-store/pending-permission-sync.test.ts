@@ -160,7 +160,7 @@ describe('syncPendingPrompts: questions and elicitations', () => {
     })
   })
 
-  it('restores a Termul ask_user question the reopen dropped as history', () => {
+  it('restores a Troupe ask_user question the reopen dropped as history', () => {
     historySeqWatermarks.set(SID, 40)
     useAcpStore.getState()._onQuestionRequest(question('q-1'), 30)
     expect(questionIds()).toEqual([])

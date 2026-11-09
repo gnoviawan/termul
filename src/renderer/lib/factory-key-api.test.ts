@@ -54,7 +54,7 @@ describe('factoryKeyApi', () => {
     authHeader.mockReturnValueOnce(undefined as never)
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     await expect(factoryKeyApi.save(config, 'fk-example')).rejects.toThrow(
-      'Sign in to the Termul server'
+      'Sign in to the Troupe server'
     )
     expect(fetchSpy).not.toHaveBeenCalled()
     fetchSpy.mockRestore()

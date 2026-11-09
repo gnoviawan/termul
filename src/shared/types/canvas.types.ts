@@ -64,7 +64,7 @@ export interface CanvasConflict {
   version: string | null
 }
 
-/** What Termul's file watcher seeing the document change meant. */
+/** What Troupe's file watcher seeing the document change meant. */
 export type CanvasDiskOutcome =
   | { kind: 'unchanged'; view: CanvasPersistenceView }
   | { kind: 'reload'; view: CanvasPersistenceView; bytes: string }
@@ -244,7 +244,7 @@ export interface CanvasApi {
     mountSeq: number,
     snapshot: string
   ) => Promise<IpcResult<CanvasWriteOutcome>>
-  /** Termul's file watcher saw the document change (AD-27). `reloadFailed`:
+  /** Troupe's file watcher saw the document change (AD-27). `reloadFailed`:
    * the editor did not load the bytes a `reload` outcome handed it (it
    * refused them, or moved past the version the host judged clean), which
    * the host turns into a conflict. */

@@ -15,19 +15,19 @@ impl ClaudeRuntimeProbe for SystemClaudeRuntimeProbe {
         let path = crate::acp::config::runtime_resolution_path();
         if resolve_runtime_executable("claude", &path).is_none() {
             return Err(
-                "Claude Code CLI is not installed. Install it from Anthropic, then restart Termul."
+                "Claude Code CLI is not installed. Install it from Anthropic, then restart Troupe."
                     .to_string(),
             );
         }
         if resolve_runtime_executable("node", &path).is_none() {
             return Err(
-                "Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Termul."
+                "Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Troupe."
                     .to_string(),
             );
         }
         if !node_major_is_supported(probe_node_major_async().await) {
             return Err(
-                "Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Termul."
+                "Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Troupe."
                     .to_string(),
             );
         }

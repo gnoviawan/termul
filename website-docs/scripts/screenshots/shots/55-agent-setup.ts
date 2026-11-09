@@ -107,6 +107,7 @@ async function addMcpServers(page: Page): Promise<void> {
   await openApp(page)
   await openSettings(page, 'MCP Servers')
   await page.getByRole('button', { name: 'Add server' }).click()
+  await page.getByRole('button', { name: 'Import JSON instead' }).click()
   const dialog = page.getByRole('dialog', { name: 'Add MCP servers' })
   await dialog.locator('textarea').fill(mcpJson)
 }

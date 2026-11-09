@@ -1,5 +1,5 @@
-import type { AgentId, McpServer, SessionId } from '@/lib/acp-api'
-import { selectMcpServersForAgent } from '@/lib/acp-mcp-persistence'
+import type { AgentCapabilities, AgentId, McpServer, SessionId } from '@/lib/acp-api'
+import { type StoredMcpServer, selectMcpServersForAgent } from '@/lib/acp-mcp-persistence'
 import { sha256Hex } from '@/lib/sha256-hex'
 import type { AcpState } from './types'
 
@@ -38,12 +38,25 @@ export function registryMcpServersAreCurrent(
   sessionId: SessionId,
   agentId: AgentId
 ): boolean {
-  const recorded = registryMcpFingerprints.get(sessionId)
-  if (recorded === undefined) return true
-  const { servers } = selectMcpServersForAgent(
-    state.mcpServers,
-    state.agents[agentId]?.capabilities
+  return (
+    registryMcpServersMatch(sessionId, state.mcpServers, state.agents[agentId]?.capabilities) !==
+    false
   )
+}
+
+/**
+ * Whether the servers `sessionId` started with are the ones the list would
+ * give its agent now. `null` when the session recorded none (it was reopened
+ * or made with an explicit list).
+ */
+export function registryMcpServersMatch(
+  sessionId: SessionId,
+  mcpServers: StoredMcpServer[],
+  capabilities: AgentCapabilities | null | undefined
+): boolean | null {
+  const recorded = registryMcpFingerprints.get(sessionId)
+  if (recorded === undefined) return null
+  const { servers } = selectMcpServersForAgent(mcpServers, capabilities)
   return registryMcpDigest(servers) === recorded
 }
 

@@ -1,11 +1,11 @@
 ---
 title: Add a custom agent
-description: Run an agent that is not in Termul's list by pasting its config as JSON.
+description: Run an agent that is not in Troupe's list by pasting its config as JSON.
 ---
 
-If an agent is not in Termul's list, you can add it yourself. The agent must support the Agent Client Protocol (ACP), the open standard that Termul and the Zed editor use to talk to coding agents. Many agents have an ACP mode. It is often started with an `acp` argument.
+If an agent is not in Troupe's list, you can add it yourself. The agent must support the Agent Client Protocol (ACP), the open standard that Troupe and the Zed editor use to talk to coding agents. Many agents have an ACP mode. It is often started with an `acp` argument.
 
-<Callout type="warn">A custom agent runs any command you give it, on the computer that runs Termul. Add only agents you trust.</Callout>
+<Callout type="warn">A custom agent runs any command you give it, on the computer that runs Troupe. Add only agents you trust.</Callout>
 
 ## Paste the agent's config
 
@@ -17,7 +17,7 @@ If an agent is not in Termul's list, you can add it yourself. The agent must sup
 
 ![The Add Custom ACP Agent dialog with a Zed agent_servers config pasted in](/screenshots/agent-setup-custom-agent.png)
 
-Termul accepts two shapes of JSON. The first is a flat object:
+Troupe accepts two shapes of JSON. The first is a flat object:
 
 ```json
 {
@@ -28,7 +28,7 @@ Termul accepts two shapes of JSON. The first is a flat object:
 }
 ```
 
-The second is the `agent_servers` block from a Zed `settings.json` file. You can paste the whole Zed settings file. Termul finds the `agent_servers` block and ignores the rest.
+The second is the `agent_servers` block from a Zed `settings.json` file. You can paste the whole Zed settings file. Troupe finds the `agent_servers` block and ignores the rest.
 
 ```json
 {
@@ -42,27 +42,27 @@ The second is the `agent_servers` block from a Zed `settings.json` file. You can
 }
 ```
 
-Paste one agent at a time. If the block holds more than one agent, Termul asks you to paste them one by one.
+Paste one agent at a time. If the block holds more than one agent, Troupe asks you to paste them one by one.
 
 These fields are allowed:
 
-- `name`: the name Termul shows. In the Zed shape, the key is the name.
+- `name`: the name Troupe shows. In the Zed shape, the key is the name.
 - `command`: the program to run.
 - `args`: a list of arguments for the program.
 - `env`: environment variables for the program.
 - `allowTerminal`: `true` lets the agent run commands in a terminal. See [Allow terminal commands](#allow-terminal-commands).
 - `icon`: an SVG icon, up to 64 KB.
-- `configId`: the agent's ID. Termul makes one for you. Keep it when you share a config, so the agent keeps its identity.
+- `configId`: the agent's ID. Troupe makes one for you. Keep it when you share a config, so the agent keeps its identity.
 
-Zed fields that Termul has no use for, such as `type` and `default_mode`, are dropped. Any other unknown field stops the save and names the field.
+Zed fields that Troupe has no use for, such as `type` and `default_mode`, are dropped. Any other unknown field stops the save and names the field.
 
 ### Keep secrets out of the config
 
-Each value in `env` must be a reference such as `$TEAM_API_KEY`, not the key itself. Termul refuses to save a value that looks like a secret.
+Each value in `env` must be a reference such as `$TEAM_API_KEY`, not the key itself. Troupe refuses to save a value that looks like a secret.
 
 ## Confirm the command
 
-After you click **Save Agent**, Termul shows the name, command and arguments it will run, with a warning. Read them. If they are what you expect, click the **Confirm** button. Click **Cancel** to go back and edit the JSON.
+After you click **Save Agent**, Troupe shows the name, command and arguments it will run, with a warning. Read them. If they are what you expect, click the **Confirm** button. Click **Cancel** to go back and edit the JSON.
 
 ![The Confirm arbitrary command step, listing the name, command, args and configId of Team Agent](/screenshots/agent-setup-custom-agent-confirm.png)
 
@@ -70,7 +70,7 @@ The new agent appears in the list in **Settings** > **Agent chats**, and in the 
 
 ### Allow terminal commands
 
-If the config has `"allowTerminal": true`, Termul asks a second time. This setting lets the agent run any command in a terminal on your computer. Click **Back** if you are not sure.
+If the config has `"allowTerminal": true`, Troupe asks a second time. This setting lets the agent run any command in a terminal on your computer. Click **Back** if you are not sure.
 
 ## Share a custom agent
 
@@ -78,4 +78,4 @@ Each custom agent in **Settings** > **Agent chats** has a **Copy JSON** button. 
 
 ## Remove a custom agent
 
-In **Settings** > **Agent chats**, click **Remove** on the custom agent's row. Termul asks you to confirm, then deletes the agent. Agents that come with Termul or from the registry have no **Remove** button.
+In **Settings** > **Agent chats**, click **Remove** on the custom agent's row. Troupe asks you to confirm, then deletes the agent. Agents that come with Troupe or from the registry have no **Remove** button.

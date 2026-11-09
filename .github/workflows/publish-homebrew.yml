@@ -203,7 +203,7 @@ jobs:
           INTEL_SHA256: ${{ steps.dmg.outputs.intel_sha256 }}
         run: |
           source scripts/release/homebrew.sh
-          write_homebrew_cask tap/Casks/termul.rb \
+          update_homebrew_tap tap \
             "$VERSION" "$ARM_SHA256" "$INTEL_SHA256"
 
       - name: Commit and push
@@ -212,8 +212,11 @@ jobs:
           VERSION: ${{ needs.release_metadata.outputs.version }}
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
-          git add Casks/termul.rb
-          if git diff --cached --quiet -- Casks/termul.rb; then
+          git add -A Casks
+          if [[ -e cask_renames.json ]]; then
+            git add cask_renames.json
+          fi
+          if git diff --cached --quiet; then
             echo "Homebrew cask already up to date."
             exit 0
           fi

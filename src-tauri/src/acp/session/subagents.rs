@@ -2,7 +2,7 @@
 //!
 //! The adapter runs each subagent in its own ACP session and sends that
 //! session's traffic (updates, permission requests, questions) under the
-//! child session id. Termul shows a subagent inside its parent chat, so the
+//! child session id. Troupe shows a subagent inside its parent chat, so the
 //! driver maps every child session to its root chat session and to the
 //! dispatch card that the host synthesizes for it.
 

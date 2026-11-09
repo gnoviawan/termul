@@ -98,7 +98,7 @@ function generateWideLines(lineCount: number, width: number): string {
 }
 
 async function main(): Promise<void> {
-  console.log('=== Termul xterm 5.5 Baseline Benchmark ===\n')
+  console.log('=== Troupe xterm 5.5 Baseline Benchmark ===\n')
 
   const results: BenchmarkResult[] = []
   const baselinePayload = () => generateHeavyOutput(1000)

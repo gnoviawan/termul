@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Termul needs microphone access so tools running in its terminals, such as voice input in CLI agents, can record audio.</string>
+	<string>Troupe needs microphone access so tools running in its terminals, such as voice input in CLI agents, can record audio.</string>
 </dict>
 </plist>

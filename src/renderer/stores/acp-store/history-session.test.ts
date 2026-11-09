@@ -535,7 +535,7 @@ describe('acp-store', () => {
       sessionId: 's-resume',
       cwd: '/w',
       // #1420: a reopen onto a fresh agent attaches the (here empty) MCP list
-      // so the host still gets the `termul` plan server.
+      // so the host still gets the `troupe` plan server.
       mcpServers: [],
       commandId: expect.any(String)
     })
@@ -1099,7 +1099,7 @@ describe('acp-store', () => {
   it('a reopen onto a fresh agent attaches the configured MCP servers (idle-stop auto-resume, #1420)', async () => {
     // Idle-stop auto-resume (use-idle-stop-auto-resume.ts) calls
     // `openHistorySession(id)` with NO options. Without the store default the
-    // host received `None` and the agent lost the `termul` server + every
+    // host received `None` and the agent lost the `troupe` server + every
     // configured MCP server. The default must send a non-undefined list.
     useAcpStore.setState((s) => ({
       agents: {

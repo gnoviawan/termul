@@ -126,7 +126,7 @@ fn catalog(rows: Vec<Value>) -> LoadedCatalog {
     let mut items: Vec<_> = rows.into_iter().filter_map(item_from_row).collect();
     items.sort_by(|a, b| a.name.cmp(&b.name));
     LoadedCatalog {
-        items,
+        items: items.into_iter().map(Arc::new).collect(),
         source: McpCatalogSource {
             updated_at: Some("2026-10-27T00:00:00Z".to_string()),
             sample: false,

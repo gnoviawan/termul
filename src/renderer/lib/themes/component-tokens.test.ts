@@ -5,7 +5,7 @@ import { contrastRatio, FOCUS_CONTRAST_MIN, oklchComponentsToHex } from './color
 import { COMPONENT_TOKEN_DEFAULTS } from './component-tokens'
 import { CONTAINER, S_DEFAULT } from './termul-light-chrome'
 
-/** Tokens added for the Termul Light v2 composer, keycaps and Rail keycap. */
+/** Tokens added for the Troupe Light v2 composer, keycaps and Rail keycap. */
 const LIFT_TOKENS = [
   '--composer-shadow',
   '--prompt-panel-shadow',
@@ -44,7 +44,7 @@ describe('component tokens', () => {
     }
   })
 
-  it('lifts the composer, tabs, keycaps and Rail keycap in Termul Light', () => {
+  it('lifts the composer, tabs, keycaps and Rail keycap in Troupe Light', () => {
     const vars = emittedVars('termul-light')
     expect(vars['--composer-shadow']).toBe(S_DEFAULT)
     expect(vars['--prompt-panel-shadow']).toBe(S_DEFAULT)

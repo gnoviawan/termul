@@ -111,7 +111,7 @@ impl MockAgent {
 }
 
 /// The spawn result flags exactly the methods whose advertised
-/// `_meta["api-key"]` names a provider whose key shape Termul knows.
+/// `_meta["api-key"]` names a provider whose key shape Troupe knows.
 #[tokio::test]
 async fn spawn_flags_the_methods_that_take_an_api_key() {
     let Some(mock) = spawn_mock().await else {

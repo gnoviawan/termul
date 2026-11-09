@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+bats_require_minimum_version 1.5.0
+
 load "helpers.bash"
 
 fixture_sums="$TERMUL_TEST_REPO_ROOT/scripts/tests/fixtures/SHA256SUMS.txt"
@@ -20,6 +22,10 @@ teardown() {
   unset TERMUL_INSTALL_APPLICATIONS_DIR
   unset TERMUL_INSTALL_BIN_DIR
   unset TERMUL_INSTALL_DESKTOP_DIR
+  unset TROUPE_INSTALL_YES
+  unset TROUPE_INSTALL_APPLICATIONS_DIR
+  unset TROUPE_INSTALL_BIN_DIR
+  unset TROUPE_INSTALL_DESKTOP_DIR
   cleanup_tmp
 }
 
@@ -81,7 +87,7 @@ if [[ \"\$1\" == 'attach' ]]; then
     fi
     prev=\"\$arg\"
   done
-  mkdir -p \"\$mountpoint/Termul Manager.app\"
+  mkdir -p \"\$mountpoint/Troupe.app\" \"\$mountpoint/Termul Manager.app\"
 fi
 "
   stub_cmd cp "
@@ -184,6 +190,22 @@ command chmod \"\$@\"
   ! grep -q "curl" "$TERMUL_TEST_LOG"
 }
 
+@test "require_tools on Linux names ln, which the compat links need" {
+  load_install
+  local tool
+  for tool in curl mktemp awk sha256sum cp chmod mkdir od tr; do
+    stub_cmd "$tool" "exit 0"
+  done
+  local saved_path="$PATH"
+  PATH="$TERMUL_TEST_STUB_BIN"
+
+  run require_tools linux
+
+  PATH="$saved_path"
+  [ "$status" -eq 1 ]
+  [ "$output" = "Missing required tools: ln" ]
+}
+
 @test "resolve_version parses latest redirect without api.github.com" {
   stub_cmd curl "
 printf '%s\\n' \"\$*\" >>\"\$TERMUL_TEST_LOG\"
@@ -201,10 +223,10 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
 
 @test "verify_sha256 succeeds for matching fixture" {
   load_install
-  local payload="$TERMUL_TEST_TMP_DIR/Termul.Manager_1.2.3_amd64.AppImage"
+  local payload="$TERMUL_TEST_TMP_DIR/Troupe_1.2.3_amd64.AppImage"
   printf '%s' "linux appimage payload" >"$payload"
 
-  run verify_sha256 "$payload" "Termul.Manager_1.2.3_amd64.AppImage" "$fixture_sums"
+  run verify_sha256 "$payload" "Troupe_1.2.3_amd64.AppImage" "$fixture_sums"
 
   [ "$status" -eq 0 ]
 }
@@ -212,15 +234,15 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
 @test "verify_sha256 fails missing and mismatched entries without creating install targets" {
   load_install
   local payload="$TERMUL_TEST_TMP_DIR/payload"
-  local target="$TERMUL_INSTALL_BIN_DIR/termul-manager"
+  local target="$TERMUL_INSTALL_BIN_DIR/troupe"
   printf '%s' "tampered payload" >"$payload"
 
-  run verify_sha256 "$payload" "Termul.Manager_9.9.9_amd64.AppImage" "$fixture_sums"
+  run verify_sha256 "$payload" "Troupe_9.9.9_amd64.AppImage" "$fixture_sums"
   [ "$status" -ne 0 ]
   [[ "$output" == *"Integrity check failed, nothing was installed"* ]]
   [ ! -e "$target" ]
 
-  run verify_sha256 "$payload" "Termul.Manager_1.2.3_amd64.AppImage" "$fixture_sums"
+  run verify_sha256 "$payload" "Troupe_1.2.3_amd64.AppImage" "$fixture_sums"
   [ "$status" -ne 0 ]
   [[ "$output" == *"Integrity check failed, nothing was installed"* ]]
   [ ! -e "$target" ]
@@ -233,7 +255,7 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   run confirm_install "Install Termul Manager?"
 
   [ "$status" -ne 0 ]
-  [[ "$output" == *"TERMUL_INSTALL_YES=1"* ]]
+  [[ "$output" == *"Set TROUPE_INSTALL_YES=1 to install non-interactively."* ]]
 }
 
 @test "confirm_install proceeds with env var and echoes prompt" {
@@ -243,8 +265,58 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   run confirm_install "Install Termul Manager v1.2.3?"
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"TERMUL_INSTALL_YES=1"* ]]
-  [[ "$output" == *"Install Termul Manager v1.2.3?"* ]]
+  [ "$output" = "TROUPE_INSTALL_YES=1: Install Termul Manager v1.2.3?" ]
+}
+
+@test "confirm_install proceeds with the TROUPE_ name" {
+  load_install
+  export TROUPE_INSTALL_YES=1
+
+  run confirm_install "Install Termul Manager v1.2.3?"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "TROUPE_INSTALL_YES=1: Install Termul Manager v1.2.3?" ]
+}
+
+@test "brand_env prefers TROUPE_, falls back to TERMUL_, and ignores a blank TROUPE_" {
+  load_install
+
+  TROUPE_INSTALL_BIN_DIR=/new TERMUL_INSTALL_BIN_DIR=/old run brand_env INSTALL_BIN_DIR
+  [ "$output" = "/new" ]
+  TERMUL_INSTALL_BIN_DIR=/old run brand_env INSTALL_BIN_DIR
+  [ "$output" = "/old" ]
+  TROUPE_INSTALL_BIN_DIR= TERMUL_INSTALL_BIN_DIR=/old run brand_env INSTALL_BIN_DIR
+  [ "$output" = "/old" ]
+  TROUPE_INSTALL_BIN_DIR="  " TERMUL_INSTALL_BIN_DIR=/old run brand_env INSTALL_BIN_DIR
+  [ "$output" = "/old" ]
+  unset TERMUL_INSTALL_BIN_DIR
+  run brand_env INSTALL_BIN_DIR
+  [ "$output" = "" ]
+}
+
+@test "note_legacy_env names each old variable once and skips renamed ones" {
+  load_install
+  unset TERMUL_INSTALL_APPLICATIONS_DIR TERMUL_INSTALL_DESKTOP_DIR
+  export TERMUL_INSTALL_YES=1
+  export TROUPE_INSTALL_BIN_DIR=/new
+
+  run --separate-stderr note_legacy_env
+
+  [ "$status" -eq 0 ]
+  [ "$stderr" = "TERMUL_INSTALL_YES is deprecated; rename it to TROUPE_INSTALL_YES (TERMUL_INSTALL_YES still works for now)" ]
+}
+
+@test "install_linux installs into TROUPE_INSTALL_BIN_DIR over the TERMUL_ name" {
+  stub_common_tools
+  stub_curl_release_flow "linux appimage payload"
+  load_install
+  export TROUPE_INSTALL_BIN_DIR="$HOME/troupe-bin"
+
+  run install_linux "v1.2.3" "x86_64" "$fixture_sums"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/troupe-bin/troupe.AppImage")" = "linux appimage payload" ]
+  [ ! -e "$TERMUL_INSTALL_BIN_DIR/troupe.AppImage" ]
 }
 
 @test "install_macos downloads correct DMG, verifies before copy fallback, detaches, then xattrs" {
@@ -257,15 +329,15 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   run install_macos "v1.2.3" "aarch64" "$fixture_sums"
 
   [ "$status" -eq 0 ]
-  grep -q "releases/download/v1.2.3/Termul.Manager_1.2.3_aarch64.dmg" "$TERMUL_TEST_LOG"
-  ! grep -q "Termul.Manager_v1.2.3_aarch64.dmg" "$TERMUL_TEST_LOG"
+  grep -q "releases/download/v1.2.3/Troupe_1.2.3_aarch64.dmg" "$TERMUL_TEST_LOG"
+  ! grep -q "Troupe_v1.2.3_aarch64.dmg" "$TERMUL_TEST_LOG"
   local verify_line
   local attach_line
   local cp_line
   local sudo_line
   local detach_line
   local xattr_line
-  verify_line="$(grep -n "curl .*Termul.Manager_1.2.3_aarch64.dmg" "$TERMUL_TEST_LOG" | head -n1 | cut -d: -f1)"
+  verify_line="$(grep -n "curl .*Troupe_1.2.3_aarch64.dmg" "$TERMUL_TEST_LOG" | head -n1 | cut -d: -f1)"
   attach_line="$(grep -n "hdiutil attach" "$TERMUL_TEST_LOG" | cut -d: -f1)"
   cp_line="$(grep -n "^cp " "$TERMUL_TEST_LOG" | head -n1 | cut -d: -f1)"
   sudo_line="$(grep -n "^sudo cp" "$TERMUL_TEST_LOG" | cut -d: -f1)"
@@ -289,12 +361,32 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   run install_macos "v1.2.3" "x86_64" "$fixture_sums"
 
   [ "$status" -ne 0 ]
-  grep -q "Termul.Manager_1.2.3_x64.dmg" "$TERMUL_TEST_LOG"
-  ! grep -q "Termul.Manager_v1.2.3_x64.dmg" "$TERMUL_TEST_LOG"
+  grep -q "Troupe_1.2.3_x64.dmg" "$TERMUL_TEST_LOG"
+  ! grep -q "Troupe_v1.2.3_x64.dmg" "$TERMUL_TEST_LOG"
   grep -q "hdiutil detach" "$TERMUL_TEST_LOG"
 }
 
 @test "install_macos replaces existing app bundle before copying" {
+  stub_common_tools
+  stub_curl_release_flow "mac dmg payload"
+  stub_macos_install_tools
+  stub_logging_rm
+  mkdir -p "$TERMUL_INSTALL_APPLICATIONS_DIR/Troupe.app"
+  load_install
+
+  run install_macos "v1.2.3" "aarch64" "$fixture_sums"
+
+  [ "$status" -eq 0 ]
+  local rm_line
+  local cp_line
+  rm_line="$(grep -n "^rm -rf .*Troupe.app" "$TERMUL_TEST_LOG" | head -n1 | cut -d: -f1)"
+  cp_line="$(grep -n "^cp -R " "$TERMUL_TEST_LOG" | head -n1 | cut -d: -f1)"
+  [ -n "$rm_line" ]
+  [ -n "$cp_line" ]
+  [ "$rm_line" -lt "$cp_line" ]
+}
+
+@test "install_macos removes the pre-rename Termul Manager bundle after installing Troupe" {
   stub_common_tools
   stub_curl_release_flow "mac dmg payload"
   stub_macos_install_tools
@@ -305,13 +397,42 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   run install_macos "v1.2.3" "aarch64" "$fixture_sums"
 
   [ "$status" -eq 0 ]
-  local rm_line
+  grep -Fq "/mount/Troupe.app $TERMUL_INSTALL_APPLICATIONS_DIR/" "$TERMUL_TEST_LOG"
   local cp_line
-  rm_line="$(grep -n "^rm -rf .*Termul Manager.app" "$TERMUL_TEST_LOG" | head -n1 | cut -d: -f1)"
+  local rm_line
   cp_line="$(grep -n "^cp -R " "$TERMUL_TEST_LOG" | head -n1 | cut -d: -f1)"
+  rm_line="$(grep -Fn "rm -rf $TERMUL_INSTALL_APPLICATIONS_DIR/Termul Manager.app" "$TERMUL_TEST_LOG" | head -n1 | cut -d: -f1)"
   [ -n "$rm_line" ]
-  [ -n "$cp_line" ]
-  [ "$rm_line" -lt "$cp_line" ]
+  [ "$cp_line" -lt "$rm_line" ]
+  [ ! -e "$TERMUL_INSTALL_APPLICATIONS_DIR/Termul Manager.app" ]
+}
+
+@test "install_macos installs a pre-rename release under its Termul Manager names" {
+  stub_common_tools
+  stub_curl_release_flow "mac dmg payload"
+  stub_macos_install_tools
+  stub_logging_rm
+  mkdir -p "$TERMUL_INSTALL_APPLICATIONS_DIR/Termul Manager.app"
+  load_install
+
+  run install_macos "v0.4.60" "aarch64" "$fixture_sums"
+
+  [ "$status" -eq 0 ]
+  grep -q "releases/download/v0.4.60/Termul.Manager_0.4.60_aarch64.dmg" "$TERMUL_TEST_LOG"
+  grep -Fq "/mount/Termul Manager.app $TERMUL_INSTALL_APPLICATIONS_DIR/" "$TERMUL_TEST_LOG"
+  [ "$(grep -Fc "rm -rf $TERMUL_INSTALL_APPLICATIONS_DIR/Termul Manager.app" "$TERMUL_TEST_LOG")" -eq 1 ]
+}
+
+@test "install_linux downloads a pre-rename release under its Termul Manager asset name" {
+  stub_common_tools
+  stub_curl_release_flow "linux appimage payload"
+  load_install
+
+  run install_linux "v0.4.60" "x86_64" "$fixture_sums"
+
+  [ "$status" -eq 0 ]
+  grep -q "releases/download/v0.4.60/Termul.Manager_0.4.60_amd64.AppImage" "$TERMUL_TEST_LOG"
+  grep -Fxq "Name=Termul Manager" "$TERMUL_INSTALL_DESKTOP_DIR/troupe.desktop"
 }
 
 @test "install_linux installs AppImage, desktop entry, chmod, and PATH warning" {
@@ -322,12 +443,176 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   run install_linux "v1.2.3" "x86_64" "$fixture_sums"
 
   [ "$status" -eq 0 ]
-  grep -q "releases/download/v1.2.3/Termul.Manager_1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
-  ! grep -q "Termul.Manager_v1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
-  [ -x "$TERMUL_INSTALL_BIN_DIR/termul-manager" ]
-  [ -f "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop" ]
-  grep -q "Exec=$TERMUL_INSTALL_BIN_DIR/termul-manager" "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
-  [[ "$output" == *"not in PATH"* ]]
+  grep -q "releases/download/v1.2.3/Troupe_1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
+  ! grep -q "Troupe_v1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
+  [ -x "$TERMUL_INSTALL_BIN_DIR/troupe" ]
+  [ "$(cat "$TERMUL_INSTALL_BIN_DIR/troupe.AppImage")" = "linux appimage payload" ]
+  [ "$(cat "$TERMUL_INSTALL_DESKTOP_DIR/troupe.desktop")" = "[Desktop Entry]
+Type=Application
+Name=Troupe
+Exec=$TERMUL_INSTALL_BIN_DIR/troupe
+Terminal=false
+Categories=Development;Utility;" ]
+  [[ "$output" == *"Installed Troupe to $TERMUL_INSTALL_BIN_DIR/troupe"* ]]
+  [[ "$output" == *"Warning: $TERMUL_INSTALL_BIN_DIR is not in PATH. Add it to run troupe from your shell."* ]]
+}
+
+@test "install_linux keeps the termul-manager names as links to troupe and a hidden desktop entry" {
+  stub_common_tools
+  stub_curl_release_flow "linux appimage payload"
+  load_install
+
+  run install_linux "v1.2.3" "x86_64" "$fixture_sums"
+
+  [ "$status" -eq 0 ]
+  [ "$(readlink "$TERMUL_INSTALL_BIN_DIR/termul-manager")" = "troupe" ]
+  [ "$(readlink "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage")" = "troupe.AppImage" ]
+  [ "$(cat "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop")" = "[Desktop Entry]
+Type=Application
+Name=Troupe
+Exec=$TERMUL_INSTALL_BIN_DIR/troupe
+Terminal=false
+NoDisplay=true
+Categories=Development;Utility;" ]
+}
+
+@test "install_linux over a pre-0.5.0 script install leaves both names launching Troupe" {
+  stub_common_tools
+  stub_curl_release_flow "linux appimage payload"
+  load_install
+  mkdir -p "$TERMUL_INSTALL_BIN_DIR" "$TERMUL_INSTALL_DESKTOP_DIR"
+  printf '#!/usr/bin/env bash\nexec "${BASH_SOURCE[0]%%/*}/termul-manager.AppImage" "$@"\n' >"$TERMUL_INSTALL_BIN_DIR/termul-manager"
+  printf '#!/usr/bin/env bash\necho old payload\n' >"$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage"
+  chmod 755 "$TERMUL_INSTALL_BIN_DIR/termul-manager" "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage"
+  printf '[Desktop Entry]\nName=Termul Manager\nExec=%s/termul-manager\n' "$TERMUL_INSTALL_BIN_DIR" >"$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
+
+  run install_linux "v1.2.3" "x86_64" "$fixture_sums"
+  [ "$status" -eq 0 ]
+  printf '#!/usr/bin/env bash\necho "troupe payload $*"\n' >"$TERMUL_INSTALL_BIN_DIR/troupe.AppImage"
+
+  run --separate-stderr env -u WAYLAND_DISPLAY "$TERMUL_INSTALL_BIN_DIR/troupe" --a
+  [ "$status" -eq 0 ]
+  [ "$output" = "troupe payload --a" ]
+  run --separate-stderr env -u WAYLAND_DISPLAY "$TERMUL_INSTALL_BIN_DIR/termul-manager" --b
+  [ "$status" -eq 0 ]
+  [ "$output" = "troupe payload --b" ]
+  run --separate-stderr env -u WAYLAND_DISPLAY "$TERMUL_INSTALL_BIN_DIR/termul-manager.AppImage" --c
+  [ "$status" -eq 0 ]
+  [ "$output" = "troupe payload --c" ]
+  grep -Fxq "Exec=$TERMUL_INSTALL_BIN_DIR/troupe" "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
+  grep -Fxq "NoDisplay=true" "$TERMUL_INSTALL_DESKTOP_DIR/termul-manager.desktop"
+}
+
+# Installs for real, then swaps the AppImage for a stub that prints the env and
+# argv the launcher hands it.
+install_linux_launcher() {
+  stub_common_tools
+  stub_curl_release_flow "linux appimage payload"
+  load_install
+  install_linux "v1.2.3" "x86_64" "$fixture_sums" >/dev/null 2>&1
+  cat >"$TERMUL_INSTALL_BIN_DIR/troupe.AppImage" <<'STUB'
+#!/usr/bin/env bash
+printf 'LD_PRELOAD=<%s> marker=<%s> args=<%s>\n' "${LD_PRELOAD-unset}" "${TERMUL_LAUNCHER_PRELOAD-unset}" "$*"
+STUB
+  chmod 755 "$TERMUL_INSTALL_BIN_DIR/troupe.AppImage"
+  wayland_lib="$TERMUL_TEST_TMP_DIR/host/libwayland-client.so.0"
+  mkdir -p "${wayland_lib%/*}"
+    printf '\177ELF\002' >"$wayland_lib"
+}
+
+# ld.so warns on stderr about the fake preload paths; assert on stdout only.
+run_launcher() {
+  run --separate-stderr env -u LD_PRELOAD -u TERMUL_LAUNCHER_PRELOAD -u WAYLAND_DISPLAY \
+    TERMUL_WAYLAND_CLIENT_LIB="$wayland_lib" "$@" "$TERMUL_INSTALL_BIN_DIR/${launcher:-troupe}" --flag "two words"
+}
+
+@test "linux launcher preloads the host libwayland on Wayland and records it" {
+  install_linux_launcher
+
+  run_launcher WAYLAND_DISPLAY=wayland-0
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<$wayland_lib> marker=<$wayland_lib> args=<--flag two words>" ]
+}
+
+@test "linux launcher preloads the same way when started as termul-manager" {
+  install_linux_launcher
+
+  launcher=termul-manager run_launcher WAYLAND_DISPLAY=wayland-0
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<$wayland_lib> marker=<$wayland_lib> args=<--flag two words>" ]
+}
+
+@test "linux launcher appends to a user LD_PRELOAD and keeps it" {
+  install_linux_launcher
+
+  run_launcher WAYLAND_DISPLAY=wayland-0 LD_PRELOAD="/opt/a.so /opt/b.so"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=</opt/a.so /opt/b.so:$wayland_lib> marker=<$wayland_lib> args=<--flag two words>" ]
+}
+
+@test "linux launcher adds nothing when the user already preloads the host libwayland" {
+  install_linux_launcher
+
+  run_launcher WAYLAND_DISPLAY=wayland-0 LD_PRELOAD="$wayland_lib"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<$wayland_lib> marker=<unset> args=<--flag two words>" ]
+}
+
+@test "linux launcher leaves X11 sessions untouched" {
+  install_linux_launcher
+
+  run_launcher LD_PRELOAD=/opt/a.so
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=</opt/a.so> marker=<unset> args=<--flag two words>" ]
+}
+
+@test "linux launcher adds nothing when the host has no libwayland" {
+  install_linux_launcher
+  rm "$wayland_lib"
+
+  run_launcher WAYLAND_DISPLAY=wayland-0 TERMUL_LAUNCHER_PRELOAD=/stale.so
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<unset> marker=<unset> args=<--flag two words>" ]
+}
+
+@test "linux launcher skips a 32-bit libwayland and says so" {
+  install_linux_launcher
+  printf '\177ELF\001' >"$wayland_lib"
+
+  run_launcher WAYLAND_DISPLAY=wayland-0
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<unset> marker=<unset> args=<--flag two words>" ]
+  [[ "$stderr" == *"TERMUL_WAYLAND_CLIENT_LIB=$wayland_lib is not a 64-bit library"* ]]
+}
+
+@test "linux launcher prefers TROUPE_WAYLAND_CLIENT_LIB" {
+  install_linux_launcher
+  troupe_lib="$TERMUL_TEST_TMP_DIR/troupe/libwayland-client.so.0"
+  mkdir -p "${troupe_lib%/*}"
+  printf '\177ELF\002' >"$troupe_lib"
+
+  run_launcher WAYLAND_DISPLAY=wayland-0 TROUPE_WAYLAND_CLIENT_LIB="$troupe_lib"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<$troupe_lib> marker=<$troupe_lib> args=<--flag two words>" ]
+}
+
+@test "linux launcher finds the AppImage when started through a symlink" {
+  install_linux_launcher
+  mkdir -p "$TERMUL_TEST_TMP_DIR/elsewhere"
+  ln -s "$TERMUL_INSTALL_BIN_DIR/troupe" "$TERMUL_TEST_TMP_DIR/elsewhere/termul"
+
+  run --separate-stderr env -u LD_PRELOAD -u WAYLAND_DISPLAY "$TERMUL_TEST_TMP_DIR/elsewhere/termul" --flag
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "LD_PRELOAD=<unset> marker=<unset> args=<--flag>" ]
 }
 
 @test "main happy macOS path reaches hdiutil once" {
@@ -341,7 +626,7 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   run main
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Install Termul Manager v1.2.3 (darwin-aarch64) to $TERMUL_INSTALL_APPLICATIONS_DIR?"* ]]
+  [[ "$output" == *"Install Troupe v1.2.3 (darwin-aarch64) to $TERMUL_INSTALL_APPLICATIONS_DIR?"* ]]
   [ "$(grep -c "hdiutil attach" "$TERMUL_TEST_LOG")" -eq 1 ]
 }
 
@@ -355,10 +640,10 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   run main
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Install Termul Manager v1.2.3 (linux-x86_64) to $HOME/.local/bin?"* ]]
-  [ -x "$TERMUL_INSTALL_BIN_DIR/termul-manager" ]
-  grep -q "Termul.Manager_1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
-  ! grep -q "Termul.Manager_v1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
+  [[ "$output" == *"Install Troupe v1.2.3 (linux-x86_64) to $HOME/.local/bin?"* ]]
+  [ -x "$TERMUL_INSTALL_BIN_DIR/troupe" ]
+  grep -q "Troupe_1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
+  ! grep -q "Troupe_v1.2.3_amd64.AppImage" "$TERMUL_TEST_LOG"
 }
 
 @test "main non-tty abort runs no install commands" {

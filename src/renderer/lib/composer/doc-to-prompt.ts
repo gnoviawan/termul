@@ -44,6 +44,8 @@ import {
   SKILL_TOKEN_START
 } from '@/lib/skill-tokens'
 import { contextFromAttrs, selectionContextToken } from './selection-context'
+import type { TermulToolId } from './termul-tools'
+import { toolToken } from './tool-tokens'
 
 /**
  * The pill node type name. Kept in one place so the (de)serializers and the
@@ -76,7 +78,16 @@ export const CONTEXT_PILL_NODE = 'contextPill'
 
 export const CONVERSATION_PILL_NODE = 'conversationPill'
 
-type PillKind = 'pill' | 'commandPill' | 'filePill' | 'contextPill' | 'conversationPill'
+/** A Troupe tool pill. Its token (`\uE00C…\uE00D`) is owned by `tool-tokens.ts`. */
+export const TOOL_PILL_NODE = 'toolPill'
+
+type PillKind =
+  | 'pill'
+  | 'commandPill'
+  | 'filePill'
+  | 'contextPill'
+  | 'conversationPill'
+  | 'toolPill'
 
 function isPillKind(kind: DocSegment['kind']): kind is PillKind {
   return kind !== 'text'
@@ -177,6 +188,10 @@ export function walkDocSegments(doc: PmNode): DocSegment[] {
             String(node.attrs.sessionId ?? '')
           )
           kind = 'conversationPill'
+          blockEndedInHardBreak = false
+        } else if (node.type.name === TOOL_PILL_NODE) {
+          displayText = toolToken(String(node.attrs.id ?? '') as TermulToolId)
+          kind = 'toolPill'
           blockEndedInHardBreak = false
         } else if (node.type.name === 'hardBreak') {
           displayText = '\n'

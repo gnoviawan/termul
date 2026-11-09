@@ -14,7 +14,7 @@ const updatePanelVisibility = vi.fn((panel: string, visible: boolean) => {
   return Promise.resolve()
 })
 
-const project = (path: string): Project => ({ id: 'p1', name: 'Termul', path }) as Project
+const project = (path: string): Project => ({ id: 'p1', name: 'Troupe', path }) as Project
 
 beforeEach(() => {
   vi.clearAllMocks()

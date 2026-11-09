@@ -34,9 +34,9 @@
  * session moves to `elsewhere`; opening it again here takes it back the same
  * way.
  *
- * Disk changes are detected by Termul, never by the editor (AD-27): the
+ * Disk changes are detected by Troupe, never by the editor (AD-27): the
  * file watcher reports the document changed (`checkDisk`), the host compares
- * the file with what Termul last read or wrote, and a clean editor reloads
+ * the file with what Troupe last read or wrote, and a clean editor reloads
  * silently while a dirty one gets `conflict` and the panel's choice
  * (`resolveConflict`). A crashed editor (`event.crashed`, or timeouts the
  * host counted) is replaced by a fresh mount loading the last saved bytes
@@ -170,7 +170,7 @@ export interface CanvasState {
   saveCanvas: (projectId: string) => Promise<boolean>
   pushTheme: (projectId: string) => void
   pushLocale: (projectId: string) => void
-  /** Termul's file watcher saw the project's document change. */
+  /** Troupe's file watcher saw the project's document change. */
   checkDisk: (projectId: string) => Promise<void>
   /** Carry out the user's answer to a conflict. True when it is resolved. */
   resolveConflict: (projectId: string, choice: CanvasConflictChoice) => Promise<boolean>
@@ -216,7 +216,7 @@ const HOST_DROPPED_PHASE: CanvasPhase = {
   code: 'CANVAS_CLOSED',
   mountSeq: null,
   message:
-    'Termul closed this canvas, so changes made here since were not saved. Open it again to continue from its last save.'
+    'Troupe closed this canvas, so changes made here since were not saved. Open it again to continue from its last save.'
 }
 
 /** The phase a session moves to when this window loses its mount. */
@@ -533,7 +533,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         'dirtyChanged',
         `canvas dirty notification failed for project ${projectId}: ${result.code}`
       )
-      patchSession(projectId, { saveError: `Autosave could not reach Termul: ${result.error}` })
+      patchSession(projectId, { saveError: `Autosave could not reach Troupe: ${result.error}` })
       if (retry) {
         setTimeout(() => {
           const now = get().sessions[projectId]
