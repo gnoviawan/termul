@@ -1118,10 +1118,10 @@ impl SessionPersistence {
             }
             if let Some(prior) = metadata.continued_from.as_deref() {
                 log::warn!(
-                    "[acp-history] continued_from already set session_id={} prior={:?} ignored={:?}",
+                    "[acp-history] continued_from already set session_id={} prior={} ignored={}",
                     crate::logging::redact_session_id(session_id),
-                    prior,
-                    continued_from
+                    crate::logging::redact_session_id(prior),
+                    crate::logging::redact_session_id(continued_from)
                 );
                 return Ok(());
             }
