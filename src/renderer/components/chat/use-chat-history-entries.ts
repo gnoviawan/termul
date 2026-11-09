@@ -12,6 +12,7 @@ import {
 } from '@/lib/acp-history-persistence'
 import { activeWorktreeOf } from '@/lib/active-worktree'
 import { logFrontendError } from '@/lib/log-api'
+import { chainIds, foldSessionChains } from '@/lib/session-chain'
 import { chatsMatchAnnouncement } from '@/lib/shell-announcements'
 import { useAcpStore } from '@/stores/acp-store'
 import { useActiveProject } from '@/stores/project-store'
@@ -138,36 +139,56 @@ export function useChatHistoryEntries({
   // Troupe-created sessions only. The host-owned `discovered` flag is `false`
   // for sessions Troupe created (`register_session`) and `true` for external
   // `session/list` mirrors — filter hides CLI/other-client chats.
+  // CAP-8 (spec-in-chat-agent-switch): a switched chat is ONE conversation —
+  // fold every `continuedFrom` chain to its terminal session before rows are
+  // built. The surviving row keeps the terminal id (open/reload land on the
+  // live session) and adopts the merged title/count/activity/agent sequence;
+  // `chainIds` keeps the absorbed ids so delete and the Active check still
+  // reach them. Membership derives from the SCOPED index: a chain whose
+  // members cross a scope boundary degrades to per-scope rows rather than
+  // hiding a chat.
+  const foldedScopedIndex = useMemo(() => foldSessionChains(scopedIndex), [scopedIndex])
+
   const mergedEntries = useMemo(() => {
-    const entries: ChatHistorySidebarEntry[] = scopedIndex
+    const entries: ChatHistorySidebarEntry[] = foldedScopedIndex
       .filter((e) => e.discovered !== true)
-      .map((e) => ({
-        id: e.id,
-        title: e.title,
-        messageCount: e.messageCount,
-        status: e.status,
-        discovered: false,
-        agentId: e.agentId,
-        agentConfigId: e.agentConfigId,
-        agents: e.agents,
-        lastActivityAt: e.lastActivityAt,
-        createdAt: e.createdAt,
-        canOpen: true
-      }))
+      .map((e) => {
+        const members = chainIds(scopedIndex, e.id)
+        return {
+          id: e.id,
+          title: e.title,
+          messageCount: e.messageCount,
+          status: e.status,
+          discovered: false,
+          agentId: e.agentId,
+          agentConfigId: e.agentConfigId,
+          agents: e.agents,
+          chainIds: members.length > 1 ? members : undefined,
+          lastActivityAt: e.lastActivityAt,
+          createdAt: e.createdAt,
+          canOpen: true
+        }
+      })
 
     if (!extraEntries || extraEntries.length === 0) return entries
     // An extra entry the scoped history already lists appears once, as
     // history, under the extra's title (the one the row displays, e.g. an
     // open chat's live title) so the search matches what the user sees.
     const extraById = new Map(extraEntries.map((e) => [e.id, e]))
-    const listed = new Set(entries.map((e) => e.id))
+    // An extra already appears once — as a listed row OR as an absorbed
+    // member of a folded chain row (an open pre-switch tab must not double).
+    const listed = new Set(entries.flatMap((e) => (e.chainIds !== undefined ? e.chainIds : [e.id])))
     const merged = entries.map((e) => {
-      const extra = extraById.get(e.id)
+      const extra =
+        extraById.get(e.id) ??
+        (e.chainIds !== undefined
+          ? e.chainIds.map((memberId) => extraById.get(memberId)).find((x) => x !== undefined)
+          : undefined)
       return extra && extra.title !== e.title ? { ...e, title: extra.title } : e
     })
     const extras = extraEntries.filter((e) => !listed.has(e.id))
     return extras.length > 0 ? [...extras, ...merged] : merged
-  }, [scopedIndex, extraEntries])
+  }, [foldedScopedIndex, scopedIndex, extraEntries])
 
   // Lazy rendering: keep all results in memory but only render a growing window
   // (a project can accumulate hundreds of sessions; rendering all rows is the cost).
@@ -211,7 +232,11 @@ export function useChatHistoryEntries({
   // Active entries keep `filtered`'s order and skip the window, so an open
   // chat is never paged out; the window pages the rest.
   const { active, windowed, hasMore } = useMemo(() => {
-    const isActive = (entry: ChatHistorySidebarEntry): boolean => activeIds?.has(entry.id) ?? false
+    // A folded row is Active when ANY chain member is open — a pre-switch
+    // source still on screen keeps the conversation row highlighted.
+    const isActive = (entry: ChatHistorySidebarEntry): boolean =>
+      (activeIds?.has(entry.id) ?? false) ||
+      (entry.chainIds?.some((memberId) => activeIds?.has(memberId)) ?? false)
     const activeEntries = activeIds && activeIds.size > 0 ? filtered.filter(isActive) : []
     const rest = activeEntries.length > 0 ? filtered.filter((entry) => !isActive(entry)) : filtered
     const page = rest.slice(0, visibleCount)
@@ -285,18 +310,23 @@ export function useChatHistoryEntries({
     [addAgentChatTab, openHistorySession, openDiscoveredSession, activeProjectId, onSessionOpened]
   )
 
+  // Deleting a folded row deletes the WHOLE conversation: every chain
+  // member's session is removed, else an absorbed source would resurface as
+  // a standalone row on the next index refresh.
   const deleteEntry = useCallback(
     (id: string) => {
-      void deleteHistorySession(id).catch(() => {
-        toast.error('Could not delete that chat. Try again.')
-        void logFrontendError({
-          level: 'warn',
-          source: logSource,
-          message: `Failed to delete chat history session ${id}`
+      for (const memberId of chainIds(scopedIndex, id)) {
+        void deleteHistorySession(memberId).catch(() => {
+          toast.error('Could not delete that chat. Try again.')
+          void logFrontendError({
+            level: 'warn',
+            source: logSource,
+            message: `Failed to delete chat history session ${memberId}`
+          })
         })
-      })
+      }
     },
-    [deleteHistorySession, logSource]
+    [deleteHistorySession, logSource, scopedIndex]
   )
 
   return {

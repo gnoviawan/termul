@@ -58,6 +58,11 @@ pub struct ChatHistoryIndexEntry {
     pub model_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
+    /// The previous session id an in-chat agent switch continued from (the
+    /// `agent_switch` marker's `newSessionId` target side). Additive: absent
+    /// on unswitched chats and pre-feature entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continued_from: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

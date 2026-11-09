@@ -142,6 +142,17 @@ pub struct SessionMetadata {
     /// loads with `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweep_checkpoint: Option<SweepCheckpoint>,
+    /// The previous session id this session continues from, when it was
+    /// created by an in-chat agent switch (the `agent_switch` marker's
+    /// `newSessionId` target). Stamped by `record_agent_switch` on the NEW
+    /// session so history surfaces can fold a switch chain into one row.
+    /// Derived cache: the durable `agent_switch` record on the SOURCE log
+    /// stays authoritative — this is the O(1) lookup a list-fold needs (the
+    /// alternative scans every log for a marker naming this session).
+    /// Additive: old metadata loads with `None` and the renderer heals the
+    /// fold lazily when a source payload's markers are installed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continued_from: Option<String>,
 }
 
 impl SessionMetadata {
@@ -213,6 +224,11 @@ pub struct SessionIndexEntry {
     /// The session log's epoch (see [`SessionMetadata::log_epoch`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_epoch: Option<String>,
+    /// The previous session id this session continues from (see
+    /// [`SessionMetadata::continued_from`]). Carried on the wire so a client
+    /// can collapse a switch chain into one conversation row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continued_from: Option<String>,
 }
 
 impl From<&SessionMetadata> for SessionIndexEntry {
@@ -239,6 +255,7 @@ impl From<&SessionMetadata> for SessionIndexEntry {
             model_id: metadata.model_id.clone(),
             model_name: metadata.model_name.clone(),
             log_epoch: metadata.log_epoch.clone(),
+            continued_from: metadata.continued_from.clone(),
         }
     }
 }

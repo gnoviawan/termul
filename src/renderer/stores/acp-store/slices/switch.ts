@@ -32,6 +32,7 @@ import {
   type SwitchMarkerFacts,
   setSwitchRejection,
   spliceSwitchTranscript,
+  stampSwitchContinuation,
   switchBlockedReason,
   trimLiveToolCalls,
   withSwitchMarker
@@ -598,9 +599,15 @@ export const createSwitchSlice: StateCreator<AcpState, [], [], SwitchSliceState>
           detachOldAgentForSwitch(set, oldConfigId, cwd, oldSession.agentId)
         }
 
-        // 7. Ordered-agent cache on the index entry (append, consecutive-dedup).
+        // 7. Ordered-agent cache on the SOURCE entry (append, consecutive-
+        //    dedup) + the durable chain edge on the TARGET entry — the
+        //    fold's O(1) lookup while the host's own index stamp lands.
         set((s) => ({
-          sessionIndex: appendOrderedAgents(s, sessionId, oldConfigId, toConfigId)
+          sessionIndex: stampSwitchContinuation(
+            { sessionIndex: appendOrderedAgents(s, sessionId, oldConfigId, toConfigId) },
+            newSessionId as SessionId,
+            sessionId
+          )
         }))
 
         // 8. Clear the armed switch on the old session (the launchConfigId
@@ -647,7 +654,11 @@ export const createSwitchSlice: StateCreator<AcpState, [], [], SwitchSliceState>
             detachOldAgentForSwitch(set, oldConfigId, cwd, oldSession.agentId)
           }
           set((s) => ({
-            sessionIndex: appendOrderedAgents(s, sessionId, oldConfigId, toConfigId)
+            sessionIndex: stampSwitchContinuation(
+              { sessionIndex: appendOrderedAgents(s, sessionId, oldConfigId, toConfigId) },
+              dispatchTarget,
+              sessionId
+            )
           }))
           clearSwitching()
           void logFrontendError({
@@ -712,6 +723,11 @@ export const createSwitchSlice: StateCreator<AcpState, [], [], SwitchSliceState>
             sw.newSessionId === record.newSessionId &&
             sw.summaryText === record.summaryText)
       )
+      // Chain edge for the fold (CAP-8): the marker names its continuation.
+      // A remote/shared-live client sees this event without having run
+      // `switchAgent`, so the stamp lands here too — idempotent against the
+      // orchestrating client's own stamp.
+      const stampedIndex = stampSwitchContinuation(s, e.newSessionId, e.sessionId)
       if (idx !== -1) {
         // Idempotent upsert: the latest fields win, placement stays, and
         // the matched entry keeps its durable id/seq + arrival timestamp.
@@ -723,13 +739,17 @@ export const createSwitchSlice: StateCreator<AcpState, [], [], SwitchSliceState>
           timestamp: list[idx].timestamp,
           seq: list[idx].seq
         }
-        return { agentSwitches: { ...s.agentSwitches, [e.sessionId]: next } }
+        return {
+          agentSwitches: { ...s.agentSwitches, [e.sessionId]: next },
+          sessionIndex: stampedIndex
+        }
       }
       return {
         agentSwitches: {
           ...s.agentSwitches,
           [e.sessionId]: [...list, record].slice(-MAX_LIVE_TOOL_CALLS)
-        }
+        },
+        sessionIndex: stampedIndex
       }
     })
   }

@@ -28,6 +28,13 @@ const INDEX_FILE: &str = "sessions.json";
 /// opens never re-run it (and never re-stamp a session whose project was
 /// deliberately cleared by a future feature).
 const UNASSIGNED_MIGRATION_MARKER: &str = "unassigned-project-migrated";
+/// One-time backfill of `continued_from` index edges for chains recorded
+/// before the field existed: `record_agent_switch` has stamped the new
+/// session's metadata since the field shipped, but a marker written earlier
+/// left no index edge. The migration reads each log's newest `agent_switch`
+/// once, stamps the target's metadata, and writes this marker so later
+/// launches skip the scan.
+const CONTINUED_FROM_MIGRATION_MARKER: &str = "continued-from-migrated-v1";
 const METADATA_FILE: &str = "metadata.json";
 const MESSAGES_FILE: &str = "messages.jsonl";
 const TOOL_CALLS_FILE: &str = "tool-calls.jsonl";
@@ -455,6 +462,7 @@ impl SessionPersistence {
             log_epoch: Some(mint_log_epoch()),
             head_ahead_of_durable: false,
             sweep_checkpoint: None,
+            continued_from: None,
         };
         self.persist_metadata(&metadata)?;
         if let Err(error) = self.install_runtime(metadata.clone()) {
@@ -564,6 +572,7 @@ impl SessionPersistence {
             log_epoch: Some(mint_log_epoch()),
             head_ahead_of_durable: false,
             sweep_checkpoint: None,
+            continued_from: None,
         };
         if let Err(error) = self.persist_metadata(&metadata) {
             let _ = fs::remove_dir_all(self.session_dir(&metadata.storage_key)?);
@@ -638,6 +647,7 @@ impl SessionPersistence {
             log_epoch: Some(mint_log_epoch()),
             head_ahead_of_durable: false,
             sweep_checkpoint: None,
+            continued_from: None,
         };
         self.persist_metadata(&metadata)?;
         if let Err(error) = self.install_runtime(metadata.clone()) {
@@ -1081,6 +1091,63 @@ impl SessionPersistence {
             .get(session_id)
             .map(|metadata| metadata.lock().clone())
             .ok_or(SessionPersistenceError::SessionNotFound)
+    }
+
+    /// Stamp `session_id`'s metadata + index entry as the continuation of
+    /// `continued_from` — set on the NEW session an in-chat agent switch
+    /// creates (the `agent_switch` marker's `newSessionId`). The marker on
+    /// the SOURCE log stays the authoritative record; this is the O(1)
+    /// index-edge the history fold needs so a switch chain renders as one
+    /// conversation. The mutation lands on the shared catalog metadata the
+    /// session writer snapshots, so a later writer flush cannot lose it.
+    /// Idempotent: a same-value stamp is a no-op; an unknown session is
+    /// `SessionNotFound`; a mismatched prior value wins (a session has at
+    /// most one switch-source).
+    pub async fn note_continued_from(&self, session_id: &str, continued_from: &str) -> Result<()> {
+        let entry = self
+            .inner
+            .catalog
+            .lock()
+            .get(session_id)
+            .cloned()
+            .ok_or(SessionPersistenceError::SessionNotFound)?;
+        {
+            let mut metadata = entry.lock();
+            if metadata.continued_from.as_deref() == Some(continued_from) {
+                return Ok(());
+            }
+            if let Some(prior) = metadata.continued_from.as_deref() {
+                log::warn!(
+                    "[acp-history] continued_from already set session_id={} prior={:?} ignored={:?}",
+                    crate::logging::redact_session_id(session_id),
+                    prior,
+                    continued_from
+                );
+                return Ok(());
+            }
+            metadata.continued_from = Some(continued_from.to_string());
+        }
+        // Route the metadata write through the session writer when one is
+        // installed: it is the one thread that writes this session's
+        // metadata, so no stale snapshot can overtake the stamp. Without a
+        // (working) writer the inline write runs under the catalog lock so
+        // a concurrent `delete_session` cannot resurrect the directory.
+        let inline_error = match self.runtime(session_id) {
+            Ok(runtime) => match self.send_command(
+                &runtime,
+                session_id,
+                WriterCommand::PersistMetadata,
+            ) {
+                Ok(()) => None,
+                Err(_) => self.persist_mark_inline(session_id, &entry),
+            },
+            Err(_) => self.persist_mark_inline(session_id, &entry),
+        };
+        if let Some(error) = inline_error {
+            return Err(error);
+        }
+        self.persist_index().await?;
+        Ok(())
     }
 
     pub fn last_seq(&self, session_id: &str) -> Result<u64> {
@@ -1861,7 +1928,15 @@ impl SessionPersistence {
 
         let migration_marker = self.inner.root.join(UNASSIGNED_MIGRATION_MARKER);
         let migrate_unassigned = !migration_marker.exists();
+        let continued_from_marker = self.inner.root.join(CONTINUED_FROM_MIGRATION_MARKER);
+        let migrate_continued_from = !continued_from_marker.exists();
         let mut unassigned_stamped = 0usize;
+        // `(target, source)` edges found by the migration scan, applied to
+        // the catalog before install so the one index rebuild carries them.
+        let mut continued_from_edges: Vec<(String, String)> = Vec::new();
+        // A scan or stamp failed: keep the migration open so the next
+        // launch retries (same contract as the unassigned migration).
+        let mut continued_from_incomplete = false;
         // Sessions the loop could not visit (unreadable, quarantined,
         // conflicting): they miss the stamping, so they keep the migration open.
         let mut skipped = 0usize;
@@ -1918,6 +1993,26 @@ impl SessionPersistence {
             }
             ensure_log_exists(&dir.join(MESSAGES_FILE))?;
             ensure_log_exists(&dir.join(TOOL_CALLS_FILE))?;
+
+            // One-time chain backfill (see CONTINUED_FROM_MIGRATION_MARKER):
+            // a pre-feature `agent_switch` marker left no index edge on its
+            // target. The newest marker is authoritative; the scan stops at
+            // the first probeable hit from the tail.
+            if migrate_continued_from {
+                match newest_agent_switch_target(&dir.join(MESSAGES_FILE), &metadata.session_id) {
+                    Ok(Some(target)) => {
+                        continued_from_edges.push((target, metadata.session_id.clone()));
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        continued_from_incomplete = true;
+                        log::warn!(
+                            "[acp-history] recover() continued_from scan failed session_id={} error={error}",
+                            crate::logging::redact_session_id(&metadata.session_id)
+                        );
+                    }
+                }
+            }
 
             let mut dirty = false;
 
@@ -2122,6 +2217,36 @@ impl SessionPersistence {
             recovered.insert(metadata.session_id.clone(), metadata);
         }
 
+        // Apply the backfilled chain edges onto the in-memory catalog BEFORE
+        // install, so the single index rebuild below carries them. The
+        // marker's target may be gone (deleted or quarantined) — the edge is
+        // then moot (no row to fold) and does not keep the migration open.
+        let mut continued_from_stamped = 0usize;
+        if migrate_continued_from {
+            for (target, source) in &continued_from_edges {
+                if let Some(metadata) = recovered.get_mut(target) {
+                    if metadata.continued_from.is_none() {
+                        metadata.continued_from = Some(source.clone());
+                        if let Err(error) = self.persist_metadata(metadata) {
+                            continued_from_incomplete = true;
+                            log::warn!(
+                                "[acp-history] recover() continued_from stamp failed session_id={} error={error}",
+                                crate::logging::redact_session_id(target)
+                            );
+                        } else {
+                            continued_from_stamped += 1;
+                        }
+                    }
+                }
+            }
+            if !continued_from_edges.is_empty() {
+                log::info!(
+                    "[acp-history] continued_from backfill stamped={continued_from_stamped} edges={}",
+                    continued_from_edges.len()
+                );
+            }
+        }
+
         for metadata in recovered.values() {
             // Read-only catalog entries: no writer runtime survives a restart.
             self.install_catalog_entry(metadata.clone());
@@ -2133,6 +2258,21 @@ impl SessionPersistence {
         let index_written = self
             .persist_index_unless_unchanged(existing_index.as_deref())
             .await?;
+        if migrate_continued_from && skipped == 0 && !continued_from_incomplete {
+            // Marker last: a crash before this point re-runs the (idempotent)
+            // stamping on the next open. A skipped session keeps the
+            // migration open so its edge is stamped once it is readable.
+            atomic_file::replace(&continued_from_marker, b"1\n")?;
+            log::info!(
+                "[acp-history] continued-from migration complete stamped={continued_from_stamped} edges={}",
+                continued_from_edges.len()
+            );
+        } else if migrate_continued_from {
+            log::warn!(
+                "[acp-history] continued-from migration left open stamped={continued_from_stamped} edges={} skipped={skipped} incomplete={continued_from_incomplete}",
+                continued_from_edges.len()
+            );
+        }
         if migrate_unassigned && skipped == 0 {
             // Marker last: a crash before this point re-runs the (idempotent)
             // stamping on the next open. A skipped session keeps the
@@ -2397,6 +2537,8 @@ fn open_turn_step<'a>(
     }
 }
 
+#[cfg(test)]
+mod continued_from_tests;
 #[cfg(test)]
 mod diff_stat_tests;
 #[cfg(test)]

@@ -287,6 +287,7 @@ fn model_fields_serialize_camel_case_when_set() {
         model_id: Some("m1".into()),
         model_name: Some("Model One".into()),
         log_epoch: None,
+        continued_from: None,
     })
     .unwrap();
     assert_eq!(json["modelId"], "m1");

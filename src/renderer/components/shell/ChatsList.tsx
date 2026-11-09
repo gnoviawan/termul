@@ -128,7 +128,11 @@ export function ChatsList({ project }: ChatsListProps): React.JSX.Element {
                   <ChatCard
                     card={card}
                     index={item.index}
-                    isActive={card.entry.id === activeChatSessionId}
+                    isActive={
+                      card.entry.id === activeChatSessionId ||
+                      (activeChatSessionId !== null &&
+                        (card.entry.chainIds?.includes(activeChatSessionId) ?? false))
+                    }
                     actions={cardActions}
                     onRequestDelete={setDeleteConfirm}
                   />
@@ -150,9 +154,9 @@ export function ChatsList({ project }: ChatsListProps): React.JSX.Element {
         variant="danger"
         onConfirm={() => {
           if (deleteConfirm) {
-            const id = deleteConfirm.id
+            const entry = deleteConfirm
             setDeleteConfirm(null)
-            onDelete(id)
+            onDelete(entry)
           }
         }}
         onCancel={() => setDeleteConfirm(null)}

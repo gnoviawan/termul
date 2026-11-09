@@ -923,6 +923,15 @@ export interface PersistedSessionSummary {
    */
   modelId?: string
   modelName?: string
+  /**
+   * Switch-chain edge (CAP-8): the previous session id this session
+   * continues from, stamped by the host when an in-chat agent switch is
+   * durably recorded. Additive: absent on pre-feature sessions and on the
+   * chain's first session. The authoritative switch history stays in the
+   * durable `agent_switch` records; this is an index convenience so a
+   * client can fold the chain into one history row without walking logs.
+   */
+  continuedFrom?: string
 }
 
 export interface UserPromptEvent {

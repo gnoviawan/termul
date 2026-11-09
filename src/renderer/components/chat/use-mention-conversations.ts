@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
+import { foldSessionChains } from '@/lib/session-chain'
 import { conversationTitleText } from '@/lib/skill-tokens'
 import { useAcpStore } from '@/stores/acp-store'
 import type { ConversationMatch } from './mention-menu-model'
@@ -20,7 +21,9 @@ export function projectConversations({
   runningIds
 }: ProjectConversationsInput): ConversationMatch[] {
   if (!projectId) return []
-  return sessionIndex
+  // A switched conversation is mentionable once — the folded terminal row
+  // opens the merged transcript (CAP-8 / spec-in-chat-agent-switch).
+  return foldSessionChains(sessionIndex)
     .filter((e) => e.projectId === projectId && e.discovered !== true && e.id !== excludeSessionId)
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map((e) => ({

@@ -282,7 +282,11 @@ export function persistSession(
     // entry's list forward verbatim so a normal persist never drops (or
     // duplicates) the cache. Absent on unswitched chats — `agentConfigId`
     // above stays the session's own historical attribution.
-    agents: existingEntry?.agents
+    agents: existingEntry?.agents,
+    // Switch-chain edge (CAP-8): like `agents`, the switch orchestration
+    // stamps it once; every other persist carries it forward so a normal
+    // projection never drops the fold's lookup.
+    continuedFrom: existingEntry?.continuedFrom
   }
   const nextIndex = [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
   setIndex(nextIndex)

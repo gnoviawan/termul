@@ -32,6 +32,7 @@ fn metadata() -> SessionMetadata {
         log_epoch: None,
         head_ahead_of_durable: false,
         sweep_checkpoint: None,
+        continued_from: None,
     }
 }
 

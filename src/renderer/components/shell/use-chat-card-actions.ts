@@ -23,7 +23,7 @@ function warnFailure(action: 'open' | 'delete', error: unknown): void {
 export interface ChatCardActions {
   onOpen: (entry: ProjectChatEntry) => void
   onOpenInSplit: (entry: ProjectChatEntry) => void
-  onDelete: (id: string) => void
+  onDelete: (entry: ProjectChatEntry) => void
   onOpenTerminal: (entry: ProjectChatEntry) => Promise<void>
   onOpenInFileExplorer: (cwd: string) => Promise<void>
   onCopyPath: (cwd: string) => Promise<void>
@@ -61,12 +61,17 @@ export function useChatCardActions(projectId: string): ChatCardActions {
     openAgentChatPlaced(entry.id, LOG_SOURCE, { paneId: activePaneId, zone: 'right' })
   }, [])
 
+  // A folded chain row deletes as one conversation: `chainIds` names every
+  // member session so an absorbed pre-switch source cannot resurface as a
+  // standalone row on the next index refresh.
   const onDelete = useCallback(
-    (id: string) => {
-      void deleteHistorySession(id).catch((error: unknown) => {
-        warnFailure('delete', error)
-        toast.error('Could not delete that chat. Try again.')
-      })
+    (entry: ProjectChatEntry) => {
+      for (const memberId of entry.chainIds ?? [entry.id]) {
+        void deleteHistorySession(memberId).catch((error: unknown) => {
+          warnFailure('delete', error)
+          toast.error('Could not delete that chat. Try again.')
+        })
+      }
     },
     [deleteHistorySession]
   )

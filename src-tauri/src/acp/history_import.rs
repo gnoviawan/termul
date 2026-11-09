@@ -152,6 +152,10 @@ async fn import_session(
         .and_then(Value::as_str)
         .unwrap_or("closed")
         .to_string();
+    // A renderer-authored payload may already carry the switch-chain edge
+    // (the `continuedFrom` index field); keep it through the migration so a
+    // pre-import chain still folds into one row.
+    let continued_from = metadata.get("continuedFrom").and_then(Value::as_str);
 
     let registration = SessionRegistration {
         session_id: session_id.to_string(),
@@ -165,6 +169,17 @@ async fn import_session(
         .register_imported_session(registration, created_at, title)
         .await
         .map_err(|error| error.to_string())?;
+    if let Some(source) = continued_from {
+        if let Err(error) = persistence
+            .note_continued_from(session_id, source)
+            .await
+        {
+            log::warn!(
+                "[acp-history] legacy import could not stamp continued_from on session_id={}: {error}",
+                crate::logging::redact_session_id(session_id)
+            );
+        }
+    }
 
     // Imported sessions are archives: the live agent (if any died with the old
     // renderer) is not attached. `Error` survives; every other historical

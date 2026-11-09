@@ -5,6 +5,7 @@
  */
 import type { ProjectChatEntry } from '@/components/sidebar/project-chat-row'
 import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
+import { chainIds, foldSessionChains } from '@/lib/session-chain'
 import { pickedWorkingCopy, workingCopyOf } from '@/lib/working-copy'
 import type { Project } from '@/types/project'
 
@@ -63,28 +64,38 @@ export function buildChatCards({
   const picked = pickedWorkingCopy(project, pick)
   const narrowKey = picked?.state === 'resolved' && picked.kind === 'worktree' ? picked.key : null
 
-  return sessionIndex
+  // CAP-8 (spec-in-chat-agent-switch): scope first, then fold every
+  // `continuedFrom` chain to its terminal session — a handed-off chat is one
+  // row, opened/reloaded on the live session, deleted as a whole via
+  // `chainIds`. A chain member outside the picked scope stays its own row.
+  const scoped = sessionIndex
     .filter((e) => e.projectId === project.id && e.discovered !== true)
     .filter((e) => narrowKey === null || workingCopyOf(e.cwd, project)?.key === narrowKey)
+
+  return foldSessionChains(scoped)
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    .map((e) => ({
-      entry: {
-        id: e.id,
-        title: e.title,
-        messageCount: e.messageCount,
-        status: e.status,
-        discovered: false,
-        agentId: e.agentId,
-        agentConfigId: e.agentConfigId,
-        agents: e.agents,
-        lastActivityAt: e.lastActivityAt,
-        cwd: e.cwd,
-        canOpen: true
-      },
-      agentName: e.agentConfigId ? (agentNames.get(e.agentConfigId) ?? null) : null,
-      indexModel: e.modelName || e.modelId || null,
-      branch: branchLineOf(e, project)
-    }))
+    .map((e) => {
+      const members = chainIds(scoped, e.id)
+      return {
+        entry: {
+          id: e.id,
+          title: e.title,
+          messageCount: e.messageCount,
+          status: e.status,
+          discovered: false,
+          agentId: e.agentId,
+          agentConfigId: e.agentConfigId,
+          agents: e.agents,
+          chainIds: members.length > 1 ? members : undefined,
+          lastActivityAt: e.lastActivityAt,
+          cwd: e.cwd,
+          canOpen: true
+        },
+        agentName: e.agentConfigId ? (agentNames.get(e.agentConfigId) ?? null) : null,
+        indexModel: e.modelName || e.modelId || null,
+        branch: branchLineOf(e, project)
+      }
+    })
 }
 
 /**
