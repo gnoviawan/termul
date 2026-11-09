@@ -591,6 +591,17 @@ describe('ShellRail', () => {
         act(() => useShellLayoutStore.setState({ sidePanelVisible: true }))
         expect(track()).not.toBeInTheDocument()
       })
+
+      it('does not hold after a tab click while the SSH workspace is open', () => {
+        // The SSH workspace replaces the Side panel, so the click reveals nothing.
+        act(() => useSSHStore.setState({ workspaceOpen: true }))
+        fireEvent.pointerEnter(rail(), { pointerId: 1 })
+        clickTab('Explorer')
+        openSidePanel()
+        expect(track()).toBeInTheDocument()
+        act(() => useSSHStore.setState({ workspaceOpen: false }))
+        expect(track()).not.toBeInTheDocument()
+      })
     })
 
     it('puts the mark / toggle swap below the empty top band under the macOS traffic lights', () => {

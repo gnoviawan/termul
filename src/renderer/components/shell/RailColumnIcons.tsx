@@ -59,7 +59,8 @@ export function RailColumnIcons({
     if (!projectId) return
     if (!sshOpen) useShellLayoutStore.getState().setLastColumnTab(projectId, tab)
     if (!panelVisible) {
-      onOpenPanel?.(event)
+      // The SSH workspace replaces the Side panel, so the click reveals nothing to hold for.
+      if (!sshOpen) onOpenPanel?.(event)
       void updatePanelVisibility('fileExplorerVisible', true)
         .then(() => {
           if (!sshOpen) focusPanelTab(tab)
