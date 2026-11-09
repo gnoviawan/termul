@@ -5,7 +5,7 @@
  */
 import type { ProjectChatEntry } from '@/components/sidebar/project-chat-row'
 import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
-import { chainIds, foldSessionChains } from '@/lib/session-chain'
+import { foldEntries, membersOf, sessionChainIndex } from '@/lib/session-chain'
 import { pickedWorkingCopy, workingCopyOf } from '@/lib/working-copy'
 import type { Project } from '@/types/project'
 
@@ -67,15 +67,22 @@ export function buildChatCards({
   // CAP-8 (spec-in-chat-agent-switch): scope first, then fold every
   // `continuedFrom` chain to its terminal session — a handed-off chat is one
   // row, opened/reloaded on the live session, deleted as a whole via
-  // `chainIds`. A chain member outside the picked scope stays its own row.
-  const scoped = sessionIndex
-    .filter((e) => e.projectId === project.id && e.discovered !== true)
-    .filter((e) => narrowKey === null || workingCopyOf(e.cwd, project)?.key === narrowKey)
+  // `chainIds`. Display membership derives from the picked scope (a chain
+  // member outside it stays its own row), but DELETE membership resolves
+  // against the whole project index so a folded card removes members beyond
+  // the pick too — otherwise the out-of-scope member resurfaces standalone.
+  const projectChats = sessionIndex.filter(
+    (e) => e.projectId === project.id && e.discovered !== true
+  )
+  const scoped = projectChats.filter(
+    (e) => narrowKey === null || workingCopyOf(e.cwd, project)?.key === narrowKey
+  )
+  const deleteIndex = sessionChainIndex(projectChats)
 
-  return foldSessionChains(scoped)
+  return foldEntries(sessionChainIndex(scoped))
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map((e) => {
-      const members = chainIds(scoped, e.id)
+      const members = membersOf(deleteIndex, e.id)
       return {
         entry: {
           id: e.id,

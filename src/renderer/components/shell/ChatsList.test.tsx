@@ -419,6 +419,21 @@ describe('ChatsList interactions', () => {
     expect(mocks.deleteHistorySession).toHaveBeenCalledWith('a')
   })
 
+  it('deletes every member of a folded switch chain after confirmation', async () => {
+    setIndex([
+      entry('src', { lastActivityAt: 10 }),
+      entry('dst', { continuedFrom: 'src', lastActivityAt: 20 })
+    ])
+    render(<ChatsList project={project} />)
+    // The chain folds to one card on the terminal session.
+    fireEvent.contextMenu(screen.getByTitle('Chat dst'))
+    fireEvent.click(await screen.findByText('Delete Chat'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(mocks.deleteHistorySession).toHaveBeenCalledTimes(2))
+    expect(mocks.deleteHistorySession).toHaveBeenCalledWith('src')
+    expect(mocks.deleteHistorySession).toHaveBeenCalledWith('dst')
+  })
+
   it('toasts and logs once when deleting fails', async () => {
     mocks.deleteHistorySession.mockRejectedValue(new Error('nope'))
     render(<ChatsList project={project} />)

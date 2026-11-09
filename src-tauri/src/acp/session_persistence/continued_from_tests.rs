@@ -24,7 +24,7 @@ fn registration(session_id: &str) -> SessionRegistration {
         stable_agent_namespace: Some("config:test".to_string()),
         runtime_agent_id: Some("agent-1".to_string()),
         project_id: Some("project-1".to_string()),
-        cwd: PathBuf::from("/tmp"),
+        cwd: std::env::temp_dir(),
         ..Default::default()
     }
 }

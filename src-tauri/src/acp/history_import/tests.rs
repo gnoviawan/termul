@@ -255,3 +255,33 @@ async fn import_keeps_user_deletions_final() {
 
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// A renderer-authored payload may already carry the switch-chain edge
+/// (`metadata.continuedFrom`); the import must keep it so a pre-import chain
+/// still folds into one history row.
+#[tokio::test]
+async fn import_carries_continued_from_edge() {
+    let (root, persistence, chat_history) = setup("continued-from").await;
+    let cwd = root.join("cwd").to_string_lossy().into_owned();
+    chat_history
+        .save(
+            "legacy-src",
+            legacy_payload("legacy-src", &cwd, "closed", turn_messages()),
+        )
+        .unwrap();
+    let mut target = legacy_payload("legacy-dst", &cwd, "closed", turn_messages());
+    target["metadata"]["continuedFrom"] = json!("legacy-src");
+    chat_history.save("legacy-dst", target).unwrap();
+
+    assert_eq!(import_chat_history(&persistence, &chat_history).await, 2);
+    assert_eq!(
+        persistence
+            .metadata("legacy-dst")
+            .unwrap()
+            .continued_from
+            .as_deref(),
+        Some("legacy-src")
+    );
+    assert_eq!(persistence.metadata("legacy-src").unwrap().continued_from, None);
+    let _ = std::fs::remove_dir_all(root);
+}

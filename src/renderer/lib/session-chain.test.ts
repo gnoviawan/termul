@@ -95,10 +95,43 @@ describe('foldSessionChains', () => {
 
   it('does not hide entries or loop on a continuedFrom cycle', () => {
     const folded = foldSessionChains([
-      entry('a', { continuedFrom: 'b' }),
-      entry('b', { continuedFrom: 'a' })
+      entry('a', { continuedFrom: 'b', messageCount: 3 }),
+      entry('b', { continuedFrom: 'a', messageCount: 5 })
     ])
     expect(folded.map((e) => e.id).sort()).toEqual(['a', 'b'])
+    // A cycle has no terminal: each member keeps its own row AND its own
+    // data — merging either into the other would sum their transcripts.
+    const a = folded.find((e) => e.id === 'a')
+    const b = folded.find((e) => e.id === 'b')
+    expect(a?.messageCount).toBe(3)
+    expect(b?.messageCount).toBe(5)
+    expect(a?.chainIds).toBeUndefined()
+    expect(b?.chainIds).toBeUndefined()
+  })
+
+  it('keeps a session whose continuer race was lost to a cycle as its own row', () => {
+    // 'x' also names 'b' as its source, but 'a' is the newer continuer, so
+    // the a↔b loop stays a cycle and 'x' keeps its own standalone row.
+    const folded = foldSessionChains([
+      entry('x', { continuedFrom: 'b', createdAt: 50, messageCount: 7 }),
+      entry('a', { continuedFrom: 'b', createdAt: 200, messageCount: 3 }),
+      entry('b', { continuedFrom: 'a', createdAt: 300, messageCount: 5 })
+    ])
+    expect(folded.map((e) => e.id).sort()).toEqual(['a', 'b', 'x'])
+    const x = folded.find((e) => e.id === 'x')
+    expect(x?.messageCount).toBe(7)
+  })
+
+  it('folds the winning branch of a fork out of a would-be cycle', () => {
+    // Same shape but 'x' is the NEWEST continuer of 'b': the a↔b loop breaks
+    // into a normal a→b→x chain with 'x' as terminal.
+    const folded = foldSessionChains([
+      entry('x', { continuedFrom: 'b', createdAt: 400 }),
+      entry('a', { continuedFrom: 'b', createdAt: 200 }),
+      entry('b', { continuedFrom: 'a', createdAt: 300 })
+    ])
+    expect(folded.map((e) => e.id)).toEqual(['x'])
+    expect(folded[0].chainIds).toEqual(['a', 'b', 'x'])
   })
 
   it('does not loop on a self-referencing entry', () => {
@@ -114,10 +147,14 @@ describe('foldSessionChains', () => {
     ]
     const folded = foldSessionChains(entries)
     expect(folded.map((e) => e.id).sort()).toEqual(['new-fork', 'old-fork'])
-    // The newest continuer absorbs the source's row; the loser keeps its own
-    // row (a fork still continues the same conversation).
+    // The newest continuer wins the chain and absorbs the source's row.
+    expect(liveSessionIdOf(entries, 'src')).toBe('new-fork')
+    // Membership follows the kept edge only: the winner's chain includes the
+    // shared source, while the losing fork keeps just its own branch — deleting
+    // it must not remove the source the winner still needs.
     expect(chainIds(entries, 'new-fork')).toEqual(['src', 'new-fork'])
-    expect(chainIds(entries, 'old-fork')).toEqual(['src', 'old-fork'])
+    expect(chainIds(entries, 'old-fork')).toEqual(['old-fork'])
+    expect(chainIds(entries, 'src')).toEqual(['src', 'new-fork'])
   })
 })
 
@@ -140,9 +177,10 @@ describe('liveSessionIdOf', () => {
     expect(liveSessionIdOf(entries, 'absent')).toBe('absent')
   })
 
-  it('stops without looping on a cycle', () => {
+  it('stops without looping on a cycle and keeps the queried member', () => {
     const cyc = [entry('x', { continuedFrom: 'y' }), entry('y', { continuedFrom: 'x' })]
-    expect(['x', 'y']).toContain(liveSessionIdOf(cyc, 'x'))
+    expect(liveSessionIdOf(cyc, 'x')).toBe('x')
+    expect(liveSessionIdOf(cyc, 'y')).toBe('y')
   })
 })
 

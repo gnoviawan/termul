@@ -600,8 +600,10 @@ export const createSwitchSlice: StateCreator<AcpState, [], [], SwitchSliceState>
         }
 
         // 7. Ordered-agent cache on the SOURCE entry (append, consecutive-
-        //    dedup) + the durable chain edge on the TARGET entry — the
-        //    fold's O(1) lookup while the host's own index stamp lands.
+        //    dedup) + the projection chain edge on the TARGET entry — the
+        //    fold's O(1) lookup until the host's own index stamp lands (the
+        //    durable edge is the host's; when the marker write failed this
+        //    local edge still keeps the chain folded for this session).
         set((s) => ({
           sessionIndex: stampSwitchContinuation(
             { sessionIndex: appendOrderedAgents(s, sessionId, oldConfigId, toConfigId) },

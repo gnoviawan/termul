@@ -12,7 +12,7 @@ import {
 } from '@/lib/acp-history-persistence'
 import { activeWorktreeOf } from '@/lib/active-worktree'
 import { logFrontendError } from '@/lib/log-api'
-import { chainIds, foldSessionChains } from '@/lib/session-chain'
+import { foldEntries, membersOf, sessionChainIndex, UNTITLED_PATTERN } from '@/lib/session-chain'
 import { chatsMatchAnnouncement } from '@/lib/shell-announcements'
 import { useAcpStore } from '@/stores/acp-store'
 import { useActiveProject } from '@/stores/project-store'
@@ -144,31 +144,29 @@ export function useChatHistoryEntries({
   // built. The surviving row keeps the terminal id (open/reload land on the
   // live session) and adopts the merged title/count/activity/agent sequence;
   // `chainIds` keeps the absorbed ids so delete and the Active check still
-  // reach them. Membership derives from the SCOPED index: a chain whose
-  // members cross a scope boundary degrades to per-scope rows rather than
-  // hiding a chat.
-  const foldedScopedIndex = useMemo(() => foldSessionChains(scopedIndex), [scopedIndex])
+  // reach them. Display membership derives from the SCOPED index: a chain
+  // whose members cross a scope boundary degrades to per-scope rows rather
+  // than hiding a chat.
+  const scopedChain = useMemo(() => sessionChainIndex(scopedIndex), [scopedIndex])
+  const foldedScopedIndex = useMemo(() => foldEntries(scopedChain), [scopedChain])
 
   const mergedEntries = useMemo(() => {
     const entries: ChatHistorySidebarEntry[] = foldedScopedIndex
       .filter((e) => e.discovered !== true)
-      .map((e) => {
-        const members = chainIds(scopedIndex, e.id)
-        return {
-          id: e.id,
-          title: e.title,
-          messageCount: e.messageCount,
-          status: e.status,
-          discovered: false,
-          agentId: e.agentId,
-          agentConfigId: e.agentConfigId,
-          agents: e.agents,
-          chainIds: members.length > 1 ? members : undefined,
-          lastActivityAt: e.lastActivityAt,
-          createdAt: e.createdAt,
-          canOpen: true
-        }
-      })
+      .map((e) => ({
+        id: e.id,
+        title: e.title,
+        messageCount: e.messageCount,
+        status: e.status,
+        discovered: false,
+        agentId: e.agentId,
+        agentConfigId: e.agentConfigId,
+        agents: e.agents,
+        chainIds: e.chainIds,
+        lastActivityAt: e.lastActivityAt,
+        createdAt: e.createdAt,
+        canOpen: true
+      }))
 
     if (!extraEntries || extraEntries.length === 0) return entries
     // An extra entry the scoped history already lists appears once, as
@@ -184,11 +182,19 @@ export function useChatHistoryEntries({
         (e.chainIds !== undefined
           ? e.chainIds.map((memberId) => extraById.get(memberId)).find((x) => x !== undefined)
           : undefined)
-      return extra && extra.title !== e.title ? { ...e, title: extra.title } : e
+      // An absorbed member's live title fills in only when the folded row has
+      // no real one — an open pre-switch tab's placeholder must not override
+      // the fold's newest real title.
+      return extra !== undefined &&
+        extra.title !== e.title &&
+        UNTITLED_PATTERN.test(e.title.trim()) &&
+        !UNTITLED_PATTERN.test(extra.title.trim())
+        ? { ...e, title: extra.title }
+        : e
     })
     const extras = extraEntries.filter((e) => !listed.has(e.id))
     return extras.length > 0 ? [...extras, ...merged] : merged
-  }, [foldedScopedIndex, scopedIndex, extraEntries])
+  }, [foldedScopedIndex, extraEntries])
 
   // Lazy rendering: keep all results in memory but only render a growing window
   // (a project can accumulate hundreds of sessions; rendering all rows is the cost).
@@ -310,12 +316,13 @@ export function useChatHistoryEntries({
     [addAgentChatTab, openHistorySession, openDiscoveredSession, activeProjectId, onSessionOpened]
   )
 
-  // Deleting a folded row deletes the WHOLE conversation: every chain
-  // member's session is removed, else an absorbed source would resurface as
-  // a standalone row on the next index refresh.
+  // Deleting a folded row deletes the WHOLE conversation: membership resolves
+  // against the FULL index (not the scoped one) so a chain member outside the
+  // current worktree scope is removed too — it would otherwise resurface as a
+  // standalone row in another scope's view.
   const deleteEntry = useCallback(
     (id: string) => {
-      for (const memberId of chainIds(scopedIndex, id)) {
+      for (const memberId of membersOf(sessionChainIndex(sessionIndex), id)) {
         void deleteHistorySession(memberId).catch(() => {
           toast.error('Could not delete that chat. Try again.')
           void logFrontendError({
@@ -326,7 +333,7 @@ export function useChatHistoryEntries({
         })
       }
     },
-    [deleteHistorySession, logSource, scopedIndex]
+    [deleteHistorySession, logSource, sessionIndex]
   )
 
   return {

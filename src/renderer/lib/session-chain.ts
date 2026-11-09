@@ -6,91 +6,153 @@
  * lets the history list collapse a chain into ONE row — the terminal (new)
  * session — instead of a row per session the conversation passed through.
  *
- * Pure functions over `SessionIndexEntry[]`: no stores, no React.
+ * Pure functions over `SessionIndexEntry[]`: no stores, no React. Build a
+ * `SessionChainIndex` once per list derivation with `sessionChainIndex` —
+ * every lookup (fold, membership, live id) then runs against the shared
+ * deduped continuer map instead of rebuilding it per row.
  */
 
 import type { SessionIndexEntry } from './acp-history-persistence'
 
 /** `Untitled Chat` and `Untitled Chat N` — a folded row prefers a real title. */
-const UNTITLED_PATTERN = /^Untitled Chat( \d+)?$/
+export const UNTITLED_PATTERN = /^Untitled Chat( \d+)?$/
 
-/**
- * Forward continuation map: source session id → the session that continues
- * it. A source has at most one well-formed continuer; on a malformed index
- * naming two, the one created last wins (a switch target is always created
- * after its source), with the id as a deterministic tie-break.
- */
-function continuerMap(entries: readonly SessionIndexEntry[]): Map<string, string> {
+/** A folded row keeps the terminal's fields plus its chain membership. */
+export interface FoldedSessionEntry extends SessionIndexEntry {
+  /** Oldest → newest member ids when this row folds a chain (>1 member). */
+  chainIds?: string[]
+}
+
+export interface SessionChainIndex {
+  entries: readonly SessionIndexEntry[]
+  byId: Map<string, SessionIndexEntry>
+  /**
+   * Winning continuer per source id. A source has at most one well-formed
+   * continuer; on a malformed index naming two (a fork), the one created
+   * last wins (a switch target is always created after its source), with
+   * the id as a deterministic tie-break.
+   */
+  continuerOf: Map<string, SessionIndexEntry>
+  /**
+   * Members of any cycle in the deduped continuer graph (A ↔ B). A cycle
+   * has no terminal: its members are never hidden and never merge into a
+   * neighbor — each keeps its own row and its own data.
+   */
+  cycleMembers: Set<string>
+}
+
+/** Build the shared lookup maps over `entries` once (O(N)). */
+export function sessionChainIndex(entries: readonly SessionIndexEntry[]): SessionChainIndex {
   const byId = new Map(entries.map((entry) => [entry.id, entry] as const))
-  const continuerOf = new Map<string, string>()
+  const continuerOf = new Map<string, SessionIndexEntry>()
   for (const entry of entries) {
     const source = entry.continuedFrom
-    if (!source || source === entry.id || !byId.has(source)) continue
-    const current = continuerOf.get(source)
-    if (current === undefined) {
-      continuerOf.set(source, entry.id)
-      continue
-    }
-    const existing = byId.get(current)
+    if (!source || source === entry.id) continue
+    if (!byId.has(source)) continue
+    const existing = continuerOf.get(source)
     if (
-      existing !== undefined &&
-      (entry.createdAt > existing.createdAt ||
-        (entry.createdAt === existing.createdAt && entry.id > existing.id))
+      existing === undefined ||
+      entry.createdAt > existing.createdAt ||
+      (entry.createdAt === existing.createdAt && entry.id > existing.id)
     ) {
-      continuerOf.set(source, entry.id)
+      continuerOf.set(source, entry)
     }
   }
-  return continuerOf
+
+  // Cycle detection on the deduped continuer graph (classic visiting/done
+  // walk): only nodes still on the current path can close a loop.
+  const cycleMembers = new Set<string>()
+  const state = new Map<string, 1 | 2>() // 1 = on path, 2 = done
+  for (const entry of entries) {
+    if (state.has(entry.id)) continue
+    const path: string[] = []
+    let current: string | undefined = entry.id
+    while (current !== undefined && !state.has(current)) {
+      state.set(current, 1)
+      path.push(current)
+      current = continuerOf.get(current)?.id
+    }
+    if (current !== undefined && state.get(current) === 1) {
+      for (const node of path.slice(path.indexOf(current))) cycleMembers.add(node)
+    }
+    for (const node of path) state.set(node, 2)
+  }
+  return { entries, byId, continuerOf, cycleMembers }
+}
+
+/**
+ * Ancestor ids of `id`, oldest → newest — only over edges the continuer map
+ * kept. A `continuedFrom` source whose deduped winner is someone else (a
+ * fork's losing branch) is NOT this chain's ancestor: deleting the loser
+ * must not remove the shared source the winner still needs. Cycle members
+ * stop the walk so each keeps only its own data.
+ */
+function ancestorsOf(ix: SessionChainIndex, id: string): string[] {
+  const ancestors: string[] = []
+  const seen = new Set([id])
+  let current = id
+  for (;;) {
+    const source = ix.byId.get(current)?.continuedFrom
+    if (
+      source === undefined ||
+      source === current ||
+      seen.has(source) ||
+      !ix.byId.has(source) ||
+      ix.cycleMembers.has(source) ||
+      ix.continuerOf.get(source)?.id !== current
+    ) {
+      break
+    }
+    ancestors.unshift(source)
+    seen.add(source)
+    current = source
+  }
+  return ancestors
+}
+
+/** Descendant ids of `id`, newest-first-from-id → terminal, over kept edges only. */
+function descendantsOf(ix: SessionChainIndex, id: string): string[] {
+  const descendants: string[] = []
+  const seen = new Set([id])
+  let current = id
+  for (;;) {
+    const next = ix.continuerOf.get(current)
+    if (next === undefined || seen.has(next.id) || ix.cycleMembers.has(next.id)) break
+    descendants.push(next.id)
+    seen.add(next.id)
+    current = next.id
+  }
+  return descendants
+}
+
+/**
+ * Every member id of `id`'s chain, oldest → newest. `[id]` for a standalone
+ * or unknown session. Both directions are walked (backward via `continuedFrom`
+ * edges the continuer map kept, forward via that map) so delete can drop the
+ * whole conversation whichever member the caller names — while a fork's
+ * losing branch never claims the shared ancestors the winner still needs.
+ */
+export function membersOf(ix: SessionChainIndex, id: string): string[] {
+  if (!ix.byId.has(id)) return [id]
+  return [...ancestorsOf(ix, id), id, ...descendantsOf(ix, id)]
 }
 
 /**
  * The terminal (newest live) session id of `id`'s chain — where an open of
  * any member should land. `id` itself when it is not a chain member or when
- * its chain cycles back (a pure cycle has no terminal; refusing to resolve
- * keeps every member visible rather than hiding the whole conversation).
+ * its chain reaches a cycle member (a pure cycle has no terminal; refusing
+ * to resolve keeps every member visible rather than hiding the whole
+ * conversation).
  */
-export function liveSessionIdOf(entries: readonly SessionIndexEntry[], id: string): string {
-  const continuerOf = continuerMap(entries)
-  const seen = new Set<string>()
+export function liveIdOf(ix: SessionChainIndex, id: string): string {
+  const seen = new Set([id])
   let current = id
-  while (continuerOf.has(current) && !seen.has(current)) {
-    seen.add(current)
-    current = continuerOf.get(current) as string
+  for (;;) {
+    const next = ix.continuerOf.get(current)
+    if (next === undefined || seen.has(next.id) || ix.cycleMembers.has(next.id)) return current
+    seen.add(next.id)
+    current = next.id
   }
-  return current
-}
-
-/**
- * Every member id of `id`'s chain, oldest → newest. `[id]` for a standalone
- * session. Both directions are walked (backward via `continuedFrom`,
- * forward via the continuer map) so delete can drop the whole conversation
- * whichever member the caller names.
- */
-export function chainIds(entries: readonly SessionIndexEntry[], id: string): string[] {
-  const byId = new Map(entries.map((entry) => [entry.id, entry] as const))
-  const continuerOf = continuerMap(entries)
-  const seen = new Set<string>([id])
-  // Backward: ancestors oldest → newest. Forward: descendants from id — the
-  // row's own membership, so a fork's row never claims its sibling branch.
-  const ancestors: string[] = []
-  let current = id
-  while (true) {
-    const source = byId.get(current)?.continuedFrom
-    if (source === undefined || source === current || seen.has(source) || !byId.has(source)) break
-    ancestors.unshift(source)
-    seen.add(source)
-    current = source
-  }
-  const descendants: string[] = []
-  current = id
-  while (continuerOf.has(current)) {
-    const next = continuerOf.get(current) as string
-    if (seen.has(next)) break
-    seen.add(next)
-    descendants.push(next)
-    current = next
-  }
-  return [...ancestors, id, ...descendants]
 }
 
 /** Ordered, consecutive-deduped config-id sequence across the chain. */
@@ -106,54 +168,33 @@ function mergedAgentSequence(chain: readonly SessionIndexEntry[]): string[] | un
 }
 
 /**
- * Collapse every switch chain in `entries` to its terminal member. The
+ * Collapse every switch chain in the index to its terminal member. The
  * surviving row keeps the terminal's identity (opens/reconnects land on
  * the live session) while adopting the chain's merged view: the first real
  * title walking newest → oldest, the summed message count, the oldest
  * creation time, the newest activity, and the ordered agent sequence.
  * Standalone entries pass through untouched; a `continuedFrom` naming an
  * absent or deleted source degrades to a standalone row, never a crash.
+ * Multi-member rows carry `chainIds` so delete/active-state/extras-merge
+ * reach every absorbed member without a second walk.
  */
-export function foldSessionChains(entries: readonly SessionIndexEntry[]): SessionIndexEntry[] {
-  const byId = new Map(entries.map((entry) => [entry.id, entry] as const))
-  const continuerOf = continuerMap(entries)
-  if (continuerOf.size === 0) return [...entries]
-  // Hidden = every source whose continuer walk reaches a DISTINCT terminal.
-  // A pure cycle (A ↔ B) never reaches one — its members stay listed rather
-  // than vanishing.
+export function foldEntries(ix: SessionChainIndex): FoldedSessionEntry[] {
+  if (ix.continuerOf.size === 0) return [...ix.entries]
+  // Hidden = every NON-cycle entry whose kept continuer is not itself a
+  // cycle member. A cycle member's row can absorb nobody, and a chain that
+  // dead-ends into a cycle keeps its own row too.
   const hidden = new Set<string>()
-  for (const entry of entries) {
-    const seen = new Set<string>([entry.id])
-    let terminal = entry.id
-    while (continuerOf.has(terminal)) {
-      const next = continuerOf.get(terminal) as string
-      if (seen.has(next)) {
-        terminal = entry.id // ran into a cycle: no terminal, hide nothing
-        break
-      }
-      seen.add(next)
-      terminal = next
-    }
-    if (terminal !== entry.id) hidden.add(entry.id)
+  for (const entry of ix.entries) {
+    if (ix.cycleMembers.has(entry.id)) continue
+    const continuer = ix.continuerOf.get(entry.id)
+    if (continuer !== undefined && !ix.cycleMembers.has(continuer.id)) hidden.add(entry.id)
   }
-  return entries
+  return ix.entries
     .filter((entry) => !hidden.has(entry.id))
     .map((entry) => {
-      // Backward walk from this (possibly terminal) entry to its chain root.
-      const chain: SessionIndexEntry[] = [entry]
-      const seen = new Set([entry.id])
-      let current = entry
-      while (
-        current.continuedFrom !== undefined &&
-        current.continuedFrom !== current.id &&
-        !seen.has(current.continuedFrom) &&
-        byId.has(current.continuedFrom)
-      ) {
-        const source = byId.get(current.continuedFrom) as SessionIndexEntry
-        chain.unshift(source)
-        seen.add(source.id)
-        current = source
-      }
+      const chain: SessionIndexEntry[] = ancestorsOf(ix, entry.id)
+        .map((memberId) => ix.byId.get(memberId) as SessionIndexEntry)
+        .concat(entry)
       if (chain.length === 1) return entry
       const title =
         [...chain].reverse().find((member) => !UNTITLED_PATTERN.test(member.title.trim()))?.title ??
@@ -165,7 +206,23 @@ export function foldSessionChains(entries: readonly SessionIndexEntry[]): Sessio
         createdAt: Math.min(...chain.map((member) => member.createdAt)),
         lastActivityAt: Math.max(...chain.map((member) => member.lastActivityAt)),
         lastSeq: Math.max(...chain.map((member) => member.lastSeq ?? 0)),
-        agents: mergedAgentSequence(chain) ?? entry.agents
+        agents: mergedAgentSequence(chain) ?? entry.agents,
+        chainIds: membersOf(ix, entry.id)
       }
     })
+}
+
+// Single-call conveniences: build the index for one lookup (a user action
+// like delete or project-switch restore). List derivations should build the
+// `SessionChainIndex` once and reuse it across every row instead.
+export function chainIds(entries: readonly SessionIndexEntry[], id: string): string[] {
+  return membersOf(sessionChainIndex(entries), id)
+}
+
+export function liveSessionIdOf(entries: readonly SessionIndexEntry[], id: string): string {
+  return liveIdOf(sessionChainIndex(entries), id)
+}
+
+export function foldSessionChains(entries: readonly SessionIndexEntry[]): FoldedSessionEntry[] {
+  return foldEntries(sessionChainIndex(entries))
 }

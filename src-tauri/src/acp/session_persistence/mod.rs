@@ -1129,25 +1129,52 @@ impl SessionPersistence {
         }
         // Route the metadata write through the session writer when one is
         // installed: it is the one thread that writes this session's
-        // metadata, so no stale snapshot can overtake the stamp. Without a
-        // (working) writer the inline write runs under the catalog lock so
-        // a concurrent `delete_session` cannot resurrect the directory.
-        let inline_error = match self.runtime(session_id) {
-            Ok(runtime) => match self.send_command(
-                &runtime,
-                session_id,
-                WriterCommand::PersistMetadata,
-            ) {
-                Ok(()) => None,
-                Err(_) => self.persist_mark_inline(session_id, &entry),
-            },
+        // metadata, so no stale snapshot can overtake the stamp. The Flush
+        // ack means `Ok(())` here is durable — `record_agent_switch` treats a
+        // recorded edge as settled, and the one-time migration never rescans
+        // after its marker exists. Without a (working) writer the inline
+        // write runs under the catalog lock so a concurrent `delete_session`
+        // cannot resurrect the directory.
+        let write_error = match self.runtime(session_id) {
+            Ok(runtime) => {
+                if self
+                    .send_command(&runtime, session_id, WriterCommand::PersistMetadata)
+                    .is_err()
+                {
+                    self.persist_mark_inline(session_id, &entry)
+                } else {
+                    let (tx, rx) = oneshot::channel();
+                    if self
+                        .send_command(&runtime, session_id, WriterCommand::Flush(tx))
+                        .is_err()
+                    {
+                        self.persist_mark_inline(session_id, &entry)
+                    } else {
+                        match rx.await {
+                            Ok(Ok(())) => None,
+                            // Flush failed or the writer stopped: fall back to
+                            // the inline write (the writer also marks itself
+                            // unsaved and retries on its next command, so both
+                            // paths converge on the same catalog snapshot).
+                            Ok(Err(_)) | Err(_) => {
+                                self.persist_mark_inline(session_id, &entry)
+                            }
+                        }
+                    }
+                }
+            }
             Err(_) => self.persist_mark_inline(session_id, &entry),
         };
-        if let Some(error) = inline_error {
-            return Err(error);
+        let result = match write_error {
+            Some(error) => Err(error),
+            None => self.persist_index().await,
+        };
+        if result.is_err() {
+            // Roll the in-memory edge back so a retry re-attempts the durable
+            // write instead of no-opping on the set field.
+            entry.lock().continued_from = None;
         }
-        self.persist_index().await?;
-        Ok(())
+        result
     }
 
     pub fn last_seq(&self, session_id: &str) -> Result<u64> {

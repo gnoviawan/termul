@@ -126,11 +126,13 @@ describe('buildChatCards', () => {
       pick: '/repo/.termul/worktrees/feature',
       agentNames
     })
-    // Workspace scope shows only the worktree member — the fold ran on the
-    // scoped set, where 'dst' has no in-scope source to fold into.
+    // Picked worktree scope shows only the worktree member — the display fold
+    // ran on the scoped set, where 'dst' has no in-scope source to fold into.
     expect(cards.map((c) => c.entry.id)).toEqual(['dst'])
     expect(cards[0].entry.title).toBe('Worktree chat')
-    expect(cards[0].entry.chainIds).toBeUndefined()
+    // Delete membership still spans the project: removing the card removes
+    // the out-of-scope source too, so it cannot resurface in Workspace view.
+    expect(cards[0].entry.chainIds).toEqual(['src', 'dst'])
   })
 
   it('resolves the agent name and the index model', () => {

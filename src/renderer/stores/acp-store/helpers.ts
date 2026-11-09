@@ -1107,10 +1107,10 @@ export function mergeSessionIndexEntries(
             // config; the host's durable attribution must survive the spread.
             agentConfigId: entry.agentConfigId ?? hostEntry.agentConfigId,
             // A local projection made before the host stamp landed must not
-            // erase the host's durable chain edge — nor may a stale local
-            // edge hide a newer host correction... the newest stamp is the
-            // winner either way.
-            continuedFrom: entry.continuedFrom ?? hostEntry.continuedFrom,
+            // erase the host's durable chain edge — and once the host has
+            // one it wins, so a stale local edge cannot hide a host
+            // correction. `undefined` still falls through to the local stamp.
+            continuedFrom: hostEntry.continuedFrom ?? entry.continuedFrom,
             turnActive: mergeTurnActive(entry.turnActive, hostEntry.turnActive, true),
             // The host stamps `created_at` once at registration; a local
             // projection re-stamped by a reopen must not override it.

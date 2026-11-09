@@ -77,6 +77,7 @@ import {
   refreshHostOwnedIndex,
   resolveSwitchRedirect,
   SWITCH_SPLICE_ID_PREFIX,
+  type SwitchMarkerFacts,
   scanPlanFenceFromMessages,
   spliceSwitchTranscript,
   stampSwitchContinuation,
@@ -504,6 +505,7 @@ function healChainEdges(
  */
 async function respliceLiveSwitchTarget(
   set: TurnEndSetter,
+  get: () => AcpState,
   targetId: SessionId,
   stillCurrent?: () => boolean,
   targetContinuedFrom?: string
@@ -531,10 +533,28 @@ async function respliceLiveSwitchTarget(
     }
     const installed = projectTranscript(sourcePayload, { headAnchored: true })
     const marker = live?.marker ?? installed.switches.find((sw) => sw.newSessionId === successor)
+    // A `continuedFrom` edge without a readable durable marker (legacy log
+    // predating markers, or a marker write that never landed) still splices —
+    // the boundary is fabricated from the index's from/to config ids so the
+    // reopened chain keeps its handoff separator.
+    const facts: SwitchMarkerFacts =
+      marker ??
+      (() => {
+        const index = get().sessionIndex
+        const sourceEntry = index.find((e) => e.id === sourceId)
+        const successorEntry = index.find((e) => e.id === successor)
+        return {
+          fromConfigId: sourceEntry?.agentConfigId ?? '',
+          toConfigId: successorEntry?.agentConfigId ?? '',
+          newSessionId: successor,
+          summaryText: '',
+          timestamp: successorEntry?.createdAt ?? sourcePayload.metadata.lastActivityAt
+        }
+      })()
     hopsNewestFirst.push({
       sourceId,
       payload: sourcePayload,
-      band: marker ? withSwitchMarker(installed, marker) : installed
+      band: withSwitchMarker(installed, facts)
     })
     visited.add(sourceId)
     successor = sourceId
@@ -986,6 +1006,7 @@ async function openHistorySessionInner(
   // re-splice the pre-switch band while the in-memory source link is warm.
   await respliceLiveSwitchTarget(
     set,
+    get,
     id,
     () => !deletedMidOpen() && isCurrentSessionReopen(id, reopenGeneration),
     meta.continuedFrom

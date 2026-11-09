@@ -357,14 +357,23 @@ pub(super) fn scan_fold_tail(
 static AGENT_SWITCH_NEEDLE: LazyLock<memmem::Finder<'static>> =
     LazyLock::new(|| memmem::Finder::new(b"\"type\":\"agent_switch\""));
 
+/// How far back the one-time `continued_from` migration scans a log for an
+/// `agent_switch` marker. The marker lands at (or within a few late-event
+/// lines of) the source log's tail — the source stops receiving turns at the
+/// switch — so the tail window covers realistic chains while bounding the
+/// one-time startup read over large histories. A deeper marker misses the
+/// edge: the chain degrades to pre-fold rows, never a crash.
+const MIGRATION_SWITCH_SCAN_TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
 /// The `newSessionId` of the newest `agent_switch` in `path` — the session
 /// this log's conversation continued in (the CAP-7 reopen resolution). One
 /// backward pass that parses only candidate lines and stops at the newest
 /// probeable marker: a session is the source of at most one switch, so the
 /// first parseable hit from the tail is the edge. `None` when no probeable
-/// marker exists (unswitched chat, or a corrupt marker — a corrupt newest
-/// line never lets an older candidate stamp a stale edge... a second marker
-/// cannot exist anyway, so scanning deeper could only mislead).
+/// marker exists in the tail window (unswitched chat, or every marker
+/// corrupt). An unterminated final line is still probed — a crash could
+/// leave the marker itself as the bare tail; a partial line simply fails to
+/// parse and the scan continues into the window.
 pub(super) fn newest_agent_switch_target(
     path: &Path,
     session_id: &str,
@@ -376,8 +385,9 @@ pub(super) fn newest_agent_switch_target(
     };
     let end = file.metadata()?.len();
     let mut target = None;
-    scan_lines_backward(&mut file, end, 0, |line, terminated| {
-        if !terminated || AGENT_SWITCH_NEEDLE.find(line).is_none() {
+    let floor = end.saturating_sub(MIGRATION_SWITCH_SCAN_TAIL_BYTES);
+    scan_lines_backward(&mut file, end, floor, |line, _terminated| {
+        if AGENT_SWITCH_NEEDLE.find(line).is_none() {
             return ControlFlow::Continue(());
         }
         match probe_record(line, session_id) {
