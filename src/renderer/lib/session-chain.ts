@@ -138,6 +138,19 @@ export function membersOf(ix: SessionChainIndex, id: string): string[] {
 }
 
 /**
+ * Chain membership restricted to `id`'s project. A malformed or legacy
+ * `continuedFrom` edge can name a session in another project; destructive
+ * actions (delete) and cross-boundary reads (mention context) must not
+ * follow it. `id` itself is always included.
+ */
+export function projectScopedMembers(ix: SessionChainIndex, id: string): string[] {
+  const projectId = ix.byId.get(id)?.projectId
+  return membersOf(ix, id).filter(
+    (memberId) => memberId === id || ix.byId.get(memberId)?.projectId === projectId
+  )
+}
+
+/**
  * The terminal (newest live) session id of `id`'s chain — where an open of
  * any member should land. `id` itself when it is not a chain member or when
  * its chain reaches a cycle member (a pure cycle has no terminal; refusing

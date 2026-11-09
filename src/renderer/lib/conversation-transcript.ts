@@ -4,8 +4,9 @@ import { acpHistoryApi } from '@/lib/acp-history-api'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { conversationEnvelope, type TranscriptGap } from '@/lib/conversation-envelope'
 import { logFrontendError } from '@/lib/log-api'
-import { membersOf, sessionChainIndex } from '@/lib/session-chain'
+import { projectScopedMembers, sessionChainIndex } from '@/lib/session-chain'
 import { type ChatMessage, useAcpStore } from '@/stores/acp-store'
+import { SWITCH_SPLICE_ID_PREFIX } from '@/stores/acp-store/helpers'
 
 const TRANSCRIPT_TAIL_LIMIT = 200
 // Total transcript characters one send carries across all of its chat pills.
@@ -14,6 +15,8 @@ const CONVERSATION_CONTEXT_CHARS = 30_000
 interface Transcript {
   messages: ChatMessage[]
   toolCalls: ToolCall[]
+  /** A chain member was unreadable — the returned context is partial. */
+  partial?: boolean
 }
 
 async function readPersistedTranscript(sessionId: string): Promise<Transcript | null> {
@@ -27,33 +30,79 @@ async function readPersistedTranscript(sessionId: string): Promise<Transcript | 
   return payload ? { messages: payload.messages, toolCalls: payload.toolCalls ?? [] } : null
 }
 
+type AcpSnapshot = ReturnType<typeof useAcpStore.getState>
+
+/**
+ * A member's own turns from the live store — the reopen splice namespaces
+ * every band record `switch-splice:<sourceId>:`, so stripping them yields
+ * exactly this session's contribution (no band can be counted twice).
+ */
+function ownTurns(state: AcpSnapshot, sessionId: string): Transcript | null {
+  const loaded = state.messages[sessionId]
+  if (!loaded || state.sessions[sessionId]?.replaying) return null
+  return {
+    messages: loaded.filter((m) => !m.id.startsWith(SWITCH_SPLICE_ID_PREFIX)),
+    toolCalls: (state.toolCalls[sessionId] ?? []).filter(
+      (t) => !t.toolCallId.startsWith(SWITCH_SPLICE_ID_PREFIX)
+    )
+  }
+}
+
 export async function readConversationTranscript(sessionId: string): Promise<Transcript | null> {
   const state = useAcpStore.getState()
-  const loaded = state.messages[sessionId]
+  const ix = sessionChainIndex(state.sessionIndex)
   // The mention picker folds a switch chain into its terminal row, so a
-  // terminal-only read would silently drop every pre-switch turn. When the
-  // loaded transcript already carries the merged band (reopen splice), it
-  // IS the whole conversation; otherwise read every chain member's durable
-  // payload oldest → newest (durable logs never contain bands, so there is
-  // nothing to de-duplicate).
-  const memberIds = membersOf(sessionChainIndex(state.sessionIndex), sessionId)
+  // terminal-only read would silently drop every pre-switch turn. Project
+  // scoping keeps a malformed cross-project edge from leaking another
+  // project's transcript into this conversation.
+  const memberIds = projectScopedMembers(ix, sessionId)
+  const loaded = state.messages[sessionId]
   if (loaded && !state.sessions[sessionId]?.replaying) {
-    if ((state.agentSwitches[sessionId]?.length ?? 0) >= memberIds.length - 1) {
-      return { messages: loaded, toolCalls: state.toolCalls[sessionId] ?? [] }
-    }
+    // Use the loaded transcript only when its splice provably covers every
+    // ancestor — a marker count alone can pass while the band itself is
+    // missing (a failed reload leaves own turns with the switch recorded).
+    const coversAncestors = memberIds
+      .filter((memberId) => memberId !== sessionId)
+      .every((ancestorId) =>
+        loaded.some((m) => m.id.startsWith(`${SWITCH_SPLICE_ID_PREFIX}${ancestorId}:`))
+      )
+    if (coversAncestors) return { messages: loaded, toolCalls: state.toolCalls[sessionId] ?? [] }
   } else if (memberIds.length === 1) {
     return readPersistedTranscript(sessionId)
   }
-  const parts = await Promise.all(memberIds.map(readPersistedTranscript))
+  // Per member, prefer own-turns from the live store (freshest, band-free);
+  // the durable payload is the fallback and the only source for cold members.
+  const parts = await Promise.all(
+    memberIds.map((memberId) => ownTurns(state, memberId) ?? readPersistedTranscript(memberId))
+  )
   if (parts.every((part) => part === null)) return null
+  // Each member's payload restarts its seq space at 1 — re-stamp into
+  // increasing bands so the context formatter's seq-first sort preserves
+  // chain order instead of interleaving same-seqd turns.
   const messages: ChatMessage[] = []
   const toolCalls: ToolCall[] = []
-  for (const part of parts) {
-    if (!part) continue
-    messages.push(...part.messages)
-    toolCalls.push(...part.toolCalls)
-  }
-  return { messages, toolCalls }
+  let offset = 0
+  let partial = false
+  memberIds.forEach((memberId, i) => {
+    const part = parts[i]
+    if (!part) {
+      partial = true
+      void logFrontendError({
+        level: 'warn',
+        source: 'conversationTranscript',
+        message: `Mentioned chat member ${memberId.slice(0, 8)}… unreadable; context is partial`
+      })
+      return
+    }
+    for (const message of part.messages) {
+      messages.push({ ...message, seq: offset + (message.seq ?? 0) })
+    }
+    for (const call of part.toolCalls) {
+      toolCalls.push({ ...call, seq: offset + (call.seq ?? 0) })
+    }
+    offset += ix.byId.get(memberId)?.lastSeq ?? Math.max(part.messages.length, 1)
+  })
+  return { messages, toolCalls, ...(partial ? { partial: true } : {}) }
 }
 
 function agentNameOf(sessionId: string): string | null {
@@ -99,6 +148,9 @@ export async function resolveConversationContexts(
     if (!transcript) {
       gaps.set(sessionId, 'unavailable')
       continue
+    }
+    if (transcript.partial) {
+      gaps.set(sessionId, 'partial')
     }
     const contextTitle = capContextFragment(title)
     const body = buildConversationContext({

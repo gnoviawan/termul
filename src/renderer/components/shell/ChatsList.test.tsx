@@ -434,6 +434,30 @@ describe('ChatsList interactions', () => {
     expect(mocks.deleteHistorySession).toHaveBeenCalledWith('dst')
   })
 
+  it('requires a new confirmation when the chain grew while the dialog was open', async () => {
+    setIndex([
+      entry('src', { lastActivityAt: 10 }),
+      entry('dst', { continuedFrom: 'src', lastActivityAt: 20 })
+    ])
+    render(<ChatsList project={project} />)
+    fireEvent.contextMenu(screen.getByTitle('Chat dst'))
+    fireEvent.click(await screen.findByText('Delete Chat'))
+    // A switch completes while the confirm dialog is open: 'new' continues 'dst'.
+    setIndex([
+      entry('src', { lastActivityAt: 10 }),
+      entry('dst', { continuedFrom: 'src', lastActivityAt: 20 }),
+      entry('new', { continuedFrom: 'dst', lastActivityAt: 30 })
+    ])
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    // Membership changed since the snapshot: no delete yet, dialog re-arms.
+    expect(mocks.deleteHistorySession).not.toHaveBeenCalled()
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(mocks.deleteHistorySession).toHaveBeenCalledTimes(3))
+    expect(mocks.deleteHistorySession).toHaveBeenCalledWith('src')
+    expect(mocks.deleteHistorySession).toHaveBeenCalledWith('dst')
+    expect(mocks.deleteHistorySession).toHaveBeenCalledWith('new')
+  })
+
   it('toasts and logs once when deleting fails', async () => {
     mocks.deleteHistorySession.mockRejectedValue(new Error('nope'))
     render(<ChatsList project={project} />)

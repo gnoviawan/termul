@@ -3,6 +3,7 @@ import { useMemo, useRef, useState } from 'react'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import type { ProjectChatEntry } from '@/components/sidebar/project-chat-row'
 import { SidebarSearchField } from '@/components/sidebar/sidebar-search-field'
+import { projectScopedMembers, sessionChainIndex } from '@/lib/session-chain'
 import { useAcpStore } from '@/stores/acp-store'
 import { useShellLayoutStore } from '@/stores/shell-layout-store'
 import { findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
@@ -153,11 +154,22 @@ export function ChatsList({ project }: ChatsListProps): React.JSX.Element {
         cancelLabel="Cancel"
         variant="danger"
         onConfirm={() => {
-          if (deleteConfirm) {
-            const entry = deleteConfirm
-            setDeleteConfirm(null)
-            onDelete(entry)
+          if (!deleteConfirm) return
+          // A switch completing after this dialog opened extends the chain:
+          // re-resolve membership, and when it changed since the snapshot the
+          // user approved, refresh the snapshot and require a new
+          // confirmation rather than silently widening the delete.
+          const { sessionIndex } = useAcpStore.getState()
+          const fresh = projectScopedMembers(sessionChainIndex(sessionIndex), deleteConfirm.id)
+          const captured = deleteConfirm.chainIds ?? [deleteConfirm.id]
+          const changed =
+            fresh.length !== captured.length || fresh.some((id) => !captured.includes(id))
+          if (changed) {
+            setDeleteConfirm({ ...deleteConfirm, chainIds: fresh })
+            return
           }
+          setDeleteConfirm(null)
+          onDelete(deleteConfirm)
         }}
         onCancel={() => setDeleteConfirm(null)}
       />

@@ -12,9 +12,15 @@ import {
 } from '@/lib/acp-history-persistence'
 import { activeWorktreeOf } from '@/lib/active-worktree'
 import { logFrontendError } from '@/lib/log-api'
-import { foldEntries, membersOf, sessionChainIndex, UNTITLED_PATTERN } from '@/lib/session-chain'
+import {
+  foldEntries,
+  projectScopedMembers,
+  sessionChainIndex,
+  UNTITLED_PATTERN
+} from '@/lib/session-chain'
 import { chatsMatchAnnouncement } from '@/lib/shell-announcements'
 import { useAcpStore } from '@/stores/acp-store'
+import { liveSwitchSources } from '@/stores/acp-store/shared-state'
 import { useActiveProject } from '@/stores/project-store'
 import { useShellAnnouncerStore } from '@/stores/shell-announcer-store'
 import { useWorktreePick } from '@/stores/shell-layout-store'
@@ -325,9 +331,15 @@ export function useChatHistoryEntries({
       // Read at call time: a switch completing after render must not leave
       // the newest continuation behind (membership from the FULL index —
       // a member outside the current scope would otherwise resurface as a
-      // standalone row in another scope's view).
+      // standalone row in another scope's view). Project scoping keeps a
+      // malformed cross-project edge from deleting another project's
+      // transcript; in-flight switch targets of a member are swept too.
       const { sessionIndex: fullIndex } = useAcpStore.getState()
-      for (const memberId of membersOf(sessionChainIndex(fullIndex), id)) {
+      const memberIds = new Set(projectScopedMembers(sessionChainIndex(fullIndex), id))
+      for (const [targetId, link] of liveSwitchSources) {
+        if (memberIds.has(link.sourceId)) memberIds.add(targetId)
+      }
+      for (const memberId of memberIds) {
         void deleteHistorySession(memberId).catch(() => {
           toast.error('Could not delete that chat. Try again.')
           void logFrontendError({

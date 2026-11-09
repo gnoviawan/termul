@@ -45,7 +45,8 @@ const LABEL_RE =
 
 const TRANSCRIPT_GAP_NOTES = {
   unavailable: ', transcript unavailable',
-  omitted: ', transcript omitted: context limit'
+  omitted: ', transcript omitted: context limit',
+  partial: ', transcript partial: earlier history unavailable'
 } as const
 
 /** Why a mentioned chat's transcript is not in the send. */
