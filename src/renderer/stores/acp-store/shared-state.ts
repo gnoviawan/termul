@@ -10,6 +10,7 @@ import { sessionModelSnapshot } from '@/components/chat/chat-input-bar-config'
 import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
 import {
   deriveTitle,
+  isUntitledTitle,
   maxPayloadSeq,
   type SessionIndexEntry,
   type SessionPayload
@@ -224,11 +225,27 @@ export function persistSession(
   const recordedModel = sessionModelSnapshot(session)
   const modelId = recordedModel?.modelId ?? existingEntry?.modelId
   const modelName = recordedModel?.modelName ?? existingEntry?.modelName
+  // Prefer a real title over the `Untitled Chat` placeholder (issue #1798). A
+  // watching device installs the payload's placeholder into `session.title`
+  // before the host derives the first-message title; a later `chat_history`
+  // delta then titles the INDEX row but never the live session. Re-stamping
+  // `session.title` verbatim here would clobber that derived title with the
+  // stale placeholder and, with a fresh `lastActivityAt`, let
+  // `mergeSessionIndexEntries` keep the local placeholder on every refetch.
+  // Fall through to the derived/existing title whenever the live title is a
+  // placeholder; a real local title (e.g. a rename) still wins.
+  const derivedTitle = deriveTitle(liveMessages, fallbackTitle)
+  const title =
+    session.title && !isUntitledTitle(session.title)
+      ? session.title
+      : isUntitledTitle(derivedTitle)
+        ? (session.title ?? derivedTitle)
+        : derivedTitle
   const entry: SessionIndexEntry = {
     id: sessionId,
     agentId: session.agentId,
     agentConfigId,
-    title: session.title ?? deriveTitle(liveMessages, fallbackTitle),
+    title,
     cwd: session.cwd,
     projectId: session.projectId,
     createdAt: keepCreatedAt(existingEntry?.createdAt, session.createdAt),
