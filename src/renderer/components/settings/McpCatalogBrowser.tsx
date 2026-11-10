@@ -93,7 +93,10 @@ function PlaceholderLine({ line, bar }: { line: string; bar: string }): React.JS
 
 /**
  * Line-for-line stand-in for the source card while the first status loads, so
- * the search box under it does not jump down when the card arrives.
+ * the search box under it does not jump down when the card arrives. The sync
+ * row is the real one (disabled), not a skeleton, so its description wraps to
+ * the same height at every width — a fixed-height bar under-reserves when the
+ * description wraps to two lines on a narrow card.
  */
 function CatalogSourcePlaceholder(): React.JSX.Element {
   return (
@@ -103,13 +106,14 @@ function CatalogSourcePlaceholder(): React.JSX.Element {
         <PlaceholderLine line="h-4" bar="h-3 w-44" />
         <PlaceholderLine line="h-4" bar="h-3 w-24" />
       </div>
-      <div aria-hidden className="flex items-center gap-x-6 px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <PlaceholderLine line="h-5" bar="h-3.5 w-48" />
-          <PlaceholderLine line="mt-0.5 h-5" bar="h-3 w-80" />
-        </div>
-        <Skeleton className="h-5 w-9 shrink-0 rounded-full" />
-      </div>
+      <SettingsSwitchRow
+        id="mcp-catalog-sync"
+        label="Keep the catalog up to date"
+        description="The host downloads the official MCP Registry and checks it for changes."
+        checked
+        disabled
+        onToggle={() => {}}
+      />
     </SettingsCard>
   )
 }

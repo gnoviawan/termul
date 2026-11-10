@@ -325,7 +325,6 @@ describe('McpCatalogBrowser catalog source', () => {
 
     const placeholder = screen.getByTestId('mcp-catalog-source-placeholder')
     expect(placeholder).toHaveAttribute('aria-busy', 'true')
-    expect(placeholder.textContent).toBe('')
     const searchBox = screen.getByRole('textbox', { name: 'Search the MCP catalog' })
     expect(
       placeholder.compareDocumentPosition(searchBox) & Node.DOCUMENT_POSITION_FOLLOWING
@@ -335,6 +334,22 @@ describe('McpCatalogBrowser catalog source', () => {
 
     expect(await screen.findByText('Up to date.')).toBeInTheDocument()
     expect(screen.queryByTestId('mcp-catalog-source-placeholder')).toBeNull()
+  })
+
+  it('reserves the real sync row while loading so a wrapped description cannot shift the search box', async () => {
+    search.mockResolvedValue(page([installable]))
+    status.mockReturnValue(new Promise(() => {}))
+    render(<McpCatalogBrowser />)
+
+    const placeholder = screen.getByTestId('mcp-catalog-source-placeholder')
+    const row = within(placeholder)
+    // The description text is rendered (not a fixed-height skeleton bar), so it
+    // wraps to the same height the real card uses at every width.
+    expect(
+      row.getByText('The host downloads the official MCP Registry and checks it for changes.')
+    ).toBeInTheDocument()
+    const reservedSwitch = row.getByRole('switch', { name: 'Keep the catalog up to date' })
+    expect(reservedSwitch).toBeDisabled()
   })
 
   it('drops the placeholder when the status cannot be read', async () => {
