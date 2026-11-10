@@ -13,7 +13,8 @@ import {
   isUntitledTitle,
   maxPayloadSeq,
   type SessionIndexEntry,
-  type SessionPayload
+  type SessionPayload,
+  UNTITLED_CHAT_RE
 } from '@/lib/acp-history-persistence'
 import { getAcpTransport } from '@/lib/acp-transport'
 import {
@@ -74,8 +75,7 @@ export function nextUntitledTitle(): string {
   return `Untitled Chat ${untitledChatCounter}`
 }
 
-/** Matches an `Untitled Chat N` placeholder and captures its numeric suffix. */
-export const UNTITLED_CHAT_RE = /^Untitled Chat (\d+)$/
+export { UNTITLED_CHAT_RE }
 
 /**
  * Lift `untitledChatCounter` to at least the highest `Untitled Chat N` suffix
@@ -232,15 +232,22 @@ export function persistSession(
   // `session.title` verbatim here would clobber that derived title with the
   // stale placeholder and, with a fresh `lastActivityAt`, let
   // `mergeSessionIndexEntries` keep the local placeholder on every refetch.
-  // Fall through to the derived/existing title whenever the live title is a
-  // placeholder; a real local title (e.g. a rename) still wins.
+  // Fall through to the existing/derived title whenever the live title is a
+  // placeholder; a real local title (e.g. a rename) still wins. When the live
+  // title is a placeholder, a real index title (host-derived or
+  // background-generated, which only reaches the index) beats re-deriving one
+  // from the first message. A null live title keeps the old derive-first path.
   const derivedTitle = deriveTitle(liveMessages, fallbackTitle)
   const title =
     session.title && !isUntitledTitle(session.title)
       ? session.title
-      : isUntitledTitle(derivedTitle)
-        ? (session.title ?? derivedTitle)
-        : derivedTitle
+      : isUntitledTitle(session.title) &&
+          existingEntry?.title &&
+          !isUntitledTitle(existingEntry.title)
+        ? existingEntry.title
+        : isUntitledTitle(derivedTitle)
+          ? (session.title ?? derivedTitle)
+          : derivedTitle
   const entry: SessionIndexEntry = {
     id: sessionId,
     agentId: session.agentId,

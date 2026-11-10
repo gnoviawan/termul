@@ -520,6 +520,9 @@ function historyMode(): 'server' | 'live_only' | 'tauri_store' | undefined {
  */
 export const UNTITLED_HOST_TITLE = 'Untitled Chat'
 
+/** Matches an `Untitled Chat N` placeholder and captures its numeric suffix. */
+export const UNTITLED_CHAT_RE = /^Untitled Chat (\d+)$/
+
 /**
  * True when `title` is a placeholder shown before a real title is derived from
  * the first message: the bare host placeholder `Untitled Chat` or the
@@ -530,7 +533,7 @@ export const UNTITLED_HOST_TITLE = 'Untitled Chat'
  * turn end would clobber the derived title the chat list already shows.
  */
 export function isUntitledTitle(title: string | null | undefined): boolean {
-  return title === UNTITLED_HOST_TITLE || /^Untitled Chat \d+$/.test(title ?? '')
+  return title === UNTITLED_HOST_TITLE || UNTITLED_CHAT_RE.test(title ?? '')
 }
 
 export function fromPersistedSessionSummary(entry: PersistedSessionSummary): SessionIndexEntry {

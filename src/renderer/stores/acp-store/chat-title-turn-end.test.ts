@@ -104,6 +104,16 @@ describe('persistSession keeps the derived title at turn end (#1798)', () => {
     expect(entry.title).toBe('Fix the login bug please')
   })
 
+  it('keeps a real index title (e.g. host-generated) over re-deriving from the first message', () => {
+    const sess = session({ title: 'Untitled Chat' })
+    const [entry] = persist(
+      sess,
+      [userMessage('fix login pls')],
+      [indexEntry({ title: 'Fix login redirect loop' })]
+    )
+    expect(entry.title).toBe('Fix login redirect loop')
+  })
+
   it('keeps a real local title (e.g. a rename) over the index title', () => {
     const sess = session({ title: 'My renamed chat' })
     const [entry] = persist(sess, [userMessage('whatever')], [indexEntry({ title: 'Old title' })])
@@ -128,6 +138,13 @@ describe('mergeSessionIndexEntries protects the host title from a local placehol
   it('still lets a newer local real title (rename) win over the host', () => {
     const local = [indexEntry({ title: 'Renamed locally', lastActivityAt: T0 + 1000 })]
     const host = [indexEntry({ title: 'Fix the login bug', lastActivityAt: T0 })]
+    const [merged] = mergeSessionIndexEntries(local, host, new Set(['s1']))
+    expect(merged.title).toBe('Renamed locally')
+  })
+
+  it('keeps a local real title when a newer host row is a numbered placeholder', () => {
+    const local = [indexEntry({ title: 'Renamed locally', lastActivityAt: T0 })]
+    const host = [indexEntry({ title: 'Untitled Chat 4', lastActivityAt: T0 + 1000 })]
     const [merged] = mergeSessionIndexEntries(local, host, new Set(['s1']))
     expect(merged.title).toBe('Renamed locally')
   })

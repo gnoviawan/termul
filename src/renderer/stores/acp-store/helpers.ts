@@ -37,8 +37,7 @@ import {
   isUntitledTitle,
   maxPayloadSeq,
   type PersistedTurnError,
-  type SessionIndexEntry,
-  UNTITLED_HOST_TITLE
+  type SessionIndexEntry
 } from '@/lib/acp-history-persistence'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { agentConfigIdentityKey } from '@/lib/agents/acp-config-identity'
@@ -1128,7 +1127,7 @@ export function mergeSessionIndexEntries(
         // and the host cannot know yet: the host titles a chat only once its
         // first prompt is durable (a promoted warm session registers
         // untitled), and its index omits `turnActive`.
-        const keepTitle = hostEntry.title === UNTITLED_HOST_TITLE
+        const keepTitle = isUntitledTitle(hostEntry.title)
         const keepTurn = entry.turnActive === true && hostEntry.turnActive === undefined
         const idx = merged.findIndex((e) => e.id === entry.id)
         if ((keepTitle || keepTurn) && idx >= 0) {
