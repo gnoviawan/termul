@@ -62,6 +62,21 @@ pub fn dist_web_ready() -> bool {
     dist_web_dir().join(INDEX_HTML).is_file()
 }
 
+/// Whether the embedded (rust-embed) bundle carries `index.html` — true in a
+/// release binary where `dist-web/` is NOT on disk but the Vite bundle was
+/// embedded at cargo-build time (`#[folder = "../dist-web/"]`).
+pub fn embedded_web_ready() -> bool {
+    Assets::get(INDEX_HTML).is_some()
+}
+
+/// Whether the web UI can be served at all — from disk (`dist-web/`, dev) OR
+/// the embedded bundle (release). The "static routes will 404" warning must
+/// only fire when BOTH sources are absent; a shipped binary embeds the UI even
+/// though the compile-time `dist-web/` path does not exist on the user's disk.
+pub fn web_ui_available() -> bool {
+    dist_web_ready() || embedded_web_ready()
+}
+
 /// ServeDir + SPA `index.html` fallback for the hash-router client (dev path).
 pub fn static_service() -> ServeDir<ServeFile> {
     static_service_from(&dist_web_dir())

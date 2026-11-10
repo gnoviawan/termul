@@ -29,6 +29,22 @@ fn dist_web_ready_reflects_index_html_on_disk() {
     assert_eq!(dist_web_ready(), expected);
 }
 
+#[test]
+fn web_ui_available_counts_the_embedded_bundle() {
+    // Regression (#1802): the "static routes will 404" warning keyed on
+    // `dist_web_ready()` alone, so a shipped binary (UI embedded, no `dist-web/`
+    // on disk) warned falsely. `web_ui_available()` must also count the embed.
+    assert_eq!(embedded_web_ready(), Assets::get(INDEX_HTML).is_some());
+    assert_eq!(web_ui_available(), dist_web_ready() || embedded_web_ready());
+    if embedded_web_ready() {
+        // Embed present + no disk still means the UI serves → no warning.
+        assert!(
+            web_ui_available(),
+            "embedded bundle must make the UI available regardless of disk state"
+        );
+    }
+}
+
 /// Drive a path through `serve_embedded` (the release fallback) and return
 /// the (status, content-type, cache-control, body). Runs against whatever
 /// `Assets` embed is present — CI's `rust-checks` job runs `bun run

@@ -363,7 +363,10 @@ pub async fn serve_router(
     let owned_port = crate::host_perimeter::OwnedPort::claim(addr.port());
     info!("ACP web server listening on http://{}", addr);
 
-    if !assets::dist_web_ready() {
+    // Only warn when NEITHER the on-disk `dist-web/` (dev) NOR the embedded
+    // bundle (release binary) can serve the UI — a shipped binary embeds the UI
+    // even though the compile-time `dist-web/` path does not exist on disk.
+    if !assets::web_ui_available() {
         warn!(
             "dist-web/index.html not found at {:?} — run `bun run build:web` before browsing; \
              /health still works, static routes will 404",
