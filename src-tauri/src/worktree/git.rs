@@ -40,21 +40,17 @@ pub(super) struct GitOutput {
 
 /// Run a git command and return its exit code and output without judging success.
 ///
-/// `cwd` and path-valued `args` go through [`crate::path_validation::git_path`]
-/// so Windows verbatim (`\\?\…`) paths never reach `git.exe` (see #1724).
+/// `cwd` goes through [`crate::path_validation::git_path`] so a Windows
+/// verbatim (`\\?\…`) path never reaches `git.exe` (see #1724). `args` are
+/// passed as-is; callers normalize path operands (see `WorktreeManager::create`).
 pub(super) fn run_git_output(args: &[&str], cwd: Option<&str>) -> Result<GitOutput, WorktreeError> {
     let git = which_git()?;
-    let scrubbed: Vec<_> = args
-        .iter()
-        .map(|a| crate::path_validation::git_path(a))
-        .collect();
-
     let mut cmd = quiet_command(&git);
     // `-c` must precede the subcommand. Pinning `color.ui=false` keeps a user
     // `color.ui=always` config from ANSI-wrapping the `fatal:`/`error:` line
     // prefixes that `parse_git_stderr` classifies on.
     cmd.arg("-c").arg("color.ui=false");
-    cmd.args(scrubbed.iter().map(|a| a.as_ref()));
+    cmd.args(args);
     if let Some(dir) = cwd {
         cmd.current_dir(crate::path_validation::git_path(dir).as_ref());
     }
@@ -119,14 +115,10 @@ pub(super) fn run_git_streaming(
 ) -> Result<(String, String), WorktreeError> {
     let git = which_git()?;
 
-    let scrubbed: Vec<_> = args
-        .iter()
-        .map(|a| crate::path_validation::git_path(a))
-        .collect();
     let mut cmd = quiet_command(&git);
     // See `run_git` — `-c` must precede the subcommand.
     cmd.arg("-c").arg("color.ui=false");
-    cmd.args(scrubbed.iter().map(|a| a.as_ref()));
+    cmd.args(args);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     if let Some(dir) = cwd {

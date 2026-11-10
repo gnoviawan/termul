@@ -933,6 +933,35 @@ fn it_discard_reverts_tracked_modification_to_index() {
     std::fs::remove_dir_all(&repo).ok();
 }
 
+/// On POSIX `\\?\foo` is a literal file name; discarding it must not be
+/// rewritten to (and revert) the unrelated tracked `foo` (#1735 review).
+#[cfg(not(windows))]
+#[test]
+// The lint reads `\\` as a root; on POSIX it is a literal name character.
+#[allow(clippy::join_absolute_paths)]
+fn it_discard_literal_verbatim_named_file_leaves_plain_twin_alone() {
+    if git_missing() {
+        return;
+    }
+    let repo = init_repo("discard-literal-verbatim");
+    let odd = r"\\?\foo";
+    std::fs::write(repo.join("foo"), "orig\n").unwrap();
+    std::fs::write(repo.join(odd), "odd\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    std::fs::write(repo.join("foo"), "keep-me\n").unwrap();
+    std::fs::write(repo.join(odd), "odd-dirty\n").unwrap();
+
+    git_discard_file(repo.to_str().unwrap(), odd).unwrap();
+    assert_eq!(std::fs::read_to_string(repo.join(odd)).unwrap(), "odd\n");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("foo")).unwrap(),
+        "keep-me\n",
+        "the plain twin keeps its edits"
+    );
+    std::fs::remove_dir_all(&repo).ok();
+}
+
 #[test]
 fn it_discard_staged_row_of_mm_file_preserves_staged_content() {
     if git_missing() {

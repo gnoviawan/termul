@@ -42,12 +42,39 @@ pub fn strip_verbatim_prefix(path: &str) -> Cow<'_, str> {
 /// Path form safe to hand to `git` / `git.exe`.
 ///
 /// Windows `canonicalize` yields `\\?\…` paths that git rejects (`fatal: could
-/// not create leading directories …: Invalid argument`). Call this at every git
-/// boundary (cwd and path-valued argv) so worktree/temp fixtures and production
-/// callers stay tool-friendly. No-op when the path has no verbatim prefix.
+/// not create leading directories …: Invalid argument`). Call this on the git
+/// cwd and on path operands built from canonical paths (not on every argv
+/// token: refs, messages and pathspecs are passed through untouched).
+///
+/// Only rewrites on Windows; on POSIX a backslash is a literal filename
+/// character, so `\\?\foo` is a real name and is returned unchanged.
 #[inline]
 pub fn git_path(path: &str) -> Cow<'_, str> {
-    strip_verbatim_prefix(path)
+    if cfg!(windows) {
+        windows_git_path(path)
+    } else {
+        Cow::Borrowed(path)
+    }
+}
+
+/// The Windows half of [`git_path`], platform-independent so it is testable
+/// everywhere. Strips only the drive (`\\?\C:\…`) and UNC (`\\?\UNC\…`)
+/// verbatim forms. Other verbatim forms such as `\\?\Volume{GUID}\…` have no
+/// plain equivalent (stripping would leave a relative path), so they are
+/// returned unchanged.
+pub fn windows_git_path(path: &str) -> Cow<'_, str> {
+    const VERBATIM: &str = r"\\?\";
+    const VERBATIM_UNC: &str = r"\\?\UNC\";
+    if path.starts_with(VERBATIM_UNC) {
+        return strip_verbatim_prefix(path);
+    }
+    if let Some(rest) = path.strip_prefix(VERBATIM) {
+        let b = rest.as_bytes();
+        if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+            return strip_verbatim_prefix(path);
+        }
+    }
+    Cow::Borrowed(path)
 }
 
 /// A Windows path a client sent, in plain backslash form: separators become

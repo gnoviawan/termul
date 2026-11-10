@@ -207,16 +207,40 @@ fn plain_windows_client_path_drops_a_verbatim_prefix_in_any_slash_style() {
 }
 
 #[test]
-fn test_git_path_strips_verbatim_for_git_exe() {
+fn test_windows_git_path_strips_drive_and_unc_verbatim_for_git_exe() {
     // Mirrors the Windows CI failure in #1724: canonicalize + worktree add.
     assert_eq!(
-        git_path(r"\\?\C:\Users\runneradmin\AppData\Local\Temp\.tmpABC\main").as_ref(),
+        windows_git_path(r"\\?\C:\Users\runneradmin\AppData\Local\Temp\.tmpABC\main").as_ref(),
         r"C:\Users\runneradmin\AppData\Local\Temp\.tmpABC\main"
     );
     assert_eq!(
-        git_path(r"\\?\UNC\server\share\repo").as_ref(),
+        windows_git_path(r"\\?\UNC\server\share\repo").as_ref(),
         r"\\server\share\repo"
     );
+    assert_eq!(windows_git_path("/home/user/project").as_ref(), "/home/user/project");
+    assert_eq!(windows_git_path("chat/abc").as_ref(), "chat/abc");
+}
+
+#[test]
+fn test_windows_git_path_keeps_verbatim_forms_without_a_plain_equivalent() {
+    // Stripping these would leave a relative path git resolves against the
+    // process cwd.
+    let volume = r"\\?\Volume{0b1c2d3e-0000-0000-0000-000000000000}\repo";
+    assert_eq!(windows_git_path(volume).as_ref(), volume);
+    assert_eq!(windows_git_path(r"\\?\foo").as_ref(), r"\\?\foo");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn test_git_path_keeps_literal_posix_backslash_names() {
+    // On POSIX `\\?\foo` is a legal file name, not a verbatim prefix.
+    assert_eq!(git_path(r"\\?\foo").as_ref(), r"\\?\foo");
+    assert_eq!(git_path(r"\\?\C:\x").as_ref(), r"\\?\C:\x");
     assert_eq!(git_path("/home/user/project").as_ref(), "/home/user/project");
-    assert_eq!(git_path("chat/abc").as_ref(), "chat/abc");
+}
+
+#[cfg(windows)]
+#[test]
+fn test_git_path_strips_verbatim_on_windows() {
+    assert_eq!(git_path(r"\\?\C:\repo").as_ref(), r"C:\repo");
 }
