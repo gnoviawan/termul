@@ -69,12 +69,19 @@ pub fn embedded_web_ready() -> bool {
     Assets::get(INDEX_HTML).is_some()
 }
 
+/// Disk-or-embed composition used by [`web_ui_available`]. Factored out so
+/// tests can force the "embed only, no disk" case that a shipped binary hits
+/// (issue #1802), independent of whether this build tree has `dist-web/`.
+fn web_ui_available_from(disk: bool, embed: bool) -> bool {
+    disk || embed
+}
+
 /// Whether the web UI can be served at all — from disk (`dist-web/`, dev) OR
 /// the embedded bundle (release). The "static routes will 404" warning must
 /// only fire when BOTH sources are absent; a shipped binary embeds the UI even
 /// though the compile-time `dist-web/` path does not exist on the user's disk.
 pub fn web_ui_available() -> bool {
-    dist_web_ready() || embedded_web_ready()
+    web_ui_available_from(dist_web_ready(), embedded_web_ready())
 }
 
 /// ServeDir + SPA `index.html` fallback for the hash-router client (dev path).
