@@ -106,14 +106,19 @@ function CatalogSourcePlaceholder(): React.JSX.Element {
         <PlaceholderLine line="h-4" bar="h-3 w-44" />
         <PlaceholderLine line="h-4" bar="h-3 w-24" />
       </div>
-      <SettingsSwitchRow
-        id="mcp-catalog-sync"
-        label="Keep the catalog up to date"
-        description="The host downloads the official MCP Registry and checks it for changes."
-        checked
-        disabled
-        onToggle={() => {}}
-      />
+      {/* Visual stand-in only: the real checked state is unknown until status
+          loads, so hide this row from assistive tech. The card is already
+          aria-busy. */}
+      <div aria-hidden>
+        <SettingsSwitchRow
+          id="mcp-catalog-sync"
+          label="Keep the catalog up to date"
+          description="The host downloads the official MCP Registry and checks it for changes."
+          checked
+          disabled
+          onToggle={() => {}}
+        />
+      </div>
     </SettingsCard>
   )
 }

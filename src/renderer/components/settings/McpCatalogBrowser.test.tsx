@@ -348,7 +348,10 @@ describe('McpCatalogBrowser catalog source', () => {
     expect(
       row.getByText('The host downloads the official MCP Registry and checks it for changes.')
     ).toBeInTheDocument()
-    const reservedSwitch = row.getByRole('switch', { name: 'Keep the catalog up to date' })
+    // The visual switch is in the DOM for height, but hidden from AT so it
+    // cannot announce the setting as on while the real preference is unknown.
+    expect(row.queryByRole('switch')).toBeNull()
+    const reservedSwitch = placeholder.querySelector('#mcp-catalog-sync')
     expect(reservedSwitch).toBeDisabled()
   })
 
