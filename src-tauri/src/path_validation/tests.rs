@@ -217,7 +217,10 @@ fn test_windows_git_path_strips_drive_and_unc_verbatim_for_git_exe() {
         windows_git_path(r"\\?\UNC\server\share\repo").as_ref(),
         r"\\server\share\repo"
     );
-    assert_eq!(windows_git_path("/home/user/project").as_ref(), "/home/user/project");
+    assert_eq!(
+        windows_git_path("/home/user/project").as_ref(),
+        "/home/user/project"
+    );
     assert_eq!(windows_git_path("chat/abc").as_ref(), "chat/abc");
 }
 
@@ -230,13 +233,57 @@ fn test_windows_git_path_keeps_verbatim_forms_without_a_plain_equivalent() {
     assert_eq!(windows_git_path(r"\\?\foo").as_ref(), r"\\?\foo");
 }
 
+#[test]
+fn test_windows_git_path_keeps_verbatim_when_plain_form_names_another_folder() {
+    // A verbatim path is literal; the plain form is normalized by Windows, so
+    // stripping these would point git at a different location.
+    for unsafe_path in [
+        r"\\?\C:\repo/other",
+        r"\\?\C:\repo\..\other",
+        r"\\?\C:\repo\.\sub",
+        r"\\?\C:\repo\.",
+        r"\\?\C:\repo.\sub",
+        r"\\?\C:\repo \sub",
+        r"\\?\C:\repo\sub.",
+        r"\\?\C:\repo\\sub",
+        r"\\?\C:\repo\nul",
+        r"\\?\C:\repo\COM1.txt",
+        r"\\?\C:repo",
+        r"\\?\UNC\server\share\..\other",
+        r"\\?\UNC\server\share/repo",
+        r"\\?\UNC\",
+    ] {
+        assert_eq!(
+            windows_git_path(unsafe_path).as_ref(),
+            unsafe_path,
+            "{unsafe_path}"
+        );
+    }
+}
+
+#[test]
+fn test_windows_git_path_still_strips_safe_verbatim_forms() {
+    for (verbatim, plain) in [
+        (r"\\?\C:\", r"C:\"),
+        (r"\\?\C:\repo\", r"C:\repo\"),
+        (r"\\?\D:\a b\.hidden\x.y", r"D:\a b\.hidden\x.y"),
+        (r"\\?\C:\repo\console\com10", r"C:\repo\console\com10"),
+        (r"\\?\UNC\server\share\repo\sub", r"\\server\share\repo\sub"),
+    ] {
+        assert_eq!(windows_git_path(verbatim).as_ref(), plain, "{verbatim}");
+    }
+}
+
 #[cfg(not(windows))]
 #[test]
 fn test_git_path_keeps_literal_posix_backslash_names() {
     // On POSIX `\\?\foo` is a legal file name, not a verbatim prefix.
     assert_eq!(git_path(r"\\?\foo").as_ref(), r"\\?\foo");
     assert_eq!(git_path(r"\\?\C:\x").as_ref(), r"\\?\C:\x");
-    assert_eq!(git_path("/home/user/project").as_ref(), "/home/user/project");
+    assert_eq!(
+        git_path("/home/user/project").as_ref(),
+        "/home/user/project"
+    );
 }
 
 #[cfg(windows)]

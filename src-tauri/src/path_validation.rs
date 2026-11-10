@@ -62,19 +62,65 @@ pub fn git_path(path: &str) -> Cow<'_, str> {
 /// verbatim forms. Other verbatim forms such as `\\?\Volume{GUID}\…` have no
 /// plain equivalent (stripping would leave a relative path), so they are
 /// returned unchanged.
+///
+/// A verbatim path is taken literally, while a plain one is normalized by
+/// Windows (`/` is a separator, `.`/`..` are resolved, trailing dots and
+/// spaces are trimmed, device names like `NUL` are devices). The prefix is
+/// therefore only dropped when the plain form names the same location;
+/// otherwise the path is returned unchanged, so git gets the literal target
+/// (or refuses the verbatim path) instead of a different folder.
 pub fn windows_git_path(path: &str) -> Cow<'_, str> {
     const VERBATIM: &str = r"\\?\";
     const VERBATIM_UNC: &str = r"\\?\UNC\";
-    if path.starts_with(VERBATIM_UNC) {
-        return strip_verbatim_prefix(path);
-    }
-    if let Some(rest) = path.strip_prefix(VERBATIM) {
-        let b = rest.as_bytes();
-        if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
-            return strip_verbatim_prefix(path);
+    let rest = if let Some(rest) = path.strip_prefix(VERBATIM_UNC) {
+        if rest.is_empty() {
+            return Cow::Borrowed(path);
         }
+        rest
+    } else if let Some(rest) = path.strip_prefix(VERBATIM) {
+        let b = rest.as_bytes();
+        if !(b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\') {
+            return Cow::Borrowed(path);
+        }
+        &rest[3..]
+    } else {
+        return Cow::Borrowed(path);
+    };
+    if verbatim_rest_is_plain_safe(rest) {
+        strip_verbatim_prefix(path)
+    } else {
+        Cow::Borrowed(path)
     }
-    Cow::Borrowed(path)
+}
+
+/// Whether the part of a verbatim path after its root means the same thing
+/// once the `\\?\` prefix is gone (see [`windows_git_path`]).
+fn verbatim_rest_is_plain_safe(rest: &str) -> bool {
+    if rest.contains('/') {
+        return false;
+    }
+    let rest = rest.strip_suffix('\\').unwrap_or(rest);
+    if rest.is_empty() {
+        return true;
+    }
+    rest.split('\\').all(|name| {
+        !name.is_empty()
+            && name != "."
+            && name != ".."
+            && !name.ends_with(['.', ' '])
+            && !is_windows_device_name(name)
+    })
+}
+
+fn is_windows_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim_end();
+    let upper = stem.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ((upper.starts_with("COM") || upper.starts_with("LPT"))
+        && upper.len() == 4
+        && matches!(upper.as_bytes()[3], b'1'..=b'9'))
 }
 
 /// A Windows path a client sent, in plain backslash form: separators become
