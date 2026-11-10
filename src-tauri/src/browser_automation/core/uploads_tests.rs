@@ -193,6 +193,28 @@ fn files_the_project_git_ignores_are_refused() {
 }
 
 #[test]
+fn git_ignores_accepts_a_canonical_root() {
+    // On Windows `canonicalize` yields a `\\?\` root that git.exe rejects;
+    // `git_ignores` must normalize its `-C` operand (#1724).
+    let p = project();
+    let init = std::process::Command::new("git")
+        .arg("-C")
+        .arg(p.dir.path())
+        .args(["init", "-q"])
+        .status();
+    if !init.is_ok_and(|s| s.success()) {
+        eprintln!("skipped: git is not available");
+        return;
+    }
+    let root = fs::canonicalize(p.dir.path()).unwrap();
+    #[cfg(windows)]
+    assert!(root.to_string_lossy().starts_with(r"\\?\"), "{root:?}");
+    fs::write(root.join(".gitignore"), "build/\n").unwrap();
+    assert!(git_ignores(&root, Path::new("build/app.zip")));
+    assert!(!git_ignores(&root, Path::new("docs/report.pdf")));
+}
+
+#[test]
 fn staged_names_keep_the_base_name_and_drop_path_tricks() {
     assert_eq!(
         staged_name(Path::new("/p/report final.pdf")),

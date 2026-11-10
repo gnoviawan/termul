@@ -228,7 +228,10 @@ impl WorktreeManager {
         if force {
             args.push("--force");
         }
-        args.push(worktree_path);
+        // A worktree path may arrive canonical (`\\?\…` on Windows), e.g. from
+        // `remove_all_managed`'s JSON list; git.exe rejects that form (#1724).
+        let worktree_path = crate::path_validation::git_path(worktree_path);
+        args.push(worktree_path.as_ref());
 
         run_git(&args, Some(project_path))?;
 
