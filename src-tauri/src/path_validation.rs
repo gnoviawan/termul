@@ -118,9 +118,16 @@ fn is_windows_device_name(name: &str) -> bool {
     matches!(
         upper.as_str(),
         "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
-    ) || ((upper.starts_with("COM") || upper.starts_with("LPT"))
-        && upper.len() == 4
-        && matches!(upper.as_bytes()[3], b'1'..=b'9'))
+    ) || upper
+        .strip_prefix("COM")
+        .or_else(|| upper.strip_prefix("LPT"))
+        .is_some_and(|n| {
+            // Windows also reserves the superscript digits ¹ ² ³.
+            matches!(
+                n,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        })
 }
 
 /// A Windows path a client sent, in plain backslash form: separators become
