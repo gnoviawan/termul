@@ -565,3 +565,23 @@ fn boundary_read_rebuilds_a_cache_that_is_behind_a_mutation() {
     assert_eq!(reg.canonical_root("p-1"), None);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #1724: on Windows a project registered with a verbatim root
+/// (`\\?\C:\…`) must still match the plain cwd that worktree create now
+/// returns, and the other way round. On POSIX a backslash is a literal
+/// character, so paths are compared as written there.
+#[test]
+fn find_by_path_matches_verbatim_and_plain_windows_spellings() {
+    let reg = ProjectRegistry::new();
+    reg.set(vec![sample("p-win", Some(r"\\?\C:\repo"), false)], None);
+    let expected = if cfg!(windows) { Some("p-win") } else { None };
+    assert_eq!(reg.find_by_path(r"C:\repo").as_deref(), expected);
+    let nested = reg.find_by_path(r"C:\repo\.termul\worktrees\feat");
+    assert_eq!(nested.as_deref(), expected);
+    // The verbatim spelling itself always matches exactly.
+    assert_eq!(reg.find_by_path(r"\\?\C:\repo").as_deref(), Some("p-win"));
+
+    reg.set(vec![sample("p-plain", Some(r"C:\repo"), false)], None);
+    let expected = if cfg!(windows) { Some("p-plain") } else { None };
+    assert_eq!(reg.find_by_path(r"\\?\C:\repo").as_deref(), expected);
+}

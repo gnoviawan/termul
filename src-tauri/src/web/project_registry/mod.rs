@@ -301,6 +301,12 @@ impl ProjectRegistry {
         if target.is_empty() {
             return None;
         }
+        // Compare in git's plain spelling so a verbatim (`\\?\C:\…`) root and
+        // the plain path returned by worktree create still match (#1724).
+        // `git_path` only rewrites on Windows and only when both forms name
+        // the same folder.
+        let target_owned = crate::path_validation::git_path(target).into_owned();
+        let target = target_owned.as_str();
         let g = self.inner.lock();
         // Track the LONGEST matching ancestor dir, not the first one. When two
         // registered projects nest (e.g. `/dev` and `/dev/app`), a cwd of
@@ -314,7 +320,8 @@ impl ProjectRegistry {
             let Some(path) = project.path.as_deref() else {
                 continue;
             };
-            let path = path.trim();
+            let path = crate::path_validation::git_path(path.trim());
+            let path = path.as_ref();
             if path == target {
                 return Some(project.id.clone());
             }
