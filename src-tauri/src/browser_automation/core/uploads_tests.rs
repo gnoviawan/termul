@@ -207,8 +207,10 @@ fn git_ignores_accepts_a_canonical_root() {
         return;
     }
     let root = fs::canonicalize(p.dir.path()).unwrap();
-    #[cfg(windows)]
-    assert!(root.to_string_lossy().starts_with(r"\\?\"), "{root:?}");
+    // Runtime check: the layering test forbids compile-time platform gates in core.
+    if cfg!(windows) {
+        assert!(root.to_string_lossy().starts_with(r"\\?\"), "{root:?}");
+    }
     fs::write(root.join(".gitignore"), "build/\n").unwrap();
     assert!(git_ignores(&root, Path::new("build/app.zip")));
     assert!(!git_ignores(&root, Path::new("docs/report.pdf")));
