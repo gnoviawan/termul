@@ -49,6 +49,7 @@ import { dropPromptQueueForSession, moveQueuedPrompts } from '../../prompt-queue
 import { pruneRestoredChatTabs } from '../chat-tab-prune'
 import {
   addAdvertisedOptionsKeepingCurrent,
+  adoptIndexTitles,
   cacheOptionsFromSession,
   captureReopenControlBaseline,
   configIdForAgentId,
@@ -72,6 +73,7 @@ import {
   openTurnPromptSeq,
   partitionTranscriptTurns,
   plainLastError,
+  preferIndexTitle,
   refreshHostOwnedIndex,
   resolveSwitchRedirect,
   SWITCH_SPLICE_ID_PREFIX,
@@ -849,7 +851,10 @@ async function openHistorySessionInner(
         cwd: meta.cwd,
         projectId: meta.projectId,
         status: 'closed',
-        title: meta.title,
+        // The host can serve the placeholder when this device opens the chat
+        // before its first prompt titled it (issue #1808); a real index title
+        // wins over it.
+        title: preferIndexTitle(meta.title, s.sessionIndex, id),
         // Optimistic turn flags: installed only when the turn could still be
         // live, and cleared again at agent resolution when no owning agent is
         // connected to keep it running (dead turn).
@@ -1583,7 +1588,9 @@ async function applyIndexEntries(
     mergeSessionIndexEntries(current, entries, liveSessionIds),
     get().sessions
   )
-  set({ sessionIndex: merged })
+  // A live session installed before the host titled it still holds the
+  // placeholder; the index row's real title replaces it (issue #1808).
+  set((s) => ({ sessionIndex: merged, sessions: adoptIndexTitles(s.sessions, merged) }))
   // Prune restored agent-chat tabs whose session is neither live nor in the
   // hydrated index — they could only render the corpse "chat unavailable"
   // fallback. Live sessions win over index absence (a just-failed launch is
