@@ -399,6 +399,21 @@ export interface BugReportDraftInput {
   diagnostics: BugReportContext
 }
 
+/**
+ * A web MCP OAuth flow waiting on its sign-in (spec-mcp-oauth-web-paste-back).
+ * Set once the host returns the sign-in link; the paste dialog reads it to
+ * offer Open/Copy and to take the loopback redirect address back. Cleared when
+ * the flow ends (token stored, failed, cancelled). Desktop never sets it.
+ */
+export interface McpOAuthPasteBack {
+  projectId: string
+  serverUrl: string
+  serverName: string
+  authUrl: string
+  /** The loopback redirect the host registered (`http://127.0.0.1:{port}/oauth/callback`). */
+  redirectUri: string
+}
+
 /** How an option set reaches the agent's saved composer record. */
 export interface OptionSetOptions {
   /** False for a restore or reapply: only user picks update the saved record. Defaults to true. */
@@ -556,6 +571,8 @@ export interface AcpState {
   mcpOAuthConnecting: Record<string, boolean>
   /** Per-server OAuth connected state (true when a stored token exists). */
   mcpOAuthConnected: Record<string, boolean>
+  /** Per-server web OAuth flow awaiting sign-in (drives the paste-back dialog). */
+  mcpOAuthPasteBack: Record<string, McpOAuthPasteBack>
 
   // Sessions
   sessions: Record<SessionId, AcpSession>
@@ -915,8 +932,19 @@ export interface AcpState {
   /** Start the OAuth flow for an HTTP/SSE MCP server that returned `authRequired`,
    * on behalf of `projectId` (the web host authorizes the URL against that
    * project's MCP list). Opens the system browser, waits for the callback,
-   * stores the token. */
-  connectMcpOAuth: (projectId: string, id: string) => Promise<void>
+   * stores the token. On web it also publishes `mcpOAuthPasteBack[id]` while
+   * the sign-in is pending. Resolves `true` once a token is stored, `false`
+   * when the flow was cancelled ({@link AcpState.cancelMcpOAuth}) or the
+   * server went away; throws on failure. */
+  connectMcpOAuth: (projectId: string, id: string) => Promise<boolean>
+  /** Web only: finish server `id`'s pending flow with the pasted loopback
+   * redirect address. Clears `mcpOAuthPasteBack[id]` on success (the running
+   * `connectMcpOAuth` then sees the token and marks the server connected).
+   * Throws an `McpOAuthError` with the host's code on failure. */
+  completeMcpOAuthPaste: (id: string, callbackUrl: string) => Promise<void>
+  /** Stop server `id`'s pending web OAuth flow: polling stops, the
+   * connecting spinner and the paste-back entry clear. No-op when none runs. */
+  cancelMcpOAuth: (id: string) => void
   /** Check whether a stored OAuth token exists and update `mcpOAuthConnected`. */
   checkMcpOAuthStatus: (projectId: string, id: string) => Promise<void>
   /** Delete the stored OAuth token (the "Disconnect" action). */

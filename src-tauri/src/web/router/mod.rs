@@ -237,6 +237,9 @@ pub fn router(
             "/mcp-servers/oauth/disconnect",
             post(mcp_oauth_api::oauth_disconnect),
         )
+        // Paste-back: finish a flow from the redirect address a browser on
+        // another machine landed on.
+        .route("/mcp-servers/oauth/complete", post(mcp_oauth_api::oauth_complete))
         // The OAuth callback redirect target (GET — the AS redirects here).
         .route("/oauth/callback", get(mcp_oauth_api::oauth_callback))
         // Project-creation fs/git/shell routes (Story: Web/remote project

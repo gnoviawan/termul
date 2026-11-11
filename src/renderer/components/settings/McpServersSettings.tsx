@@ -243,7 +243,9 @@ export function McpServersSettings(): React.JSX.Element {
                               )
                             } else {
                               void connectMcpOAuth(activeProjectId, server.id)
-                                .then(() => toast.success(`Connected to ${server.name}`))
+                                .then((connected) => {
+                                  if (connected) toast.success(`Connected to ${server.name}`)
+                                })
                                 .catch((error: unknown) => toast.error(oauthFailureMessage(error)))
                             }
                           }}
