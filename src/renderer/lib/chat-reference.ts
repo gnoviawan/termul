@@ -18,6 +18,14 @@ export interface ChatReference {
 const READ_HINT = 'Read it with the Troupe read_chat tool.'
 
 /**
+ * A verbatim value kept on its line: a line break in a folder name or id
+ * would otherwise start a line such as a second `Chat ID:` the agent follows.
+ */
+function oneLine(value: string): string {
+  return value.replace(/\r/g, '\\r').replace(/\n/g, '\\n')
+}
+
+/**
  * A short labeled plain-text block ending in how to read the chat; lines with
  * an unknown value are left out.
  */
@@ -25,9 +33,10 @@ export function formatChatReference({ chatId, title, project, cwd }: ChatReferen
   const lines = [`Troupe chat: ${title.replace(/\s+/g, ' ').trim()}`, `Chat ID: ${chatId}`]
   if (project) {
     const name = project.name?.replace(/\s+/g, ' ').trim()
-    lines.push(name ? `Project: ${name} (ID ${project.id})` : `Project: ID ${project.id}`)
+    const id = oneLine(project.id)
+    lines.push(name ? `Project: ${name} (ID ${id})` : `Project: ID ${id}`)
   }
-  if (cwd) lines.push(`Folder: ${cwd}`)
+  if (cwd) lines.push(`Folder: ${oneLine(cwd)}`)
   lines.push(READ_HINT)
   return lines.join('\n')
 }
