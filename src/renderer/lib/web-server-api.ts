@@ -778,8 +778,12 @@ export const webServerMcpOAuth = {
   },
 
   /** Check whether a stored OAuth token exists for a server URL. */
-  async status(projectId: string, serverUrl: string): Promise<IpcResult<{ hasToken: boolean }>> {
-    return postJson('/mcp-servers/oauth/status', { projectId, serverUrl })
+  async status(
+    projectId: string,
+    serverUrl: string,
+    signal?: AbortSignal
+  ): Promise<IpcResult<{ hasToken: boolean }>> {
+    return postJson('/mcp-servers/oauth/status', { projectId, serverUrl }, signal)
   },
 
   /** Delete the stored OAuth token for a server URL. */

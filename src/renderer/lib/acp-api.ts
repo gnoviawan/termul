@@ -1026,18 +1026,19 @@ export async function startMcpOAuth(
   try {
     while (Date.now() < deadline) {
       await waitOrCancel(POLL_INTERVAL_MS, signal)
-      const status = await webServerMcpOAuth.status(projectId, serverUrl)
+      // The signal also aborts a status request that hangs.
+      const status = await webServerMcpOAuth.status(projectId, serverUrl, signal)
       if (signal?.aborted) throw oauthCancelled()
       if (status.success && status.data?.hasToken) {
         return
       }
     }
+    throw new Error('OAuth flow timed out — user did not complete authorization in time')
   } catch (err) {
-    // A cancelled sign-in closes its provider window.
-    if (err instanceof McpOAuthError && err.code === MCP_OAUTH_CANCELLED) popup?.close()
+    // A cancelled or timed-out sign-in closes its provider window.
+    popup?.close()
     throw err
   }
-  throw new Error('OAuth flow timed out — user did not complete authorization in time')
 }
 
 /** Web only: finish a pending OAuth flow with the loopback redirect address

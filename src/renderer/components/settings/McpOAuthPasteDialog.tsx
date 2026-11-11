@@ -6,9 +6,9 @@
  * the running `connectMcpOAuth` poll then sees the token and this dialog
  * closes. A browser anywhere else lands on a page that cannot load: the user
  * pastes that address here and the host exchanges the code with the session
- * it kept from the start. Mounted once by the web root (`App.tsx`) so both
- * Connect entry points (MCP settings, catalog install) share it; desktop never
- * sets `mcpOAuthPasteBack`.
+ * it kept from the start. Mounted once by each root (`App.tsx`, `TauriApp.tsx`)
+ * so both Connect entry points (MCP settings, catalog install) share it; on
+ * desktop it renders nothing, because desktop never sets `mcpOAuthPasteBack`.
  */
 
 import { useId, useState } from 'react'

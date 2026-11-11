@@ -167,6 +167,16 @@ describe('startMcpOAuth refusal of an unsafe sign-in link', () => {
         expect(popup.close).toHaveBeenCalledTimes(1)
       })
 
+      it('closes the sign-in window when the flow times out', async () => {
+        const settled = startMcpOAuth('proj-1', 'https://mcp.example.com').catch((e: unknown) => e)
+
+        await vi.advanceTimersByTimeAsync(301_000)
+
+        const error = await settled
+        expect(String(error)).toContain('timed out')
+        expect(popup.close).toHaveBeenCalledTimes(1)
+      })
+
       it('keeps the flow going when the popup is blocked, so the dialog can open the link', async () => {
         openSpy.mockReturnValue(null)
         const onAuthUrl = vi.fn()
