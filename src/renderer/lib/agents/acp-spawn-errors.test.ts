@@ -100,6 +100,37 @@ describe('formatAcpSpawnError', () => {
     expect(result.detail).toContain('npx cache')
   })
 
+  it('explains an npx cache entry that lost its package.json (npm ENOENT, exit 254)', () => {
+    const raw =
+      'agent failed to start: Internal error: {\n' +
+      '  "data": "Process exited with exit status: 254: npm error code ENOENT\\n' +
+      'npm error syscall open\\nnpm error path /Users/dev/.npm/_npx/2226a678236ff29a/package.json\\n' +
+      'npm error errno -2\\n"\n}'
+    const result = classifySetupError(raw, { command: 'npx' })
+    expect(result).toMatchObject({ category: 'spawn', label: 'Agent unavailable' })
+    expect(result.detail).toBe(
+      'npm could not read package.json in its npx cache entry for this agent. ' +
+        'The npx cache may be incomplete. Run `npm config get cache`, rename the `_npx` directory there as a backup, then retry.'
+    )
+    expect(
+      formatAcpSpawnError(
+        "npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open '/home/ubuntu/.npm/_npx/4a4ca55c38a52b9f/package.json'",
+        { command: 'npx' }
+      )
+    ).toBe(result.detail)
+    expect(
+      formatAcpSpawnError(
+        'npm error code ENOENT\\nnpm error path C:\\\\Users\\\\dev\\\\AppData\\\\Local\\\\npm-cache\\\\_npx\\\\4a4ca55c38a52b9f\\\\package.json',
+        { command: 'npx' }
+      )
+    ).toBe(result.detail)
+  })
+
+  it('does not blame the npx cache for an ENOENT on the project package.json', () => {
+    const raw = 'npm error code ENOENT\nnpm error path /work/app/package.json'
+    expect(formatAcpSpawnError(raw, { command: 'npx' })).toMatch(/Install Node\.js/)
+  })
+
   it('explains an npx package missing an optional/platform dependency', () => {
     // @agentclientprotocol/codex-acp spawns `codex app-server` via
     // @openai/codex; a partial ~/.npm/_npx tree lacks the platform package and
