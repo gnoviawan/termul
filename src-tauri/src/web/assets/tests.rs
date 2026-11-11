@@ -893,3 +893,65 @@ async fn serve_embedded_conditional_head_304_has_no_content_length() {
         .get(header::CONTENT_ENCODING)
         .is_none());
 }
+
+/// #1801 on the dev disk path: `ServeDir` answers a matching
+/// `If-Modified-Since` with a 304 that already has no `Content-Length` (it
+/// does not go through axum's handler `IntoResponse`, which is what set
+/// `Content-Length: 0` on the embed/canvas 304s). An unconditional HEAD still
+/// reports the real length (#1728). Uses the same layers `router()` /
+/// `router_with_static` install for the disk path.
+#[tokio::test]
+async fn disk_served_conditional_head_304_has_no_content_length() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::write(root.join("index.html"), "<!doctype html>shell").expect("index.html");
+
+    let router = Router::new()
+        .fallback_service(static_service_from(root))
+        .layer(axum::middleware::from_fn(shell_no_cache_headers))
+        .layer(axum::middleware::from_fn(immutable_asset_cache_headers))
+        .layer(static_compression_layer());
+
+    let send = |method: Method, since: Option<axum::http::HeaderValue>| {
+        let mut request = Request::builder().method(method).uri("/index.html");
+        if let Some(value) = since {
+            request = request.header(header::IF_MODIFIED_SINCE, value);
+        }
+        router.clone().oneshot(
+            request
+                .header(header::ACCEPT_ENCODING, "gzip")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+    };
+
+    let fresh = send(Method::HEAD, None).await.expect("router response");
+    assert_eq!(fresh.status(), StatusCode::OK);
+    let length = fresh.headers()[header::CONTENT_LENGTH].clone();
+    assert_ne!(length, "0");
+    let last_modified = fresh.headers()[header::LAST_MODIFIED].clone();
+
+    for method in [Method::HEAD, Method::GET] {
+        let revalidated = send(method.clone(), Some(last_modified.clone()))
+            .await
+            .expect("router response");
+        assert_eq!(revalidated.status(), StatusCode::NOT_MODIFIED, "{method}");
+        assert!(
+            revalidated.headers().get(header::CONTENT_LENGTH).is_none(),
+            "{method}: {:?}",
+            revalidated.headers().get(header::CONTENT_LENGTH)
+        );
+        assert!(
+            revalidated
+                .headers()
+                .get(header::CONTENT_ENCODING)
+                .is_none(),
+            "{method}: {:?}",
+            revalidated.headers().get(header::CONTENT_ENCODING)
+        );
+        let body = to_bytes(revalidated.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        assert!(body.is_empty(), "{method}");
+    }
+}
