@@ -148,7 +148,7 @@ describe('startMcpOAuth refusal of an unsafe sign-in link', () => {
         expect(done).toBe(true)
       })
 
-      it('stops polling and rejects as cancelled once the signal aborts', async () => {
+      it('stops polling, closes the sign-in window and rejects as cancelled once the signal aborts', async () => {
         const controller = new AbortController()
         const settled = startMcpOAuth('proj-1', 'https://mcp.example.com', {
           signal: controller.signal
@@ -164,6 +164,7 @@ describe('startMcpOAuth refusal of an unsafe sign-in link', () => {
         expect(error).toBeInstanceOf(McpOAuthError)
         expect((error as McpOAuthError).code).toBe(MCP_OAUTH_CANCELLED)
         expect(webServerMcpOAuth.status).toHaveBeenCalledTimes(polls)
+        expect(popup.close).toHaveBeenCalledTimes(1)
       })
 
       it('keeps the flow going when the popup is blocked, so the dialog can open the link', async () => {

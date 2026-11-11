@@ -363,7 +363,7 @@ async fn complete_is_refused_to_a_remote_peer_and_in_shared_live_mode() {
         !body.success,
         "shared-live must refuse even a loopback peer"
     );
-    assert!(body.code.is_some());
+    assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
     assert!(state.pending_oauth_flows.read().contains_key("s1"));
 }
 

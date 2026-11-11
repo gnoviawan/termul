@@ -58,6 +58,8 @@ pub mod project_registry;
 pub mod projects_api;
 pub mod prompt_turn;
 #[cfg(test)]
+mod oauth_redirect_base_tests;
+#[cfg(test)]
 mod prompt_turn_tests;
 pub mod route_deadline;
 pub mod router;
@@ -524,21 +526,5 @@ async fn shutdown_signal() -> Result<(), std::io::Error> {
         // Windows: Ctrl-C / console ctrl handler via tokio. SIGTERM is not a
         // portable Win32 signal; service-stop is out of scope for this scaffold.
         ctrl_c.await
-    }
-}
-
-#[cfg(test)]
-mod oauth_redirect_base_tests {
-    use super::oauth_redirect_base;
-
-    #[test]
-    fn redirect_base_is_loopback_on_the_bound_port() {
-        for bind in ["0.0.0.0:8080", "127.0.0.1:8080", "192.168.1.5:8080"] {
-            assert_eq!(
-                oauth_redirect_base(bind.parse().unwrap()),
-                "http://127.0.0.1:8080",
-                "{bind}"
-            );
-        }
     }
 }

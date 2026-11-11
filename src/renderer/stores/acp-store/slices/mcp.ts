@@ -458,8 +458,10 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
         }
       })
     } catch (err) {
+      // Desktop ignores the signal, so a superseded flow can still settle here.
+      const superseded = oauthFlows.get(id) !== flow
       settle()
-      if (isOAuthCancelled(err)) {
+      if (isOAuthCancelled(err) || superseded) {
         void logFrontendError({
           level: 'info',
           source: 'acp-store.connectMcpOAuth',
@@ -476,8 +478,9 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
     // startMcpOAuth blocks until the token is stored (desktop: the Tauri
     // command blocks; web: polls the status endpoint). Setting connected
     // state here is correct — the token is confirmed.
+    const superseded = oauthFlows.get(id) !== flow
     settle()
-    if (deleted()) return false
+    if (superseded || deleted()) return false
     set((s) => ({ mcpOAuthConnected: { ...s.mcpOAuthConnected, [id]: true } }))
     void logFrontendError({
       level: 'info',
@@ -505,10 +508,9 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
       if (code !== 'OAUTH_UNKNOWN_STATE') throw err
       // The host holds no flow for this sign-in. It may already have used it
       // (its own callback won, or a lost reply to an earlier paste): then the
-      // token is stored and the running poll finishes the connect.
-      const stored = await acpApi
-        .hasMcpOAuthToken(pending.projectId, pending.serverUrl)
-        .catch(() => false)
+      // token is stored and the running poll finishes the connect. A failed
+      // check rejects as is: the dialog stays open for another try.
+      const stored = await acpApi.hasMcpOAuthToken(pending.projectId, pending.serverUrl)
       if (!stored) {
         // Expired: polling for its token can never succeed.
         get().cancelMcpOAuth(id)

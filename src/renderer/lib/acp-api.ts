@@ -1023,13 +1023,19 @@ export async function startMcpOAuth(
   const POLL_INTERVAL_MS = 1000
   const POLL_TIMEOUT_MS = 300_000 // 5 min — matches OAUTH_FLOW_TIMEOUT_SECS
   const deadline = Date.now() + POLL_TIMEOUT_MS
-  while (Date.now() < deadline) {
-    await waitOrCancel(POLL_INTERVAL_MS, signal)
-    const status = await webServerMcpOAuth.status(projectId, serverUrl)
-    if (signal?.aborted) throw oauthCancelled()
-    if (status.success && status.data?.hasToken) {
-      return
+  try {
+    while (Date.now() < deadline) {
+      await waitOrCancel(POLL_INTERVAL_MS, signal)
+      const status = await webServerMcpOAuth.status(projectId, serverUrl)
+      if (signal?.aborted) throw oauthCancelled()
+      if (status.success && status.data?.hasToken) {
+        return
+      }
     }
+  } catch (err) {
+    // A cancelled sign-in closes its provider window.
+    if (err instanceof McpOAuthError && err.code === MCP_OAUTH_CANCELLED) popup?.close()
+    throw err
   }
   throw new Error('OAuth flow timed out — user did not complete authorization in time')
 }
