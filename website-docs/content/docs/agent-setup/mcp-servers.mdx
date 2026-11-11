@@ -101,7 +101,12 @@ Some HTTP and SSE servers need you to sign in with your account on that service.
 2. Sign in on the page that opens in your browser, and allow access.
 3. Go back to Troupe. The button changes to **Disconnect**, and Troupe tests the server again.
 
-In the browser version, the sign-in page opens in a new window. If nothing opens, allow pop-ups for the Troupe site and try again. You have five minutes to finish signing in.
+In the browser version, the sign-in page opens in a new window, and a **Finish signing in to** dialog shows the sign-in link. If nothing opens, click **Open**, or click **Copy** and open the link yourself. You have five minutes to finish signing in.
+
+- If your browser runs on the same machine as Troupe, signing in finishes by itself and the dialog closes.
+- If your browser runs on another device, for example a laptop or phone connected to troupe-server, it ends on a `127.0.0.1` address that fails to load or shows an error. Copy that full address from the address bar, paste it into **Paste the redirect address**, and click **Complete sign-in**.
+
+If the dialog says the address does not belong to this sign-in, paste the full address that starts with the one it shows. To stop, click **Dismiss**, then click **Connect** to start again.
 
 To remove the sign-in, click **Disconnect**.
 
