@@ -2304,6 +2304,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     const task = (async () => {
       const connected = get().agentStatus[agentId] === 'connected'
       const capabilities = get().agents[agentId]?.capabilities ?? null
+      const mcpServers = selectMcpServersForAgent(get().mcpServers, capabilities).servers
       let strategy = decideResume({ connected, capabilities })
 
       if (strategy === 'local') {
@@ -2383,7 +2384,8 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
                   ),
                   cwd,
                   projectId
-                )
+                ),
+                mcpServers
               )
             )) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
@@ -2437,7 +2439,8 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
                   ),
                   cwd,
                   projectId
-                )
+                ),
+                mcpServers
               )
             )) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
@@ -2490,7 +2493,8 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
                   ),
                   cwd,
                   projectId
-                )
+                ),
+                mcpServers
               )
             )) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
