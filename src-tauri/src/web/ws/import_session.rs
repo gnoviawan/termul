@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::acp::agent_session_import::{
-    import_agent_session, ImportAgentSessionError, ImportAgentSessionRequest,
+    import_agent_session_with_cleanup, ImportAgentSessionError, ImportAgentSessionRequest,
 };
 use crate::acp::AgentId;
 
@@ -47,7 +47,7 @@ pub(super) async fn handle_import_agent_session(
         );
     };
     let session_id = parsed.session_id.trim().to_string();
-    let result = import_agent_session(
+    let result = import_agent_session_with_cleanup(
         acp,
         &persistence,
         ImportAgentSessionRequest {
@@ -58,6 +58,7 @@ pub(super) async fn handle_import_agent_session(
             updated_at: parsed.updated_at,
             project_id: parsed.project_id,
         },
+        || relay.forget_session(&session_id),
     )
     .await;
     match result {
@@ -71,9 +72,6 @@ pub(super) async fn handle_import_agent_session(
             ok_with_payload(id, &crate::acp::SessionIndexEntry::from(&metadata))
         }
         Err(error) => {
-            if error.registered_session() {
-                relay.forget_session(&session_id).await;
-            }
             warn!(
                 target: "termul::web::ws",
                 error = %error,
@@ -84,7 +82,8 @@ pub(super) async fn handle_import_agent_session(
                     WsReply::err(id, WsErrorCode::Duplicate, error.to_string())
                 }
                 ImportAgentSessionError::UnknownAgent(message)
-                | ImportAgentSessionError::Agent(message) => acp_err_to_reply(id, message),
+                | ImportAgentSessionError::Agent(message)
+                | ImportAgentSessionError::Live(message) => acp_err_to_reply(id, message),
                 ImportAgentSessionError::Invalid(_) | ImportAgentSessionError::Empty => {
                     WsReply::err(id, WsErrorCode::Unsupported, error.to_string())
                 }

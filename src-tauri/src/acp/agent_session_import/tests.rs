@@ -352,5 +352,40 @@ async fn an_unhealthy_writer_after_the_flush_fails_the_import() {
         matches!(error, ImportAgentSessionError::Persistence(_)),
         "{error:?}"
     );
+    // Stop the session's writer before its directory goes away.
+    let _ = persistence.delete_session("cc-writer").await;
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The relay cleanup of a failed import runs while the import still holds its
+/// slot, so a retry cannot register the session before the cleanup ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_import_cleans_up_before_it_releases_its_slot() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let ran = std::sync::atomic::AtomicBool::new(false);
+    let result =
+        import_agent_session_with_cleanup(&h.acp, &h.persistence, h.request("cc-fail"), || async {
+            assert!(
+                ImportSlot::claim("cc-fail").is_none(),
+                "the slot is released before the cleanup"
+            );
+            ran.store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+        .await;
+    assert!(
+        matches!(result, Err(ImportAgentSessionError::Agent(_))),
+        "{result:?}"
+    );
+    assert!(ran.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(ImportSlot::claim("cc-fail").is_some());
+    h.finish().await;
+}
+
+#[test]
+fn a_live_session_of_another_flow_keeps_its_relay_state() {
+    let error = ImportAgentSessionError::Live("ACP_IMPORT_SESSION_LIVE: held".to_string());
+    assert!(!error.registered_session());
+    assert!(ImportAgentSessionError::Agent("load failed".to_string()).registered_session());
 }

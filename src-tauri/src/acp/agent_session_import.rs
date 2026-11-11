@@ -73,6 +73,9 @@ pub enum ImportAgentSessionError {
     Registration(String),
     /// The agent could not load the session.
     Agent(String),
+    /// Another flow holds the session live on the agent. Its relay state is
+    /// not the import's to clean up.
+    Live(String),
     /// The agent replayed no history.
     Empty,
     /// The session store failed.
@@ -86,6 +89,7 @@ impl std::fmt::Display for ImportAgentSessionError {
             | Self::UnknownAgent(message)
             | Self::Registration(message)
             | Self::Agent(message)
+            | Self::Live(message)
             | Self::Persistence(message) => f.write_str(message),
             Self::AlreadyKnown => f.write_str("this session is already in the chat history"),
             Self::Empty => f.write_str("the agent returned no history for this session"),
@@ -97,18 +101,38 @@ impl std::error::Error for ImportAgentSessionError {}
 
 impl ImportAgentSessionError {
     /// Whether the import had registered the session (and so may have left
-    /// state behind in the relay) when it failed.
+    /// state behind in the relay) when it failed. A live session of another
+    /// flow keeps its relay state.
     pub fn registered_session(&self) -> bool {
         matches!(self, Self::Agent(_) | Self::Empty | Self::Persistence(_))
     }
 }
 
-/// Import one session. A failure leaves no trace in the store.
+/// Import one session with no relay cleanup (tests). A failure leaves no
+/// trace in the store.
+#[cfg(test)]
 pub async fn import_agent_session(
     acp: &Arc<AcpManager>,
     persistence: &Arc<SessionPersistence>,
     request: ImportAgentSessionRequest,
 ) -> Result<SessionMetadata, ImportAgentSessionError> {
+    import_agent_session_with_cleanup(acp, persistence, request, || async {}).await
+}
+
+/// Import one session. A failure leaves no trace in the store. `cleanup` runs
+/// after a failed import that left state of its own behind (see [`ImportAgentSessionError::registered_session`]).
+/// `cleanup` runs before the import slot is released, so it cannot remove the
+/// state of a retry that registers the same session.
+pub async fn import_agent_session_with_cleanup<F, Fut>(
+    acp: &Arc<AcpManager>,
+    persistence: &Arc<SessionPersistence>,
+    request: ImportAgentSessionRequest,
+    cleanup: F,
+) -> Result<SessionMetadata, ImportAgentSessionError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     let session_id = request.session_id.trim().to_string();
     // A directory name may end in whitespace on POSIX: only the emptiness check trims.
     let cwd = request.cwd.clone();
@@ -172,6 +196,9 @@ pub async fn import_agent_session(
             if let Err(rollback) = persistence.delete_session(&session_id).await {
                 log::warn!("[acp-import] rollback failed session_id={log_id} error={rollback}");
             }
+            if error.registered_session() {
+                cleanup().await;
+            }
             Err(error)
         }
     }
@@ -198,6 +225,9 @@ async fn load_and_close(
         // live session of another flow (`ACP_IMPORT_SESSION_LIVE`) is not ours to close.
         if message.starts_with("ACP_IMPORT_INCOMPLETE") {
             close_agent_session(acp, agent_id, session_id).await;
+        }
+        if message.starts_with("ACP_IMPORT_SESSION_LIVE") {
+            return Err(ImportAgentSessionError::Live(message));
         }
         return Err(ImportAgentSessionError::Agent(message));
     }
