@@ -149,6 +149,9 @@ jobs:
     name: Build (${{ matrix.platform }})
     needs: [prepare, mcp-snapshot]
     runs-on: ${{ matrix.runner }}
+    # The slowest leg (macos-x64) takes about 65 minutes. A wedged runner
+    # otherwise sits for the 6-hour default until GitHub drops it (#1617).
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -176,11 +179,25 @@ jobs:
         with:
           egress-policy: audit
 
+      # The linux-x64 runner has lost communication after this step failed,
+      # killing the whole nightly (#1617). Bound it and retry once.
       - name: Checkout
+        id: checkout
+        continue-on-error: true
+        timeout-minutes: 10
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           # Pin to the exact commit `prepare` synthesized the version from so
           # the build commit matches the version baked into the binary.
+          ref: ${{ needs.prepare.outputs.commit_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout (retry)
+        if: steps.checkout.outcome == 'failure'
+        timeout-minutes: 10
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
           ref: ${{ needs.prepare.outputs.commit_sha }}
           fetch-depth: 1
           persist-credentials: false
