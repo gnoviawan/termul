@@ -754,6 +754,12 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
     // first-prompt send) still targets the real session after the merge has
     // already deleted the placeholder.
     let launchedSessionId: SessionId | null = null
+    const blocks =
+      initialBlocks && initialBlocks.length > 0
+        ? initialBlocks
+        : initialText && initialText.trim().length > 0
+          ? ([{ type: 'text', text: initialText }] as ContentBlock[])
+          : null
     try {
       const sessionId = await get().startChat(configId, cwd, mcpServers, projectId, {
         worktreePath,
@@ -844,12 +850,6 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
 
       await get().applyPendingLauncherOptions(sessionId, pending)
 
-      const blocks =
-        initialBlocks && initialBlocks.length > 0
-          ? initialBlocks
-          : initialText && initialText.trim().length > 0
-            ? ([{ type: 'text', text: initialText }] as ContentBlock[])
-            : null
       if (blocks) {
         await runPromptTurn(
           set,
@@ -931,7 +931,8 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
                 ? {
                     ...plainLastError(`${classified.label}: ${classified.detail}`),
                     launchConfigId: configId,
-                    pendingLauncherOptions: pending ?? null
+                    pendingLauncherOptions: pending ?? null,
+                    launchFirstTurnBlocks: blocks
                   }
                 : { lastError: err instanceof Error ? err.message : String(err) })
             }

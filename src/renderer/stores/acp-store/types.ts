@@ -295,6 +295,14 @@ export interface AcpSession {
     configValues: Record<string, string>
   } | null
   /**
+   * The first turn a failed chat launch was starting with (`finalizeChatLaunch`
+   * catch, same lifetime as `launchConfigId`). `retryFailedLaunch` re-sends it
+   * when the transcript has no optimistic first message to resend: a GitHub
+   * hand-off (Fix CI / Resolve comments) builds its first turn after the
+   * placeholder opens and never paints it (gh-1741).
+   */
+  launchFirstTurnBlocks?: ContentBlock[] | null
+  /**
    * Option values the agent advertised at session creation — the `session/new`
    * result (recorded by `createSession`) or the `session_created` payload when
    * the event beat the local record. `_onModeUpdate` and
