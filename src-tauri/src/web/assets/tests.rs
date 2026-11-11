@@ -904,7 +904,8 @@ async fn serve_embedded_conditional_head_304_has_no_content_length() {
 async fn disk_served_conditional_head_304_has_no_content_length() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
-    std::fs::write(root.join("index.html"), "<!doctype html>shell").expect("index.html");
+    let document = b"<!doctype html>shell";
+    std::fs::write(root.join("index.html"), document).expect("index.html");
 
     let router = Router::new()
         .fallback_service(static_service_from(root))
@@ -925,11 +926,27 @@ async fn disk_served_conditional_head_304_has_no_content_length() {
         )
     };
 
-    let fresh = send(Method::HEAD, None).await.expect("router response");
-    assert_eq!(fresh.status(), StatusCode::OK);
-    let length = fresh.headers()[header::CONTENT_LENGTH].clone();
-    assert_ne!(length, "0");
-    let last_modified = fresh.headers()[header::LAST_MODIFIED].clone();
+    let fresh_get = send(Method::GET, None).await.expect("router response");
+    assert_eq!(fresh_get.status(), StatusCode::OK);
+    let content_type = fresh_get
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/html"), "got {content_type}");
+    assert!(fresh_get.headers().get(header::CONTENT_ENCODING).is_none());
+    let length = fresh_get.headers()[header::CONTENT_LENGTH].clone();
+    let last_modified = fresh_get.headers()[header::LAST_MODIFIED].clone();
+    let body = to_bytes(fresh_get.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    assert_eq!(&body[..], document.as_slice());
+    assert_eq!(length, body.len().to_string());
+
+    let fresh_head = send(Method::HEAD, None).await.expect("router response");
+    assert_eq!(fresh_head.status(), StatusCode::OK);
+    assert_eq!(fresh_head.headers()[header::CONTENT_LENGTH], length);
 
     for method in [Method::HEAD, Method::GET] {
         let revalidated = send(method.clone(), Some(last_modified.clone()))
