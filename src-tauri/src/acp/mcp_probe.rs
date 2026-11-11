@@ -533,13 +533,10 @@ async fn connect_http(
     // header so the probe succeeds without re-prompting. This is the
     // "connect once, use forever" path — after the OAuth flow completes and
     // the token is persisted, every subsequent probe loads and uses it.
-    let has_auth_header = server
-        .headers
-        .iter()
-        .any(|pair| {
-            pair.name.eq_ignore_ascii_case("Authorization")
-                && reqwest::header::HeaderValue::from_str(&pair.value).is_ok()
-        });
+    let has_auth_header = server.headers.iter().any(|pair| {
+        pair.name.eq_ignore_ascii_case("Authorization")
+            && reqwest::header::HeaderValue::from_str(&pair.value).is_ok()
+    });
     let stored_token = if has_auth_header {
         None
     } else {
