@@ -223,6 +223,10 @@ describe('listImportableSessions', () => {
     if (result.status !== 'ready') return
     expect(result.sessions).toHaveLength(12)
     expect(list).toHaveBeenCalledTimes(12)
+    expect(list).toHaveBeenNthCalledWith(1, 'agent-1', '/work', undefined)
+    for (let page = 1; page < 12; page++) {
+      expect(list).toHaveBeenNthCalledWith(page + 1, 'agent-1', '/work', `c${page - 1}`)
+    }
   })
 
   it('stops listing when the agent repeats a cursor', async () => {
@@ -237,6 +241,8 @@ describe('listImportableSessions', () => {
     if (result.status !== 'ready') return
     expect(result.sessions.map((s) => s.sessionId)).toEqual(['a'])
     expect(list).toHaveBeenCalledTimes(2)
+    expect(list).toHaveBeenNthCalledWith(1, 'agent-1', '/work', undefined)
+    expect(list).toHaveBeenNthCalledWith(2, 'agent-1', '/work', 'same')
   })
 
   it('offers nothing when the agent cannot list or load sessions', async () => {

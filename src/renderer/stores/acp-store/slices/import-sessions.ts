@@ -63,10 +63,10 @@ export const createImportSlice: StateCreator<AcpState, [], [], ImportSliceState>
     const seen = new Set<string>()
     const cursors = new Set<string>()
     let cursor: string | undefined
-    let truncated = false
+    let truncated: 'page cap' | 'repeated cursor' | undefined
     for (let page = 0; ; page++) {
       if (page === MAX_LIST_PAGES) {
-        truncated = true
+        truncated = 'page cap'
         break
       }
       const res = await withAuthRetry(get, agentId, 'session/list', 'text', () =>
@@ -80,7 +80,7 @@ export const createImportSlice: StateCreator<AcpState, [], [], ImportSliceState>
       if (res.nextCursor == null) break
       // A repeated cursor would loop forever.
       if (cursors.has(res.nextCursor)) {
-        truncated = true
+        truncated = 'repeated cursor'
         break
       }
       cursors.add(res.nextCursor)
@@ -90,7 +90,7 @@ export const createImportSlice: StateCreator<AcpState, [], [], ImportSliceState>
       void logFrontendError({
         level: 'warn',
         source: 'acp.importSessions.list',
-        message: `Stopped listing agent sessions after ${seen.size}: the agent kept returning a cursor`
+        message: `Stopped listing agent sessions after ${seen.size}: ${truncated === 'page cap' ? `reached the ${MAX_LIST_PAGES}-page cap` : 'the agent repeated a cursor'}`
       })
     }
     if (get().agentStatus[agentId] !== 'connected') {
