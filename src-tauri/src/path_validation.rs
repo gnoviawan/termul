@@ -39,6 +39,97 @@ pub fn strip_verbatim_prefix(path: &str) -> Cow<'_, str> {
     Cow::Borrowed(path)
 }
 
+/// Path form safe to hand to `git` / `git.exe`.
+///
+/// Windows `canonicalize` yields `\\?\…` paths that git rejects (`fatal: could
+/// not create leading directories …: Invalid argument`). Call this on the git
+/// cwd and on path operands built from canonical paths (not on every argv
+/// token: refs, messages and pathspecs are passed through untouched).
+///
+/// Only rewrites on Windows; on POSIX a backslash is a literal filename
+/// character, so `\\?\foo` is a real name and is returned unchanged.
+#[inline]
+pub fn git_path(path: &str) -> Cow<'_, str> {
+    if cfg!(windows) {
+        windows_git_path(path)
+    } else {
+        Cow::Borrowed(path)
+    }
+}
+
+/// The Windows half of [`git_path`], platform-independent so it is testable
+/// everywhere. Strips only the drive (`\\?\C:\…`) and UNC (`\\?\UNC\…`)
+/// verbatim forms. Other verbatim forms such as `\\?\Volume{GUID}\…` have no
+/// plain equivalent (stripping would leave a relative path), so they are
+/// returned unchanged.
+///
+/// A verbatim path is taken literally, while a plain one is normalized by
+/// Windows (`/` is a separator, `.`/`..` are resolved, trailing dots and
+/// spaces are trimmed, device names like `NUL` are devices). The prefix is
+/// therefore only dropped when the plain form names the same location;
+/// otherwise the path is returned unchanged, so git gets the literal target
+/// (or refuses the verbatim path) instead of a different folder.
+pub fn windows_git_path(path: &str) -> Cow<'_, str> {
+    const VERBATIM: &str = r"\\?\";
+    const VERBATIM_UNC: &str = r"\\?\UNC\";
+    let rest = if let Some(rest) = path.strip_prefix(VERBATIM_UNC) {
+        if rest.is_empty() {
+            return Cow::Borrowed(path);
+        }
+        rest
+    } else if let Some(rest) = path.strip_prefix(VERBATIM) {
+        let b = rest.as_bytes();
+        if !(b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\') {
+            return Cow::Borrowed(path);
+        }
+        &rest[3..]
+    } else {
+        return Cow::Borrowed(path);
+    };
+    if verbatim_rest_is_plain_safe(rest) {
+        strip_verbatim_prefix(path)
+    } else {
+        Cow::Borrowed(path)
+    }
+}
+
+/// Whether the part of a verbatim path after its root means the same thing
+/// once the `\\?\` prefix is gone (see [`windows_git_path`]).
+fn verbatim_rest_is_plain_safe(rest: &str) -> bool {
+    if rest.contains('/') {
+        return false;
+    }
+    let rest = rest.strip_suffix('\\').unwrap_or(rest);
+    if rest.is_empty() {
+        return true;
+    }
+    rest.split('\\').all(|name| {
+        !name.is_empty()
+            && name != "."
+            && name != ".."
+            && !name.ends_with(['.', ' '])
+            && !is_windows_device_name(name)
+    })
+}
+
+fn is_windows_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim_end();
+    let upper = stem.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || upper
+        .strip_prefix("COM")
+        .or_else(|| upper.strip_prefix("LPT"))
+        .is_some_and(|n| {
+            // Windows also reserves the superscript digits ¹ ² ³.
+            matches!(
+                n,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        })
+}
+
 /// A Windows path a client sent, in plain backslash form: separators become
 /// `\` and a verbatim prefix is dropped, whatever slashes it was spelled
 /// with (`\\?\D:\p`, `//?/D:/p`, `\\?\D:\p/doc`). Clients echo the registry's

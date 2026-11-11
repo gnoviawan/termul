@@ -125,15 +125,19 @@ impl GitCommand {
 }
 
 /// git, ready for its arguments, running in `cwd`.
+///
+/// `cwd` is passed through [`crate::path_validation::git_path`] so a Windows
+/// verbatim (`\\?\…`) path from `canonicalize` does not reach `git.exe`.
 pub(super) fn git_command(cwd: &str) -> GitCommand {
-    if let Some(target) = wsl::wsl_target(cwd) {
+    let cwd = crate::path_validation::git_path(cwd);
+    if let Some(target) = wsl::wsl_target(cwd.as_ref()) {
         return GitCommand {
             command: target.git_command(),
             min_wait_ms: wsl::WSL_START_TIMEOUT_MS,
         };
     }
     let mut command = backend_command(resolve_git_binary());
-    command.current_dir(cwd);
+    command.current_dir(cwd.as_ref());
     command.into()
 }
 

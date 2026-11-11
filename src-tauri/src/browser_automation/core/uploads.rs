@@ -163,7 +163,10 @@ fn git_ignores(root: &Path, rel: &Path) -> bool {
     let mut git = std::process::Command::new("git");
     hide_console(&mut git)
         .arg("-C")
-        .arg(root)
+        .arg(root.to_str().map_or_else(
+            || root.as_os_str().to_os_string(),
+            |s| crate::path_validation::git_path(s).into_owned().into(),
+        ))
         .args(["check-ignore", "-q", "--"])
         .arg(rel)
         .stdin(std::process::Stdio::null())
