@@ -3500,7 +3500,7 @@ describe('Agent session import parity', () => {
       /getAcpTransport\(\)\.importAgentSession\(input, call\)/
     )
     expect(readFileSync(join(LIB_DIR, 'acp-transport', 'ws-transport.ts'), 'utf-8')).toMatch(
-      /'import_agent_session'/
+      /return this\.request<PersistedSessionSummary>\('import_agent_session', input, undefined, options\)/
     )
     expect(
       readFileSync(join(LIB_DIR, 'acp-transport', 'desktop-transport.ts'), 'utf-8')
@@ -3513,7 +3513,7 @@ describe('Agent session import parity', () => {
     )
     expect(read('web', 'ws', 'import_session.rs')).toMatch(/import_agent_session\(/)
     expect(read('web', 'command_ledger', 'class.rs')).toMatch(
-      /\(\s*"import_agent_session",\s*CommandClass::command\(/
+      /\(\s*"import_agent_session",\s*CommandClass::command\(Replay::Payload\)/
     )
   })
 
