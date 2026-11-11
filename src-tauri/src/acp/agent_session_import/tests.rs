@@ -320,3 +320,37 @@ async fn a_padded_project_id_is_stored_trimmed_and_a_future_time_is_not_trusted(
     assert!(metadata.created_at <= now_millis() + 300_000);
     h.finish().await;
 }
+
+/// A relay that cannot take a replayed update only marks the writer unhealthy,
+/// so the import must read that flag after the flush and fail.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unhealthy_writer_after_the_flush_fails_the_import() {
+    let dir = std::env::temp_dir().join(format!("termul-import-{}", uuid::Uuid::new_v4()));
+    let persistence = SessionPersistence::open(dir.join("sessions"))
+        .await
+        .expect("open session persistence");
+    let registration = SessionRegistration {
+        session_id: "cc-writer".to_string(),
+        stable_agent_namespace: Some("mock".to_string()),
+        cwd: dir.clone(),
+        ..Default::default()
+    };
+    persistence
+        .register_imported_session(registration, now_millis(), None)
+        .await
+        .expect("register");
+
+    flush_checked(&persistence, "cc-writer")
+        .await
+        .expect("a healthy writer passes");
+
+    persistence.mark_writer_unhealthy_for_test("cc-writer", "writer stopped");
+    let error = flush_checked(&persistence, "cc-writer")
+        .await
+        .expect_err("an unhealthy writer fails the import");
+    assert!(
+        matches!(error, ImportAgentSessionError::Persistence(_)),
+        "{error:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
