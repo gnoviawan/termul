@@ -8,13 +8,19 @@ vi.mock('@/lib/tauri-runtime', () => ({
   cleanupTauriListener: vi.fn()
 }))
 vi.mock('@/lib/web-server-api', () => ({
-  webServerMcpOAuth: { start: vi.fn(), status: vi.fn(), disconnect: vi.fn() }
+  webServerMcpOAuth: { start: vi.fn(), status: vi.fn(), disconnect: vi.fn(), complete: vi.fn() }
 }))
 
 import { invoke } from '@tauri-apps/api/core'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpOAuth } from '@/lib/web-server-api'
-import { MCP_UNSAFE_URL, McpOAuthError, startMcpOAuth } from './acp-api'
+import {
+  completeMcpOAuth,
+  MCP_OAUTH_CANCELLED,
+  MCP_UNSAFE_URL,
+  McpOAuthError,
+  startMcpOAuth
+} from './acp-api'
 
 const refused = {
   success: false,
@@ -105,5 +111,98 @@ describe('startMcpOAuth refusal of an unsafe sign-in link', () => {
       expect(popup.close).toHaveBeenCalledTimes(1)
       expect(popup.location.href).toBe('about:blank')
     })
+
+    describe('paste-back', () => {
+      const authUrl = 'https://auth.example.test/authorize?client_id=x'
+      const redirectUri = 'http://127.0.0.1:8080/oauth/callback'
+
+      beforeEach(() => {
+        vi.useFakeTimers()
+        vi.mocked(webServerMcpOAuth.start).mockResolvedValue({
+          success: true,
+          data: { authUrl, redirectUri }
+        })
+        vi.mocked(webServerMcpOAuth.status).mockResolvedValue({
+          success: true,
+          data: { hasToken: false }
+        })
+      })
+
+      it('hands the sign-in link and the registered redirect to onAuthUrl, then waits for the token', async () => {
+        const onAuthUrl = vi.fn()
+        let done = false
+        const flow = startMcpOAuth('proj-1', 'https://mcp.example.com', { onAuthUrl }).then(() => {
+          done = true
+        })
+
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(onAuthUrl.mock.calls).toEqual([[authUrl, redirectUri]])
+        expect(done).toBe(false)
+
+        vi.mocked(webServerMcpOAuth.status).mockResolvedValue({
+          success: true,
+          data: { hasToken: true }
+        })
+        await vi.advanceTimersByTimeAsync(1000)
+        await flow
+        expect(done).toBe(true)
+      })
+
+      it('stops polling and rejects as cancelled once the signal aborts', async () => {
+        const controller = new AbortController()
+        const settled = startMcpOAuth('proj-1', 'https://mcp.example.com', {
+          signal: controller.signal
+        }).catch((e: unknown) => e)
+
+        await vi.advanceTimersByTimeAsync(2000)
+        const polls = vi.mocked(webServerMcpOAuth.status).mock.calls.length
+        expect(polls).toBe(2)
+        controller.abort()
+        await vi.advanceTimersByTimeAsync(5000)
+
+        const error = await settled
+        expect(error).toBeInstanceOf(McpOAuthError)
+        expect((error as McpOAuthError).code).toBe(MCP_OAUTH_CANCELLED)
+        expect(webServerMcpOAuth.status).toHaveBeenCalledTimes(polls)
+      })
+
+      it('keeps the flow going when the popup is blocked, so the dialog can open the link', async () => {
+        openSpy.mockReturnValue(null)
+        const onAuthUrl = vi.fn()
+        const controller = new AbortController()
+        const settled = startMcpOAuth('proj-1', 'https://mcp.example.com', {
+          onAuthUrl,
+          signal: controller.signal
+        }).catch((e: unknown) => e)
+
+        await vi.advanceTimersByTimeAsync(1000)
+        expect(onAuthUrl.mock.calls).toEqual([[authUrl, redirectUri]])
+        controller.abort()
+        expect(((await settled) as McpOAuthError).code).toBe(MCP_OAUTH_CANCELLED)
+      })
+    })
+  })
+})
+
+describe('completeMcpOAuth', () => {
+  const pasted = 'http://127.0.0.1:8080/oauth/callback?code=c&state=s'
+
+  it('posts the pasted address for the named project', async () => {
+    vi.mocked(webServerMcpOAuth.complete).mockResolvedValue({ success: true, data: undefined })
+
+    await expect(completeMcpOAuth('proj-1', pasted)).resolves.toBeUndefined()
+    expect(webServerMcpOAuth.complete).toHaveBeenCalledWith('proj-1', pasted)
+  })
+
+  it('surfaces the host code and message', async () => {
+    vi.mocked(webServerMcpOAuth.complete).mockResolvedValue({
+      success: false,
+      error: 'The user denied access',
+      code: 'OAUTH_DENIED'
+    })
+
+    const error = await completeMcpOAuth('proj-1', pasted).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(McpOAuthError)
+    expect(error).toMatchObject({ code: 'OAUTH_DENIED', message: 'The user denied access' })
   })
 })

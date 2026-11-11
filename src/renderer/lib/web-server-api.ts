@@ -768,6 +768,15 @@ export const webServerMcpOAuth = {
     return postJson('/mcp-servers/oauth/start', { projectId, serverUrl })
   },
 
+  /**
+   * Finish a flow with the loopback redirect address the user pasted back
+   * (the browser that signed in could not reach the host). The host matches
+   * it to its pending flow by `state` and exchanges the code.
+   */
+  async complete(projectId: string, callbackUrl: string): Promise<IpcResult<void>> {
+    return postJson('/mcp-servers/oauth/complete', { projectId, callbackUrl })
+  },
+
   /** Check whether a stored OAuth token exists for a server URL. */
   async status(projectId: string, serverUrl: string): Promise<IpcResult<{ hasToken: boolean }>> {
     return postJson('/mcp-servers/oauth/status', { projectId, serverUrl })

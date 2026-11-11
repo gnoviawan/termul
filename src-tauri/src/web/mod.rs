@@ -103,6 +103,17 @@ pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
     Arc::new(PtyManager::new(events, cwd, git, exit))
 }
 
+/// The base of the web OAuth redirect URI: `127.0.0.1` on the bound port,
+/// whatever the bind address, because authorization servers accept plain http
+/// only on loopback. A browser on the host machine reaches the callback
+/// directly only when the server listens on all interfaces or on loopback;
+/// any other browser pastes the address it landed on into
+/// `POST /mcp-servers/oauth/complete`. Desktop shared-live denies all OAuth
+/// control routes before this is read.
+fn oauth_redirect_base(addr: SocketAddr) -> String {
+    format!("http://127.0.0.1:{}", addr.port())
+}
+
 /// Bind and serve the standalone ACP HTTP server until SIGINT/SIGTERM.
 ///
 /// `ws_relay` is the live [`WsRelaySink`] — passed to both `AcpManager::new`
@@ -422,13 +433,7 @@ pub async fn serve_router(
         Some(store),
         cfg.allow_remote_writes,
         shared_live_writes_denied,
-        // The effective externally reachable origin for OAuth redirect URIs.
-        // The bound address is known here (before `router()` is called), so
-        // the callback route's `redirect_uri` uses it instead of the
-        // hardcoded loopback default. Desktop shared-live denies all OAuth
-        // control routes before this is read, so it stays `http://127.0.0.1`
-        // (harmless — never used).
-        format!("http://{}", addr),
+        oauth_redirect_base(addr),
         web_auth,
         cfg.allowed_origins.clone(),
         host_allow,
@@ -519,5 +524,21 @@ async fn shutdown_signal() -> Result<(), std::io::Error> {
         // Windows: Ctrl-C / console ctrl handler via tokio. SIGTERM is not a
         // portable Win32 signal; service-stop is out of scope for this scaffold.
         ctrl_c.await
+    }
+}
+
+#[cfg(test)]
+mod oauth_redirect_base_tests {
+    use super::oauth_redirect_base;
+
+    #[test]
+    fn redirect_base_is_loopback_on_the_bound_port() {
+        for bind in ["0.0.0.0:8080", "127.0.0.1:8080", "192.168.1.5:8080"] {
+            assert_eq!(
+                oauth_redirect_base(bind.parse().unwrap()),
+                "http://127.0.0.1:8080",
+                "{bind}"
+            );
+        }
     }
 }

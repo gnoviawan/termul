@@ -147,9 +147,7 @@ pub async fn acp_mcp_oauth_start(
     app: tauri::AppHandle,
     server_url: String,
 ) -> Result<IpcResult<()>, String> {
-    use rmcp::transport::auth::{
-        AuthorizationManager, AuthorizationRequest, AuthorizationSession, OAuthState,
-    };
+    use rmcp::transport::auth::{AuthorizationManager, AuthorizationRequest, AuthorizationSession};
     use std::net::TcpListener;
     use tauri_plugin_opener::OpenerExt;
 
@@ -263,60 +261,23 @@ pub async fn acp_mcp_oauth_start(
             }
         }
     };
-    // 5. Exchange the authorization code for tokens using the SAME session
-    //    (which holds the PKCE verifier). After handle_callback succeeds, the
-    //    OAuthState transitions to Authorized(manager) — the token is stored
-    //    in the manager's InMemoryCredentialStore. We read it from there.
-    let mut oauth_state = OAuthState::Session(session);
-
+    // 5. Exchange the authorization code with the SAME session (it holds the
+    //    PKCE verifier) and store the token. The desktop flow does not pass
+    //    the callback's `iss` on to the issuer check.
     let callback = rmcp::transport::auth::AuthorizationCallback::from_redirect_url(&callback_url)
         .map_err(|e| format!("callback parse failed: {e}"))?;
-
-    oauth_state
-        .handle_callback(&callback.code, &callback.csrf_token)
-        .await
-        .map_err(|e| format!("token exchange failed: {e}"))?;
-
-    // After handle_callback, oauth_state is now Authorized(manager).
-    // Call get_access_token on the MANAGER (not on OAuthState, which returns
-    // "Already authorized" for the Authorized variant).
-    let (access_token, client_id, refresh_token, expires_at) = match &oauth_state {
-        OAuthState::Authorized(manager) | OAuthState::Unauthorized(manager) => {
-            use oauth2::TokenResponse;
-            let token = manager.get_access_token().await.map_err(|e| {
-                log::warn!("[mcp-oauth] failed to retrieve access token (url redacted): {e}");
-                format!("failed to get access token: {e}")
-            })?;
-            let creds = manager.get_credentials().await.map_err(|e| {
-                log::warn!("[mcp-oauth] failed to retrieve credentials (url redacted): {e}");
-                format!("failed to get credentials: {e}")
-            })?;
-            let refresh = creds
-                .1
-                .as_ref()
-                .and_then(|tr| tr.refresh_token().map(|t| t.secret().to_string()));
-            let exp = creds.1.as_ref().and_then(|tr| tr.expires_in()).map(|d| {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|n| n.as_secs() + d.as_secs())
-                    .unwrap_or(0)
-            });
-            (token, creds.0, refresh, exp)
-        }
-        _ => return Err("unexpected OAuth state after callback".to_string()),
-    };
-
-    // 6. Store the token in the file store.
-    let stored = crate::acp::mcp_oauth::StoredToken {
-        access_token,
-        refresh_token,
-        expires_at,
-        client_id,
-        issuer: server_url.clone(),
-        server_url: server_url.clone(),
-    };
-    crate::acp::mcp_oauth::store_token(&server_url, &stored)
-        .map_err(|e| format!("failed to store token: {e}"))?;
+    let stored = crate::acp::mcp_oauth::finish_session(
+        &server_url,
+        session,
+        &callback.code,
+        &callback.csrf_token,
+        None,
+    )
+    .await
+    .map_err(|e| {
+        log::warn!("[mcp-oauth] OAuth token exchange failed (url redacted): {e}");
+        e.to_string()
+    })?;
 
     log::info!(
         "[mcp-oauth] OAuth flow completed for server (url redacted), has refresh token: {}",
