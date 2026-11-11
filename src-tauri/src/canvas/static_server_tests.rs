@@ -583,6 +583,40 @@ mod served_from_dev_dir {
         assert_eq!(body, "", "HEAD sends no body");
     }
 
+    /// #1801: a 304 to a conditional HEAD carries no `Content-Length`, like
+    /// the 304 to GET (RFC 9110 §8.6), on both routers.
+    #[tokio::test]
+    async fn a_conditional_head_304_has_no_content_length_on_both_routers() {
+        let _bundle = Bundle::standard();
+        let id = "cv_head_304";
+        let token = bundle_tokens().issue(id).unwrap();
+        for file in ["", "app.js"] {
+            let uri = format!("/canvas/{id}/{token}/{file}");
+            let etag = get(&uri, &HeaderMap::new()).headers()[header::ETAG].clone();
+            for (router, name) in [(web_router(), "web"), (bundle_router(), "desktop")] {
+                for method in [Method::HEAD, Method::GET] {
+                    let response = router
+                        .clone()
+                        .oneshot(
+                            Request::builder()
+                                .method(method.clone())
+                                .uri(&uri)
+                                .header(header::IF_NONE_MATCH, etag.clone())
+                                .body(Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    let what = format!("{name} {method} {file}");
+                    assert_eq!(response.status(), StatusCode::NOT_MODIFIED, "{what}");
+                    assert_eq!(content_length(&response), None, "{what}");
+                    assert_eq!(response.headers()[header::ETAG], etag, "{what}");
+                    assert_eq!(body_text(response).await, "", "{what}");
+                }
+            }
+        }
+    }
+
     async fn get_from(router: axum::Router, uri: String) -> Response {
         router
             .oneshot(Request::get(uri).body(Body::empty()).unwrap())

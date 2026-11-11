@@ -816,3 +816,80 @@ async fn serve_embedded_evaluates_if_none_match_only_for_get_and_head() {
         assert_eq!(body.as_ref(), expected_body, "{method}");
     }
 }
+
+/// #1801: a 304 carries no `Content-Length` for HEAD as well as GET, and the
+/// compression layer leaves it alone (no `Content-Encoding` on a bodiless
+/// reply). Goes through a router so axum's own HEAD handling runs.
+#[tokio::test]
+async fn not_modified_has_no_content_length_or_encoding_for_head_and_get() {
+    let router = Router::new()
+        .fallback(|| async { not_modified() })
+        .layer(static_compression_layer());
+    for method in [Method::HEAD, Method::GET] {
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method.clone())
+                    .uri("/")
+                    .header(header::ACCEPT_ENCODING, "gzip")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED, "{method}");
+        assert!(
+            resp.headers().get(header::CONTENT_LENGTH).is_none(),
+            "{method}: {:?}",
+            resp.headers().get(header::CONTENT_LENGTH)
+        );
+        assert!(
+            resp.headers().get(header::CONTENT_ENCODING).is_none(),
+            "{method}: {:?}",
+            resp.headers().get(header::CONTENT_ENCODING)
+        );
+        let body = to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        assert!(body.is_empty(), "{method}");
+    }
+}
+
+/// #1801 on the embedded bundle: a conditional HEAD of `/` answers 304 with no
+/// `Content-Length`, while an unconditional HEAD still reports the real
+/// length (#1728).
+#[tokio::test]
+async fn serve_embedded_conditional_head_304_has_no_content_length() {
+    if !embed_present() {
+        return;
+    }
+    let router = Router::new()
+        .fallback(serve_embedded)
+        .layer(static_compression_layer());
+    let head = |etag: Option<String>| {
+        let mut request = Request::builder().method(Method::HEAD).uri("/");
+        if let Some(tag) = etag {
+            request = request.header(header::IF_NONE_MATCH, tag);
+        }
+        router
+            .clone()
+            .oneshot(request.body(Body::empty()).expect("build request"))
+    };
+    let fresh = head(None).await.expect("router response");
+    assert_eq!(fresh.status(), StatusCode::OK);
+    let length = fresh.headers()[header::CONTENT_LENGTH].clone();
+    assert_ne!(length, "0");
+    let etag = fresh.headers()[header::ETAG]
+        .to_str()
+        .expect("ascii etag")
+        .to_string();
+
+    let revalidated = head(Some(etag)).await.expect("router response");
+    assert_eq!(revalidated.status(), StatusCode::NOT_MODIFIED);
+    assert!(revalidated.headers().get(header::CONTENT_LENGTH).is_none());
+    assert!(revalidated
+        .headers()
+        .get(header::CONTENT_ENCODING)
+        .is_none());
+}
