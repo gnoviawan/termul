@@ -139,7 +139,11 @@ export function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId):
   if (!session || session.status === 'closed' || sessionTurnBusy(session)) return
 
   const queue = state.promptQueues[sessionId] ?? []
-  if (queue.length === 0) return
+  if (queue.length === 0) {
+    // Nothing is left to retry, so the busy-retry ladder starts over.
+    clearBusyQueueRetry(sessionId)
+    return
+  }
 
   const [next, ...rest] = queue
   set((s) => ({
@@ -194,6 +198,22 @@ function scheduleBusyQueueRetry(set: TurnEndSetter, sessionId: SessionId): void 
     source: 'acp-store.busyQueueRetry',
     message: `Prompt on session ${sessionId} was rejected as busy with no turn running here; retrying the queue in ${delayMs}ms (attempt ${retry.attempts})`
   })
+}
+
+/** Cancel + drop a session's busy-retry marker (armed timer or stale entry). */
+function clearBusyQueueRetry(sessionId: SessionId): void {
+  const retry = busyQueueRetries.get(sessionId)
+  if (!retry) return
+  if (retry.timer) clearTimeout(retry.timer)
+  busyQueueRetries.delete(sessionId)
+}
+
+/**
+ * Start the busy-retry ladder over after a dispatch settles. An armed timer
+ * belongs to a later prompt the host rejected as busy, so it keeps running.
+ */
+function resetBusyQueueRetry(sessionId: SessionId): void {
+  if (!busyQueueRetries.get(sessionId)?.timer) busyQueueRetries.delete(sessionId)
 }
 
 /**
@@ -319,6 +339,9 @@ function readOnlyGuardOf(state: AcpState, sessionId: SessionId): string | null {
  * `queuedOrigin` marks a dequeue/send-now path: on `ACP_TURN_IN_PROGRESS` (or
  * if the session is still busy at stage time), the original queue item is
  * restored at the front with its existing id so FIFO order is preserved.
+ *
+ * `options.leadsQueue` marks a prompt that comes before anything already
+ * queued (a launch's first prompt), so a non-empty queue does not hold it.
  */
 export async function runPromptTurn(
   set: TurnEndSetter,
@@ -327,7 +350,7 @@ export async function runPromptTurn(
   userBlocks: ContentBlock[],
   dispatch: (session: AcpSession, turnId: string) => Promise<PromptDispatchResult>,
   queuedOrigin?: QueuedPrompt,
-  options?: { skipUserAppend?: boolean; displayBlocks?: ContentBlock[] }
+  options?: { skipUserAppend?: boolean; displayBlocks?: ContentBlock[]; leadsQueue?: boolean }
 ): Promise<void> {
   const session = get().sessions[sessionId]
   if (!session) throw new Error(`unknown session ${sessionId}`)
@@ -359,6 +382,7 @@ export async function runPromptTurn(
   const displayBlocks = options?.displayBlocks ?? userBlocks
 
   let enqueued = false
+  let drainStalledQueue = false
   let userMessage: ChatMessage | null = null
   let openTurnId = ''
   const skipUserAppend = Boolean(options?.skipUserAppend)
@@ -390,8 +414,22 @@ export async function runPromptTurn(
     // finally flushes once agentId is repointed and the transcript installed.
     const isUnboundLaunchPlaceholder = !current.agentId
     const awaitingAgent = s.openingHistoryIds[sessionId] || isUnboundLaunchPlaceholder
-    if ((sessionTurnBusy(current) || awaitingAgent) && !skipUserAppend) {
+    // A new send also waits behind prompts already queued here, including a
+    // busy-rejected prompt on its retry timer: the host may report the session
+    // idle meanwhile, and the follow-up must not overtake it (#1726). A
+    // dequeue (`queuedOrigin`) is the queue head itself and a launch's first
+    // prompt (`leadsQueue`) precedes anything typed during the launch, so
+    // both start.
+    const retryArmed = Boolean(busyQueueRetries.get(sessionId)?.timer)
+    const holdForPriorQueue =
+      !queuedOrigin &&
+      !options?.leadsQueue &&
+      ((s.promptQueues[sessionId] ?? []).length > 0 || retryArmed)
+    if ((sessionTurnBusy(current) || awaitingAgent || holdForPriorQueue) && !skipUserAppend) {
       enqueued = true
+      // Nothing else will flush a queue left behind on an idle session (a
+      // queued send that failed outright), so this send drains it in order.
+      drainStalledQueue = !sessionTurnBusy(current) && !awaitingAgent && !retryArmed
       if (queuedOrigin) {
         return {
           promptQueues: {
@@ -544,6 +582,7 @@ export async function runPromptTurn(
   if (enqueued || !openTurnId) {
     // Nothing is dispatched under this id: it is not an unresolved command.
     settleCommand(turnId, 'rejected')
+    if (drainStalledQueue) flushNextQueuedPrompt(set, sessionId)
     if (enqueued) return
   }
   // `userMessage` is absent ONLY in the deliberate empty-display dispatch —
@@ -644,11 +683,11 @@ export async function runPromptTurn(
     }
     dispatchedAgentId = liveSession.agentId
     settleDispatch(await send(liveSession, turnId))
-    busyQueueRetries.delete(sessionId)
+    resetBusyQueueRetry(sessionId)
   } catch (err) {
     // Only a busy rejection keeps the retry ladder; any other outcome (an
     // echo-accepted or reconciled turn, a definite failure) starts it over.
-    if (!isPromptTurnInProgressError(err)) busyQueueRetries.delete(sessionId)
+    if (!isPromptTurnInProgressError(err)) resetBusyQueueRetry(sessionId)
     if (isPromptTurnInProgressError(err)) {
       settleCommand(turnId, 'rejected')
       activeWirePromptTurns.delete(sessionId)
@@ -913,6 +952,11 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
         [sessionId]: (s.promptQueues[sessionId] ?? []).filter((item) => item.id !== queueId)
       }
     }))
+    // An armed busy retry holds new sends; with nothing left to retry it must
+    // not keep holding them.
+    if ((get().promptQueues[sessionId] ?? []).length === 0) {
+      clearBusyQueueRetry(sessionId)
+    }
   },
 
   sendQueuedPromptNow: async (sessionId, queueId) => {

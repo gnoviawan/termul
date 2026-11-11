@@ -1,5 +1,5 @@
 //! Behavior of the commit stamp against real repositories: only a real trailer
-//! is a stamp, a bounded search is not capped, and two Termul commits naming
+//! is a stamp, a bounded search is not capped, and two Troupe commits naming
 //! one `expectedHead` cannot both land.
 
 use super::*;

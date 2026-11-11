@@ -13,8 +13,8 @@ export async function confirmInstallAndRestart(version: string | null): Promise<
     const target = version ? `version ${version}` : 'the new version'
     const confirmed = await confirm(
       hasActiveTerminalSessions()
-        ? `Termul will install ${target} and restart. Your running terminal sessions will be closed. Continue?`
-        : `Termul will install ${target} and restart now. Continue?`,
+        ? `Troupe will install ${target} and restart. Your running terminal sessions will be closed. Continue?`
+        : `Troupe will install ${target} and restart now. Continue?`,
       {
         title: 'Install update',
         kind: 'warning',

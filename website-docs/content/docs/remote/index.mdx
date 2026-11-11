@@ -1,19 +1,19 @@
 ---
 title: Browser and phone
-description: Reach Termul from another computer's browser or from your phone.
+description: Reach Troupe from another computer's browser or from your phone.
 ---
 
-You can open Termul in a web browser on another device, including your phone. The browser shows the same projects, chats, terminals and files as the app on the machine that runs them.
+You can open Troupe in a web browser on another device, including your phone. The browser shows the same projects, chats, terminals and files as the app on the machine that runs them.
 
-![Termul open in a desktop web browser](/screenshots/remote-browser-connected.png)
+![Troupe open in a desktop web browser](/screenshots/remote-browser-connected.png)
 
 ## Pick a way to connect
 
-There are two ways to reach Termul from another device.
+There are two ways to reach Troupe from another device.
 
-| | Share your desktop app | Run `termul-server` |
+| | Share your desktop app | Run `troupe-server` |
 | --- | --- | --- |
-| What runs the work | The Termul desktop app on your computer | A small server program, often on a Linux machine or in Docker |
+| What runs the work | The Troupe desktop app on your computer | A small server program, often on a Linux machine or in Docker |
 | How you connect | Scan a QR code or open a private link | Open the server's address in a browser |
 | Setup | One switch in the status bar, plus the `cloudflared` program | Install the server, then finish setup in the browser |
 | What the other device can do | Watch your chats and terminals | Everything, once you allow it (see [Allow changes from other devices](/docs/remote/server-options#allow-changes-from-other-devices)) |
@@ -21,15 +21,15 @@ There are two ways to reach Termul from another device.
 
 Share your desktop app when you want to check on your agents from your phone for a while. The link works from any network, and you don't have to install anything on a server.
 
-Run `termul-server` when you want Termul to be available all the time, or when your projects live on a remote machine. It is the only way to work fully from a phone or another browser: send prompts, answer approvals, open terminals and edit files.
+Run `troupe-server` when you want Troupe to be available all the time, or when your projects live on a remote machine. It is the only way to work fully from a phone or another browser: send prompts, answer approvals, open terminals and edit files.
 
 ## In this section
 
 <Cards>
   <Card title="Share your desktop app" href="/docs/remote/share-desktop" description="Open your desktop sessions on a phone with a QR code." />
-  <Card title="Install and start termul-server" href="/docs/remote/server" description="Download the server and set it up in the browser, or use Docker." />
+  <Card title="Install and start troupe-server" href="/docs/remote/server" description="Download the server and set it up in the browser, or use Docker." />
   <Card title="Server options" href="/docs/remote/server-options" description="Flags, the access token, remote changes, reverse proxies and updates." />
-  <Card title="Use Termul in a browser" href="/docs/remote/web-browser" description="The token screen, the connection light, and what differs from the desktop app." />
-  <Card title="Use Termul on a phone" href="/docs/remote/phone" description="The phone layout, terminal keys, files, git and approvals." />
-  <Card title="Install as an app and get notifications" href="/docs/remote/install-app" description="Add Termul to your home screen and turn on alerts." />
+  <Card title="Use Troupe in a browser" href="/docs/remote/web-browser" description="The token screen, the connection light, and what differs from the desktop app." />
+  <Card title="Use Troupe on a phone" href="/docs/remote/phone" description="The phone layout, terminal keys, files, git and approvals." />
+  <Card title="Install as an app and get notifications" href="/docs/remote/install-app" description="Add Troupe to your home screen and turn on alerts." />
 </Cards>

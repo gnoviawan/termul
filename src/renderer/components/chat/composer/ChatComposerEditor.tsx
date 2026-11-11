@@ -11,7 +11,8 @@ import {
   docOffsetToDisplayOffset,
   docToDisplayText,
   FILE_PILL_NODE,
-  SKILL_PILL_NODE
+  SKILL_PILL_NODE,
+  TOOL_PILL_NODE
 } from '@/lib/composer/doc-to-prompt'
 import { draftFromTokens } from '@/lib/composer/draft-from-tokens'
 import { logFrontendError } from '@/lib/log-api'
@@ -21,6 +22,7 @@ import { ConversationPill } from './ConversationPillNode'
 import { FilePill } from './FilePillNode'
 import { SelectionContextPill } from './SelectionContextPillNode'
 import { SkillPill } from './SkillPillNode'
+import { ToolPill } from './ToolPillNode'
 
 export interface ChatComposerEditorProps {
   /**
@@ -87,7 +89,8 @@ const ATOM_PILL_NODES = new Set([
   CMD_PILL_NODE,
   FILE_PILL_NODE,
   CONTEXT_PILL_NODE,
-  CONVERSATION_PILL_NODE
+  CONVERSATION_PILL_NODE,
+  TOOL_PILL_NODE
 ])
 
 /**
@@ -287,6 +290,7 @@ export function ChatComposerEditor({
         FilePill,
         SelectionContextPill,
         ConversationPill,
+        ToolPill,
         createComposerKeymap(beforeKeyDownRef),
         Placeholder.configure({
           placeholder: () => placeholderRef.current,
@@ -336,7 +340,7 @@ export function ChatComposerEditor({
           onPasteAttachmentsRef.current?.(event as ClipboardEvent)
           if (event.defaultPrevented) return true
           const text = event.clipboardData?.getData('text/plain') ?? ''
-          if (!/[\uE000\uE004\uE006\uE008\uE00A]/.test(text)) return false
+          if (!/[\uE000\uE004\uE006\uE008\uE00A\uE00C]/.test(text)) return false
           event.preventDefault()
           try {
             const parsed = view.state.schema.nodeFromJSON(

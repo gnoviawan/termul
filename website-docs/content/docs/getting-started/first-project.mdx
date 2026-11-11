@@ -1,9 +1,9 @@
 ---
 title: Create your first project
-description: Add a folder to Termul as a project, with an optional template and Git repository.
+description: Add a folder to Troupe as a project, with an optional template and Git repository.
 ---
 
-A project in Termul is a folder on your computer, or on the server when you use Termul in a browser. Each project has its own terminals, chats, open files, and Git view. You can create a new folder for a project or add a folder that already exists.
+A project in Troupe is a folder on your computer, or on the server when you use Troupe in a browser. Each project has its own terminals, chats, open files, and Git view. You can create a new folder for a project or add a folder that already exists.
 
 ## Open the New project dialog
 
@@ -20,11 +20,11 @@ The **Create New Project** dialog opens.
 ## Create a project
 
 1. In **Root Directory**, type the path of the folder, or select **Browse** to pick it.
-2. Check **Project Name**. Termul fills it in from the folder name. Change it if you want a different name.
+2. Check **Project Name**. Troupe fills it in from the folder name. Change it if you want a different name.
 3. Optional: select **Advanced options** to choose a template, a color, or a shell. See the next sections.
 4. Select **Create**.
 
-If the folder doesn't exist, Termul creates it. The dialog closes, a message at the bottom of the window shows the progress, and Termul switches to the new project.
+If the folder doesn't exist, Troupe creates it. The dialog closes, a message at the bottom of the window shows the progress, and Troupe switches to the new project.
 
 From here you can [open a terminal](/docs/terminals) or [start a chat with an agent](/docs/agents).
 
@@ -40,22 +40,22 @@ A template writes a few starter files into the folder. It doesn't install packag
 | **React App (Vite)** | `package.json`, `vite.config.ts`, `tsconfig.json`, `index.html`, `src/main.tsx`, `src/App.tsx`, `src/index.css`, and `.gitignore`. |
 | **Python Project** | `main.py`, `requirements.txt`, `.env.example`, `.gitignore`, and an empty `src` folder. |
 
-<Callout type="warn">Use a template only with a new or empty folder. Termul writes the template files without checking for files that have the same names.</Callout>
+<Callout type="warn">Use a template only with a new or empty folder. Troupe writes the template files without checking for files that have the same names.</Callout>
 
 ## Pick a color and a shell
 
 In **Advanced options**:
 
 - **Color** sets the color of the project's icon in the projects list. The first color comes from **Settings** > **New Project Defaults**.
-- **Default Terminal** sets the shell that new terminals in this project use. Termul lists the shells it found on the computer.
+- **Default Terminal** sets the shell that new terminals in this project use. Troupe lists the shells it found on the computer.
 
 You can change both later. See [Manage projects](/docs/getting-started/projects).
 
 ## Start a Git repository
 
-**Advanced options** has an **Initialize Git repository in this directory** check box. Select it to run `git init` in the folder before Termul writes any template files.
+**Advanced options** has an **Initialize Git repository in this directory** check box. Select it to run `git init` in the folder before Troupe writes any template files.
 
-The check box shows only when the folder is empty or doesn't exist yet. If the folder already has a Git repository, Termul finds it on its own, and the [Git tools](/docs/git) work right away.
+The check box shows only when the folder is empty or doesn't exist yet. If the folder already has a Git repository, Troupe finds it on its own, and the [Git tools](/docs/git) work right away.
 
 ## Add a folder you already have
 
@@ -66,19 +66,19 @@ To work on an existing project, use the same dialog:
 3. Leave **Project Template** set to **Empty Project**.
 4. Select **Create**.
 
-Termul doesn't change or move your files. If you later delete the project from Termul, the folder stays on disk.
+Troupe doesn't change or move your files. If you later delete the project from Troupe, the folder stays on disk.
 
 ## Pick a folder in the browser
 
-<Callout type="info">This section is about the browser version of Termul. The desktop app uses your system's own folder picker.</Callout>
+<Callout type="info">This section is about the browser version of Troupe. The desktop app uses your system's own folder picker.</Callout>
 
-In the browser, **Browse** opens the **Select Project Folder** window. It shows the folders on the computer that runs Termul, not the computer in front of you.
+In the browser, **Browse** opens the **Select Project Folder** window. It shows the folders on the computer that runs Troupe, not the computer in front of you.
 
 ![The Select Project Folder window showing the folders inside /home/demo-getting-started/projects](/screenshots/getting-started-folder-picker.png)
 
 1. Select a folder to open it. Select **Up** to go to the parent folder.
 2. When the path at the top shows the folder you want, select **Select Current Folder**.
 
-The window can't create folders. To use a new folder, type its path in **Root Directory** instead. Termul creates it when you select **Create**.
+The window can't create folders. To use a new folder, type its path in **Root Directory** instead. Troupe creates it when you select **Create**.
 
 In the browser, the dialog also shows a note about where the project is saved. The server keeps your projects after a restart only if it is set up with a projects file. See [Browser and phone](/docs/remote).

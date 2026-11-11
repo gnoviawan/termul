@@ -415,6 +415,13 @@ fn table() -> Vec<Row> {
             None,
         ),
         row("inspect_ui", "ui.inspect", json!({}), json!({}), None),
+        row(
+            "wait_for_changes",
+            "events.poll",
+            json!({"after": 7}),
+            json!({"events": [], "cursor": 7, "reset": false, "dropped": 0}),
+            None,
+        ),
     ]
 }
 

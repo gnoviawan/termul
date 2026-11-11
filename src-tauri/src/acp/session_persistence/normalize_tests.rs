@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use super::derive_title;
+use super::{derive_title, user_prompt_text};
 
 fn title_of(text: &str) -> String {
     derive_title(&json!({ "content": [{ "type": "text", "text": text }] }))
@@ -54,6 +54,78 @@ fn a_framed_handoff_draft_with_skills_titles_from_the_user_text() {
     assert_eq!(
         title_of("# Conversation handoff\n\nYou are taking over.\n\n---\n\n# Agent Skills\n\nfix-repo: /skills/fix-repo.md\n\n---\n\n(fix-repo) now"),
         "(fix-repo) now"
+    );
+}
+
+// The wire literals match `src/renderer/lib/composer/__tests__/tool-pill.test.ts`.
+#[test]
+fn a_prompt_opening_with_a_tool_pill_titles_from_the_tool_name() {
+    assert_eq!(
+        title_of(
+            "(Use the browser tool from the troupe MCP server) open localhost and check the login"
+        ),
+        "Browser open localhost and check the login"
+    );
+}
+
+#[test]
+fn a_tool_pill_mid_prompt_becomes_its_label() {
+    assert_eq!(
+        title_of("schedule it (Use the automation tools from the troupe MCP server) daily"),
+        "schedule it Automations daily"
+    );
+}
+
+#[test]
+fn two_tool_pills_both_become_labels() {
+    assert_eq!(
+        title_of("(Use the browser tool from the troupe MCP server) open localhost and (Use the canvas tools from the troupe MCP server)"),
+        "Browser open localhost and Canvas"
+    );
+}
+
+#[test]
+fn a_0_4_tool_pill_naming_the_termul_server_still_becomes_its_label() {
+    assert_eq!(
+        title_of("(Use the browser tool from the termul MCP server) open localhost and (Use the canvas tools from the termul MCP server)"),
+        "Browser open localhost and Canvas"
+    );
+    assert_eq!(
+        title_of("(Use the browser tool from the termul MCP server) open localhost and (Use the canvas tools from the troupe MCP server)"),
+        "Browser open localhost and Canvas"
+    );
+}
+
+#[test]
+fn a_tool_pill_only_prompt_titles_as_the_tool() {
+    assert_eq!(
+        title_of("(Use the canvas tools from the troupe MCP server)"),
+        "Canvas"
+    );
+}
+
+#[test]
+fn an_unknown_tool_hint_is_dropped() {
+    assert_eq!(
+        title_of("(Use the terminal tools from the troupe MCP server) list the panes"),
+        "list the panes"
+    );
+}
+
+#[test]
+fn prompt_text_for_suggestions_keeps_the_tool_instruction() {
+    let text = "(Use the browser tool from the troupe MCP server) open localhost";
+    assert_eq!(
+        user_prompt_text(&json!({ "content": [{ "type": "text", "text": text }] })).as_deref(),
+        Some(text)
+    );
+}
+
+#[test]
+fn a_prompt_without_a_tool_pill_is_unchanged() {
+    assert_eq!(
+        title_of("(Use the browser) to open  localhost"),
+        "(Use the browser) to open  localhost"
     );
 }
 
@@ -199,5 +271,112 @@ fn a_dispatch_keeps_its_bounded_text_result() {
     assert!(
         kept.get("title").is_none(),
         "the record carries the dispatch title"
+    );
+}
+
+fn reduced_edit(type_: &str, tool: serde_json::Value) -> serde_json::Value {
+    let key = if type_ == "tool_call" {
+        "toolCall"
+    } else {
+        "update"
+    };
+    let payload = json!({ "agentId": "agent", "sessionId": "chat", key: tool });
+    super::normalize_durable_payload(type_, &payload)[key].clone()
+}
+
+#[test]
+fn a_multi_file_edit_without_locations_persists_every_diff_path() {
+    let edit = reduced_edit(
+        "tool_call",
+        json!({
+            "toolCallId": "multi",
+            "kind": "edit",
+            "content": [
+                { "type": "diff", "path": "/work/a.ts", "oldText": "a\n", "newText": "A\n" },
+                { "type": "content", "content": { "type": "text", "text": "note" } },
+                { "type": "diff", "path": "/work/b.ts", "oldText": null, "newText": "b\n" },
+                { "type": "diff", "path": "", "newText": "x\n" },
+                { "type": "diff", "path": "/work/a.ts", "oldText": "A\n", "newText": "AA\n" },
+            ],
+        }),
+    );
+    assert_eq!(
+        edit["locations"],
+        json!([{ "path": "/work/a.ts" }, { "path": "/work/b.ts" }]),
+        "each diff path once, in order"
+    );
+    assert_eq!(edit["diffStat"], json!({ "added": 4, "removed": 2 }));
+    let update = reduced_edit(
+        "tool_call_update",
+        json!({
+            "toolCallId": "multi",
+            "status": "completed",
+            "content": [
+                { "type": "diff", "path": "/work/a.ts", "newText": "A\n" },
+                { "type": "diff", "path": "/work/c.ts", "newText": "c\n" },
+            ],
+        }),
+    );
+    assert_eq!(
+        update["locations"],
+        json!([{ "path": "/work/a.ts" }, { "path": "/work/c.ts" }])
+    );
+}
+
+#[test]
+fn a_file_change_summary_claims_every_location_and_diff_path_within_bounds() {
+    let move_ = reduced_edit(
+        "tool_call",
+        json!({
+            "toolCallId": "m",
+            "kind": "move",
+            "locations": [{ "path": "/work/old.ts" }, { "path": "/work/new.ts" }],
+            "rawInput": { "path": "/work/input.ts" },
+        }),
+    );
+    assert_eq!(
+        move_["locations"],
+        json!([{ "path": "/work/old.ts" }, { "path": "/work/new.ts" }]),
+        "both ends of a move persist"
+    );
+    let huge = format!("/{}", "a".repeat(super::MAX_SUMMARY_PATH_CHARS));
+    let items: Vec<serde_json::Value> = std::iter::once(huge)
+        .chain((0..super::MAX_SUMMARY_PATHS + 5).map(|i| format!("/work/f{i}.ts")))
+        .map(|path| json!({ "type": "diff", "path": path, "newText": "x\n" }))
+        .collect();
+    let many = reduced_edit(
+        "tool_call",
+        json!({ "toolCallId": "e", "kind": "edit", "content": items }),
+    );
+    let paths = many["locations"].as_array().unwrap();
+    assert_eq!(paths.len(), super::MAX_SUMMARY_PATHS);
+    assert_eq!(
+        paths[0],
+        json!({ "path": "/work/f0.ts" }),
+        "an overlong path is skipped"
+    );
+}
+
+#[test]
+fn a_subagents_multi_file_edit_masks_every_persisted_path() {
+    let edit = reduced_edit(
+        "tool_call",
+        json!({
+            "toolCallId": "c2",
+            "kind": "edit",
+            "content": [
+                { "type": "diff", "path": "/work/a.ts", "newText": "a\n" },
+                { "type": "diff", "path": "https://bob:hunter2pass@example.com/b.ts", "newText": "b\n" },
+            ],
+            "_meta": { "claudeCode": { "parentToolUseId": "d1" } },
+        }),
+    );
+    let paths = edit["locations"].as_array().unwrap();
+    assert_eq!(paths.len(), 2);
+    assert_eq!(paths[0], json!({ "path": "/work/a.ts" }));
+    let second = paths[1]["path"].as_str().unwrap();
+    assert!(
+        second.starts_with("https://bob:") && !second.contains("hunter2pass"),
+        "{second}"
     );
 }

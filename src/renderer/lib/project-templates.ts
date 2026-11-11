@@ -44,7 +44,7 @@ const server = http.createServer((req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.end(JSON.stringify({
     status: "success",
-    message: "Welcome to your Node.js server created with Termul Manager!",
+    message: "Welcome to your Node.js server created with Troupe!",
     environment: NODE_ENV,
     timestamp: new Date().toISOString()
   }));
@@ -91,10 +91,10 @@ edition = "2021"
         content: `use std::env;
 
 fn main() {
-    let app_name = env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "Termul Rust App".to_string());
+    let app_name = env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "Troupe Rust App".to_string());
     println!("=======================================");
     println!(" Welcome to {}!", app_name);
-    println!(" Created with Termul Manager");
+    println!(" Created with Troupe");
     println!("=======================================");
     println!("Running in target directory: {:?}", env::current_dir().unwrap());
 }
@@ -234,7 +234,7 @@ function App() {
         boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
       }}>
         <h1 style={{ color: '#00b37e', margin: '0 0 1rem 0' }}>React + Vite Template</h1>
-        <p style={{ margin: '0 0 2rem 0', opacity: 0.8 }}>Ready-to-use boilerplate from Termul Manager</p>
+        <p style={{ margin: '0 0 2rem 0', opacity: 0.8 }}>Ready-to-use boilerplate from Troupe</p>
         
         <button 
           onClick={() => setCount(c => c + 1)}
@@ -302,7 +302,7 @@ class APIHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             response = {
                 "status": "success",
-                "message": "Welcome to your Python server created with Termul Manager!",
+                "message": "Welcome to your Python server created with Troupe!",
                 "timestamp": self.date_time_string()
             }
             self.wfile.write(json.dumps(response).encode("utf-8"))

@@ -9,9 +9,12 @@ import { SSHPopover } from '@/components/shell/SSHPopover'
 import { useTopRowPlatform } from '@/components/shell/top-row-context'
 import { useTrafficLightInset } from '@/components/shell/traffic-light-inset'
 import { useShortcutLabel } from '@/components/shell/use-shortcut-label'
+import { showsFileColumn } from '@/layouts/workspace-layout/explorer-column-blocks'
 import { cn } from '@/lib/utils'
+import { useFileExplorerVisible } from '@/stores/file-explorer-store'
 import { useReportBugStore } from '@/stores/report-bug-store'
 import { useSettingsModalStore, useSettingsModalView } from '@/stores/settings-modal-store'
+import { useSSHWorkspaceOpen } from '@/stores/ssh-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 
@@ -66,7 +69,7 @@ const TOGGLE_STATES = [
 ]
 
 /**
- * The Termul mark and the Rail toggle share one clipped 36px slot. At rest
+ * The Troupe mark and the Rail toggle share one clipped 36px slot. At rest
  * the mark shows and the toggle waits 8px to the left, faded and blurred.
  * While the pointer is over the Rail (`group/rail` on the nav) the two
  * cross-fade after an 80ms intent delay: the toggle comes in left to right
@@ -108,9 +111,10 @@ function BrandToggleSwap({ dragRegion }: { dragRegion: boolean }): React.JSX.Ele
 /**
  * Collapsed Rail body (48px): the top band (the 8px window gutter plus the
  * Rail's 40px part of the top row) with the mark / Rail toggle swap, the
- * project stack with status, the Column tab icons (Chats, Explorer, Changes)
- * in a track, Search, Canvas, Automations, SSH, then Theme, Shortcuts and Settings pinned
- * at the bottom.
+ * project stack with status, the Column tab icons (Chats, Explorer, Changes,
+ * GitHub) in a track while the Side panel is off screen (hidden, SSH
+ * workspace, or no local project), Search, Canvas,
+ * Automations, SSH, then Theme, Shortcuts and Settings pinned at the bottom.
  */
 export function RailCollapsed({
   projects,
@@ -133,6 +137,13 @@ export function RailCollapsed({
   const underTrafficLights = useTrafficLightInset() !== null
   const searchShortcut = useShortcutLabel('commandPalette')
   const settingsShortcut = useShortcutLabel('settings')
+  // `ShellFrame` mounts the Side panel whenever a project is active.
+  const sidePanelOnScreen = showsFileColumn({
+    isExplorerVisible: useFileExplorerVisible(),
+    activeProject,
+    workspaceOpen: useSSHWorkspaceOpen(),
+    hasSidePanel: Boolean(activeProject)
+  })
 
   return (
     <div className="flex h-full w-12 shrink-0 flex-col items-center gap-1 pb-2">
@@ -158,15 +169,18 @@ export function RailCollapsed({
           onNewProject={onNewProject}
         />
 
-        {/* The Column tabs sit in a track, like the tab bar of the expanded
-            Side panel, so they read as tabs and not as actions. */}
-        <div
-          data-testid="rail-column-tab-track"
-          // 10px = the 8px buttons inside + the 2px padding (concentric).
-          className="flex flex-col items-center gap-0.5 rounded-[10px] border border-border bg-card p-0.5"
-        >
-          <RailColumnIcons activeProject={activeProject} />
-        </div>
+        {/* The Column tabs sit in a track, like the Side panel's tab bar, so
+            they read as tabs and not as actions. While the Side panel is on
+            screen it shows the tabs itself, so the Rail shows none. */}
+        {!sidePanelOnScreen && (
+          <div
+            data-testid="rail-column-tab-track"
+            // 10px = the 8px buttons inside + the 2px padding (concentric).
+            className="flex flex-col items-center gap-0.5 rounded-[10px] border border-border bg-card p-0.5"
+          >
+            <RailColumnIcons activeProject={activeProject} />
+          </div>
+        )}
 
         <div className="flex flex-col items-center gap-1">
           <RailButton

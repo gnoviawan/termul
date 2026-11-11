@@ -230,7 +230,7 @@ function menuButton(page: Page): Locator {
 }
 
 function drawerOf(page: Page): Locator {
-  return page.getByRole('dialog', { name: 'Termul', exact: true })
+  return page.getByRole('dialog', { name: 'Troupe', exact: true })
 }
 
 /** Tap ☰ and wait for the drawer to be on screen and settled. */

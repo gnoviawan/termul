@@ -11,6 +11,7 @@ import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
+import { useSSHStore } from '@/stores/ssh-store'
 import type { Project } from '@/types/project'
 import { ShellRail, type ShellRailProps } from './ShellRail'
 
@@ -126,6 +127,7 @@ describe('ShellRail', () => {
     // `unavailable` keeps the store usable in memory without writing.
     useShellLayoutStore.setState({ status: 'unavailable' })
     useSettingsModalStore.setState({ view: null })
+    useSSHStore.setState({ workspaceOpen: false })
     useProjectStore.setState({ projects, groups: [] })
     useGitStatusStore.setState({
       diffStats: {},
@@ -239,7 +241,7 @@ describe('ShellRail', () => {
       expect(props.onShortcutsOpenChange).toHaveBeenCalledWith(true)
     })
 
-    it('ends the Rail header with the one 28px toggle, after the centered Termul mark', () => {
+    it('ends the Rail header with the one 28px toggle, after the centered Troupe mark', () => {
       for (const tauri of [true, false]) {
         tauriRef.current = tauri
         const { unmount } = renderRail()
@@ -263,7 +265,7 @@ describe('ShellRail', () => {
       }
     })
 
-    it('keeps the Termul mark after the traffic-light clearance on macOS', () => {
+    it('keeps the Troupe mark after the traffic-light clearance on macOS', () => {
       tauriRef.current = true
       macRef.current = true
       try {
@@ -417,23 +419,20 @@ describe('ShellRail', () => {
       useShellLayoutStore.setState({ railExpanded: false })
     })
 
-    it('shows only the icons: project stack, Column tabs, Search, Canvas, Automations, SSH, Theme, Shortcuts, Settings, Report a bug', () => {
+    it('shows only the icons: project stack, Search, Canvas, Automations, SSH, Theme, Shortcuts, Settings, Report a bug', () => {
       renderRail()
 
       const nav = screen.getByRole('navigation', { name: 'Projects' })
       const names = within(nav)
         .getAllByRole('button')
         .map((button) => button.getAttribute('aria-label'))
-      // The Rail toggle shares the top slot with the Termul mark.
+      // The Rail toggle shares the top slot with the Troupe mark.
       expect(names).toEqual([
         'Expand or collapse projects',
         'Switch project (Alpha)',
         // Other open projects (not archived) follow the active one.
         'Open Beta',
-        'Chats',
-        'Explorer',
-        'Changes',
-        'GitHub',
+        // The Side panel is shown, so it carries the Column tabs.
         'Search',
         'Open canvas',
         'Open automations',
@@ -464,6 +463,46 @@ describe('ShellRail', () => {
       ).toEqual(['Color themes', 'Open keyboard shortcuts menu', 'Settings', 'Report a bug'])
     })
 
+    it('shows the Column tabs only while the Side panel is not on screen', () => {
+      const track = () => screen.queryByTestId('rail-column-tab-track')
+      const tabs = () =>
+        within(track() as HTMLElement)
+          .getAllByRole('button')
+          .map((b) => b.getAttribute('aria-label'))
+
+      const shown = renderRail()
+      expect(track()).not.toBeInTheDocument()
+      shown.unmount()
+
+      // Everything collapsed: the Rail carries the tabs.
+      useShellLayoutStore.setState({ sidePanelVisible: false })
+      const hidden = renderRail()
+      expect(tabs()).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
+      hidden.unmount()
+
+      // The SSH workspace replaces the Side panel, so the Rail keeps the tabs.
+      useShellLayoutStore.setState({ sidePanelVisible: true })
+      useSSHStore.setState({ workspaceOpen: true })
+      const ssh = renderRail()
+      expect(tabs()).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
+      ssh.unmount()
+      useSSHStore.setState({ workspaceOpen: false })
+
+      // No project (or one without a local folder): no Side panel, so the
+      // Rail keeps the tabs.
+      for (const activeProject of [undefined, { ...projects[0], path: '' }]) {
+        const view = renderRail({ activeProject })
+        expect(tabs()).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
+        view.unmount()
+      }
+      renderRail({ activeProject: undefined, activeProjectId: '' })
+      for (const name of ['Chats', 'Explorer', 'Changes', 'GitHub']) {
+        expect(
+          within(track() as HTMLElement).getByRole('button', { name, exact: true })
+        ).toBeDisabled()
+      }
+    })
+
     it('puts the mark / toggle swap below the empty top band under the macOS traffic lights', () => {
       tauriRef.current = true
       macRef.current = true
@@ -481,7 +520,7 @@ describe('ShellRail', () => {
       }
     })
 
-    it('swaps the Termul mark for the toggle in one clipped slot on hover, focus and touch', () => {
+    it('swaps the Troupe mark for the toggle in one clipped slot on hover, focus and touch', () => {
       renderRail()
       const swap = screen.getByTestId('rail-brand-swap')
       expect(swap).toHaveClass('size-9', 'overflow-hidden', 'group/swap')

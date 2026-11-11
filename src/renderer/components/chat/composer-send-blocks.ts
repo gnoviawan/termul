@@ -28,6 +28,7 @@ export function buildComposerSend(
     hasCommand,
     hasSelectionContexts,
     hasConversations,
+    hasTools,
     wireWithCommand,
     displayWithCommand,
     wireTrimmed,
@@ -44,7 +45,16 @@ export function buildComposerSend(
       ...fileBlocks,
       ...contextBlocks
     ])
-    if (!(hasSkills || hasFileRefs || hasCommand || hasSelectionContexts || hasConversations)) {
+    if (
+      !(
+        hasSkills ||
+        hasFileRefs ||
+        hasCommand ||
+        hasSelectionContexts ||
+        hasConversations ||
+        hasTools
+      )
+    ) {
       return { kind: 'blocks', wire }
     }
     const display = textWithAttachmentBlocks(displayWithCommand, attachments)
@@ -59,7 +69,7 @@ export function buildComposerSend(
       display: displayTrimmed ? [{ type: 'text', text: displayWithCommand }] : []
     }
   }
-  if (hasCommand || hasSelectionContexts) {
+  if (hasCommand || hasSelectionContexts || hasTools) {
     return {
       kind: 'blocks',
       wire: wireTrimmed ? [{ type: 'text', text: wireTrimmed }] : [],

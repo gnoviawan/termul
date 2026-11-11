@@ -9,6 +9,7 @@ import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
+import { McpOAuthPasteDialogHost } from '@/components/settings/McpOAuthPasteDialog'
 import { ServerSetupGate } from '@/components/setup/ServerSetupGate'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Toaster } from '@/components/ui/sonner'
@@ -29,6 +30,7 @@ import { useGitStatusRefresh } from './hooks/use-git-status-refresh'
 import { useProjectGitBranch } from './hooks/use-project-git-branch'
 import { useProjectIcon } from './hooks/use-project-icon'
 import { useRemoteProjects } from './hooks/use-remote-projects'
+import { useRenameNotice } from './hooks/use-rename-notice'
 import { useSSHSessionEvents } from './hooks/use-ssh-session-events'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
@@ -172,6 +174,7 @@ function AppEffects(): null {
   useMenuUpdaterListener()
   useUpdateCheck()
   useUpdateToast()
+  useRenameNotice()
   useVisibilityState()
   useTerminalExitNotification()
   useTerminalIdleNotification()
@@ -306,6 +309,11 @@ const App = () => {
                   dialog (spec-acp-terminal-auth) — auth can be triggered from a
                   chat panel or warm pool, not just the launcher. */}
               <BrowserAuthDialogHost />
+              {/* Web MCP OAuth paste-back (spec-mcp-oauth-web-paste-back): the
+                  loopback redirect the host registered is unreachable from a
+                  browser on another device, so its address is pasted back here.
+                  Global so MCP settings and catalog install share it. */}
+              <McpOAuthPasteDialogHost />
               {/* Agent browser-automation consent fallback (CAP-5) —
                   desktop-only responder (the component no-ops on web; the host
                   auto-denies). */}

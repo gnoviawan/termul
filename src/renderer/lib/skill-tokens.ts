@@ -43,6 +43,8 @@
  * whole token + padding block + trailing space in one backspace.
  */
 
+import { replaceToolTokensInline, TOOL_TOKEN_END } from './composer/tool-tokens'
+
 export const SKILL_TOKEN_START = '\uE000'
 export const SKILL_TOKEN_END = '\uE001'
 /** Sentinel pair wrapping the optional caret-alignment padding block. */
@@ -455,8 +457,10 @@ export function replaceCommandTokensInline(value: string): string {
 }
 
 export function sanitizeDisplayText(value: string): string {
-  return replaceConversationTokensInline(
-    replaceFileTokensInline(replaceSkillTokensInline(replaceCommandTokensInline(value)))
+  return replaceToolTokensInline(
+    replaceConversationTokensInline(
+      replaceFileTokensInline(replaceSkillTokensInline(replaceCommandTokensInline(value)))
+    )
   )
 }
 
@@ -546,7 +550,8 @@ export function isComposerTriggerBoundary(value: string, index: number): boolean
     prev === CMD_TOKEN_END ||
     prev === FILE_TOKEN_END ||
     prev === CONTEXT_TOKEN_END ||
-    prev === CONV_TOKEN_END
+    prev === CONV_TOKEN_END ||
+    prev === TOOL_TOKEN_END
   )
 }
 

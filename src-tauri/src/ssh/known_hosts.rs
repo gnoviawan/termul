@@ -1,7 +1,7 @@
 //! Host key verification against OpenSSH `known_hosts` files.
 //!
 //! Two stores are consulted: the app-managed `~/.ssh/known_hosts_termul`
-//! (written by Termul, one plain OpenSSH line per trusted host) and the
+//! (written by Troupe, one plain OpenSSH line per trusted host) and the
 //! user's `~/.ssh/known_hosts` (read-only — system ssh owns it). A key is
 //! trusted when either store matches it. An unknown key is never accepted
 //! silently: the caller must ask the user and then call [`trust`].
@@ -250,7 +250,7 @@ pub fn check(host: &str, port: u16, key: &PublicKey) -> Result<HostKeyStatus, St
     ))
 }
 
-/// Drop the app-file lines whose first field names exactly `entry` (Termul
+/// Drop the app-file lines whose first field names exactly `entry` (Troupe
 /// writes one host pattern per line, so other lines are left untouched).
 pub(crate) fn without_entry(contents: &str, entry: &str) -> String {
     let mut kept = String::with_capacity(contents.len());
@@ -269,7 +269,7 @@ pub(crate) fn without_entry(contents: &str, entry: &str) -> String {
 }
 
 /// Persist trust for this host key in the app-managed file, replacing any
-/// previous Termul entry for the same host and port.
+/// previous Troupe entry for the same host and port.
 pub fn trust(host: &str, port: u16, key: &PublicKey) -> Result<(), String> {
     let path = app_known_hosts_path().ok_or_else(|| "Home directory not found".to_string())?;
     let entry = host_entry(host, port);

@@ -49,8 +49,8 @@ export function TestimonialListPage() {
   const [message, setMessage] = useState('');
 
   useSeoMeta({
-    title: 'Termul Testimonial CMS',
-    description: 'Token-protected moderation queue for Termul testimonials.',
+    title: 'Troupe Testimonial CMS',
+    description: 'Token-protected moderation queue for Troupe testimonials.',
     robots: 'noindex,nofollow',
   });
 
@@ -141,7 +141,7 @@ export function TestimonialListPage() {
         <div className="mb-10 flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
           <SectionHeader
             eyebrow="Private CMS"
-            title="Moderate Termul testimonials."
+            title="Moderate Troupe testimonials."
             description="Review pending submissions before they appear on the public landing page."
             className="max-w-2xl"
           />

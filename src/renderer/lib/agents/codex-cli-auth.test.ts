@@ -60,7 +60,7 @@ describe('codexAuthSyncDecision', () => {
     ).toBe('none')
   })
 
-  it('does nothing while Termul sign-in is in progress', () => {
+  it('does nothing while Troupe sign-in is in progress', () => {
     expect(
       codexAuthSyncDecision({
         previous: 'signed-out',

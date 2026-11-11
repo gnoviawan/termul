@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MCP_UNSAFE_URL, McpOAuthError } from '@/lib/acp-api'
+import { logFrontendError } from '@/lib/log-api'
 import { useAcpStore } from '@/stores/acp-store'
 import { McpServersSettings } from './McpServersSettings'
 
@@ -13,6 +14,8 @@ const { toastError, toastSuccess, toastFn } = vi.hoisted(() => ({
 vi.mock('sonner', () => ({
   toast: Object.assign(toastFn, { error: toastError, success: toastSuccess })
 }))
+
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(async () => {}) }))
 
 const saveMcpServer = vi.fn(async () => {})
 const importMcpServers = vi.fn(async (_servers: unknown[]) => {})
@@ -40,8 +43,27 @@ function seedStore(): void {
   })
 }
 
-function openAddDialog(): void {
+function openAddForm(): void {
   fireEvent.click(screen.getByRole('button', { name: /add server/i }))
+}
+
+function openAddDialog(): void {
+  openAddForm()
+  fireEvent.click(screen.getByRole('button', { name: 'Import JSON instead' }))
+}
+
+function openEditJson(server: string): void {
+  chooseRowAction(server, 'Edit')
+  fireEvent.click(screen.getByRole('button', { name: 'Edit as JSON' }))
+}
+
+function type(label: string, value: string): void {
+  fireEvent.change(screen.getByLabelText(label), { target: { value } })
+}
+
+function choose(combobox: string, option: string): void {
+  fireEvent.click(screen.getByRole('combobox', { name: combobox }))
+  fireEvent.click(screen.getByRole('option', { name: option }))
 }
 
 function typeJson(value: string): void {
@@ -71,7 +93,7 @@ describe('McpServersSettings', () => {
   it('does not claim to retain the experimental acp capability (issue #362)', () => {
     // The Rust schema is built without `unstable_mcp_over_acp`, so an agent's
     // `mcpCapabilities.acp` is dropped on parse (pinned in the Rust events
-    // tests). The notice must say Termul does not read it.
+    // tests). The notice must say Troupe does not read it.
     render(<McpServersSettings />)
     const notice = screen.getByText(/MCP-over-ACP/).closest('p')
     expect(notice).toHaveTextContent('does not read it')
@@ -214,7 +236,7 @@ describe('McpServersSettings', () => {
       ]
     })
     render(<McpServersSettings />)
-    chooseRowAction('Files', 'Edit as JSON')
+    openEditJson('Files')
     expect(screen.getByText('Edit MCP server')).toBeInTheDocument()
     // Pre-populated JSON: explicit type, env as an object map, enabled included.
     expect(editorJson()).toMatchObject({
@@ -264,7 +286,7 @@ describe('McpServersSettings', () => {
       ]
     })
     render(<McpServersSettings />)
-    chooseRowAction('Remote', 'Edit as JSON')
+    openEditJson('Remote')
     expect(editorJson()).toMatchObject({
       type: 'http',
       name: 'Remote',
@@ -314,7 +336,7 @@ describe('McpServersSettings', () => {
     })
     render(<McpServersSettings />)
 
-    chooseRowAction('Files', 'Edit as JSON')
+    openEditJson('Files')
     const renamed = editorJson()
     renamed.name = 'My files'
     renamed.env = { TOKEN: 'new' }
@@ -325,7 +347,7 @@ describe('McpServersSettings', () => {
       expect.objectContaining({ name: 'My files', env: [{ name: 'TOKEN', value: 'new' }], catalog })
     )
 
-    chooseRowAction('Files', 'Edit as JSON')
+    openEditJson('Files')
     const relaunched = editorJson()
     relaunched.args = ['-y', '@example/files', '--root', '/']
     typeJson(JSON.stringify(relaunched))
@@ -344,7 +366,7 @@ describe('McpServersSettings', () => {
       mcpServers: [{ id: 's2', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
     })
     render(<McpServersSettings />)
-    chooseRowAction('Files', 'Edit as JSON')
+    openEditJson('Files')
     const edited = editorJson()
     edited.enabled = false
     typeJson(JSON.stringify(edited))
@@ -361,7 +383,7 @@ describe('McpServersSettings', () => {
       mcpServers: [{ id: 's3', type: 'stdio', name: 'Files', command: 'node', enabled: false }]
     })
     render(<McpServersSettings />)
-    chooseRowAction('Files', 'Edit as JSON')
+    openEditJson('Files')
     const edited = editorJson()
     expect(edited.enabled).toBe(false)
     delete edited.enabled
@@ -379,7 +401,7 @@ describe('McpServersSettings', () => {
       mcpServers: [{ id: 's4', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
     })
     render(<McpServersSettings />)
-    chooseRowAction('Files', 'Edit as JSON')
+    openEditJson('Files')
     typeJson(JSON.stringify({ mcpServers: { files: { command: 'node' } } }))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() =>
@@ -393,7 +415,7 @@ describe('McpServersSettings', () => {
       mcpServers: [{ id: 's6', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
     })
     render(<McpServersSettings />)
-    chooseRowAction('Files', 'Edit as JSON')
+    openEditJson('Files')
     typeJson(JSON.stringify({ type: 'stdio', name: 'Files', command: '' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() =>
@@ -445,7 +467,7 @@ describe('McpServersSettings', () => {
       mcpServers: [{ id: 's7', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
     })
     render(<McpServersSettings />)
-    chooseRowAction('Files', 'Edit as JSON')
+    openEditJson('Files')
     const edited = editorJson()
     edited.command = 'bun'
     typeJson(JSON.stringify(edited))
@@ -529,7 +551,7 @@ describe('McpServersSettings', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
       await waitFor(() =>
         expect(toastError).toHaveBeenCalledWith(
-          "This server's sign-in link isn't a secure https link, so Termul didn't open it."
+          "This server's sign-in link isn't a secure https link, so Troupe didn't open it."
         )
       )
 
@@ -592,5 +614,351 @@ describe('McpServersSettings', () => {
     // Preserved surfaces: storage warning + experimental MCP-over-ACP card.
     expect(screen.getByText('$VARIABLE')).toBeInTheDocument()
     expect(screen.getByText(/mcp-over-acp/i)).toBeInTheDocument()
+  })
+
+  describe('guided form', () => {
+    it('adds a local server from a pasted command line and env rows', async () => {
+      render(<McpServersSettings />)
+      openAddForm()
+      expect(screen.getByRole('heading', { name: 'Add MCP server' })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('radio', { name: /on this computer/i }))
+      type('Name', 'github')
+      type('Command', `GITHUB_TOKEN=$GH_TOKEN npx -y "@modelcontextprotocol/server-github"`)
+      type('Environment variable 1 name', 'DEBUG')
+      type('Environment variable 1 value', 'mcp:*')
+      fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
+      await waitFor(() => expect(importMcpServers).toHaveBeenCalledTimes(1))
+      expect(importMcpServers).toHaveBeenCalledWith([
+        {
+          type: 'stdio',
+          name: 'github',
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-github'],
+          env: [
+            { name: 'DEBUG', value: 'mcp:*' },
+            { name: 'GITHUB_TOKEN', value: '$GH_TOKEN' }
+          ],
+          id: expect.stringMatching(UUID_RE),
+          enabled: true
+        }
+      ])
+      await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith('Added 1 MCP server'))
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+
+    it('moves a leading NAME=value into the env rows when the command loses focus', () => {
+      render(<McpServersSettings />)
+      openAddForm()
+      fireEvent.click(screen.getByRole('radio', { name: /on this computer/i }))
+      type('Command', 'API_KEY=abc uvx mcp-server-git')
+      fireEvent.blur(screen.getByLabelText('Command'))
+      expect(screen.getByLabelText('Command')).toHaveValue('uvx mcp-server-git')
+      expect(screen.getByLabelText('Environment variable 1 name')).toHaveValue('API_KEY')
+      expect(screen.getByLabelText('Environment variable 1 value')).toHaveValue('abc')
+      expect(screen.getByLabelText('Environment variable 1 value')).toHaveAttribute(
+        'type',
+        'password'
+      )
+    })
+
+    it('starts the command from a Common chip', () => {
+      render(<McpServersSettings />)
+      openAddForm()
+      fireEvent.click(screen.getByRole('radio', { name: /on this computer/i }))
+      type('Command', '@dokploy/mcp')
+      fireEvent.click(screen.getByRole('button', { name: 'npx -y …' }))
+      expect(screen.getByLabelText('Command')).toHaveValue('npx -y @dokploy/mcp')
+    })
+
+    it('adds a remote server with an API key header', async () => {
+      render(<McpServersSettings />)
+      openAddForm()
+      type('Name', 'linear')
+      type('Server URL', 'https://mcp.linear.app/mcp')
+      choose('Sign-in', 'API key or token')
+      expect(screen.getByLabelText('Header 1 name')).toHaveValue('Authorization')
+      expect(screen.getByLabelText('Header 1 value')).toHaveAttribute('placeholder', 'Bearer …')
+      type('Header 1 value', 'Bearer $LINEAR_KEY')
+      fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
+      await waitFor(() => expect(importMcpServers).toHaveBeenCalledTimes(1))
+      expect(importMcpServers).toHaveBeenCalledWith([
+        {
+          type: 'http',
+          name: 'linear',
+          url: 'https://mcp.linear.app/mcp',
+          headers: [{ name: 'Authorization', value: 'Bearer $LINEAR_KEY' }],
+          id: expect.stringMatching(UUID_RE),
+          enabled: true
+        }
+      ])
+    })
+
+    it('picks SSE from the URL until the connection type is chosen by hand', async () => {
+      render(<McpServersSettings />)
+      openAddForm()
+      type('Name', 'asana')
+      type('Server URL', 'https://mcp.asana.com/sse')
+      fireEvent.click(screen.getByRole('button', { name: 'Advanced' }))
+      expect(screen.getByRole('combobox', { name: 'Connection type' })).toHaveTextContent(
+        'SSE (older servers)'
+      )
+      choose('Connection type', 'Streamable HTTP (recommended)')
+      type('Server URL', 'https://mcp.asana.com/v2/sse')
+      fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
+      await waitFor(() => expect(importMcpServers).toHaveBeenCalledTimes(1))
+      expect(importMcpServers).toHaveBeenCalledWith([
+        expect.objectContaining({ type: 'http', url: 'https://mcp.asana.com/v2/sse' })
+      ])
+    })
+
+    it('blocks Save on a header without a value and logs only the field name', async () => {
+      render(<McpServersSettings />)
+      openAddForm()
+      type('Name', 'linear')
+      type('Server URL', 'https://mcp.linear.app/mcp')
+      choose('Sign-in', 'API key or token')
+      expect(screen.getByText('Needs a value.')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
+      await waitFor(() =>
+        expect(logFrontendError).toHaveBeenCalledWith({
+          level: 'warn',
+          source: 'settings.McpServersSettings',
+          message: 'MCP server form rejected: headers'
+        })
+      )
+      expect(importMcpServers).not.toHaveBeenCalled()
+      type('Header 1 value', 'Bearer secret-value')
+      expect(screen.queryByText('Needs a value.')).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
+      await waitFor(() => expect(importMcpServers).toHaveBeenCalledTimes(1))
+      expect(JSON.stringify(vi.mocked(logFrontendError).mock.calls)).not.toContain('secret-value')
+    })
+
+    it('shows required-field errors only after Save', async () => {
+      render(<McpServersSettings />)
+      openAddForm()
+      expect(screen.queryByText('Give the server a name.')).not.toBeInTheDocument()
+      type('Server URL', 'mcp.linear.app')
+      fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
+      expect(await screen.findByText('Give the server a name.')).toBeInTheDocument()
+      expect(
+        screen.getByText('Enter a full URL, like https://mcp.example.com/mcp.')
+      ).toBeInTheDocument()
+      expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'true')
+      expect(importMcpServers).not.toHaveBeenCalled()
+    })
+
+    it("keeps each card's input when switching between them, by mouse or arrow keys", () => {
+      render(<McpServersSettings />)
+      openAddForm()
+      const remote = screen.getByRole('radio', { name: /on the internet/i })
+      expect(remote).toHaveAttribute('aria-checked', 'true')
+      type('Server URL', 'https://mcp.linear.app/mcp')
+      fireEvent.keyDown(remote, { key: 'ArrowRight' })
+      const local = screen.getByRole('radio', { name: /on this computer/i })
+      expect(local).toHaveAttribute('aria-checked', 'true')
+      expect(local).toHaveFocus()
+      type('Command', 'uvx mcp-server-git')
+      fireEvent.click(remote)
+      expect(screen.getByLabelText('Server URL')).toHaveValue('https://mcp.linear.app/mcp')
+      fireEvent.click(local)
+      expect(screen.getByLabelText('Command')).toHaveValue('uvx mcp-server-git')
+    })
+
+    it('carries a single pasted server from JSON back into the form', () => {
+      render(<McpServersSettings />)
+      openAddDialog()
+      typeJson(JSON.stringify({ name: 'docs', type: 'sse', url: 'https://docs.test/events' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Use the form' }))
+      expect(screen.getByLabelText('Name')).toHaveValue('docs')
+      expect(screen.getByLabelText('Server URL')).toHaveValue('https://docs.test/events')
+      expect(screen.getByRole('combobox', { name: 'Connection type' })).toHaveTextContent(
+        'SSE (older servers)'
+      )
+    })
+
+    it('stays on JSON with a message when the JSON holds more than one server', () => {
+      render(<McpServersSettings />)
+      openAddDialog()
+      const text = JSON.stringify({
+        mcpServers: { a: { command: 'a' }, b: { url: 'https://b.test/mcp' } }
+      })
+      typeJson(text)
+      fireEvent.click(screen.getByRole('button', { name: 'Use the form' }))
+      expect(screen.getByLabelText('MCP JSON')).toHaveValue(text)
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'The form holds one valid server. Fix the JSON, or save it from here.'
+      )
+    })
+
+    it('shows the add form as JSON when switching to Import JSON instead', () => {
+      render(<McpServersSettings />)
+      openAddForm()
+      type('Name', 'docs')
+      type('Server URL', 'https://docs.test/mcp')
+      fireEvent.click(screen.getByRole('button', { name: 'Import JSON instead' }))
+      expect(editorJson()).toEqual({
+        type: 'http',
+        name: 'docs',
+        url: 'https://docs.test/mcp',
+        enabled: true
+      })
+    })
+
+    it('shows an add draft holding only an env row as JSON', () => {
+      render(<McpServersSettings />)
+      openAddForm()
+      fireEvent.click(screen.getByRole('radio', { name: /on this computer/i }))
+      type('Environment variable 1 name', 'API_KEY')
+      fireEvent.click(screen.getByRole('button', { name: 'Import JSON instead' }))
+      expect(editorJson()).toEqual({
+        type: 'stdio',
+        name: '',
+        command: '',
+        env: { API_KEY: '' },
+        enabled: true
+      })
+    })
+
+    it('edits a server in the form, keeping its id, enabled state and catalog provenance', async () => {
+      const catalog = {
+        source: 'mcp-registry' as const,
+        name: 'io.example/files',
+        version: '1.0.0',
+        kind: 'package' as const,
+        index: 0,
+        repositoryId: null,
+        launchDigest: 'digest-1'
+      }
+      useAcpStore.setState({
+        mcpServers: [
+          {
+            id: 'cat',
+            type: 'stdio',
+            name: 'Files',
+            command: 'npx',
+            args: ['-y', '@example/files', '/srv/my files'],
+            env: [{ name: 'TOKEN', value: 'old' }],
+            enabled: false,
+            catalog
+          }
+        ]
+      })
+      render(<McpServersSettings />)
+      chooseRowAction('Files', 'Edit')
+      expect(screen.getByRole('heading', { name: 'Edit MCP server' })).toBeInTheDocument()
+      expect(screen.getByRole('radio', { name: /on this computer/i })).toHaveAttribute(
+        'aria-checked',
+        'true'
+      )
+      expect(screen.getByLabelText('Command')).toHaveValue("npx -y @example/files '/srv/my files'")
+      type('Name', 'My files')
+      type('Environment variable 1 value', 'new')
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(saveMcpServer).toHaveBeenCalledTimes(1))
+      expect(saveMcpServer).toHaveBeenCalledWith({
+        type: 'stdio',
+        name: 'My files',
+        command: 'npx',
+        args: ['-y', '@example/files', '/srv/my files'],
+        env: [{ name: 'TOKEN', value: 'new' }],
+        id: 'cat',
+        enabled: false,
+        catalog
+      })
+      await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith('MCP server updated'))
+
+      chooseRowAction('Files', 'Edit')
+      type('Command', 'npx -y @example/files --root /')
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(saveMcpServer).toHaveBeenCalledTimes(2))
+      expect(saveMcpServer).toHaveBeenLastCalledWith({
+        type: 'stdio',
+        name: 'Files',
+        command: 'npx',
+        args: ['-y', '@example/files', '--root', '/'],
+        env: [{ name: 'TOKEN', value: 'old' }],
+        id: 'cat',
+        enabled: false
+      })
+    })
+
+    it('opens Edit as JSON with the form changes applied', () => {
+      useAcpStore.setState({
+        mcpServers: [
+          { id: 'r1', type: 'http', name: 'Remote', url: 'https://old.test/mcp', enabled: true }
+        ]
+      })
+      render(<McpServersSettings />)
+      chooseRowAction('Remote', 'Edit')
+      type('Server URL', 'https://new.test/sse')
+      fireEvent.click(screen.getByRole('button', { name: 'Edit as JSON' }))
+      expect(editorJson()).toEqual({
+        type: 'sse',
+        name: 'Remote',
+        url: 'https://new.test/sse',
+        enabled: true
+      })
+    })
+
+    it('opens Edit as JSON with an invalid form change kept for fixing', () => {
+      useAcpStore.setState({
+        mcpServers: [
+          { id: 'r2', type: 'http', name: 'Remote', url: 'https://old.test/mcp', enabled: true }
+        ]
+      })
+      render(<McpServersSettings />)
+      chooseRowAction('Remote', 'Edit')
+      type('Server URL', 'not a url')
+      fireEvent.click(screen.getByRole('button', { name: 'Edit as JSON' }))
+      expect(editorJson()).toEqual({
+        type: 'http',
+        name: 'Remote',
+        url: 'not a url',
+        enabled: true
+      })
+    })
+
+    it('keeps enabled from the edit JSON after switching back to the form', async () => {
+      useAcpStore.setState({
+        mcpServers: [{ id: 's4', type: 'stdio', name: 'Files', command: 'node', enabled: true }]
+      })
+      render(<McpServersSettings />)
+      openEditJson('Files')
+      const edited = editorJson()
+      edited.enabled = false
+      typeJson(JSON.stringify(edited))
+      fireEvent.click(screen.getByRole('button', { name: 'Use the form' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() =>
+        expect(saveMcpServer).toHaveBeenCalledWith({
+          type: 'stdio',
+          name: 'Files',
+          command: 'node',
+          id: 's4',
+          enabled: false
+        })
+      )
+    })
+
+    it('keeps the form open with the rollback toast and a log when the save fails', async () => {
+      importMcpServers.mockRejectedValueOnce(new Error('disk full'))
+      render(<McpServersSettings />)
+      openAddForm()
+      type('Name', 'linear')
+      type('Server URL', 'https://mcp.linear.app/mcp')
+      fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
+      await waitFor(() =>
+        expect(toastError).toHaveBeenCalledWith(
+          'Could not save the MCP servers. Your previous settings were restored.'
+        )
+      )
+      expect(logFrontendError).toHaveBeenCalledWith({
+        level: 'error',
+        source: 'settings.McpServersSettings',
+        message: 'MCP server add failed to save; the store rolled back'
+      })
+      expect(screen.getByLabelText('Server URL')).toHaveValue('https://mcp.linear.app/mcp')
+    })
   })
 })

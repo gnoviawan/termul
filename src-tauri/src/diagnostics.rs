@@ -24,8 +24,15 @@ use crate::process_util::background_command_hygiene;
 /// Most bytes of log tail attached to a report.
 const LOG_TAIL_BYTES: usize = 64 * 1024;
 
-/// Repo `gh issue create` files against.
-const ISSUE_REPO: &str = "gnoviawan/termul";
+/// Repo `gh issue create` files against, in `gh -R` `HOST/OWNER/REPO` form.
+/// The full `github.com/...` path lets the rebrand codemod's repo-url rule
+/// rewrite it together with the tests once the repo is renamed.
+const ISSUE_REPO: &str = "github.com/gnoviawan/termul";
+/// Owner part of every issue link the issue repo can print.
+const ISSUE_URL_OWNER_PREFIX: &str = "https://github.com/gnoviawan/";
+/// Every name the issue repo has had. Around the termul -> troupe rename,
+/// `gh` can print the new issue's link under either name.
+const ISSUE_REPO_NAMES: [&str; 2] = ["termul", "troupe"];
 /// Host `gh` must be authenticated against for the issue repo.
 const ISSUE_HOST: &str = "github.com";
 /// Most chars of `gh` stderr kept in a `Failed` reason.
@@ -361,15 +368,21 @@ impl Drop for BodyFile {
 /// The `gh issue create` URL on stdout, anchored to the issue shape so a
 /// warning or banner URL `gh` prints first cannot be captured instead.
 fn parse_issue_url(stdout: &str) -> Option<String> {
-    let prefix = format!("https://github.com/{ISSUE_REPO}/issues/");
     stdout
         .split_whitespace()
-        .find(|token| {
-            token
-                .strip_prefix(prefix.as_str())
-                .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
-        })
+        .find(|token| is_issue_url(token))
         .map(str::to_string)
+}
+
+fn is_issue_url(token: &str) -> bool {
+    token
+        .strip_prefix(ISSUE_URL_OWNER_PREFIX)
+        .and_then(|rest| rest.split_once("/issues/"))
+        .is_some_and(|(name, number)| {
+            ISSUE_REPO_NAMES.contains(&name)
+                && !number.is_empty()
+                && number.bytes().all(|b| b.is_ascii_digit())
+        })
 }
 
 /// First ~[`GH_STDERR_MAX`] chars of process stderr, secret-masked and

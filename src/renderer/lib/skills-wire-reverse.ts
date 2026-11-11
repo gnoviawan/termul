@@ -18,6 +18,7 @@
  */
 import { fileUrlToPath } from '@/components/chat/chat-attachments'
 import { selectionContextsToDisplay } from '@/lib/composer/selection-context'
+import { restoreToolTokens } from '@/lib/composer/tool-tokens'
 import { parseConversationEnvelope, restoreConversationLabels } from '@/lib/conversation-envelope'
 import {
   commandToken,
@@ -145,7 +146,7 @@ function framedSkillsToDisplay(body: string): string | null {
   // was never a chip stays literal — the forward direction only framed real
   // chips, and unframed names have no header entry to reconstruct from).
   // When NO marker resolves to a framed name the text is not a completed
-  // Termul framing — either a split prefix whose markers have not arrived or
+  // Troupe framing — either a split prefix whose markers have not arrived or
   // prose that merely matches the shape — so it passes through verbatim.
   let resolved = false
   const display = userText.replace(SKILL_MARKER_RE, (marker, name: string) => {
@@ -215,7 +216,7 @@ export function wireBlocksToDisplay<T extends WireBlock>(blocks: T[] | null | un
       .map((s) =>
         s.kind === 'conversation'
           ? conversationToken(s.title, s.sessionId)
-          : restoreFileTokens(s.text, filePaths)
+          : restoreFileTokens(restoreToolTokens(s.text), filePaths)
       )
       .join('')
     if (text === block.text) return block

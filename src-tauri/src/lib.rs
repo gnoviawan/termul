@@ -7,6 +7,8 @@ mod agentation;
 // Chat-authored automations: model, validation, schedules and store.
 // Tauri-free so the desktop and `termul-server` share it.
 pub mod automation;
+// TROUPE_* environment variables with the TERMUL_* names as a fallback.
+pub mod brand_env;
 mod browser_automation;
 mod browser_tab_manager;
 mod browser_tab_permissions;
@@ -27,6 +29,9 @@ mod git_remote;
 // and the `/github/*` web routes.
 mod github;
 mod host_perimeter;
+// NTFS directory junctions (worktree symlink fallback, Claude account linker).
+#[cfg(windows)]
+mod junction;
 mod logging;
 pub mod mcp_catalog;
 mod media_bytes;
@@ -944,8 +949,8 @@ fn show_log_action_error<R: tauri::Runtime>(app: &tauri::AppHandle<R>, message: 
         .show(|_| {});
 }
 
-/// AD-14 / AD-18 startup refusal: another Termul host owns the data directory,
-/// or a store was written by a newer Termul. Nothing else may open that data,
+/// AD-14 / AD-18 startup refusal: another Troupe host owns the data directory,
+/// or a store was written by a newer Troupe. Nothing else may open that data,
 /// so hide the (still empty) windows, show a native error dialog and exit
 /// non-zero once the user acknowledges it. `setup` returns right after this,
 /// so no store, agent or terminal is ever started.
@@ -956,7 +961,7 @@ fn refuse_startup<R: tauri::Runtime>(app: &tauri::AppHandle<R>, message: &str) {
     }
     app.dialog()
         .message(message)
-        .title("Termul cannot start")
+        .title("Troupe cannot start")
         .kind(MessageDialogKind::Error)
         .show(|_| std::process::exit(1));
 }
@@ -1303,6 +1308,7 @@ pub fn run() {
             // Startup diagnostic banner (issue #244): version, OS/arch, build
             // channel, session id, and resolved log path on a single line.
             logging::log_startup_banner(&handle);
+            brand_env::flush_deprecations();
             for key in &engine_scrub.changed {
                 log::warn!("[perimeter] removed engine debug setting from the environment: {key}");
             }
@@ -1399,7 +1405,7 @@ pub fn run() {
                     handle
                         .dialog()
                         .message(format!(
-                            "Termul could not read its saved project list ({error}). {dialog_note}"
+                            "Troupe could not read its saved project list ({error}). {dialog_note}"
                         ))
                         .title("Project list unavailable")
                         .kind(MessageDialogKind::Error)
@@ -1981,9 +1987,9 @@ pub fn run() {
                 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
                 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-                let show_item = MenuItemBuilder::with_id(TRAY_MENU_SHOW, "Show Termul")
+                let show_item = MenuItemBuilder::with_id(TRAY_MENU_SHOW, "Show Troupe")
                     .build(app)?;
-                let quit_item = MenuItemBuilder::with_id(TRAY_MENU_QUIT, "Quit Termul")
+                let quit_item = MenuItemBuilder::with_id(TRAY_MENU_QUIT, "Quit Troupe")
                     .build(app)?;
                 let separator = PredefinedMenuItem::separator(app)?;
 
@@ -1994,7 +2000,7 @@ pub fn run() {
                     .build()?;
 
                 let _tray = TrayIconBuilder::with_id(TRAY_ID)
-                    .tooltip("Termul Manager")
+                    .tooltip("Troupe")
                     .icon(app.default_window_icon().cloned().unwrap())
                     .menu(&tray_menu)
                     .show_menu_on_left_click(false)

@@ -1,5 +1,5 @@
 // Process and browser plumbing for the reconnect lab: an isolated seeded
-// termul-server (the same flags and fake agent as tests/e2e/helpers.ts
+// troupe-server (the same flags and fake agent as tests/e2e/helpers.ts
 // startSeededServer, which a plain Node script cannot import), the fault
 // proxy in front of it, and one fresh Chromium context per scenario.
 import { execFileSync, spawn } from 'node:child_process'
@@ -63,11 +63,12 @@ export async function freePort(start, taken = new Set()) {
 }
 
 export function defaultServerBinary() {
-  const local = join(repoRoot(), 'src-tauri', 'target', 'release', 'termul-server')
+  const local = join(repoRoot(), 'src-tauri', 'target', 'release', 'troupe-server')
   if (existsSync(local)) return local
   throw new Error(
-    `termul-server binary missing at ${local}. Build it with ` +
-      '`cargo build --release --bin termul-server --features standalone-server`, ' +
+    `troupe-server binary missing at ${local}. Run ` +
+      '`bun scripts/canvas/fetch-figcraft-bundle.mjs`, then build it with ' +
+      '`cargo build --release --bin troupe-server --features standalone-server`, ' +
       'or pass --server-bin <path>.'
   )
 }
@@ -77,7 +78,7 @@ export function defaultServerBinary() {
  * long-running agent. `onLine(line)` receives every server log line.
  */
 export async function startLabServer({ binary, port, onLine }) {
-  if (!existsSync(binary)) throw new Error(`termul-server binary missing at ${binary}`)
+  if (!existsSync(binary)) throw new Error(`troupe-server binary missing at ${binary}`)
   const bunPath = execFileSync('bash', ['-lc', 'command -v bun'], { encoding: 'utf8' })
     .trim()
     .split('\n')
@@ -140,7 +141,7 @@ export async function startLabServer({ binary, port, onLine }) {
   try {
     const deadline = Date.now() + 30_000
     for (;;) {
-      if (child.exitCode !== null) throw new Error(`termul-server exited with ${child.exitCode}`)
+      if (child.exitCode !== null) throw new Error(`troupe-server exited with ${child.exitCode}`)
       if (
         listening &&
         (await fetch(`${baseUrl}/health`)
@@ -148,7 +149,7 @@ export async function startLabServer({ binary, port, onLine }) {
           .catch(() => false))
       )
         break
-      if (Date.now() > deadline) throw new Error(`termul-server on ${port} never became healthy`)
+      if (Date.now() > deadline) throw new Error(`troupe-server on ${port} never became healthy`)
       await sleep(200)
     }
     const fakeAgent = join(repoRoot(), 'tests', 'e2e', 'fake-longrun-agent.ts')

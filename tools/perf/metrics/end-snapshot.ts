@@ -62,7 +62,7 @@ export function classifyProcess(name: string, commandLine: string): ProcessRole 
     if (/--type=gpu-process/.test(commandLine)) return 'gpu'
     return 'webviewOther'
   }
-  if (/termul-manager/i.test(name)) return 'host'
+  if (/termul-manager|troupe(?!-server)/i.test(name)) return 'host'
   if (/fake-agent[\\/]fake-agent\.ts/.test(commandLine)) return 'fakeAgent'
   return 'otherChild'
 }

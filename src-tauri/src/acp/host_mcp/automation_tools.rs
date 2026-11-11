@@ -1,4 +1,4 @@
-//! The automation authoring tools of the host `termul` MCP server: what the
+//! The automation authoring tools of the host `troupe` MCP server: what the
 //! child advertises and forwards, and the guide the authoring agent reads.
 //! The parent answers every call (`parent/automation.rs`) through the host's
 //! `AutomationService`, scoped to the calling session's project.
@@ -69,7 +69,7 @@ pub struct AutomationApplyOpsInput {
 
 pub const GUIDE_DESCRIPTION: &str = "Read this first when the user wants something to run on \
 a schedule or on demand (an automation, a recurring task, a cron job, a workflow). Returns the \
-rules and the format for building a Termul automation with the automation_* tools: node kinds \
+rules and the format for building a Troupe automation with the automation_* tools: node kinds \
 and fields, ports, templates, the output schema subset, ops, issue codes, and when to ask the \
 user questions. Returns Markdown.";
 
@@ -122,9 +122,9 @@ needs approval again."
 }
 
 /// The `automation_guide` text.
-pub const GUIDE: &str = r#"# Authoring a Termul automation
+pub const GUIDE: &str = r#"# Authoring a Troupe automation
 
-An automation is a graph the Termul host runs on a schedule or on demand, with no chat open. You build it with the automation_* tools; the user approves it in the Automations tab. You cannot approve, enable, run or delete an automation, or set a secret.
+An automation is a graph the Troupe host runs on a schedule or on demand, with no chat open. You build it with the automation_* tools; the user approves it in the Automations tab. You cannot approve, enable, run or delete an automation, or set a secret.
 
 ## Steps
 

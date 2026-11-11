@@ -10,9 +10,9 @@
 
 ## Summary
 
-Termul's terminal input is still the xterm.js keystroke stream written straight to the PTY. `currentLineRef` cannot reconstruct the real shell line. This spec moves input ownership to a client-owned command editor while the shell is at a trusted prompt, and leaves xterm.js as the continuous scrollback and the interactive PTY surface.
+Troupe's terminal input is still the xterm.js keystroke stream written straight to the PTY. `currentLineRef` cannot reconstruct the real shell line. This spec moves input ownership to a client-owned command editor while the shell is at a trusted prompt, and leaves xterm.js as the continuous scrollback and the interactive PTY surface.
 
-The editor and the shell cooperate through a Termul session protocol. Shell completion runs in-band on that same PTY so aliases, functions, shell config, and session context stay real. Completion is an internal operation. It is not a user command.
+The editor and the shell cooperate through a Troupe session protocol. Shell completion runs in-band on that same PTY so aliases, functions, shell config, and session context stay real. Completion is an internal operation. It is not a user command.
 
 ---
 
@@ -184,11 +184,11 @@ An explicit Tab when nothing is showing and no request is in flight for this con
 
 **Rule: The composer is the prompt.** It is mounted only in Editor. PTY mode, including a running command, an alternate-screen TUI, and a nested program, unmounts it and gives the keyboard to xterm. Leaving the alternate screen does not by itself return Editor. `sleep 100` does not time out into a raw prompt.
 
-**Rule: v1 injection is local interactive bash and zsh.** A nested bash or zsh enters Editor only when it emits Termul-authenticated markers. fish, PowerShell, cmd, dash, SSH, and a direct program stay raw until a valid authenticated prompt is observed. A new shell process gets a new session id. Hooks for an unregistered id do nothing.
+**Rule: v1 injection is local interactive bash and zsh.** A nested bash or zsh enters Editor only when it emits Troupe-authenticated markers. fish, PowerShell, cmd, dash, SSH, and a direct program stay raw until a valid authenticated prompt is observed. A new shell process gets a new session id. Hooks for an unregistered id do nothing.
 
 ```gherkin
 Scenario: Trusted prompt mounts an empty editor
-  Given a local interactive zsh has completed the Termul handshake
+  Given a local interactive zsh has completed the Troupe handshake
   And the latest authenticated prompt has line_empty and prompt_suppressed
   When the prompt event is applied
   Then the composer is mounted
@@ -196,7 +196,7 @@ Scenario: Trusted prompt mounts an empty editor
   And xterm does not show the shell prompt glyph
 
 Scenario: Ambient OSC does not mount the editor
-  Given the session has no Termul handshake
+  Given the session has no Troupe handshake
   When the PTY prints OSC 133 prompt markers
   Then the composer stays unmounted
   And the visible prompt remains
@@ -492,7 +492,7 @@ Rule: Surfaces
 
 ## Design Decision
 
-**Chosen option:** Option A — Termul session protocol with in-band completion.
+**Chosen option:** Option A — Troupe session protocol with in-band completion.
 
 **Summary:** The host injects an original bash or zsh integration for a local interactive login shell. The shell reports lifecycle on a private channel bound to a host-generated session id and nonce. The PTY reader strips that channel from the output bytes, in the same pass family as `DaFilter`, and drops the protocol bytes instead of forwarding them. The editor is CodeMirror. Completion is a host RPC that runs one wrapped generator in that shell and returns a structured result to the caller. Submit is a different host RPC that serializes behind the same generator lock.
 

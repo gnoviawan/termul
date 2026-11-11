@@ -6,7 +6,7 @@
  * for that configured agent, under a dedicated `persistenceApi` key. Only the
  * method id is stored — never tokens or credentials. When a fresh agent
  * process for the same config answers a session call with auth-required and
- * advertises multiple methods, the remembered id is the ONLY method Termul
+ * advertises multiple methods, the remembered id is the ONLY method Troupe
  * may auto-authenticate with; otherwise the user picks (never silently
  * choose).
  */

@@ -1,7 +1,8 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
-	"productName": "Termul Manager",
-	"version": "0.4.52",
+	"productName": "Troupe",
+	"mainBinaryName": "troupe",
+	"version": "0.4.60",
 	"identifier": "com.termul-manager.app",
 	"build": {
 		"beforeDevCommand": "npx vite --config vite.config.tauri.ts",
@@ -15,7 +16,7 @@
 			{
 				"label": "main",
 				"url": "tauri-index.html",
-				"title": "Termul Manager",
+				"title": "Troupe",
 				"width": 1200,
 				"height": 800,
 				"minWidth": 800,
@@ -68,14 +69,18 @@
 		"publisher": "gnoviawan",
 		"copyright": "Copyright © 2025 gnoviawan",
 		"category": "Productivity",
-		"shortDescription": "Termul Manager - Project-aware terminal manager",
-		"longDescription": "Termul Manager is a desktop application built with Tauri for enhanced productivity. Organize terminals by project with persistent sessions and snapshots.",
+		"shortDescription": "Troupe - Project-aware terminal manager",
+		"longDescription": "Troupe is a desktop application built with Tauri for enhanced productivity. Organize terminals by project with persistent sessions and snapshots.",
 		"macOS": {
 			"entitlements": "Entitlements.plist"
 		},
 		"windows": {
 			"nsis": {
-				"displayLanguageSelector": false
+				"displayLanguageSelector": false,
+				"installerHooks": "windows/installer-hooks.nsh"
+			},
+			"wix": {
+				"upgradeCode": "3ebd61be-890f-598f-90bd-448d14f3ba7a"
 			}
 		}
 	}

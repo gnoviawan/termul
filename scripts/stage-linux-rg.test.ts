@@ -33,14 +33,15 @@ describe('stageLinuxRg', () => {
     }
   })
 
-  test('the staged path matches every files source in tauri.linux.conf.json', async () => {
+  test('the staged path is the rg source in every tauri.linux.conf.json package', async () => {
     const config = JSON.parse(
       await readFile(join(__dirname, '..', 'src-tauri', 'tauri.linux.conf.json'), 'utf8')
     )
     expect(config.build.beforeBundleCommand).toBe('node scripts/stage-linux-rg.mjs')
     for (const pkg of ['deb', 'rpm', 'appimage']) {
-      const sources = Object.values(config.bundle.linux[pkg].files)
-      expect(sources).toEqual([STAGED_RG_RELATIVE_PATH.split('\\').join('/')])
+      expect(config.bundle.linux[pkg].files['/usr/lib/troupe/rg']).toBe(
+        STAGED_RG_RELATIVE_PATH.split('\\').join('/')
+      )
     }
   })
 

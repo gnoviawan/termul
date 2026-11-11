@@ -10,9 +10,11 @@ import { sessionModelSnapshot } from '@/components/chat/chat-input-bar-config'
 import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
 import {
   deriveTitle,
+  isUntitledTitle,
   maxPayloadSeq,
   type SessionIndexEntry,
-  type SessionPayload
+  type SessionPayload,
+  UNTITLED_CHAT_RE
 } from '@/lib/acp-history-persistence'
 import { getAcpTransport } from '@/lib/acp-transport'
 import {
@@ -73,8 +75,7 @@ export function nextUntitledTitle(): string {
   return `Untitled Chat ${untitledChatCounter}`
 }
 
-/** Matches an `Untitled Chat N` placeholder and captures its numeric suffix. */
-export const UNTITLED_CHAT_RE = /^Untitled Chat (\d+)$/
+export { UNTITLED_CHAT_RE }
 
 /**
  * Lift `untitledChatCounter` to at least the highest `Untitled Chat N` suffix
@@ -224,11 +225,34 @@ export function persistSession(
   const recordedModel = sessionModelSnapshot(session)
   const modelId = recordedModel?.modelId ?? existingEntry?.modelId
   const modelName = recordedModel?.modelName ?? existingEntry?.modelName
+  // Prefer a real title over the `Untitled Chat` placeholder (issue #1798). A
+  // watching device installs the payload's placeholder into `session.title`
+  // before the host derives the first-message title; a later `chat_history`
+  // delta then titles the INDEX row but never the live session. Re-stamping
+  // `session.title` verbatim here would clobber that derived title with the
+  // stale placeholder and, with a fresh `lastActivityAt`, let
+  // `mergeSessionIndexEntries` keep the local placeholder on every refetch.
+  // Fall through to the existing/derived title whenever the live title is a
+  // placeholder; a real local title (e.g. a rename) still wins. When the live
+  // title is a placeholder, a real index title (host-derived or
+  // background-generated, which only reaches the index) beats re-deriving one
+  // from the first message. A null live title keeps the old derive-first path.
+  const derivedTitle = deriveTitle(liveMessages, fallbackTitle)
+  const title =
+    session.title && !isUntitledTitle(session.title)
+      ? session.title
+      : isUntitledTitle(session.title) &&
+          existingEntry?.title &&
+          !isUntitledTitle(existingEntry.title)
+        ? existingEntry.title
+        : isUntitledTitle(derivedTitle)
+          ? (session.title ?? derivedTitle)
+          : derivedTitle
   const entry: SessionIndexEntry = {
     id: sessionId,
     agentId: session.agentId,
     agentConfigId,
-    title: session.title ?? deriveTitle(liveMessages, fallbackTitle),
+    title,
     cwd: session.cwd,
     projectId: session.projectId,
     createdAt: keepCreatedAt(existingEntry?.createdAt, session.createdAt),
@@ -243,7 +267,7 @@ export function persistSession(
     // so launch recovery can prefer the chat whose turn is still running.
     turnActive: session.activeTurn === true || session.openTurnId != null ? true : undefined,
     // Preserve the origin flag so a discovered (external) session re-projected
-    // here can't lose `discovered: true` and leak into the Termul-only sidebar.
+    // here can't lose `discovered: true` and leak into the Troupe-only sidebar.
     // Prefer the live-session marker (set by openDiscoveredSession) over the
     // existing index entry, so the disconnect/close path stays correct even when
     // no sessionIndex entry exists yet.

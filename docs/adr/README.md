@@ -1,6 +1,6 @@
 # Architecture decision records
 
-This directory holds the architecture decision records (ADRs) for Termul.
+This directory holds the architecture decision records (ADRs) for Troupe.
 Add an entry to the table when you add an ADR.
 
 | ADR | Title | Status |

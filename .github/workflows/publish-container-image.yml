@@ -4,11 +4,11 @@ on:
   workflow_call:
     inputs:
       release_tag:
-        description: GitHub release tag whose termul-server assets go into the image (v0.5.0, nightly)
+        description: GitHub release tag whose troupe-server assets go into the image (v0.5.0, nightly)
         required: true
         type: string
       image_tags:
-        description: Newline-separated tags to push to ghcr.io/<owner>/termul-server
+        description: Newline-separated tags to push to ghcr.io/<owner>/troupe-server and the legacy ghcr.io/<owner>/termul-server
         required: true
         type: string
 
@@ -53,11 +53,17 @@ jobs:
           IMAGE_TAGS: ${{ inputs.image_tags }}
           OWNER: ${{ github.repository_owner }}
         run: |
-          image="ghcr.io/${OWNER,,}/termul-server"
+          # One build pushed under both names, so existing pulls of
+          # termul-server get the same digest as troupe-server.
+          images=("ghcr.io/${OWNER,,}/troupe-server" "ghcr.io/${OWNER,,}/termul-server")
           tags=()
           # Docker tags cannot contain "+", so SemVer build metadata becomes "-".
           while IFS= read -r tag; do
-            [[ -n "$tag" ]] && tags+=(--tag "$image:${tag//+/-}")
+            if [[ -n "$tag" ]]; then
+              for image in "${images[@]}"; do
+                tags+=(--tag "$image:${tag//+/-}")
+              done
+            fi
           done <<< "$IMAGE_TAGS"
           docker buildx build \
             --platform linux/amd64,linux/arm64 \

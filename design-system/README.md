@@ -1,6 +1,6 @@
-# Termul design system canvas
+# Troupe design system canvas
 
-A pan-and-zoom canvas of Termul's real tokens and components, rendered from `src/renderer`.
+A pan-and-zoom canvas of Troupe's real tokens and components, rendered from `src/renderer`.
 It only uses mock data and makes no network requests.
 
 ```sh

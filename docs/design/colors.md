@@ -12,7 +12,7 @@ Tokens are OKLCH `"L C H"` on `:root`. Tailwind maps `oklch(var(--token) / <alph
 
 Nothing else exists. `green-500`, `amber-400`, `white`, `black` are bugs.
 
-The default dark theme (`termul`) paints neutrals from an explicit ramp. Other themes still derive surfaces from one neutral plus a 4% brand tint. Termul uses the Interfere blue (`termul-brand.ts`): link and text `--primary` is `#3b9eff`; the solid fill `--primary-fill` (also `--accent` and `--sidebar-primary`) is pinned to `#0d74ce` through `chrome.brandFill`, with white `--primary-foreground` (4.77:1). Hover `#0e6abe` (5.49:1) and pressed `#0e60ae` (6.36:1) are shared with Termul Light.
+The default dark theme (`termul`) paints neutrals from an explicit ramp. Other themes still derive surfaces from one neutral plus a 4% brand tint. Troupe uses the Interfere blue (`termul-brand.ts`): link and text `--primary` is `#3b9eff`; the solid fill `--primary-fill` (also `--accent` and `--sidebar-primary`) is pinned to `#0d74ce` through `chrome.brandFill`, with white `--primary-foreground` (4.77:1). Hover `#0e6abe` (5.49:1) and pressed `#0e60ae` (6.36:1) are shared with Troupe Light.
 
 | Token | Role | Source |
 | --- | --- | --- |
@@ -28,7 +28,7 @@ The default dark theme (`termul`) paints neutrals from an explicit ramp. Other t
 | `ring` | Theme ink (keycap highlight, not focus) | Bone |
 | `focus-ring` | Keyboard focus edge | A tint of `ring` lifted until it reaches 4:1 on card, background and popover |
 
-The default light theme (`termul-light`) uses Interfere neutrals. The page is `#fcfcfc`, and cards and popovers are white `#ffffff`, so raised panes separate by elevation (`--elevation-*`, Interfere s-default / s-large / s-extra-large) as well as `border-border`. Brand is the same blue family as Termul dark: fill `#0d74ce` with white text, hover `#0e6abe`, pressed `#0e60ae`. `--primary` text resolves to `#026ec6`: the AA solver darkens `#0d74ce` so it also clears 4.5:1 on the `secondary` wash (`#0d74ce` on `#f0f0f0` is about 4.3:1). `--accent` is the brand fill, not maroon. Status hues stay. Other families keep derived surfaces.
+The default light theme (`termul-light`) uses Interfere neutrals. The page is `#fcfcfc`, and cards and popovers are white `#ffffff`, so raised panes separate by elevation (`--elevation-*`, Interfere s-default / s-large / s-extra-large) as well as `border-border`. Brand is the same blue family as Troupe dark: fill `#0d74ce` with white text, hover `#0e6abe`, pressed `#0e60ae`. `--primary` text resolves to `#026ec6`: the AA solver darkens `#0d74ce` so it also clears 4.5:1 on the `secondary` wash (`#0d74ce` on `#f0f0f0` is about 4.3:1). `--accent` is the brand fill, not maroon. Status hues stay. Other families keep derived surfaces.
 
 | Token | Role | Source |
 | --- | --- | --- |
@@ -41,7 +41,7 @@ The default light theme (`termul-light`) uses Interfere neutrals. The page is `#
 | `foreground` | Primary copy | gray-12 `#202020` |
 | `secondary-foreground`, `muted-foreground` | Secondary and muted copy | gray-11 `#646464` (5.5:1 on the shell) |
 
-`--primary`, `--success`, `--warning`, and `--destructive` are text-on-card tokens (AA-shifted). Solid primary / success / destructive buttons use `bg-primary-fill` / `bg-success-fill` / `bg-destructive-fill` with matching `*-foreground`. Solid warning buttons use `bg-warning text-warning-foreground`. Do not use `--accent` for new state. In Termul themes it is the solid brand fill. Selection, hover and focus are neutral (see State). Washes stay on the text token (`bg-primary/10 text-primary`).
+`--primary`, `--success`, `--warning`, and `--destructive` are text-on-card tokens (AA-shifted). Solid primary / success / destructive buttons use `bg-primary-fill` / `bg-success-fill` / `bg-destructive-fill` with matching `*-foreground`. Solid warning buttons use `bg-warning text-warning-foreground`. Do not use `--accent` for new state. In Troupe themes it is the solid brand fill. Selection, hover and focus are neutral (see State). Washes stay on the text token (`bg-primary/10 text-primary`).
 
 ## Component tokens
 
@@ -53,10 +53,10 @@ Full CSS values (not `"L C H"`), set per theme through `ThemeChrome.tokens`. Eve
 | `--shadow-emboss`, `--shadow-emboss-hover` | `shadow-emboss`, `shadow-emboss-hover` |
 | `--switch-track-{on,off}{,-hover,-active,-disabled}`, `--switch-thumb-{on,off}{,-disabled}`, `--switch-thumb-shadow`, `--switch-disabled-opacity` | `.switch-track`, `.switch-thumb` (index.css). Do not put `ring-*` or `shadow-*` utilities on the thumb; they override the token. |
 | `--elevation-{2xs,xs,sm,md,lg,xl,2xl}`, `--elevation-{pill,panel,menu}` | `shadow-*` utilities (tailwind.config.ts) |
-| `--skeleton` | `Skeleton` fill (alpha in Termul Light, so it reads on page and card) |
-| `--ghost-hover-foreground` | `ghost` / `outline` hover ink. Defaults to `accent-foreground`; Termul uses `foreground`. |
+| `--skeleton` | `Skeleton` fill (alpha in Troupe Light, so it reads on page and card) |
+| `--ghost-hover-foreground` | `ghost` / `outline` hover ink. Defaults to `accent-foreground`; Troupe uses `foreground`. |
 
-Terminal ANSI colors and selection do not follow `--primary`. Termul pins them in `termul-terminal.ts` (`palette.terminal`), so a brand change never alters terminal output. The status bar tint may follow primary.
+Terminal ANSI colors and selection do not follow `--primary`. Troupe pins them in `termul-terminal.ts` (`palette.terminal`), so a brand change never alters terminal output. The status bar tint may follow primary.
 
 ## State
 
@@ -98,9 +98,9 @@ The StatusBar is quiet: `bg-card`, `border-t border-border`, ink `text-muted-for
 
 ## Syntax
 
-Code color is not a UI token. The editor, chat fences, and diffs share one map: `resolveSyntaxColors`. Termul's map is `termul-syntax.ts`. Other families keep their own overrides.
+Code color is not a UI token. The editor, chat fences, and diffs share one map: `resolveSyntaxColors`. Troupe's map is `termul-syntax.ts`. Other families keep their own overrides.
 
-Termul follows the Cursor editor. Teal is a keyword. Peach is a declared function or type name. Blue is a name being read. Lavender is a name being declared, and also a JSX tag. Pink is a string. Comments stay neutral gray. Property names stay on the foreground.
+Troupe follows the Cursor editor. Teal is a keyword. Peach is a declared function or type name. Blue is a name being read. Lavender is a name being declared, and also a JSX tag. Pink is a string. Comments stay neutral gray. Property names stay on the foreground.
 
 Roles that sit next to each other stay at least 15° apart in OKLCH hue. Do not use the olive, brown, and khaki set from VS Code Dark+ (`#6a9955`, `#ce9178`, `#dcdcaa`). Do not use the UI blue (`primary`) as a syntax hue. Each syntax color must clear WCAG AA (4.5:1) on the theme background and on the card.
 

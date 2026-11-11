@@ -1,6 +1,6 @@
 name: E2E
 
-# Runs the Playwright suite in tests/e2e. It drives a release `termul-server`
+# Runs the Playwright suite in tests/e2e. It drives a release `troupe-server`
 # and the built web client against a fake ACP agent (tests/e2e/fake-longrun-agent.ts),
 # so it covers spawn, prompt streaming, permissions, elicitations, crash
 # recovery and reconnect without a network LLM or credentials.
@@ -27,6 +27,9 @@ on:
       - 'src/renderer/stores/acp-store.ts'
       - 'src/renderer/components/chat/**'
       - 'src-tauri/src/server_main.rs'
+      - 'src-tauri/build.rs'
+      - 'canvas/figcraft.pin'
+      - 'scripts/canvas/**'
   schedule:
     - cron: '0 19 * * *'
   workflow_dispatch:
@@ -45,7 +48,7 @@ concurrency:
 
 jobs:
   e2e:
-    name: Playwright e2e (termul-server)
+    name: Playwright e2e (troupe-server)
     runs-on: ubuntu-22.04
     timeout-minutes: 75
     steps:
@@ -89,9 +92,18 @@ jobs:
       - name: Assert dist-web/index.html exists
         run: test -f dist-web/index.html && test -s dist-web/index.html
 
-      - name: Build termul-server (release)
+      # A release build without the figcraft canvas bundle fails to compile
+      # (canvas_bundle_missing in src-tauri/build.rs), so fetch it as
+      # release.yml does.
+      - name: Check figcraft pin
+        run: bun scripts/canvas/check-figcraft-pin.mjs
+
+      - name: Fetch and verify figcraft bundle (canvas/bundle/)
+        run: bun scripts/canvas/fetch-figcraft-bundle.mjs
+
+      - name: Build troupe-server (release)
         working-directory: src-tauri
-        run: cargo build --release --bin termul-server --features standalone-server
+        run: cargo build --release --bin troupe-server --features standalone-server
 
       - name: Install Playwright Chromium
         run: bun run playwright install --with-deps chromium

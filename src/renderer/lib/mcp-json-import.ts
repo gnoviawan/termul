@@ -1,5 +1,5 @@
 import type { McpEnvVar, McpHeader, McpServerConfig } from '@/lib/acp-api'
-import { validateMcpServer } from '@/lib/acp-mcp-persistence'
+import { MCP_VALIDATION_MESSAGES, validateMcpServer } from '@/lib/acp-mcp-persistence'
 
 export interface McpJsonImportResult {
   servers: McpServerConfig[]
@@ -37,7 +37,7 @@ function stringPairs(value: unknown): Array<{ name: string; value: string }> | u
 
 /**
  * Normalize `env`/`headers` from a Claude Desktop-style `Record<string,string>`
- * map into Termul's internal `[{name, value}]` shape. An already-normalized
+ * map into Troupe's internal `[{name, value}]` shape. An already-normalized
  * array passes through unchanged. Any other shape yields `undefined` (the
  * server is rejected by the caller; the rest still import).
  */
@@ -173,7 +173,9 @@ export function parseMcpJsonImport(text: string): McpJsonImportResult {
     }
     const validation = validateMcpServer(server)
     if (!validation.valid) {
-      errors.push(`${name || '<unnamed>'}: ${validation.errors.join(' ')}`)
+      errors.push(
+        `${name || '<unnamed>'}: ${validation.issues.map((issue) => MCP_VALIDATION_MESSAGES[issue]).join(' ')}`
+      )
       continue
     }
     servers.push(server as McpServerConfig)

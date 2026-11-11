@@ -56,8 +56,8 @@ export function GithubStatusView({
         <>
           <h3 className="text-sm font-medium text-foreground">GitHub CLI not installed</h3>
           <p className="text-xs text-muted-foreground">
-            Termul reads issues and pull requests through the GitHub CLI (<code>gh</code>) on the
-            machine running Termul.{' '}
+            Troupe reads issues and pull requests through the GitHub CLI (<code>gh</code>) on the
+            machine running Troupe.{' '}
             <ConfirmedExternalLink href={GH_INSTALL_URL} className="text-primary underline">
               Install it from cli.github.com
             </ConfirmedExternalLink>
@@ -81,7 +81,7 @@ export function GithubStatusView({
         <>
           <h3 className="text-sm font-medium text-foreground">Sign in to {blocker.host}</h3>
           <p className="text-xs text-muted-foreground">
-            Termul uses your GitHub CLI login and never stores a token. Sign in opens a terminal
+            Troupe uses your GitHub CLI login and never stores a token. Sign in opens a terminal
             that runs:
           </p>
           <code className="max-w-full rounded-md bg-muted px-2 py-1 font-mono text-2xs text-foreground [overflow-wrap:anywhere]">

@@ -284,6 +284,10 @@ impl PtyManager {
             for arg in &program_args {
                 cmd.arg(arg);
             }
+            // `CommandBuilder::new` starts from the whole process env. `env` is
+            // the complete terminal env, so a variable it dropped must not
+            // come back from the parent.
+            cmd.env_clear();
             for (key, value) in &env {
                 cmd.env(key, value);
             }

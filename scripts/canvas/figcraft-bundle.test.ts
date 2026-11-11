@@ -133,7 +133,7 @@ describe('bundle fetch', () => {
     expect(() => verifyChecksum(bytes, SHA)).toThrow(/sha256 mismatch/)
   })
 
-  test('downloads only a figcraft-web release asset of the Termul fork', () => {
+  test('downloads only a figcraft-web release asset of the Troupe fork', () => {
     const pinned =
       'https://github.com/gnoviawan/figcraft/releases/download/termul-v0.2.0/figcraft-web-termul-v0.2.0.zip'
     expect(pinnedBundleUrl(pinned)).toBe(pinned)

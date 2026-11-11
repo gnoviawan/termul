@@ -535,7 +535,7 @@ describe('acp-store', () => {
       sessionId: 's-resume',
       cwd: '/w',
       // #1420: a reopen onto a fresh agent attaches the (here empty) MCP list
-      // so the host still gets the `termul` plan server.
+      // so the host still gets the `troupe` plan server.
       mcpServers: [],
       commandId: expect.any(String)
     })
@@ -1099,7 +1099,7 @@ describe('acp-store', () => {
   it('a reopen onto a fresh agent attaches the configured MCP servers (idle-stop auto-resume, #1420)', async () => {
     // Idle-stop auto-resume (use-idle-stop-auto-resume.ts) calls
     // `openHistorySession(id)` with NO options. Without the store default the
-    // host received `None` and the agent lost the `termul` server + every
+    // host received `None` and the agent lost the `troupe` server + every
     // configured MCP server. The default must send a non-undefined list.
     useAcpStore.setState((s) => ({
       agents: {
@@ -1523,6 +1523,80 @@ describe('acp-store', () => {
       const before = useAcpStore.getState().sessions
       useAcpStore.getState().markResumeFailed('missing', 'x')
       expect(useAcpStore.getState().sessions).toBe(before)
+    })
+  })
+
+  // Issue #1808: a watching device can install a chat started on another device
+  // before the host titled it, so its live `session.title` holds the
+  // `Untitled Chat` placeholder while the tab, phone header and drawer read it.
+  describe('opened chat title on a watching device (#1808)', () => {
+    const indexRow = (id: string, title: string) => ({
+      id,
+      agentId: 'agent-x',
+      title,
+      cwd: '/work',
+      projectId: 'p1',
+      createdAt: 1,
+      lastActivityAt: 2,
+      messageCount: 1,
+      status: 'active' as const
+    })
+
+    it('a later index snapshot replaces the live placeholder title with the real one', async () => {
+      seedSession('s-watch', 'agent-x', false)
+      useAcpStore.setState((s) => ({
+        sessions: { ...s.sessions, 's-watch': { ...s.sessions['s-watch'], title: 'Untitled Chat' } }
+      }))
+      await useAcpStore
+        .getState()
+        .applySessionIndexSnapshot([indexRow('s-watch', 'z [DURATION:15]')])
+      expect(useAcpStore.getState().sessions['s-watch'].title).toBe('z [DURATION:15]')
+    })
+
+    it('keeps a real live title, a null title and a placeholder index row as they are', async () => {
+      seedSession('s-renamed', 'agent-x', false)
+      useAcpStore.setState((s) => ({
+        sessions: {
+          ...s.sessions,
+          's-renamed': { ...s.sessions['s-renamed'], title: 'My rename' },
+          's-null': { ...s.sessions['s-renamed'], id: 's-null', title: null },
+          's-pending': { ...s.sessions['s-renamed'], id: 's-pending', title: 'Untitled Chat' }
+        }
+      }))
+      const before = useAcpStore.getState().sessions
+      await useAcpStore
+        .getState()
+        .applySessionIndexSnapshot([
+          indexRow('s-renamed', 'Derived title'),
+          indexRow('s-null', 'Derived title'),
+          indexRow('s-pending', 'Untitled Chat')
+        ])
+      const after = useAcpStore.getState().sessions
+      expect(after['s-renamed'].title).toBe('My rename')
+      expect(after['s-null'].title).toBeNull()
+      expect(after['s-pending'].title).toBe('Untitled Chat')
+      // Nothing changed, so the sessions map keeps its identity.
+      expect(after).toBe(before)
+    })
+
+    it('openHistorySession takes the real index title over a placeholder payload title', async () => {
+      useAcpStore.setState({ sessionIndex: [indexRow('s-open', 'z [DURATION:15]')] })
+      const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+      ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        metadata: {
+          id: 's-open',
+          agentId: 'agent-x',
+          title: 'Untitled Chat',
+          cwd: '/work',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 0,
+          status: 'closed'
+        },
+        messages: []
+      })
+      await useAcpStore.getState().openHistorySession('s-open')
+      expect(useAcpStore.getState().sessions['s-open'].title).toBe('z [DURATION:15]')
     })
   })
 })

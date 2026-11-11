@@ -173,7 +173,7 @@ export const TERMINAL_URL_OPEN_MODE_OPTIONS: Array<{
   label: string
 }> = [
   { value: 'system', label: 'System Default Browser' },
-  { value: 'termul', label: 'Termul Browser' }
+  { value: 'termul', label: 'Troupe Browser' }
 ]
 
 export const REMOTE_BIND_MODE_OPTIONS: Array<{

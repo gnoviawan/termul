@@ -144,10 +144,10 @@
 @layer base {
   :root {
     /* Color tokens are OKLCH "L C H" components, read as oklch(var(--token)).
-       These match Termul dark `applyColorTheme('termul')` so first paint
+       These match Troupe dark `applyColorTheme('termul')` so first paint
        equals runtime. applyColorTheme overwrites them at startup. */
 
-    /* Termul dark first paint. Neutrals are the Linear void scale.
+    /* Troupe dark first paint. Neutrals are the Linear void scale.
        Brand fill stays the composer blue. applyColorTheme overwrites these. */
     --background: 0.139 0.003 246.3;
     --foreground: 0.922 0.001 286.4;
@@ -160,7 +160,7 @@
     --popover-foreground: 0.922 0.001 286.4;
 
     /* --primary is AA text on card. Solid buttons use --primary-fill (L ≤ 0.55;
-       Termul pins it to brand blue-11 #0d74ce, 4.77:1 with white). */
+       Troupe pins it to brand blue-11 #0d74ce, 4.77:1 with white). */
     --primary: 0.688 0.169 251.4;
     --primary-fill: 0.5558 0.1622 252.2;
     --primary-foreground: 1 0 0;
@@ -418,6 +418,23 @@
     @apply border-border;
   }
 
+  /* The shell is the page: `ShellFrame` is `h-screen overflow-hidden` and
+     every pane owns its own scroller. Nothing may scroll the document —
+     macOS WKWebView rubber-bands the root scroll view, so any root scroll
+     range (even a 1 px rounding of `100vh` at a fractional UI zoom) lets a
+     trackpad gesture drag the whole shell down and expose the background
+     above it. Lock the root; inner scrollers keep their own behavior. */
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  #root {
+    height: 100%;
+  }
+
   html {
     /* Crisp font rendering on Linux/Wayland (sub-pixel AA off by default) */
     -webkit-font-smoothing: antialiased;
@@ -507,7 +524,7 @@
     color: oklch(var(--popover-foreground));
   }
   /* Neutral, solid highlight: native popups may drop alpha, and --accent
-     is maroon in Termul Light. --input is one step above popover in both. */
+     is maroon in Troupe Light. --input is one step above popover in both. */
   select option:checked,
   select option:hover {
     background-color: oklch(var(--input));
@@ -600,6 +617,18 @@
   }
   .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider:hover {
     background: oklch(var(--foreground) / var(--terminal-scrollbar-hover-alpha));
+  }
+
+  /* Thin separator line between commands (OSC 133;A + xterm decoration) */
+  .xterm .termul-command-separator {
+    /* biome-ignore lint/complexity/noImportantStyles: override xterm inline decoration geometry */
+    height: 0 !important;
+    border-top: 1px solid oklch(var(--border));
+    /* biome-ignore lint/complexity/noImportantStyles: override xterm inline decoration geometry */
+    width: 100% !important;
+    /* biome-ignore lint/complexity/noImportantStyles: override xterm inline decoration geometry */
+    left: 0 !important;
+    pointer-events: none;
   }
 
   /* ------------------------------------------------------------
@@ -750,6 +779,7 @@
 
   @media (prefers-reduced-motion: reduce) {
     .animate-tooltip-in {
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over tooltip transition styles */
       transition: none !important;
     }
 
@@ -908,6 +938,20 @@
   .switch-track[data-state="checked"]:enabled:active {
     background-color: var(--switch-track-on-active);
   }
+  /* `SwitchMark` is a span inside a menu item, so it takes the item's
+     highlight and press for the switch's hover and active. */
+  .switch-mark[data-state="unchecked"]:where([data-highlighted] *) {
+    background-color: var(--switch-track-off-hover);
+  }
+  .switch-mark[data-state="checked"]:where([data-highlighted] *) {
+    background-color: var(--switch-track-on-hover);
+  }
+  .switch-mark[data-state="unchecked"]:where(:active *) {
+    background-color: var(--switch-track-off-active);
+  }
+  .switch-mark[data-state="checked"]:where(:active *) {
+    background-color: var(--switch-track-on-active);
+  }
   .switch-track:disabled {
     opacity: var(--switch-disabled-opacity);
   }
@@ -943,7 +987,7 @@
  * --rail-keycap-shadow. By default those are --rail-keycap (`muted` in dark
  * themes, a slightly darker step in light themes so it reads on the sidebar
  * mist) and --keycap-shadow. Off the Rail it takes --keycap-fill (`muted`)
- * and --keycap-shadow. Termul Light sets a white container with its
+ * and --keycap-shadow. Troupe Light sets a white container with its
  * s-default shadow for both. Inside a popover use a foreground wash
  * instead (see components/ui/menu-styles.ts): `muted` sits too close to
  * `popover` to read there.
@@ -1202,6 +1246,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .t-shimmer::before {
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over shimmer animation styles */
       animation: none !important;
     }
   }
@@ -1342,16 +1387,21 @@
     color: inherit;
   }
   .t-think.is-settled .t-think-text::before {
+    /* biome-ignore lint/complexity/noImportantStyles: settled labels must suppress the live shimmer pseudo-element */
     display: none !important;
   }
 
   @media (prefers-reduced-motion: reduce) {
     .t-think-text {
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over status text animations */
       transition: none !important;
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over status text animations */
       transform: none !important;
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over status text animations */
       filter: none !important;
     }
     .t-think-text::before {
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over the status shimmer pseudo-element */
       display: none !important;
     }
   }
@@ -1757,6 +1807,7 @@
 }
 
 .markdown-editor .bn-editor .bn-block-content[data-content-type="table"] table {
+  /* biome-ignore lint/complexity/noImportantStyles: preserve intrinsic table width within the scrolling wrapper */
   width: max-content !important;
   min-width: 100%;
   border-collapse: collapse;

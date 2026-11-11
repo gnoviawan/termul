@@ -6,7 +6,7 @@ import {
   resetNativeWebviewOcclusionForTests
 } from '@/hooks/use-native-webview-occlusion'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
-import { commandToken } from '@/lib/skill-tokens'
+import { commandToken, conversationToken, fileToken } from '@/lib/skill-tokens'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import { endedState, subagentToolCall } from '@/lib/test-utils/subagent'
 import type { AcpSession } from '@/stores/acp-store'
@@ -210,6 +210,12 @@ vi.mock('@/components/automations/ChatAutomationSuggestion', () => ({
   ChatAutomationSuggestion: () => null
 }))
 
+vi.mock('@/lib/conversation-transcript', () => ({
+  resolveConversationContexts: vi.fn(async () => ({
+    blocks: [{ type: 'text', text: '<conversation transcript>' }],
+    gaps: new Map()
+  }))
+}))
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn()
 }))
@@ -557,7 +563,7 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     render(<AgentChatPanel sessionId="s1" isVisible />)
     expect(screen.getByRole('status', { name: 'Restoring chat' })).toBeInTheDocument()
     expect(screen.getByText('Loading your conversation…')).toBeInTheDocument()
-    expect(screen.getByRole('img', { name: 'Termul' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Troupe' })).toBeInTheDocument()
     expect(mockOpen).toHaveBeenCalledTimes(1)
     expect(mockOpen).toHaveBeenCalledWith('s1')
   })
@@ -567,7 +573,7 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     restoringRef.current = { s1: true }
     render(<AgentChatPanel sessionId="s1" isVisible />)
     expect(screen.getByRole('status', { name: 'Restoring chat' })).toBeInTheDocument()
-    const mark = screen.getByRole('img', { name: 'Termul' })
+    const mark = screen.getByRole('img', { name: 'Troupe' })
     expect(mark).toHaveClass('animate-pulse')
     expect(mark).toHaveClass('motion-reduce:animate-none')
     expect(
@@ -1742,7 +1748,7 @@ describe('AgentChatPanel live-turn retry wire rebuild', () => {
     messagesRef.current = []
   })
 
-  it('retries a command-token turn with the /name wire prefix and no sentinel leaks', () => {
+  it('retries a command-token turn with the /name wire prefix and no sentinel leaks', async () => {
     sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
     const displayBlocks = [{ type: 'text', text: `${commandToken('compact')} hello` }]
     messagesRef.current = [{ id: 'm1', role: 'user', blocks: displayBlocks }]
@@ -1750,7 +1756,9 @@ describe('AgentChatPanel live-turn retry wire rebuild', () => {
 
     const onRetry = chatMessageListPropsRef.current?.onRetry
     expect(onRetry).toBeDefined()
-    onRetry?.()
+    await act(async () => {
+      onRetry?.()
+    })
 
     // The re-sent wire text is `/compact hello` (byte-identical to a fresh
     // send of the same composer value) while the display keeps the token.
@@ -1768,6 +1776,98 @@ describe('AgentChatPanel live-turn retry wire rebuild', () => {
     // The live-turn path never routes through the crashed/failed relaunches.
     expect(mockRetryCrashed).not.toHaveBeenCalled()
     expect(mockRetryFailed).not.toHaveBeenCalled()
+  })
+
+  it('retries a conversation mention with its wire label and the re-read transcript', async () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    const displayBlocks = [
+      { type: 'text', text: `see ${conversationToken('Fix login', 'chat-7')} please` }
+    ]
+    messagesRef.current = [{ id: 'm1', role: 'user', blocks: displayBlocks }]
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await act(async () => {
+      chatMessageListPropsRef.current?.onRetry?.()
+    })
+
+    expect(mockSendPromptBlocks).toHaveBeenCalledWith(
+      's1',
+      [
+        { type: 'text', text: 'see (conversation: Fix login [termul-chat:chat-7]) please' },
+        { type: 'text', text: '<conversation transcript>' }
+      ],
+      { displayBlocks }
+    )
+  })
+
+  it('re-sends the resource_link of a mentioned file', async () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    const displayBlocks = [{ type: 'text', text: `read ${fileToken('a.ts', '/w/a.ts')} now` }]
+    messagesRef.current = [{ id: 'm1', role: 'user', blocks: displayBlocks }]
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await act(async () => {
+      chatMessageListPropsRef.current?.onRetry?.()
+    })
+
+    const [, wireBlocks] = mockSendPromptBlocks.mock.calls[0] as unknown as [
+      string,
+      Array<{ type: string; uri?: string }>
+    ]
+    expect(wireBlocks.map((b) => b.type)).toEqual(['text', 'resource_link'])
+    expect(wireBlocks[1]?.uri).toContain('/w/a.ts')
+  })
+
+  it('ignores a second Retry while the first is still reading a conversation', async () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    messagesRef.current = [
+      {
+        id: 'm1',
+        role: 'user',
+        blocks: [{ type: 'text', text: `see ${conversationToken('Fix login', 'chat-7')}` }]
+      }
+    ]
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await act(async () => {
+      chatMessageListPropsRef.current?.onRetry?.()
+      chatMessageListPropsRef.current?.onRetry?.()
+    })
+
+    expect(mockSendPromptBlocks).toHaveBeenCalledOnce()
+  })
+
+  it('does not relaunch a crashed chat while a live Retry is still pending', async () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    messagesRef.current = [
+      {
+        id: 'm1',
+        role: 'user',
+        blocks: [{ type: 'text', text: `see ${conversationToken('Fix login', 'chat-7')}` }]
+      }
+    ]
+    const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    // No await between the steps: the first Retry is still reading the
+    // conversation when the chat crashes and Retry is pressed again.
+    act(() => {
+      chatMessageListPropsRef.current?.onRetry?.()
+    })
+    sessionRef.current = mockAcpSession({
+      id: 's1',
+      cwd: '/w',
+      status: 'error',
+      lastError: 'agent crashed'
+    })
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(errorNoticePropsRef.current?.onRetry).toBeDefined()
+    act(() => {
+      errorNoticePropsRef.current?.onRetry?.()
+    })
+    await act(async () => {})
+
+    expect(mockRetryCrashed).not.toHaveBeenCalled()
+    expect(mockSendPromptBlocks).toHaveBeenCalledOnce()
   })
 })
 

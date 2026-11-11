@@ -7,16 +7,16 @@ description: Open your live desktop sessions on a phone with a QR code.
 
 The desktop app can share your live chats and terminals with a phone or another browser. You turn sharing on in the status bar, then scan a QR code. The link works on any network, so your phone doesn't need to be on the same Wi-Fi as your computer.
 
-A shared link is view-only. On the other device you can watch your chats and terminals as they run. You can't send prompts, answer approvals, open terminals or change files from it. To do those things from another device, [run termul-server](/docs/remote/server) instead.
+A shared link is view-only. On the other device you can watch your chats and terminals as they run. You can't send prompts, answer approvals, open terminals or change files from it. To do those things from another device, [run troupe-server](/docs/remote/server) instead.
 
 ## Before you start
 
-Sharing uses `cloudflared`, a free program from Cloudflare. It creates a temporary public HTTPS address that forwards to Termul on your computer. You don't need a Cloudflare account for this.
+Sharing uses `cloudflared`, a free program from Cloudflare. It creates a temporary public HTTPS address that forwards to Troupe on your computer. You don't need a Cloudflare account for this.
 
-Termul doesn't install `cloudflared` for you. Install it yourself, then make sure Termul can find it. Termul looks for it in this order:
+Troupe doesn't install `cloudflared` for you. Install it yourself, then make sure Troupe can find it. Troupe looks for it in this order:
 
-1. The path in the `TERMUL_CLOUDFLARED_PATH` environment variable, if you set it.
-2. A `cloudflared` program in the same folder as the Termul app.
+1. The path in the `TROUPE_CLOUDFLARED_PATH` environment variable (or the older `TERMUL_CLOUDFLARED_PATH`), if you set it.
+2. A `cloudflared` program in the same folder as the Troupe app.
 3. `cloudflared` on your `PATH`.
 
 ## Start sharing
@@ -24,7 +24,7 @@ Termul doesn't install `cloudflared` for you. Install it yourself, then make sur
 1. In the status bar at the bottom of the window, click the monitor icon (**Remote terminal access**). The **Remote Agent Access** popover opens.
 2. Turn on **Enable remote access**.
 3. Wait a few seconds. The popover shows **Starting tunnel…** while `cloudflared` starts. Then a QR code appears.
-4. On your phone, scan the QR code with the camera. Termul opens in the phone's browser.
+4. On your phone, scan the QR code with the camera. Troupe opens in the phone's browser.
 
 To send the link to another device instead, click **Copy link** and paste it there.
 
@@ -39,13 +39,13 @@ The link has two parts:
 
 Anyone who has the full link can watch your sessions. Share it only with your own devices.
 
-The token stays the same each time you turn sharing on. Termul saves it in a file named `web-auth-token` in the app's data folder (`com.termul-manager.app`). To make old links stop working, turn sharing off, delete that file, and turn sharing on again. Termul then creates a new token.
+The token stays the same each time you turn sharing on. Troupe saves it in a file named `web-auth-token` in the app's data folder (`com.termul-manager.app`). To make old links stop working, turn sharing off, delete that file, and turn sharing on again. Troupe then creates a new token.
 
-On the phone, the browser remembers the token after the first visit. Termul also removes it from the address bar.
+On the phone, the browser remembers the token after the first visit. Troupe also removes it from the address bar.
 
 ## Stop sharing
 
-Open the popover again and turn off **Enable remote access**. Termul stops `cloudflared` and the link stops working right away.
+Open the popover again and turn off **Enable remote access**. Troupe stops `cloudflared` and the link stops working right away.
 
 Your agents keep running in the desktop app. Turning sharing off doesn't stop any chat or terminal.
 
@@ -53,7 +53,7 @@ Phones that were open on the link show **Host offline**. See [Connection status]
 
 ## If the QR code doesn't appear
 
-- **An error mentions `cloudflared binary not found`.** Termul can't find `cloudflared`. Install it, or set `TERMUL_CLOUDFLARED_PATH` to its full path, then restart Termul.
+- **An error mentions `cloudflared binary not found`.** Troupe can't find `cloudflared`. Install it, or set `TROUPE_CLOUDFLARED_PATH` to its full path, then restart Troupe.
 - **The error says the tunnel URL was not received.** `cloudflared` started but didn't get an address within 25 seconds. Check your internet connection and try again.
 - **The popover says Tunnel disconnected.** `cloudflared` stopped after it started. Turn **Enable remote access** off and on to get a new link.
 - **The phone says the site can't be reached.** A new address can take a few seconds to work everywhere. Wait a moment, then scan again.

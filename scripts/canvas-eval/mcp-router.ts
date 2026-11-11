@@ -1,7 +1,7 @@
 /**
- * The `termul` MCP server an eval agent talks to.
+ * The `troupe` MCP server an eval agent talks to.
  *
- * Instructions and tool definitions come from the real Termul child
+ * Instructions and tool definitions come from the real Troupe child
  * (`<termul binary> --internal-mcp-plan-server`), so the agent sees what it
  * sees in the app. The harness tools run in that child. Canvas tools run in a
  * headless figcraft engine (`figcraft-cli mcp`) instead of the in-app canvas.
@@ -29,7 +29,7 @@ interface ToolDefinition {
 }
 
 const HARNESS_TOOLS = new Set(['read_canvas_guide', 'get_canvas_style'])
-/** Host tools that need Termul's parent process, which the eval does not run. */
+/** Host tools that need Troupe's parent process, which the eval does not run. */
 const PARENT_TOOLS = new Set(['plan', 'browser', 'ask_user', 'set_session_title'])
 const READ_ONLY = new Set([
   'list_commands',
@@ -39,6 +39,7 @@ const READ_ONLY = new Set([
   'screenshot',
   'export',
   'inspect_ui',
+  'wait_for_changes',
   ...HARNESS_TOOLS
 ])
 
@@ -151,7 +152,7 @@ async function handle(message: Rpc): Promise<Rpc | undefined> {
       return reply({
         protocolVersion: params.protocolVersion ?? '2025-06-18',
         capabilities: { tools: {}, resources: {}, prompts: {} },
-        serverInfo: { name: 'termul', version: 'canvas-eval' },
+        serverInfo: { name: 'troupe', version: 'canvas-eval' },
         instructions
       })
     }

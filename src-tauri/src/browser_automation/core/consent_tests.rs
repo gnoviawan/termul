@@ -271,7 +271,7 @@ async fn never_reachable_origins_are_denied_without_a_prompt() {
         .await
         .unwrap();
     for (url, reason) in [
-        ("http://127.0.0.1:47123/mcp", "termul_owned_origin"),
+        ("http://127.0.0.1:47123/mcp", "troupe_owned_origin"),
         ("http://tauri.localhost/", "app_origin"),
         ("http://0.0.0.0:3000", "unspecified_address"),
         ("http://169.254.169.254/latest", "metadata_address"),

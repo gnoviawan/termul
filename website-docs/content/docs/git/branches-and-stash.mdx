@@ -3,7 +3,7 @@ title: Branches and stashes
 description: Switch, find, and create branches, and put unfinished work aside.
 ---
 
-Switch to another branch or start a new one without leaving Termul. When you are not ready to commit, stash your changes to put them aside and bring them back later.
+Switch to another branch or start a new one without leaving Troupe. When you are not ready to commit, stash your changes to put them aside and bring them back later.
 
 ## Switch branches from the context bar
 
@@ -24,16 +24,16 @@ A branch marked **worktree** is checked out in another worktree. You cannot swit
 
 If you do not see the branch name in the context bar, click **Context bar settings** (the gear at the right end of the bar) and turn on **Git Branch**.
 
-This picker does not stash your changes for you. If you have uncommitted changes, Git carries them to the other branch. If they conflict with the other branch, Git refuses and Termul shows the error.
+This picker does not stash your changes for you. If you have uncommitted changes, Git carries them to the other branch. If they conflict with the other branch, Git refuses and Troupe shows the error.
 
 ## Switch branches from the Changes tab
 
 The branch name at the top of the **Changes** tab also opens a branch menu. It lists all branches, including remote ones, but has no search box.
 
-If you have uncommitted changes, Termul asks what to do with them:
+If you have uncommitted changes, Troupe asks what to do with them:
 
 - **Bring Changes** keeps your changes and carries them to the new branch.
-- **Stash & Switch** stashes your changes, switches, and then applies them again on the new branch. If they do not apply cleanly, they stay in the stash and Termul tells you so. See [Stash your changes](#stash-your-changes).
+- **Stash & Switch** stashes your changes, switches, and then applies them again on the new branch. If they do not apply cleanly, they stay in the stash and Troupe tells you so. See [Stash your changes](#stash-your-changes).
 - **Cancel** stays on the current branch.
 
 ![The Uncommitted Changes dialog with the Bring Changes and Stash & Switch buttons](/screenshots/git-branch-switch-dialog.png)
@@ -42,7 +42,7 @@ New files count as uncommitted changes here.
 
 ## Create a branch
 
-A new branch starts from the commit you have checked out. Termul switches to it right away. Your uncommitted changes come with you.
+A new branch starts from the commit you have checked out. Troupe switches to it right away. Your uncommitted changes come with you.
 
 From the context bar:
 
@@ -50,7 +50,7 @@ From the context bar:
 2. Click **Create branch from** followed by the current branch name.
 3. Type the name and press `Enter`, or click **Create**. Press `Escape` to cancel.
 
-Termul replaces spaces and other characters that Git does not allow with `-`.
+Troupe replaces spaces and other characters that Git does not allow with `-`.
 
 From the **Changes** tab:
 
@@ -61,7 +61,7 @@ From the **Changes** tab:
 
 ## You cannot switch while an agent is working
 
-While an agent is working in a checkout, Termul does not switch the branch of that checkout, because a switch would change the files the agent is editing. Termul shows an error and stays on the current branch.
+While an agent is working in a checkout, Troupe does not switch the branch of that checkout, because a switch would change the files the agent is editing. Troupe shows an error and stays on the current branch.
 
 Wait for the agent to finish, or stop its turn, and then switch again. To keep working on another branch while the agent runs, use a [worktree](/docs/git/worktrees).
 

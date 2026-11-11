@@ -39,8 +39,15 @@ const FILTERED_PATH_VARS: &[(&str, bool)] = &[
 ];
 
 /// Variables that are always removed from the child when the gate is open (they
-/// only describe the AppImage mount and mean nothing to a host tool).
-const REMOVED_VARS: &[&str] = &["APPDIR", "APPIMAGE", "ARGV0", "OWD"];
+/// only describe the AppImage mount or its launcher and mean nothing to a host
+/// tool).
+const REMOVED_VARS: &[&str] = &[
+    "APPDIR",
+    "APPIMAGE",
+    "ARGV0",
+    "OWD",
+    super::launcher_preload::LAUNCHER_PRELOAD_VAR,
+];
 
 /// One edit to apply to a child `Command`'s environment.
 #[derive(Debug, Clone, PartialEq, Eq)]

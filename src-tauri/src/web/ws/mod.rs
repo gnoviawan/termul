@@ -626,19 +626,20 @@ pub struct AppState {
     /// sets this `false` (its `--allow-remote-writes` opt-in is the
     /// admission path there). Closes the cloudflared loopback bypass.
     pub shared_live_writes_denied: bool,
-    /// Pending MCP OAuth flows keyed by server URL. Used by the web OAuth
-    /// callback route to complete the token exchange after the browser
-    /// redirect. The desktop path doesn't use this (it runs the full flow
-    /// synchronously in the `acp_mcp_oauth_start` command).
+    /// Pending MCP OAuth flows keyed by their CSRF `state`, each holding the
+    /// session (PKCE verifier, client id) built at start. The web callback and
+    /// paste-back routes take a flow out to finish the token exchange. The
+    /// desktop path doesn't use this (it runs the full flow in the
+    /// `acp_mcp_oauth_start` command).
     pub pending_oauth_flows: Arc<
         parking_lot::RwLock<
             std::collections::HashMap<String, crate::acp::mcp_oauth::PendingOAuthFlow>,
         >,
     >,
-    /// Base URL for OAuth redirect URIs on the web path. The standalone
-    /// server derives this from its bind address; the desktop shared-live
-    /// host uses the cloudflared tunnel URL. The OAuth callback route lives
-    /// at `{base}/oauth/callback`.
+    /// Base URL for OAuth redirect URIs on the web path:
+    /// `http://127.0.0.1:{port}` on the standalone server (authorization
+    /// servers accept plain http only on loopback). The OAuth callback route
+    /// lives at `{base}/oauth/callback`.
     pub oauth_base_url: String,
     /// The web auth gate (CAP-1 interim, QA remediation Story 1). `Some` on
     /// a gated server (explicit token configured, or public bind with a

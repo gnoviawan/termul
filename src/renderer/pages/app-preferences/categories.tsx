@@ -36,7 +36,7 @@ const ALL_APP_PREF_CATEGORIES: SettingsCategory[] = [
     id: 'notifications',
     group: 'General',
     label: 'Notifications',
-    description: 'Choose when Termul sends you a system notification.',
+    description: 'Choose when Troupe sends you a system notification.',
     icon: <Bell size={16} />
   },
   {
@@ -72,7 +72,7 @@ const ALL_APP_PREF_CATEGORIES: SettingsCategory[] = [
     id: 'ai-agents',
     group: 'Agents',
     label: 'Agent chats',
-    description: 'Time limits for agent chats, and the agents Termul can start.',
+    description: 'Time limits for agent chats, and the agents Troupe can start.',
     icon: <Bot size={16} />
   },
   {
@@ -110,14 +110,14 @@ const ALL_APP_PREF_CATEGORIES: SettingsCategory[] = [
     id: 'shortcuts',
     group: 'App',
     label: 'Keyboard shortcuts',
-    description: 'Change the keys for Termul commands. Select a shortcut, then press the new keys.',
+    description: 'Change the keys for Troupe commands. Select a shortcut, then press the new keys.',
     icon: <Keyboard size={16} />
   },
   {
     id: 'updates',
     group: 'App',
     label: 'Updates',
-    description: 'Termul version, release channel and automatic checks.',
+    description: 'Troupe version, release channel and automatic checks.',
     icon: <Download size={16} />
   },
   // Web-only page (gh-1105): reconfigure the termul-server this client is
@@ -127,7 +127,7 @@ const ALL_APP_PREF_CATEGORIES: SettingsCategory[] = [
     id: 'server',
     group: 'App',
     label: 'Server',
-    description: 'Where this Termul server can be reached, and how it updates.',
+    description: 'Where this Troupe server can be reached, and how it updates.',
     icon: <Server size={16} />
   },
   {
@@ -234,6 +234,13 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
     description: 'Make terminal output readable by screen readers.',
     keywords: ['accessibility', 'a11y', 'talkback', 'voiceover', 'nvda'],
     anchorId: rowId('terminal-screen-reader-mode')
+  },
+  {
+    categoryId: 'appearance',
+    label: 'Automatic completion refresh',
+    description: 'Updates command suggestions while you type.',
+    keywords: ['completion', 'suggestions', 'tab', 'autocomplete'],
+    anchorId: rowId('terminal-automatic-completion-refresh')
   },
   {
     categoryId: 'appearance',
@@ -397,7 +404,7 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     categoryId: 'server',
     label: 'Server',
-    description: 'Address, port and update channel for this Termul server.',
+    description: 'Address, port and update channel for this Troupe server.',
     keywords: ['server', 'address', 'port', 'host', 'bind', 'remote', 'restart'],
     anchorId: rowId('server-config')
   },

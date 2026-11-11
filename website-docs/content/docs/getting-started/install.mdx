@@ -1,45 +1,48 @@
 ---
-title: Install Termul
-description: Install the Termul desktop app on macOS, Windows, or Linux.
+title: Install Troupe
+description: Install the Troupe desktop app on macOS, Windows, or Linux.
 ---
 
-The desktop app is called **Termul Manager**. Every release has builds for macOS, Windows, and Linux on the [GitHub releases page](https://github.com/gnoviawan/termul/releases/latest).
+The desktop app is called **Troupe**. Every release has builds for macOS, Windows, and Linux on the [GitHub releases page](https://github.com/gnoviawan/termul/releases/latest).
 
-If you want to run Termul on a server and open it in a browser or on your phone, install `termul-server` instead. See [Browser and phone](/docs/remote).
+If you want to run Troupe on a server and open it in a browser or on your phone, install `troupe-server` instead. See [Browser and phone](/docs/remote).
 
 ## macOS
 
-You can install Termul with Homebrew, with the install script, or from a disk image. All three give you the same app.
+You can install Troupe with Homebrew, with the install script, or from a disk image. All three give you the same app.
 
 ### Homebrew
 
 ```bash
 brew tap gnoviawan/termul
-brew install --cask termul
+brew install --cask troupe
 ```
+
+If you installed the `termul` cask before, `brew update` moves it to `troupe` for you. `brew install --cask termul` also still installs Troupe.
 
 ### Install script
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gnoviawan/termul/v0.4.21/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/gnoviawan/termul/v0.4.60/scripts/install.sh | bash
 ```
 
-The link points to the script from a fixed release, so it can't change under you. The script still installs the newest Termul release.
+The link points to the script from a fixed release, so it can't change under you. The script still installs the newest Troupe release.
 
 The script does these things:
 
 1. It finds the latest release and the disk image for your Mac (Apple silicon or Intel).
-2. It asks `Install Termul Manager <version> (...) to /Applications? [y/N]`. Type `y` and press Enter.
+2. It asks `Install Troupe <version> (...) to /Applications? [y/N]`. Type `y` and press Enter.
 3. It downloads the disk image and checks it against the release checksums. If the check fails, it installs nothing.
-4. It copies **Termul Manager.app** to `/Applications`.
+4. It copies **Troupe.app** to `/Applications`. If **Termul Manager.app** from an older release is there, the script removes it. Your settings, projects, and logins stay.
 
-To skip the question, run the script with `TERMUL_INSTALL_YES=1`. To install somewhere other than `/Applications`, set `TERMUL_INSTALL_APPLICATIONS_DIR`.
+To skip the question, run the script with `TROUPE_INSTALL_YES=1`. To install somewhere other than `/Applications`, set `TROUPE_INSTALL_APPLICATIONS_DIR`. The older `TERMUL_INSTALL_*` names still work.
 
 ### Disk image
 
 1. Open the [latest release](https://github.com/gnoviawan/termul/releases/latest).
 2. Download the `.dmg` for your Mac. The file ending in `_aarch64.dmg` is for Apple silicon. The file ending in `_x64.dmg` is for Intel.
-3. Open the `.dmg` and drag **Termul Manager** into **Applications**.
+3. Open the `.dmg` and drag **Troupe** into **Applications**.
+4. If **Termul Manager.app** from a release before 0.5.0 is still in **Applications**, move it to the Trash. Your settings, projects, and logins stay.
 
 ## Windows
 
@@ -56,38 +59,44 @@ Linux builds are for 64-bit x86 (`x86_64`) only. They need WebKitGTK 2.40 or lat
 ### Install script (AppImage)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gnoviawan/termul/v0.4.21/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/gnoviawan/termul/v0.4.60/scripts/install.sh | bash
 ```
 
 The script downloads the latest AppImage and checks it against the release checksums. Then it does these things:
 
-- It saves the app as `~/.local/bin/termul-manager`.
-- It adds a **Termul Manager** entry to your application menu.
-- It warns you if `~/.local/bin` is not on your `PATH`. Add that folder to your `PATH` to start Termul from a shell with `termul-manager`.
+- It saves the AppImage as `~/.local/bin/troupe.AppImage`.
+- It adds the `~/.local/bin/troupe` command, which starts the AppImage. On Wayland, this command also loads your system's `libwayland-client` library so that the window is not blank with Mesa 25 or later. Terminals in Troupe do not get that setting. If the library is in another folder, set `TROUPE_WAYLAND_CLIENT_LIB` (or the older `TERMUL_WAYLAND_CLIENT_LIB`) to its path.
+- It adds a **Troupe** entry to your application menu.
+- It keeps the `termul-manager` and `termul-manager.AppImage` names from older installs as links to Troupe, so old shell aliases and launchers still work.
+- It warns you if `~/.local/bin` is not on your `PATH`. Add that folder to your `PATH` to start Troupe from a shell with `troupe`.
 
-Before it installs, the script asks you to confirm. To skip the question, run it with `TERMUL_INSTALL_YES=1`. To use a different folder, set `TERMUL_INSTALL_BIN_DIR`.
+Before it installs, the script asks you to confirm. To skip the question, run it with `TROUPE_INSTALL_YES=1`. To use a different folder, set `TROUPE_INSTALL_BIN_DIR`. The older `TERMUL_INSTALL_*` names still work.
 
 ### Debian, Ubuntu, Fedora, and other packages
 
 The [latest release](https://github.com/gnoviawan/termul/releases/latest) also has these files:
 
-- A `.deb` package (`Termul.Manager_<version>_amd64.deb`) for Debian, Ubuntu, and similar systems.
-- An `.rpm` package (`Termul.Manager-<version>-1.x86_64.rpm`) for Fedora and similar systems.
-- The `.AppImage` file, if you want to manage it yourself.
+- A `.deb` package (`Troupe_<version>_amd64.deb`) for Debian, Ubuntu, and similar systems.
+- An `.rpm` package (`Troupe-<version>-1.x86_64.rpm`) for Fedora and similar systems.
+- The `.AppImage` file (`Troupe_<version>_amd64.AppImage`), if you want to manage it yourself.
+
+Releases up to 0.4.60 use the old name in their files, for example `Termul.Manager_<version>_amd64.deb`.
 
 Install the package with your system's package manager. For example, on Ubuntu:
 
 ```bash
-sudo apt install ./Termul.Manager_<version>_amd64.deb
+sudo apt install ./Troupe_<version>_amd64.deb
 ```
 
 ### Arch Linux (AUR)
 
-Termul is in the AUR as `termul-manager`. Install it with your AUR helper. For example:
+Troupe is in the AUR as `troupe`. Install it with your AUR helper. For example:
 
 ```bash
-yay -S termul-manager
+yay -S troupe
 ```
+
+The package was called `termul-manager` before 0.5.0. The `troupe` package replaces it.
 
 ## Updates
 

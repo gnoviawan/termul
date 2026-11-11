@@ -175,7 +175,7 @@ where
 /// legacy field (the schema exposes no way to switch them).
 pub(crate) const LEGACY_MODEL_SWITCH_UNSUPPORTED: &str =
     "model switching unsupported: this agent advertises its models only through the legacy \
-     `models` field, which Termul can display but not change";
+     `models` field, which Troupe can display but not change";
 
 #[cfg(test)]
 mod tests;

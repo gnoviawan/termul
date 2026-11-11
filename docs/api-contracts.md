@@ -1,4 +1,4 @@
-# Termul Manager - API Contracts
+# Troupe - API Contracts
 
 **Date:** 2026-05-09
 **Surface:** Internal Tauri command and event API
@@ -7,7 +7,7 @@
 
 This page covers the desktop app's **internal IPC contract** between the React renderer and the Rust/Tauri runtime.
 
-`termul-server` and the desktop shared-live host also expose an HTTP and WebSocket API. Its HTTP routes are described by an OpenAPI 3.1 spec that the server builds from the `ROUTES` table in `src-tauri/src/web/openapi/`. A running server serves it at `GET /openapi.json`, `termul-server openapi` prints it, and each release attaches it as `openapi.yaml`. The WebSocket protocol is defined in `src/shared/types/web-protocol.types.ts`. The user guide is `website-docs/content/docs/server-api.mdx`.
+`troupe-server` and the desktop shared-live host also expose an HTTP and WebSocket API. Its HTTP routes are described by an OpenAPI 3.1 spec that the server builds from the `ROUTES` table in `src-tauri/src/web/openapi/`. A running server serves it at `GET /openapi.json`, `troupe-server openapi` prints it, and each release attaches it as `openapi.yaml`. The WebSocket protocol is defined in `src/shared/types/web-protocol.types.ts`. The user guide is `website-docs/content/docs/server-api.mdx`.
 
 This contract is implemented through:
 
@@ -187,9 +187,9 @@ Tauri commands take camelCase arguments and run only from the `main` webview. Ot
 | `automation_set_secret` | `PUT /api/automation-secrets` | `projectId`, `name`, `value` | `null` |
 | `automation_delete_secret` | `DELETE /api/automation-secrets?project_id=&name=` | `projectId`, `name` | `null` |
 
-Secret values go in and never come back out. The host stores them in the OS keychain. A host whose keychain does not answer at startup, such as `termul-server` on headless Linux, stores them instead in `automation-secrets.json` in its data directory: an owner-only (`0600`) JSON object keyed like the keychain entries, `automation:<project_id>:<NAME>`. A host that already has that file keeps using it. The log names the backend once at startup and never carries a value.
+Secret values go in and never come back out. The host stores them in the OS keychain. A host whose keychain does not answer at startup, such as `troupe-server` on headless Linux, stores them instead in `automation-secrets.json` in its data directory: an owner-only (`0600`) JSON object keyed like the keychain entries, `automation:<project_id>:<NAME>`. A host that already has that file keeps using it. The log names the backend once at startup and never carries a value.
 
-The `/api/automation` prefix is bearer-gated. A host without a token gate serves only loopback peers. Every `POST`, `PUT` and `DELETE` except `preview-schedule` passes the remote-write guard: the desktop shared-live host refuses them, and `termul-server` admits a non-loopback peer only with `--allow-remote-writes`.
+The `/api/automation` prefix is bearer-gated. A host without a token gate serves only loopback peers. Every `POST`, `PUT` and `DELETE` except `preview-schedule` passes the remote-write guard: the desktop shared-live host refuses them, and `troupe-server` admits a non-loopback peer only with `--allow-remote-writes`.
 
 A failure carries the service's code. On HTTP it also sets the status:
 
@@ -228,7 +228,7 @@ Runs rollback logic for a migration.
 
 ## Desktop ACP Chat History Commands
 
-The host owns durable chat history. The desktop and `termul-server` both write every non-ephemeral session to `SessionPersistence` (`src-tauri/src/acp/session_persistence/`), and the desktop keeps it under `<app data dir>/acp-sessions`. `acp_history_list`, `acp_history_get`, `acp_history_get_tail` and `acp_history_delete` read and change that store. `SessionPayload` is `{ metadata, messages, toolCalls? }`. `toolCalls` mirrors the session's ACP tool calls so a reopened or resumed chat restores its tool cards. Persisted tool calls drop `rawOutput` and unknown fields, normalize mid-flight statuses to `failed`, keep only the most recent calls, and stay within a per-call serialized byte budget (`sanitizeToolCallsForPersistence`).
+The host owns durable chat history. The desktop and `troupe-server` both write every non-ephemeral session to `SessionPersistence` (`src-tauri/src/acp/session_persistence/`), and the desktop keeps it under `<app data dir>/acp-sessions`. `acp_history_list`, `acp_history_get`, `acp_history_get_tail` and `acp_history_delete` read and change that store. `SessionPayload` is `{ metadata, messages, toolCalls? }`. `toolCalls` mirrors the session's ACP tool calls so a reopened or resumed chat restores its tool cards. Persisted tool calls drop `rawOutput` and unknown fields, normalize mid-flight statuses to `failed`, keep only the most recent calls, and stay within a per-call serialized byte budget (`sanitizeToolCallsForPersistence`).
 
 The renderer-authored store under `<app data dir>/acp-chat-history` (`ChatHistoryStore`) is legacy. The one-shot renderer wipe migration is the only caller of `acp_history_save`, `acp_history_flush`, `acp_history_mark_legacy_import_complete`, `acp_history_list_legacy` and `acp_history_get_legacy`. Each of them is listed in the command table above. After every legacy write the host imports the new entries into `SessionPersistence` (`import_chat_history`), so a following `acp_history_list` returns what the migration saved. The migration deletes the old Tauri Store ACP keys only after `acp_history_list_legacy` and `acp_history_get_legacy` return what it wrote. Unrelated preferences stay.
 
@@ -236,7 +236,7 @@ The `/ws` requests `list_persisted_sessions`, `get_session_payload` and `get_ses
 
 ## GitHub Issues and PRs
 
-The host runs the user's `gh` CLI for every GitHub read and write. Termul stores no GitHub token. The contract is `src/shared/types/github.types.ts`, and the renderer facade is `src/renderer/lib/github-api.ts`. `GithubService` (`src-tauri/src/github/`) implements each operation once. The desktop calls it through a Tauri command, and the browser and `termul-server` call it through an HTTP route.
+The host runs the user's `gh` CLI for every GitHub read and write. Troupe stores no GitHub token. The contract is `src/shared/types/github.types.ts`, and the renderer facade is `src/renderer/lib/github-api.ts`. `GithubService` (`src-tauri/src/github/`) implements each operation once. The desktop calls it through a Tauri command, and the browser and `troupe-server` call it through an HTTP route.
 
 | Facade method | Tauri command | Web route | Reply `data` |
 |---|---|---|---|
@@ -271,7 +271,7 @@ Each Tauri command takes one argument, `request`. Each route takes the same obje
 - **Create label.** `createLabel` runs `gh label create`. The name is trimmed and must have 1 to 50 characters. The colour must be six hex digits (a leading `#` is dropped). The description is optional, at most 100 characters. Invalid input is refused with `GH_FAILED` before any `gh` call. An existing label name fails; the host never passes `--force`. When `gh` times out, the error says the change may already be applied.
 - **Edit item.** `editItem` adds and removes labels and assignees by name or login, matched without case. The host reads the item and the repository's labels and assignable users, resolves each name to its id, and refuses a name it cannot resolve before it writes. It sends one GraphQL mutation on stdin. The label and assignee changes in it run in order and are not a transaction: when one fails, the earlier ones may already be applied, so the client re-reads the item. An edit with no names succeeds without a write. When `gh` times out, the error says the change may already be applied.
 - **Item state.** `setItemState` closes or reopens an issue or PR (`closeIssue` with `stateReason`, `reopenIssue`, `closePullRequest`, `reopenPullRequest`). A PR close ignores `reason`. When `gh` times out, the error says the change may already be applied.
-- **Checkout PR.** `cwd` must be a clean Termul chat worktree: a linked worktree under its repository's `.termul/worktrees/`, on a `chat/` branch, with no uncommitted or untracked changes. Any other path is `PATH_VALIDATION_FAILED`. The host refuses with `GH_FORK_PUSH_BLOCKED` unless the user can write to the PR's head repository, or the PR allows maintainer edits and the user can write to the base repository. It checks this before it changes the worktree. Then it runs `gh pr checkout <n> --detach` in the worktree, which, like `git checkout`, refuses to overwrite local changes made since the cleanliness check. It then points the chat branch at the PR head with `git switch -C <chat branch>`. `headSha` is the commit the worktree is at, and it must equal the PR head. `pushCommand` is `git push <remote> HEAD:<headRefName>`, shell-quoted, where `<remote>` is the remote for the PR's head repository (or its URL).
+- **Checkout PR.** `cwd` must be a clean Troupe chat worktree: a linked worktree under its repository's `.termul/worktrees/`, on a `chat/` branch, with no uncommitted or untracked changes. Any other path is `PATH_VALIDATION_FAILED`. The host refuses with `GH_FORK_PUSH_BLOCKED` unless the user can write to the PR's head repository, or the PR allows maintainer edits and the user can write to the base repository. It checks this before it changes the worktree. Then it runs `gh pr checkout <n> --detach` in the worktree, which, like `git checkout`, refuses to overwrite local changes made since the cleanliness check. It then points the chat branch at the PR head with `git switch -C <chat branch>`. `headSha` is the commit the worktree is at, and it must equal the PR head. `pushCommand` is `git push <remote> HEAD:<headRefName>`, shell-quoted, where `<remote>` is the remote for the PR's head repository (or its URL).
 - **Errors.** The failure codes are `GITHUB_ERROR_CODES` in the contract file, plus `PATH_VALIDATION_FAILED` (desktop) and `OUTSIDE_PROJECT_ROOT` (web).
 - **Logging.** Each operation logs its start, success or failure with the repository, operation and code. The logs never include tokens, `gh` output, request bodies or remote URLs.
 
@@ -352,7 +352,7 @@ and, before creating a session (`create_session`), runs `authenticate_agent`
 - no method (or only empty/whitespace ids) → unchanged spawn → `session/new` flow.
 
 For the default `agent` auth type the provider owns the login UX (it may open its
-own browser); Termul never invents a client-side login-URL redirect. Apart
+own browser); Troupe never invents a client-side login-URL redirect. Apart
 from the opt-in Factory key described below, it does not store provider
 credentials. The `authenticate` invoke uses `{ agentId, methodId }`.
 
@@ -369,7 +369,7 @@ return only whether a key is stored. Subsequent Factory Droid spawns overlay the
 stored key, leaving active processes and sessions untouched. A missing or
 unusable OS secret store rejects saving, but browser Login and explicitly
 configured environment keys still work. The web endpoints require an enabled
-Termul web-auth gate; the browser only submits a key over HTTPS or loopback.
+Troupe web-auth gate; the browser only submits a key over HTTPS or loopback.
 Factory Login remains an explicit choice even with a stored key.
 The key form is offered when Factory requests authentication, not in the
 agent picker after an existing browser login. Saving checks through a
@@ -379,13 +379,13 @@ The bundled Factory launcher uses `droid exec --output-format acp`. The host
 also upgrades the old `acp-daemon` argument when spawning a registry-backed
 Factory config, including saved configs and remote catalog entries: the old
 mode initializes but its Droid child exits with code 1 at `session/new` when
-Termul attaches its plan MCP server.
+Troupe attaches its plan MCP server.
 Factory Droid may acknowledge `session/set_config_option` with `{}` rather than
 the ACP-required `configOptions` snapshot. Only for this agent, the host
 interprets that response as success without a snapshot; desktop and web
 clients retain their known options and update the chosen value locally.
 Creating another Factory session in the same Droid process resets the model
-of its existing sessions. Termul therefore does not refill a Factory warm
+of its existing sessions. Troupe therefore does not refill a Factory warm
 session after launch; a later chat uses a new Droid process while keeping
 earlier sessions alive. Login remains available in the auth-required banner,
 not as a permanent composer button once a session is ready.
@@ -393,7 +393,7 @@ With no stored Factory key, a new Droid process tries `session/new` using the
 CLI's existing browser-login state before offering the auth-required banner.
 
 **2a. Terminal auth methods (headless login).** Clicking a `terminal` method in the
-auth banner spawns an ordinary termul terminal tab (`kind:'shell'`, titled
+auth banner spawns an ordinary Troupe terminal tab (`kind:'shell'`, titled
 `Sign in — <agent>`) running the agent binary with the method's `args`/`env` in the
 session cwd. Exit code 0 → `authenticate(methodId)` runs and session creation
 proceeds; non-zero → toast and the banner stays. No live PTY is killed or
@@ -500,11 +500,11 @@ These are the `acp_*`, `claude_accounts_*`, `ws_channel_*` and `codex_cli_auth_s
 | `acp_mcp_oauth_start` | Starts the MCP OAuth flow for a server URL. Discovers the endpoints, registers a PKCE client, opens the authorization URL in the system browser, waits for the redirect on a local HTTP server, and stores the token. Desktop only. |
 | `acp_mcp_oauth_has_token` | Returns whether a stored OAuth token exists for a server URL. Does not check the token's validity. |
 | `acp_mcp_oauth_disconnect` | Deletes the stored OAuth token for a server URL. |
-| `acp_set_turn_timeout` | Sets or clears (`null`) the hard turn timeout override, in seconds. `TERMUL_ACP_TURN_TIMEOUT_SECS` takes precedence. |
-| `acp_set_turn_idle_timeout` | Sets or clears the turn idle timeout override. `0` is rejected. `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS` takes precedence. |
-| `acp_set_session_new_timeout` | Sets or clears the `session/new` timeout override. `0` is rejected. `TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS` takes precedence. |
-| `acp_set_session_reopen_timeout` | Sets or clears the `session/load` and `session/resume` timeout override. `0` is rejected. `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS` takes precedence. |
-| `acp_set_agent_idle_window` | Sets or clears the App Preferences override of how long an idle agent stays alive. `0` is rejected. `TERMUL_AGENT_IDLE_REAP_SECS` and a locked server window take precedence. Browser equivalent: `POST /host/agent-idle-window`. |
+| `acp_set_turn_timeout` | Sets or clears (`null`) the hard turn timeout override, in seconds. `TROUPE_ACP_TURN_TIMEOUT_SECS` takes precedence. |
+| `acp_set_turn_idle_timeout` | Sets or clears the turn idle timeout override. `0` is rejected. `TROUPE_ACP_TURN_IDLE_TIMEOUT_SECS` takes precedence. |
+| `acp_set_session_new_timeout` | Sets or clears the `session/new` timeout override. `0` is rejected. `TROUPE_ACP_SESSION_NEW_TIMEOUT_SECS` takes precedence. |
+| `acp_set_session_reopen_timeout` | Sets or clears the `session/load` and `session/resume` timeout override. `0` is rejected. `TROUPE_ACP_SESSION_REOPEN_TIMEOUT_SECS` takes precedence. |
+| `acp_set_agent_idle_window` | Sets or clears the App Preferences override of how long an idle agent stays alive. `0` is rejected. `TROUPE_AGENT_IDLE_REAP_SECS` and a locked server window take precedence. Browser equivalent: `POST /host/agent-idle-window`. |
 | `acp_get_agent_idle_window` | Returns the idle window in use as `{secs, source}`, with `source` one of `env`, `operator`, `setting` or `default`. Browser equivalent: `GET /host/agent-idle-window`. |
 | `acp_fetch_registry_snapshot` | The registry check behind "Check for updates". Takes `forceRefresh?`, shares the catalog's snapshot cache, and fails when the host has no catalog store. `/ws` equivalent: `fetch_acp_registry_snapshot`. |
 | `acp_install_registry_binary` | Legacy desktop-only install of a registry release archive (`agentId`, `archiveUrl`, `cmd`, `args?`) into `<app data dir>/acp-registry-binaries/<agentId>`. The archive URL must be `https`. The verified install is `install_acp_agent`. |
@@ -523,6 +523,8 @@ These are the `acp_*`, `claude_accounts_*`, `ws_channel_*` and `codex_cli_auth_s
 | `acp_history_mark_legacy_import_complete` | Marks the legacy store as imported and converges the host store. |
 | `acp_history_list_legacy` | Lists the legacy store so the wipe migration can verify what it wrote. |
 | `acp_history_get_legacy` | Reads one legacy payload for the same verification. |
+
+Each `TROUPE_*` variable in these rows is also read under its old `TERMUL_*` name, which logs one deprecation warning per process. A `TROUPE_*` value that is not blank wins.
 
 ### `/ws` requests
 
@@ -881,7 +883,7 @@ A project's open files and pane layout live only in the device's own store key `
 
 ### Project registry commands
 
-One durable `ProjectRegistry` per host owns the project list: `termul-server` keeps it in its projects file, the desktop in `<app data dir>/projects.json` (locked beside `store.json`, opened once at setup, **not** cleared by `remote_server_stop`). Every command below runs through one host command service: it validates, writes the candidate to disk (temp file, fsync, rename) and only then swaps memory, so a failed write replies an error and changes nothing; then it publishes the new state to every `projects` watcher.
+One durable `ProjectRegistry` per host owns the project list: `troupe-server` keeps it in its projects file, the desktop in `<app data dir>/projects.json` (locked beside `store.json`, opened once at setup, **not** cleared by `remote_server_stop`). Every command below runs through one host command service: it validates, writes the candidate to disk (temp file, fsync, rename) and only then swaps memory, so a failed write replies an error and changes nothing; then it publishes the new state to every `projects` watcher.
 
 | `/ws` request | HTTP | Request fields | Reply |
 | --- | --- | --- | --- |
@@ -905,9 +907,11 @@ The MCP server list is a file per project, `{project root}/.termul/mcp-servers.j
 | Read the list | `GET /mcp-servers?projectId=` | n/a | `[McpServer…]` (empty when the file is absent) |
 | Write the list | `PUT /mcp-servers?projectId=` | JSON array | `{}`; a write guard (`FORBIDDEN`) applies before the project is resolved |
 | Start OAuth | `POST /mcp-servers/oauth/start` | `{projectId, serverUrl}` | `{authUrl, redirectUri}`; the URL must be an enabled http/sse entry of THAT project's list, else `UNAUTHORIZED_SERVER_URL` |
+| Finish OAuth (paste-back) | `POST /mcp-servers/oauth/complete` | `{projectId, callbackUrl}` | `{}`; `callbackUrl` is the address the browser landed on. Its scheme, host, port and path must equal the flow's `redirectUri`. Same local-only write guard as `start`. Errors: `OAUTH_BAD_REDIRECT` (400, flow kept), `OAUTH_UNKNOWN_STATE` (400), `OAUTH_DENIED` (400), `OAUTH_EXCHANGE_FAILED` (502) |
 | OAuth status | `POST /mcp-servers/oauth/status` | `{projectId, serverUrl}` | `{hasToken}` |
 | OAuth disconnect | `POST /mcp-servers/oauth/disconnect` | `{projectId, serverUrl}` | `{}` |
 
+- The web redirect URI is always `http://127.0.0.1:{port}/oauth/callback`, because authorization servers accept plain http only on loopback. When the server listens on all interfaces or on loopback, a browser on the host reaches `GET /oauth/callback` directly. A browser on another device lands on a page that does not load, and the user pastes that address into `complete`. Both paths exchange the code with the session kept from `start` (same PKCE verifier and client id). Pending flows expire after 5 minutes.
 - OAuth tokens stay keyed by server URL and are host-global (`acp/mcp_oauth.rs`): a token is the host's credential for that URL, not a project's. `status` and `disconnect` validate the project but read and delete the one URL-keyed token.
 - Tauri: `remote_sync_mcp_registry({projectId, registry})` writes that project's file (same refusal as above, no default-project or home-directory fallback). The desktop OAuth/probe commands (`acp_mcp_oauth_*`, `acp_probe_mcp_server`) authorize and write nothing, so they take the server URL / config only. `POST /mcp-servers/probe` is unchanged.
 - `--project-root` (and `$TERMUL_PROJECT_ROOT`) are removed options: still parsed for one minor release with a startup warning, they only seed one in-memory project while the registry has no usable project. No flag, no seed; the onboard wizard no longer asks for a root.

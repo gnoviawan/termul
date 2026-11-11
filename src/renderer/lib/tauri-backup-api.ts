@@ -54,7 +54,7 @@ const MAX_BACKUPS = 3
 
 /**
  * Top-level userData entries the backup leaves out: its own destination, the
- * rollback store, and data Termul downloads or rebuilds by itself (agent
+ * rollback store, and data Troupe downloads or rebuilds by itself (agent
  * binaries, registry catalogs, browser profiles and captures). Agent binaries
  * alone can be gigabytes in thousands of files, and copying them one file at a
  * time held the update download at 0% before it started (#1431).
@@ -71,7 +71,7 @@ const EXCLUDED_TOP_LEVEL_ENTRIES: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Data-lock sidecars (src-tauri/src/data_lock.rs) are held locked while Termul
+ * Data-lock sidecars (src-tauri/src/data_lock.rs) are held locked while Troupe
  * runs. They carry no data, and on Windows reading a locked file fails, which
  * failed the backup.
  */
@@ -355,13 +355,21 @@ function logSkippedEntries(operation: string, skipped: string[]): void {
  * Cleans up old backups (keeps only MAX_BACKUPS most recent)
  */
 export async function createBackup(): Promise<IpcResult<BackupInfo>> {
+  // Tracks the folder this attempt created so a mid-way failure can remove it
+  // instead of leaving a partial copy that listBackups/cleanupOldBackups ignore.
+  let createdBackupPath: string | null = null
+
   try {
     const backupId = generateBackupId()
     const backupPath = await getBackupPath(backupId)
     const userDataPath = await getUserDataDir()
 
-    // Create backup directory
-    await mkdir(backupPath, { recursive: true })
+    // The backup folder itself is created without `recursive` so mkdir fails
+    // when the path already exists (an existing backup, or a link). Only a
+    // folder this attempt created may be removed on failure below.
+    await mkdir(await getBackupsDir(), { recursive: true })
+    await mkdir(backupPath)
+    createdBackupPath = backupPath
 
     const entries = await readDir(userDataPath)
     const skipped: string[] = []
@@ -397,6 +405,9 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
     // Write backup-info.json
     const infoPath = await getBackupInfoPath(backupId)
     await writeTextFile(infoPath, JSON.stringify(metadata, null, 2))
+    // The backup is complete from here on: a later failure (store, retention)
+    // must not delete it.
+    createdBackupPath = null
 
     // Store metadata in store for quick access
     const store = await getMetadataStore()
@@ -424,6 +435,22 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
       source: LOG_SOURCE,
       message: `[backup] create failed: ${errorMessage}`
     })
+
+    // Remove the partial folder this attempt created. Without backup-info.json
+    // listBackups skips it, so cleanupOldBackups would never reclaim it and
+    // partial copies would pile up with every failed attempt. Best effort: if
+    // the removal also fails, log it and still report the original failure.
+    if (createdBackupPath) {
+      try {
+        await remove(createdBackupPath, { recursive: true })
+      } catch (cleanupErr) {
+        void logFrontendError({
+          level: 'warn',
+          source: LOG_SOURCE,
+          message: `[backup] failed to remove partial backup folder: ${extractErrorMessage(cleanupErr, 'Unknown error')}`
+        })
+      }
+    }
 
     if (
       errorMessage.includes('ENOSPC') ||

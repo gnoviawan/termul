@@ -334,7 +334,7 @@ fn errors_an_agent_can_recover_from_tell_it_the_next_step() {
         (CanvasErrorCode::CanvasHidden, "Canvas tab"),
         (
             CanvasErrorCode::CanvasOpenElsewhere,
-            "another Termul window",
+            "another Troupe window",
         ),
         (CanvasErrorCode::CanvasTimeout, "do not retry it blindly"),
         (CanvasErrorCode::UnsupportedInKiosk, "save_file"),
@@ -372,6 +372,7 @@ fn a_timeout_advises_by_tool_and_only_reads_are_retried_as_is() {
         ("get_node", "retry once"),
         ("inspect_document", "retry once"),
         ("list_issues", "retry once"),
+        ("wait_for_changes", "retry once"),
     ];
     for (tool, hint) in advice {
         let encoded = late.to_backend_string_for(Some(tool));

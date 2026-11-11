@@ -502,7 +502,7 @@ pub struct AcpManager {
     /// flag so the gate also applies when persistence is absent.
     process_shutdown: AtomicBool,
     persistence: Option<Arc<SessionPersistence>>,
-    /// Host-injected `termul` MCP server (exposes the `plan` tool; one shared TCP listener across
+    /// Host-injected `troupe` MCP server (exposes the `plan` tool; one shared TCP listener across
     /// all sessions, started EAGERLY in the constructor so the first
     /// `new_session_with_context` doesn't block a Tokio worker thread on the
     /// bind + port-publish handshake). Injects a self-spawned stdio child
@@ -1286,7 +1286,7 @@ impl AcpManager {
     /// `None` leaves the request with no client MCP list and no host plan
     /// server. `Some` prepends the host plan server, injects OAuth headers, and
     /// gates transports. The renderer sends `Some` on every history reopen, not
-    /// only Reload this chat, so the agent keeps the `termul` server and the
+    /// only Reload this chat, so the agent keeps the `troupe` server and the
     /// user's MCP servers (#1420).
     ///
     /// When this agent already holds a settled plan token for the session, the

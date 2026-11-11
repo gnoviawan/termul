@@ -146,6 +146,7 @@ vi.mock('@/lib/api', async (importActual) => {
 })
 
 import { invoke } from '@tauri-apps/api/core'
+import type { ContentBlock } from '@/lib/acp-api'
 import {
   _clearPayloadCacheForTesting,
   loadSessionIndex,
@@ -559,6 +560,31 @@ describe('failed session lifecycle (story 5)', () => {
     )
   })
 
+  it('RETRY_SUCCESS: the re-sent first prompt goes ahead of a send queued on the failed chat', async () => {
+    const placeholderId = await seedFailedLaunch(new Error('connection refused by agent'))
+    await useAcpStore.getState().sendPrompt(placeholderId, 'are you there?')
+
+    const sentTexts: string[] = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
+      async (command: string, args?: { text?: string }) => {
+        if (command === 'acp_spawn_agent')
+          return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+        if (command === 'acp_new_session') return { sessionId: 'sess-retry' }
+        if (command === 'acp_send_prompt') {
+          sentTexts.push(args?.text ?? '')
+          return 'end_turn'
+        }
+        throw new Error(`unexpected invoke command: ${command}`)
+      }
+    )
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+
+    expect(sentTexts).toEqual(['hello agent'])
+    expect(useAcpStore.getState().promptQueues['sess-retry']?.map((q) => q.blocks)).toEqual([
+      [{ type: 'text', text: 'are you there?' }]
+    ])
+  })
+
   it('RETRY_NO_USER_MSG: a launch without a first prompt retries without re-sending', async () => {
     await useAcpStore
       .getState()
@@ -934,10 +960,15 @@ describe('failed session lifecycle (story 5)', () => {
 
   describe('sends during a launch', () => {
     type SentPrompt = { agentId: string; sessionId: string }
+    type SendArgs = SentPrompt & { text?: string; content?: ContentBlock[] }
 
-    async function startGatedLaunch(initialText?: string): Promise<{
+    async function startGatedLaunch(
+      initialText?: string,
+      { painted = true }: { painted?: boolean } = {}
+    ): Promise<{
       placeholderId: string
       sent: SentPrompt[]
+      sentTexts: string[]
       release: () => void
       launch: Promise<unknown>
     }> {
@@ -948,20 +979,23 @@ describe('failed session lifecycle (story 5)', () => {
         configId: 'cfg-1',
         cwd: '/work',
         projectId: 'p1',
-        initialUserBlocks: initialText ? [{ type: 'text', text: initialText }] : undefined
+        initialUserBlocks:
+          initialText && painted ? [{ type: 'text', text: initialText }] : undefined
       })
       let releaseCreate!: (value: { sessionId: string }) => void
       const createGate = new Promise<{ sessionId: string }>((resolve) => {
         releaseCreate = resolve
       })
       const sent: SentPrompt[] = []
+      const sentTexts: string[] = []
       ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
-        async (command: string, args?: SentPrompt) => {
+        async (command: string, args?: SendArgs) => {
           if (command === 'acp_spawn_agent')
             return { agentId: 'agent-1', capabilities: {}, authMethods: [] }
           if (command === 'acp_new_session') return createGate
           if (command === 'acp_send_prompt' && args) {
             sent.push({ agentId: args.agentId, sessionId: args.sessionId })
+            sentTexts.push(args.text ?? (args.content ?? []).map((b) => b.text).join(''))
             return 'end_turn'
           }
           return undefined
@@ -980,6 +1014,7 @@ describe('failed session lifecycle (story 5)', () => {
       return {
         placeholderId,
         sent,
+        sentTexts,
         release: () => releaseCreate({ sessionId: 'sess-real' }),
         launch
       }
@@ -1010,6 +1045,22 @@ describe('failed session lifecycle (story 5)', () => {
         [{ type: 'text', text: 'second message' }]
       ])
       expect(useAcpStore.getState().promptQueues[placeholderId]).toBeUndefined()
+    })
+
+    it('sends an unpainted launch prompt ahead of a send queued during the launch', async () => {
+      // A GitHub hand-off (fix CI, resolve comments) launches without painting
+      // its first prompt, so the user can type a follow-up before it is sent.
+      const { placeholderId, sentTexts, release, launch } = await startGatedLaunch('fix the CI', {
+        painted: false
+      })
+      await useAcpStore.getState().sendPrompt(placeholderId, 'then update the changelog')
+
+      release()
+      await launch
+      expect(sentTexts).toEqual(['fix the CI'])
+      expect(useAcpStore.getState().promptQueues['sess-real']?.map((q) => q.blocks)).toEqual([
+        [{ type: 'text', text: 'then update the changelog' }]
+      ])
     })
   })
 })

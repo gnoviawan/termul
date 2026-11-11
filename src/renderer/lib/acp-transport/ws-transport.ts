@@ -1569,7 +1569,7 @@ export class WsAcpTransport implements AcpTransport {
     // `pi_terminal_login`) to the host's `AcpManager::authenticate` over the
     // authenticated WS connection. The host runs the method on the agent
     // process (the provider owns the login UX, often opening its own
-    // browser); Termul never invents a redirect URL or stores credentials.
+    // browser); Troupe never invents a redirect URL or stores credentials.
     await this.connect()
     await this.request('authenticate_agent', { agentId, methodId, ...input }, undefined, options)
   }

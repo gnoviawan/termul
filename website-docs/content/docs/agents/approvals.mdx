@@ -3,7 +3,7 @@ title: Approvals and questions
 description: Answer an agent's permission requests and questions, and find out when a chat is waiting for you.
 ---
 
-Some steps need your OK. Before an agent runs a risky command, it asks for permission. When it needs a decision, it asks you a question. The agent pauses until you answer, and Termul shows you which chats are waiting.
+Some steps need your OK. Before an agent runs a risky command, it asks for permission. When it needs a decision, it asks you a question. The agent pauses until you answer, and Troupe shows you which chats are waiting.
 
 How often an agent asks depends on its mode. See [Choose how much the agent may do](/docs/agents/write-a-prompt#choose-how-much-the-agent-may-do).
 
@@ -13,15 +13,15 @@ A permission request appears at the top of the message box with the title **Appr
 
 ![An approval request above the message box. The agent wants to run "git push origin feature/discounts". The buttons are Allow, Always allow, and Reject.](/screenshots/agents-permission.png)
 
-Click one of the buttons. The agent decides which buttons to offer, so the labels differ between agents. Termul always puts the allow buttons first and the reject buttons last. Common choices are:
+Click one of the buttons. The agent decides which buttons to offer, so the labels differ between agents. Troupe always puts the allow buttons first and the reject buttons last. Common choices are:
 
 - **Allow**. Run this step once.
 - **Always allow**. Run this step now and stop asking for steps like it. The agent keeps track of what you allowed, so what "like it" means depends on the agent.
 - **Reject**. Do not run the step.
 
-If the agent offers no way to reject, Termul adds **Cancel request**. It cancels the request, and the step does not run.
+If the agent offers no way to reject, Troupe adds **Cancel request**. It cancels the request, and the step does not run.
 
-A request has no close button. It stays until you choose an option or stop the turn. If the agent asks for several steps at once, Termul shows one request at a time, in the order they came. To stop the turn instead, press `Esc` in the message box. See [Stop a turn](/docs/agents/follow-the-work#stop-a-turn).
+A request has no close button. It stays until you choose an option or stop the turn. If the agent asks for several steps at once, Troupe shows one request at a time, in the order they came. To stop the turn instead, press `Esc` in the message box. See [Stop a turn](/docs/agents/follow-the-work#stop-a-turn).
 
 ## Answer a question
 
@@ -37,7 +37,7 @@ Use the arrow keys to move between options and between questions. Some questions
 
 To read the chat while a question is open, click **Minimize questions**. A bar stays at the bottom of the chat. Click **Resume** on it to answer.
 
-Some agents send a form instead, under the title **Request from the agent**. Fill in the fields and click **Submit**. Click **Decline** to refuse the request, or **Cancel** to close it without an answer. A request can also ask you to visit a web page, for example to sign in. Click **Open link**. Termul shows the address in an **Open external link?** dialog first. Check it and click **Open**, finish on that page, then click **Done**.
+Some agents send a form instead, under the title **Request from the agent**. Fill in the fields and click **Submit**. Click **Decline** to refuse the request, or **Cancel** to close it without an answer. A request can also ask you to visit a web page, for example to sign in. Click **Open link**. Troupe shows the address in an **Open external link?** dialog first. Check it and click **Open**, finish on that page, then click **Done**.
 
 ## Leave a chat while it waits
 
@@ -47,13 +47,13 @@ By default, a request or a question waits until you answer it, you stop the turn
   In the desktop app, **Settings** > **Agent chats** has two time limits for an agent's answer: **If an answer goes quiet** and **Longest one answer**. Both are off by default. If you set one, a request that waits longer than that is cancelled with the turn.
 </Callout>
 
-A waiting request also keeps the chat open. Termul closes chats that sit idle for a while, but not one that is waiting for you. To change how long idle chats stay open, see **Close idle chats after** in **Settings** > **Agent chats**.
+A waiting request also keeps the chat open. Troupe closes chats that sit idle for a while, but not one that is waiting for you. To change how long idle chats stay open, see **Close idle chats after** in **Settings** > **Agent chats**.
 
 If the chat is open on several devices, the first answer counts.
 
 ## See which chats need you
 
-A chat that waits for your approval is marked **Needs you**. Termul also uses this mark when a chat lost its agent or could not resume. You see the mark in these places:
+A chat that waits for your approval is marked **Needs you**. Troupe also uses this mark when a chat lost its agent or could not resume. You see the mark in these places:
 
 - A yellow dot on the chat's tab.
 - **Needs you** on the chat's card in the **Chats** list.
@@ -64,11 +64,11 @@ A chat that waits for your approval is marked **Needs you**. Termul also uses th
 
 ## Get notified
 
-Termul can send a notification when a chat needs you, and when an agent finishes its work. In the desktop app, these are system notifications. In a browser, the browser asks for permission the first time.
+Troupe can send a notification when a chat needs you, and when an agent finishes its work. In the desktop app, these are system notifications. In a browser, the browser asks for permission the first time.
 
 To turn them on or off, open **Settings** > **Behavior** and go to **Notifications**:
 
 - **Notify when an agent chat needs you**. Sent when an agent waits for an approval or an answer to a question. Requests that come as a form do not send a notification.
-- **Notify when an agent chat turn finishes**. Sent when the agent finishes and no queued messages are left. Termul does not send it when you stop the turn.
+- **Notify when an agent chat turn finishes**. Sent when the agent finishes and no queued messages are left. Troupe does not send it when you stop the turn.
 
-Both are on by default. Termul does not notify you about the chat you are looking at while its window has focus. In a browser, click a notification to open the chat. In the desktop app, clicking it brings the Termul window to the front.
+Both are on by default. Troupe does not notify you about the chat you are looking at while its window has focus. In a browser, click a notification to open the chat. In the desktop app, clicking it brings the Troupe window to the front.

@@ -314,7 +314,7 @@ export type McpServerConfig = McpStdioServer | McpHttpServer | McpSseServer
 
 // --- MCP client probe (on-demand `initialize` + `tools/list`) -------------
 
-/** Per-server probe status (Termul's own client connection, not the agent's). */
+/** Per-server probe status (Troupe's own client connection, not the agent's). */
 export type ProbeStatus = 'connected' | 'disconnected' | 'authRequired'
 
 /** A tool exposed by a probed MCP server (`tools/list` output, UI subset). */
@@ -931,57 +931,125 @@ export class McpOAuthError extends Error {
   }
 }
 
+/** Code of the {@link McpOAuthError} a web flow rejects with once its
+ * `signal` aborts (the user dismissed the paste-back dialog). Callers treat
+ * it as a quiet cancel, not a failure. */
+export const MCP_OAUTH_CANCELLED = 'OAUTH_CANCELLED'
+
+export interface McpOAuthStartOptions {
+  /** Web only: called once the host returns the sign-in link and the
+   * loopback redirect it registered, so the paste-back dialog can open. */
+  onAuthUrl?: (authUrl: string, redirectUri: string) => void
+  /** Web only: aborting stops the status poll and rejects with
+   * {@link MCP_OAUTH_CANCELLED}. */
+  signal?: AbortSignal
+}
+
+function oauthCancelled(): McpOAuthError {
+  return new McpOAuthError('OAuth sign-in cancelled', MCP_OAUTH_CANCELLED)
+}
+
+/** Resolves after `ms`, or rejects as cancelled as soon as `signal` aborts. */
+function waitOrCancel(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(oauthCancelled())
+      return
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      reject(oauthCancelled())
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 /** Start the OAuth flow for an MCP server URL on behalf of `projectId` (the
  * web host authorizes the URL against that project's MCP list; the desktop
  * Tauri command authorizes nothing and takes the URL only). On desktop, opens the system
  * browser and waits for the callback (the Tauri command blocks until the
- * token is stored). On web, opens a blank window first (preserves transient
- * user activation for the popup), navigates it to the auth URL once returned,
- * then polls the status endpoint until the token is stored. Throws on
- * failure (discovery, registration, timeout), as an {@link McpOAuthError}
- * with code {@link MCP_UNSAFE_URL} when the host refused the sign-in link. */
-export async function startMcpOAuth(projectId: string, serverUrl: string): Promise<void> {
+ * token is stored; `options` are unused). On web, opens a blank window first
+ * (preserves transient user activation for the popup), navigates it to the
+ * auth URL once returned, hands the URL to `onAuthUrl` (the paste-back
+ * dialog), then polls the status endpoint until the token is stored — by the
+ * host's own callback or by a pasted redirect. A blocked popup is not fatal on
+ * web: the dialog's Open button is the fallback. Throws on failure
+ * (discovery, registration, timeout), as an {@link McpOAuthError} with code
+ * {@link MCP_UNSAFE_URL} when the host refused the sign-in link, or
+ * {@link MCP_OAUTH_CANCELLED} once `signal` aborts. */
+export async function startMcpOAuth(
+  projectId: string,
+  serverUrl: string,
+  options: McpOAuthStartOptions = {}
+): Promise<void> {
   if (isTauriContext()) {
     const result = await invokeIpc<void>('acp_mcp_oauth_start', { serverUrl })
     if (!result.success) throw new McpOAuthError(result.error, result.code)
     return
   }
+  const { onAuthUrl, signal } = options
+  if (signal?.aborted) throw oauthCancelled()
   // Web path: open a blank window BEFORE the async request so the browser
   // does not block the popup (transient user activation window). Navigate it
   // once the auth URL is returned. No `noopener` feature: the HTML spec makes
   // window.open return null with it even though the window opened, so the
   // handle would be lost (#1541).
   const popup = window.open('about:blank', '_blank')
-  if (!popup) {
-    throw new Error('Popup blocked — allow popups for this site to start OAuth')
-  }
-  popup.opener = null
+  if (popup) popup.opener = null
   let authUrl: string
+  let redirectUri: string
   try {
     const result = await webServerMcpOAuth.start(projectId, serverUrl)
     if (!result.success) {
       throw new McpOAuthError(result.error ?? 'OAuth start failed', result.code)
     }
+    if (signal?.aborted) throw oauthCancelled()
     authUrl = result.data.authUrl
+    redirectUri = result.data.redirectUri
   } catch (err) {
-    popup.close()
+    popup?.close()
     throw err
   }
-  popup.location.href = authUrl
+  if (popup) popup.location.href = authUrl
+  onAuthUrl?.(authUrl, redirectUri)
   // Wait for OAuth completion by polling the status endpoint until the token
-  // is stored. The OAuth callback redirect processes on the server side; once
-  // `hasToken` is true, the flow is complete.
+  // is stored. Either the host's `/oauth/callback` (a browser on the host's
+  // machine) or a pasted redirect (`complete`) stores it; once `hasToken` is
+  // true, the flow is complete.
   const POLL_INTERVAL_MS = 1000
   const POLL_TIMEOUT_MS = 300_000 // 5 min — matches OAUTH_FLOW_TIMEOUT_SECS
   const deadline = Date.now() + POLL_TIMEOUT_MS
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
-    const status = await webServerMcpOAuth.status(projectId, serverUrl)
-    if (status.success && status.data?.hasToken) {
-      return
+  try {
+    while (Date.now() < deadline) {
+      await waitOrCancel(POLL_INTERVAL_MS, signal)
+      // The signal also aborts a status request that hangs.
+      const status = await webServerMcpOAuth.status(projectId, serverUrl, signal)
+      if (signal?.aborted) throw oauthCancelled()
+      if (status.success && status.data?.hasToken) {
+        return
+      }
     }
+    throw new Error('OAuth flow timed out — user did not complete authorization in time')
+  } catch (err) {
+    // A cancelled or timed-out sign-in closes its provider window.
+    popup?.close()
+    throw err
   }
-  throw new Error('OAuth flow timed out — user did not complete authorization in time')
+}
+
+/** Web only: finish a pending OAuth flow with the loopback redirect address
+ * the user pasted back. Throws an {@link McpOAuthError} carrying the host's
+ * code (`OAUTH_BAD_REDIRECT`, `OAUTH_UNKNOWN_STATE`, `OAUTH_DENIED`,
+ * `OAUTH_EXCHANGE_FAILED`) on failure. */
+export async function completeMcpOAuth(projectId: string, callbackUrl: string): Promise<void> {
+  const result = await webServerMcpOAuth.complete(projectId, callbackUrl)
+  if (!result.success) {
+    throw new McpOAuthError(result.error || 'OAuth sign-in failed', result.code)
+  }
 }
 
 /** Check whether a stored OAuth token exists for a server URL (`projectId` is
@@ -1557,6 +1625,7 @@ export const acpApi = {
   probeMcpServer,
   listMcpTools,
   startMcpOAuth,
+  completeMcpOAuth,
   hasMcpOAuthToken,
   disconnectMcpOAuth,
   fetchRegistrySnapshot: acpFetchRegistrySnapshot,

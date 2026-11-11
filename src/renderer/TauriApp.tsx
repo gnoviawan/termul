@@ -9,6 +9,7 @@ import { useClaudeAutoSwitch } from '@/components/chat/claude-account/auto-switc
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
+import { McpOAuthPasteDialogHost } from '@/components/settings/McpOAuthPasteDialog'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAcpUpdateChecks } from '@/hooks/use-acp-update-checks'
@@ -45,6 +46,7 @@ import { useProjectGitBranch } from './hooks/use-project-git-branch'
 import { useProjectIcon } from './hooks/use-project-icon'
 import { useProjectRegistry } from './hooks/use-project-registry'
 import { useRemoteProjects } from './hooks/use-remote-projects'
+import { useRenameNotice } from './hooks/use-rename-notice'
 import { useShellLayoutHydration } from './hooks/use-shell-layout-hydration'
 import { useSmoothWheelScroll } from './hooks/use-smooth-wheel-scroll'
 import { useSSHSessionEvents } from './hooks/use-ssh-session-events'
@@ -100,6 +102,7 @@ function AppEffects(): null {
   useMenuUpdaterListener()
   useUpdateCheck()
   useUpdateToast()
+  useRenameNotice()
   useVisibilityState()
   useTerminalExitNotification()
   useTerminalIdleNotification()
@@ -211,6 +214,9 @@ export default function TauriApp(): React.JSX.Element {
                 dialog (spec-acp-terminal-auth) — auth can be triggered from a
                 chat panel or warm pool, not just the launcher. */}
             <BrowserAuthDialogHost />
+            {/* MCP OAuth paste-back: only the web flow sets its state, so this
+                renders nothing on desktop. Mounted on both roots for parity. */}
+            <McpOAuthPasteDialogHost />
             <CodexCliAuthSync />
             {/* Agent browser-automation consent fallback (CAP-5): corner card
                 for pending consents no visible chat-panel card hosts; the

@@ -2,7 +2,7 @@
  * Per-theme component tokens. Each value is a complete CSS value (a color or
  * a shadow list), read as `var(--token)`. The defaults restate what the
  * components drew before these tokens existed, so a theme that sets nothing
- * renders exactly as it did. Termul themes override them through
+ * renders exactly as it did. Troupe themes override them through
  * `ThemeChrome.tokens`.
  */
 export const COMPONENT_TOKEN_DEFAULTS = {

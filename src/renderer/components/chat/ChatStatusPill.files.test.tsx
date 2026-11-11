@@ -817,6 +817,29 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
     expect(pill()).toHaveAccessibleName('Session status: 2 changed files')
   })
 
+  it('lists every file of a multi-file edit call that has no locations', async () => {
+    setGit([
+      ['src/a.ts', 'modified', 1, 1],
+      ['src/b.ts', 'modified', 2, 0],
+      ['src/c.ts', 'untracked', 4, 0]
+    ])
+    render(
+      panel([
+        makeToolCall({
+          toolCallId: 'multi',
+          rawInput: {},
+          content: [
+            { type: 'diff', path: 'src/a.ts', oldText: 'a', newText: 'A' },
+            { type: 'diff', path: 'src/b.ts', oldText: 'b', newText: 'b\nB\nC' },
+            { type: 'diff', path: 'src/c.ts', oldText: null, newText: 'c' }
+          ]
+        })
+      ])
+    )
+    expect(await screen.findByText('+7')).toBeInTheDocument()
+    expect(pill()).toHaveAccessibleName('Session status: 3 changed files')
+  })
+
   it('drops files that the agent committed', async () => {
     setGit([
       ['src/a.ts', 'modified', 3, 1],

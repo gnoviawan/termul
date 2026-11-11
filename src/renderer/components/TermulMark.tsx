@@ -1,5 +1,5 @@
 /**
- * Termul brand mark.
+ * Troupe brand mark.
  *
  * Inline SVG so it can inherit the current text color via `currentColor`,
  * which keeps it legible on both light and dark themes. Source artwork lives
@@ -19,7 +19,7 @@ export function TermulMark({
       viewBox="0 0 569 507"
       xmlns="http://www.w3.org/2000/svg"
       role="img"
-      aria-label="Termul"
+      aria-label="Troupe"
       className={className}
       style={{ fillRule: 'evenodd', clipRule: 'evenodd' }}
     >

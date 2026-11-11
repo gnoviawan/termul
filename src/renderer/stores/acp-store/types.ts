@@ -179,7 +179,7 @@ export interface OpenHistoryOptions {
    * list. When omitted (idle-stop auto-resume, manual Resume chat, a
    * history-row open) it defaults to
    * `selectMcpServersForAgent(state.mcpServers, capabilities).servers` so the
-   * host `termul` server and the user's configured MCP servers survive the
+   * host `troupe` server and the user's configured MCP servers survive the
    * reopen (#1420). An explicit `[]` still asks the host to attach only the
    * plan server.
    */
@@ -269,8 +269,8 @@ export interface AcpSession {
    * `session/list` chats). Carried on the live record so `persistSession`
    * preserves it even when no `sessionIndex` entry exists yet (the
    * disconnect/close path would otherwise default a discovered session to
-   * `discovered: false` and leak it into the Termul-only Chats tab).
-   * Absent/`false` for sessions Termul created via `createSession`.
+   * `discovered: false` and leak it into the Troupe-only Chats tab).
+   * Absent/`false` for sessions Troupe created via `createSession`.
    */
   discovered?: boolean
   /**
@@ -397,6 +397,21 @@ export interface BugReportDraftInput {
   userDescription: string
   /** Host-collected diagnostics; `logTail` is already secret-masked. */
   diagnostics: BugReportContext
+}
+
+/**
+ * A web MCP OAuth flow waiting on its sign-in (spec-mcp-oauth-web-paste-back).
+ * Set once the host returns the sign-in link; the paste dialog reads it to
+ * offer Open/Copy and to take the loopback redirect address back. Cleared when
+ * the flow ends (token stored, failed, cancelled). Desktop never sets it.
+ */
+export interface McpOAuthPasteBack {
+  projectId: string
+  serverUrl: string
+  serverName: string
+  authUrl: string
+  /** The loopback redirect the host registered (`http://127.0.0.1:{port}/oauth/callback`). */
+  redirectUri: string
 }
 
 /** How an option set reaches the agent's saved composer record. */
@@ -536,8 +551,8 @@ export interface AcpState {
   mcpServersLoaded: boolean
 
   // MCP probe state — on-demand only (no persistent always-on connections).
-  // `mcpProbeStatus` reflects Termul's own rmcp client connection, NOT the
-  // agent's; the dot answers "can Termul reach this server and list its tools?".
+  // `mcpProbeStatus` reflects Troupe's own rmcp client connection, NOT the
+  // agent's; the dot answers "can Troupe reach this server and list its tools?".
   // `mcpTools` is the cached `tools/list` output; `mcpToolsLoaded` gates the
   // auto-probe on first expand; `mcpProbing` dedupes concurrent probes.
   mcpProbeStatus: Record<string, ProbeStatus>
@@ -556,6 +571,8 @@ export interface AcpState {
   mcpOAuthConnecting: Record<string, boolean>
   /** Per-server OAuth connected state (true when a stored token exists). */
   mcpOAuthConnected: Record<string, boolean>
+  /** Per-server web OAuth flow awaiting sign-in (drives the paste-back dialog). */
+  mcpOAuthPasteBack: Record<string, McpOAuthPasteBack>
 
   // Sessions
   sessions: Record<SessionId, AcpSession>
@@ -921,7 +938,7 @@ export interface AcpState {
 
   // Actions — MCP probe (on-demand, read-only). State slices above.
   /**
-   * Probe a registered MCP server by id (Termul's own rmcp client — NOT the
+   * Probe a registered MCP server by id (Troupe's own rmcp client — NOT the
    * agent's). Updates `mcpProbeStatus[id]` + `mcpTools[id]` +
    * `mcpToolsLoaded[id]=true`, and `mcpProbeError[id]` with the redacted
    * `ProbeResult.error` on a disconnected result (cleared on connected and on
@@ -937,8 +954,19 @@ export interface AcpState {
   /** Start the OAuth flow for an HTTP/SSE MCP server that returned `authRequired`,
    * on behalf of `projectId` (the web host authorizes the URL against that
    * project's MCP list). Opens the system browser, waits for the callback,
-   * stores the token. */
-  connectMcpOAuth: (projectId: string, id: string) => Promise<void>
+   * stores the token. On web it also publishes `mcpOAuthPasteBack[id]` while
+   * the sign-in is pending. Resolves `true` once a token is stored, `false`
+   * when the flow was cancelled ({@link AcpState.cancelMcpOAuth}) or the
+   * server went away; throws on failure. */
+  connectMcpOAuth: (projectId: string, id: string) => Promise<boolean>
+  /** Web only: finish server `id`'s pending flow with the pasted loopback
+   * redirect address. Clears `mcpOAuthPasteBack[id]` on success (the running
+   * `connectMcpOAuth` then sees the token and marks the server connected).
+   * Throws an `McpOAuthError` with the host's code on failure. */
+  completeMcpOAuthPaste: (id: string, callbackUrl: string) => Promise<void>
+  /** Stop server `id`'s pending web OAuth flow: polling stops, the
+   * connecting spinner and the paste-back entry clear. No-op when none runs. */
+  cancelMcpOAuth: (id: string) => void
   /** Check whether a stored OAuth token exists and update `mcpOAuthConnected`. */
   checkMcpOAuthStatus: (projectId: string, id: string) => Promise<void>
   /** Delete the stored OAuth token (the "Disconnect" action). */

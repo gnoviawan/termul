@@ -73,3 +73,11 @@
     Cross-Origin-Opener-Policy: same-origin
     Cross-Origin-Embedder-Policy: credentialless
     Cross-Origin-Resource-Policy: same-origin
+
+# The docs site (website-docs, copied to dist/docs by the deploy) ships its own
+# inline scripts and loads the API reference from a CDN, so the landing CSP
+# above, whose script hashes come from dist/index.html, would block it.
+- path: "/docs/*"
+  headers:
+    "! Content-Security-Policy": ~
+    "! Cross-Origin-Embedder-Policy": ~

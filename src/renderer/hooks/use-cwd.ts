@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { systemApi, terminalApi } from '@/lib/api'
+import { stripVerbatimPrefix } from '@/lib/windows-verbatim-path'
 import { useTerminalStore } from '@/stores/terminal-store'
 
 // Cache for home directory to avoid repeated IPC calls
@@ -58,17 +59,6 @@ export function useHomeDirectory(): string {
   }, [])
 
   return homeDir
-}
-
-/**
- * The project registry stores Windows roots in verbatim form (`\\?\D:\proj`,
- * `\\?\UNC\srv\share`). The prefix is a Win32 API detail, so drop it for
- * display and keep the separators the path came with.
- */
-function stripVerbatimPrefix(path: string): string {
-  return path
-    .replace(/^[\\/]{2}\?[\\/]UNC[\\/]/i, (prefix) => prefix.slice(0, 2))
-    .replace(/^[\\/]{2}\?[\\/]/, '')
 }
 
 /**

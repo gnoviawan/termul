@@ -21,7 +21,7 @@ type Files = Record<string, string>
 const shopFiles: Files = {
   'README.md': `# Acme Shop
 
-A small storefront used to show off Termul.
+A small storefront used to show off Troupe.
 
 \`\`\`mermaid
 flowchart LR
@@ -212,7 +212,7 @@ export async function startDemoServer(): Promise<DemoServer> {
   })
 
   const binary =
-    process.env.TERMUL_SERVER_BIN ?? join(repoRoot, 'src-tauri/target/release/termul-server')
+    process.env.TERMUL_SERVER_BIN ?? join(repoRoot, 'src-tauri/target/release/troupe-server')
   const child = spawn(
     binary,
     [
@@ -239,7 +239,7 @@ export async function startDemoServer(): Promise<DemoServer> {
     child.stdout?.on('data', onData)
     child.stderr?.on('data', onData)
     child.once('error', reject)
-    child.once('exit', (code) => reject(new Error(`termul-server exited with ${code}`)))
+    child.once('exit', (code) => reject(new Error(`troupe-server exited with ${code}`)))
   })
   const auth = { Authorization: `Bearer ${DEMO_TOKEN}`, 'content-type': 'application/json' }
   for (const p of projects) {

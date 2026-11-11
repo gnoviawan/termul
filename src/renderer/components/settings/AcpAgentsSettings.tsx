@@ -60,7 +60,7 @@ function iconSanitizesOk(svg: string): boolean {
 /**
  * Manual-install copy from the registry policy (S2-TS): managed-npm agents
  * carry their canonical reason string in the policy; every other manual-install
- * agent gets the generic "point Termul at the binary" guidance.
+ * agent gets the generic "point Troupe at the binary" guidance.
  */
 function manualInstallCopy(entry: SupportedAcpAgentEntry): string {
   const install = agentPolicy(entry.id).install

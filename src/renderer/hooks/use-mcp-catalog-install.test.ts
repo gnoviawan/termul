@@ -38,7 +38,8 @@ vi.mock('@/lib/acp-mcp-persistence', async (orig) => ({
 }))
 
 import { invoke } from '@tauri-apps/api/core'
-import { acpApi } from '@/lib/acp-api'
+import { toast } from 'sonner'
+import { acpApi, MCP_OAUTH_CANCELLED, McpOAuthError } from '@/lib/acp-api'
 import { saveMcpServers } from '@/lib/acp-mcp-persistence'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
@@ -386,7 +387,42 @@ describe('useMcpCatalogInstall', () => {
 
     act(() => hook.result.current.signIn())
 
-    expect(startOAuth.mock.calls).toEqual([['p1', 'https://weather.example/mcp']])
+    expect(startOAuth.mock.calls).toEqual([
+      [
+        'p1',
+        'https://weather.example/mcp',
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      ]
+    ])
+  })
+
+  it.each([
+    ['toasts "Connected" once the sign-in stores a token', () => Promise.resolve(), true],
+    [
+      'shows no toast when the sign-in is cancelled',
+      () => Promise.reject(new McpOAuthError('OAuth sign-in cancelled', MCP_OAUTH_CANCELLED)),
+      false
+    ]
+  ] as const)('%s', async (_, signInResult, toasted) => {
+    probeReturns({ status: 'authRequired', tools: [], error: 'sign in required' })
+    const startOAuth = vi.spyOn(acpApi, 'startMcpOAuth').mockImplementation(signInResult)
+    const hook = await toConsent()
+    act(() => hook.result.current.approve())
+    await waitFor(() => expect(hook.result.current.flow.step).toBe('done'))
+
+    act(() => hook.result.current.signIn())
+    await waitFor(() => expect(startOAuth).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(Object.values(useAcpStore.getState().mcpOAuthConnecting)).toEqual([false])
+    )
+
+    if (toasted) {
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Connected to weather-tools'))
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(toast.success).not.toHaveBeenCalled()
+      expect(toast.error).not.toHaveBeenCalled()
+    }
   })
 
   it('cancels the plan when the commit never reached the host', async () => {

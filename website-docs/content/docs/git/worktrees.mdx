@@ -11,20 +11,20 @@ Use a worktree when you want to:
 - Try an idea on a new branch without stashing your current work.
 - Run two agents on two tasks at the same time.
 
-Termul puts each worktree in `.termul/worktrees/<name>/` inside your project folder. It also adds `.termul/` to the project's `.gitignore`, so the worktrees never show up as changes.
+Troupe puts each worktree in `.termul/worktrees/<name>/` inside your project folder. It also adds `.termul/` to the project's `.gitignore`, so the worktrees never show up as changes.
 
 ## Create a worktree
 
 1. Do one of these:
    - Right-click the project in the projects rail and click **New Worktree**.
    - Press `Ctrl+Shift+Alt+N` (`Cmd+Shift+Option+N` on macOS).
-2. Type a **Name**, for example `try-new-hero`. Termul uses it for the folder and for a new branch.
+2. Type a **Name**, for example `try-new-hero`. Troupe uses it for the folder and for a new branch.
 3. Optional: check **Path Preview** to see where the folder goes.
 4. Click **Create & open**, or press `Enter`.
 
 ![The New Worktree dialog with the name try-new-hero and the path preview](/screenshots/git-worktree-modal.png)
 
-Termul creates the worktree and opens a terminal in it. The new branch starts from the commit your project folder has checked out.
+Troupe creates the worktree and opens a terminal in it. The new branch starts from the commit your project folder has checked out.
 
 The project must be a Git repository. If it is not, **New Worktree** is disabled in the menu.
 
@@ -35,9 +35,9 @@ Click **Advanced (branch options)** to choose the branch yourself:
 - **New Branch** creates a branch. Type a name in **Branch Name (optional)**, or leave it empty to use the worktree name. In **Start Reference (optional)**, type a branch name or a commit hash to start from. Leave it empty to start from the current commit.
 - **Existing Branch** checks out a branch you already have. Search the list and click a branch. Select **Show remote branches** to see branches from the remote too.
 
-Termul replaces spaces and other characters that Git does not allow in branch names with `-`.
+Troupe replaces spaces and other characters that Git does not allow in branch names with `-`.
 
-A branch can be checked out in only one folder at a time. If the branch already has a worktree, Termul tells you so.
+A branch can be checked out in only one folder at a time. If the branch already has a worktree, Troupe tells you so.
 
 ![The Advanced branch options in the New Worktree dialog, set to New Branch with a start reference](/screenshots/git-worktree-advanced.png)
 
@@ -47,7 +47,7 @@ A branch can be checked out in only one folder at a time. If the branch already 
 2. Type a name in **Search or create a worktree…** that matches no existing worktree.
 3. Click **Create worktree** followed by the name.
 
-Termul creates a new branch with that name, starting from the current commit, and switches to the worktree. It does not open a terminal.
+Troupe creates a new branch with that name, starting from the current commit, and switches to the worktree. It does not open a terminal.
 
 ## Give an agent its own worktree
 
@@ -56,13 +56,13 @@ When you start a chat, you can make the agent work in a worktree instead of your
 1. Click **New chat**.
 2. Below the prompt box, open the **Workspace** menu. It shows **Current checkout** by default.
 3. Pick one of these:
-   - **New worktree** creates a fresh worktree for this chat. Pick the **Base branch** to start from. Termul selects the repository's default branch for you, such as `main`.
+   - **New worktree** creates a fresh worktree for this chat. Pick the **Base branch** to start from. Troupe selects the repository's default branch for you, such as `main`.
    - **Existing worktree** runs the agent in a worktree you already have. Pick it in the **Worktree** menu.
 4. Type your prompt and send it.
 
 ![The Workspace menu below the prompt box, with Current checkout, Existing worktree, and New worktree](/screenshots/git-launcher-worktree.png)
 
-A new worktree for a chat gets a branch named `chat/` followed by a short id. When the agent gives the chat a title, Termul may rename the branch to match the title. The folder keeps its name.
+A new worktree for a chat gets a branch named `chat/` followed by a short id. When the agent gives the chat a title, Troupe may rename the branch to match the title. The folder keeps its name.
 
 The chat shows **Worktree** below its prompt box when the agent works in a worktree, and **Current checkout** when it edits your project folder.
 
@@ -83,7 +83,7 @@ Switching changes what these show:
 
 Switching does not close or move your open tabs, terminals, or running agents. A dot next to a worktree means a chat or terminal in it is busy. The number is how many tabs you have open in it.
 
-Termul lists every worktree of the repository, also the ones you created with Git outside Termul. It checks for new ones every minute.
+Troupe lists every worktree of the repository, also the ones you created with Git outside Troupe. It checks for new ones every minute.
 
 ### Keyboard shortcuts for worktrees
 
@@ -103,7 +103,7 @@ In the switcher, hover over a worktree and click the terminal icon. Or right-cli
 
 ## Share folders with symlinks
 
-A new worktree has only the files that Git tracks. Folders that Git ignores, like `node_modules`, are missing. Instead of installing them again in every worktree, Termul can link them to the project folder. A link (a symlink) makes the folder appear in the worktree while the files stay in one place.
+A new worktree has only the files that Git tracks. Folders that Git ignores, like `node_modules`, are missing. Instead of installing them again in every worktree, Troupe can link them to the project folder. A link (a symlink) makes the folder appear in the worktree while the files stay in one place.
 
 To choose the linked folders:
 
@@ -113,13 +113,13 @@ To choose the linked folders:
 4. To remove a folder, click the **X** next to it.
 5. Click **Save changes**.
 
-Each entry must be one folder name at the top of the project, with no `/` in it. If the list is empty, Termul fills it from `.gitignore` when you open the page. Termul does not keep that list until you click **Save changes**.
+Each entry must be one folder name at the top of the project, with no `/` in it. If the list is empty, Troupe fills it from `.gitignore` when you open the page. Troupe does not keep that list until you click **Save changes**.
 
-Termul links every folder in the list into every worktree. It checks every minute and adds links that are missing.
+Troupe links every folder in the list into every worktree. It checks every minute and adds links that are missing.
 
 ## Copy files into new worktrees
 
-Some ignored files must be real copies, not links. An example is a `.env` file that each worktree changes. List them in a file named `.worktree-include` in your project folder. Termul copies the matching files into each worktree that **New chat** creates.
+Some ignored files must be real copies, not links. An example is a `.env` file that each worktree changes. List them in a file named `.worktree-include` in your project folder. Troupe copies the matching files into each worktree that **New chat** creates.
 
 ```text title=".worktree-include"
 # Copy local settings into new chat worktrees
@@ -128,10 +128,10 @@ config/local.json
 **/.env.local
 ```
 
-- Write one pattern per line. Termul ignores empty lines and lines that start with `#`.
+- Write one pattern per line. Troupe ignores empty lines and lines that start with `#`.
 - A pattern matches the path from the project folder. `.env` matches only the `.env` at the top. Use `**/.env` to match it in every folder.
 - `*` matches any characters except `/`. `?` matches one character. A pattern that ends with `/` matches everything in that folder.
-- Termul never overwrites a file that already exists in the worktree. It skips `.git`, `.termul`, `node_modules`, `target`, and `dist`.
+- Troupe never overwrites a file that already exists in the worktree. It skips `.git`, `.termul`, `node_modules`, `target`, and `dist`.
 
 <Callout type="info">
 Only worktrees that **New chat** creates get these copies. The **New Worktree** dialog and the switcher do not copy `.worktree-include` files.

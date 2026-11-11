@@ -17,7 +17,7 @@ export const requiredPlatformKeys = [
   'darwin-aarch64-app',
   'darwin-x86_64',
   'darwin-x86_64-app',
-  // Standalone `termul-server` binaries (linux x64 and arm64). Each channel's
+  // Standalone `troupe-server` binaries (linux x64 and arm64). Each channel's
   // manifest covers both the desktop targets and both server targets so a
   // single manifest drives both updaters.
   'linux-x86_64-server',
@@ -49,13 +49,17 @@ function releaseUrlAssetName(url, tag, description) {
   } catch {
     throw new Error(`${description} must be a valid URL`)
   }
+  // The old repo path stays after the rename to gnoviawan/troupe: 0.4.x servers
+  // download only from it, and GitHub redirects it to the renamed repo.
   const expectedPrefix = `/gnoviawan/termul/releases/download/${encodeURIComponent(tag)}/`
   if (
     parsed.protocol !== 'https:' ||
     parsed.hostname !== 'github.com' ||
     !parsed.pathname.startsWith(expectedPrefix)
   ) {
-    throw new Error(`${description} must target the current ${tag} GitHub release`)
+    throw new Error(
+      `${description} must target the current ${tag} GitHub release under https://github.com/gnoviawan/termul/ (0.4.x servers reject any other path)`
+    )
   }
   const encodedName = parsed.pathname.slice(expectedPrefix.length)
   if (!encodedName || encodedName.includes('/')) {

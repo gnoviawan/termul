@@ -9,8 +9,8 @@ import { E2E_BASE_URL, E2E_DEVICE_ID } from './helpers'
  *
  * Requires from the environment (the global-setup enforces these):
  * - A freshly built `dist-web/` (bun run build:web).
- * - A release `termul-server` binary at src-tauri/target/release/termul-server
- *   (cargo build --release --bin termul-server --features standalone-server).
+ * - A release `troupe-server` binary at src-tauri/target/release/troupe-server
+ *   (cargo build --release --bin troupe-server --features standalone-server).
  *
  * The suite is NOT self-starting: global-setup spawns one isolated server
  * (loopback, throwaway state dir) and seeds a deterministic fake ACP agent
@@ -30,10 +30,22 @@ const baseURL = E2E_BASE_URL
  * starts with the suite's fixed `deviceId`, so the device-scoped store keys a
  * spec seeds through the WS helpers are the ones the page reads. A spec that
  * needs a second device overrides `termul.deviceId` with an init script.
+ *
+ * That seeded id makes every context look like a device updated from 0.4.x,
+ * so contexts also start with the rename notice dismissed. Otherwise its
+ * toast stays up for the whole spec and covers the controls under it.
  */
 const storageState = {
   cookies: [],
-  origins: [{ origin: baseURL, localStorage: [{ name: 'termul.deviceId', value: E2E_DEVICE_ID }] }]
+  origins: [
+    {
+      origin: baseURL,
+      localStorage: [
+        { name: 'termul.deviceId', value: E2E_DEVICE_ID },
+        { name: 'termul.renameNotice', value: 'dismissed' }
+      ]
+    }
+  ]
 }
 
 export default defineConfig({

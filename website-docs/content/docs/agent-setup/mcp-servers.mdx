@@ -5,22 +5,46 @@ description: Give your agents extra tools by adding MCP servers, such as an issu
 
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs'
 
-An MCP server is a small program or web service that gives an agent extra tools, for example "list open issues" or "query the database". MCP stands for Model Context Protocol. You add a server once in Termul, and Termul offers it to every new agent chat.
+An MCP server is a small program or web service that gives an agent extra tools, for example "list open issues" or "query the database". MCP stands for Model Context Protocol. You add a server once in Troupe, and Troupe offers it to every new agent chat.
 
-## Add MCP servers
-
-You add servers by pasting JSON. Termul reads the `mcpServers` format that Claude Desktop and many MCP server READMEs use, so you can usually copy the config from the server's own docs.
+## Add an MCP server
 
 1. Open Settings with `Ctrl+,` (`Cmd+,` on macOS) and click **MCP Servers**.
 2. Click **Add server**.
-3. Paste the JSON in **MCP JSON**.
-4. Click **Save**.
+3. Pick where the server runs: **On the internet** or **On this computer**. The server's setup page or README usually tells you.
+4. Enter a **Name**. Troupe shows it in the server list and in chat tool calls.
+5. Fill in the fields for that kind of server, as the next two sections describe.
+6. Click **Add server**.
+
+### A server on the internet
+
+Enter the **Server URL** from the server's docs. It usually ends in `/mcp` or `/sse`.
+
+Leave **Sign-in** at **Browser sign-in, if the server asks** unless the docs give you an API key. When the server asks you to sign in, its row in the list offers **Connect**. If the docs do give you a key, pick **API key or token** and enter the value of the `Authorization` header, for example `Bearer lin_api_123`. Troupe sends header values exactly as you type them and saves them as plain text. It does not replace `$VARIABLE` in a header.
+
+Troupe picks the connection type from the URL. A URL that ends in `/sse` uses SSE, and any other URL uses Streamable HTTP. To change it, open **Advanced**. With **API key or token**, the **Headers** rows sit under **Sign-in**, and you add other headers there. With browser sign-in, add headers under **Advanced**.
+
+### A server on this computer
+
+Enter the whole command that starts the server in **Command**, for example `npx -y @acme/issues-mcp`. Put quotes around an argument that has spaces. The **Common** buttons start the command with `npx -y`, `uvx`, or `docker run -i --rm`.
+
+Add the variables the server reads under **Environment variables**. If the docs put a variable in front of the command, as in `GITHUB_TOKEN=$GITHUB_TOKEN npx -y @modelcontextprotocol/server-github`, Troupe moves it into the variable list for you.
+
+A row that has a name and no value shows **Needs a value.** Troupe does not save the server until you fill in the value or remove the row.
+
+## Paste JSON
+
+To add many servers at once, or to copy a config from a server's README, paste JSON instead. Troupe reads the `mcpServers` format that Claude Desktop and many MCP server READMEs use.
+
+1. Click **Add server**, then click **Import JSON instead**.
+2. Paste the JSON in **MCP JSON**.
+3. Click **Save**.
 
 ![The Add MCP servers dialog with three servers pasted in: issues, docs and metrics](/screenshots/agent-setup-mcp-add.png)
 
-You can paste many servers at once in an `mcpServers` block, or a single server object on its own. If one server in the block has a mistake, Termul adds the others and tells you which one failed.
+You can paste many servers at once in an `mcpServers` block, or a single server object on its own. If any server in the block has a mistake, Troupe adds none of them and lists each mistake, so you can fix the JSON and save again.
 
-There are three kinds of server:
+Each server in the JSON is one of three kinds:
 
 - **stdio**: a program that runs on your computer. Give its `command`, and optional `args` and `env`.
 
@@ -40,9 +64,11 @@ There are three kinds of server:
   { "mcpServers": { "metrics": { "type": "sse", "url": "https://metrics.example.com/sse" } } }
   ```
 
-If you leave out `type`, Termul treats a server with a `command` as stdio and a server with only a `url` as HTTP. Fields that Termul does not use are dropped.
+If you leave out `type`, Troupe treats a server with a `command` as stdio and a server with only a `url` as HTTP. Fields that Troupe does not use are dropped.
 
-<Callout type="warn">Termul saves `env` values and `headers` as plain text. Put a reference such as `$GITHUB_TOKEN` in the config instead of the token itself.</Callout>
+To edit a server as JSON, open its row menu, click **Edit**, and then click **Edit as JSON**.
+
+<Callout type="warn">Troupe saves `env` values and `headers` as plain text. In an `env` value, put a reference such as `$GITHUB_TOKEN` instead of the token itself. Header values are sent as written, so a reference does not work there.</Callout>
 
 ## Check that a server works
 
@@ -52,19 +78,19 @@ Each server has a row with a colored dot.
 
 | Dot | Meaning |
 | --- | --- |
-| Green | Termul reached the server. |
-| Red | Termul could not reach the server. Click the row's tools link to see the error. |
+| Green | Troupe reached the server. |
+| Red | Troupe could not reach the server. Click the row's tools link to see the error. |
 | Yellow | The server needs you to sign in. See [Sign in to a server](#sign-in-to-a-server). |
-| Gray | Termul has not tested the server yet. |
+| Gray | Troupe has not tested the server yet. |
 
 To test a server, click its refresh button. To see the tools a server offers, click **Show tools**, or the tool count, such as **2 tools**.
 
-When Termul tests a server, it replaces `$NAME` references in `env` with the values from the environment Termul runs in.
+When Troupe tests a server, it replaces `$NAME` references in `env` with the values from the environment Troupe runs in.
 
 Use the other buttons on the row to manage the server:
 
 - The switch turns the server on or off. Agents get only the servers that are on.
-- The pencil button opens the server's JSON for editing. Edit one server object here, without the `mcpServers` wrapper.
+- The pencil button opens the server in the same form you added it with. Click **Edit as JSON** to edit one server object instead, without the `mcpServers` wrapper.
 - The trash button deletes the server.
 
 ## Sign in to a server
@@ -73,9 +99,14 @@ Some HTTP and SSE servers need you to sign in with your account on that service.
 
 1. Click **Connect**.
 2. Sign in on the page that opens in your browser, and allow access.
-3. Go back to Termul. The button changes to **Disconnect**, and Termul tests the server again.
+3. Go back to Troupe. The button changes to **Disconnect**, and Troupe tests the server again.
 
-In the browser version, the sign-in page opens in a new window. If nothing opens, allow pop-ups for the Termul site and try again. You have five minutes to finish signing in.
+In the browser version, the sign-in page opens in a new window, and a **Finish signing in to** dialog shows the sign-in link. If nothing opens, click **Open**, or click **Copy** and open the link yourself. You have five minutes to finish signing in.
+
+- If your browser runs on the same machine as Troupe, signing in finishes by itself and the dialog closes.
+- If your browser runs on another device, for example a laptop or phone connected to troupe-server, it ends on a `127.0.0.1` address that fails to load or shows an error. Copy that full address from the address bar, paste it into **Paste the redirect address**, and click **Complete sign-in**.
+
+If the dialog says the address does not belong to this sign-in, paste the full address that starts with the one it shows. To stop, click **Dismiss**, then click **Connect** to start again.
 
 To remove the sign-in, click **Disconnect**.
 
@@ -85,13 +116,13 @@ Under your server list, the **MCP catalog** group lists the MCP servers in the o
 
 ### Keep the catalog up to date
 
-**Keep the catalog up to date** is on by default. Termul then downloads the official MCP Registry when it starts, checks it for changes every hour, and keeps the downloaded copy for the next start. The first download fetches the whole registry, which can take a minute or two, and later checks fetch only what changed. While it works, the status line shows its progress, then **Up to date.** If a check fails, the status line says why and when Termul tries again.
+**Keep the catalog up to date** is on by default. Troupe then downloads the official MCP Registry when it starts, checks it for changes every hour, and keeps the downloaded copy for the next start. The first download fetches the whole registry, which can take a minute or two, and later checks fetch only what changed. While it works, the status line shows its progress, then **Up to date.** If a check fails, the status line says why and when Troupe tries again.
 
 Turn the switch off to stop it. The status line then says **Sync is off. No catalog request leaves this host.** The catalog keeps the copy it already has.
 
-If the box says the catalog is the small sample bundled with this build, Termul hasn't downloaded the full registry yet. Turn on sync, or wait for the download to finish.
+If the box says the catalog is the small sample bundled with this build, Troupe hasn't downloaded the full registry yet. Turn on sync, or wait for the download to finish.
 
-<Callout>With termul-server, the server does the downloading, and the switch changes it for everyone who uses that server. In a shared live session or a view-only connection you can't change it, and Termul shows **Only the host can change catalog sync.**</Callout>
+<Callout>With troupe-server, the server does the downloading, and the switch changes it for everyone who uses that server. In a shared live session or a view-only connection you can't change it, and Troupe shows **Only the host can change catalog sync.**</Callout>
 
 ### Search and browse
 
@@ -105,25 +136,25 @@ Each server shows a state, and a short reason when it can't be installed as is:
 | --- | --- |
 | Installable | Nothing else is needed on this computer to run this server. |
 | Needs a runtime | Install the runtime named in the reason first, such as Node.js (npx), uv (uvx), Docker or the .NET SDK. |
-| Unsupported | Termul can't run this server. The reason says why. |
+| Unsupported | Troupe can't run this server. The reason says why. |
 | Source only | The registry lists only the source code, with no package or hosted URL to install. |
 
 Servers that the registry marks as deprecated have a **Deprecated** badge.
 
-Servers whose publisher lists a logo show it next to their name. A server with no logo, or whose logo can't load, shows the first letter of its name instead. Logos load whether or not sync is on. Only the Termul host downloads them from the publisher and keeps a copy for a few days, so a browser or phone connected to termul-server gets each logo from that server, never from the publisher's site.
+Servers whose publisher lists a logo show it next to their name. A server with no logo, or whose logo can't load, shows the first letter of its name instead. Logos load whether or not sync is on. Only the Troupe host downloads them from the publisher and keeps a copy for a few days, so a browser or phone connected to troupe-server gets each logo from that server, never from the publisher's site.
 
 ### Install a server from the catalog
 
 1. Click **Install** on an installable server.
-2. If the server needs settings, such as an API key, fill in the form and click **Review**. Termul hides the values of secret fields.
-3. Read the review. It shows the exact command and arguments, or the URL, that Termul will save, with each environment variable and header. Click **Approve** to install, or **Cancel** to save nothing.
-4. Termul adds the server to your list, turned on, and checks that it responds. If the server asks you to sign in, click **Sign in** to open its sign-in page in your browser.
+2. If the server needs settings, such as an API key, fill in the form and click **Review**. Troupe hides the values of secret fields.
+3. Read the review. It shows the exact command and arguments, or the URL, that Troupe will save, with each environment variable and header. Click **Approve** to install, or **Cancel** to save nothing.
+4. Troupe adds the server to your list, turned on, and checks that it responds. If the server asks you to sign in, click **Sign in** to open its sign-in page in your browser.
 
 A server you installed shows **Installed** in the catalog. **Install** stays off for servers that aren't installable, and on a connection that can only view. In the browser version, open a project first, because each project has its own list.
 
-If the review waits too long, or the server's details change before you approve, Termul saves nothing and offers **Start over**.
+If the review waits too long, or the server's details change before you approve, Troupe saves nothing and offers **Start over**.
 
-<Callout type="warn">Termul saves the values you enter, API keys included, as plain text with the server's settings.</Callout>
+<Callout type="warn">Troupe saves the values you enter, API keys included, as plain text with the server's settings.</Callout>
 
 ## Global and per-project servers
 
@@ -132,7 +163,7 @@ If the review waits too long, or the server's details change before you approve,
     The list in Settings is one list for the whole app. Every project uses the same servers.
   </Tab>
   <Tab value="Browser version">
-    Each project has its own list. Settings shows the list of the project that is open. Termul saves it in the project folder, in `.termul/mcp-servers.json`.
+    Each project has its own list. Settings shows the list of the project that is open. Troupe saves it in the project folder, in `.termul/mcp-servers.json`.
   </Tab>
 </Tabs>
 
@@ -140,4 +171,4 @@ If the review waits too long, or the server's details change before you approve,
 
 When you start a new chat, the chat box shows how many MCP servers the chat gets. Click that count to see each server's status and turn servers on or off. The switches there are the same switches as in Settings, so the change applies to later chats too.
 
-Termul always offers stdio servers. It offers HTTP and SSE servers only to agents that say they support them.
+Troupe always offers stdio servers. It offers HTTP and SSE servers only to agents that say they support them.

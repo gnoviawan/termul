@@ -181,6 +181,10 @@ pub(super) fn fold_counts(records: &mut [PersistedEventRecord]) -> FoldCounts {
 /// summary — the field is omitted instead.
 pub(crate) const MAX_SUMMARY_PATH_CHARS: usize = 4096;
 
+/// Most paths one file-change summary persists; a call that claims more
+/// keeps its first ones.
+pub(crate) const MAX_SUMMARY_PATHS: usize = 256;
+
 /// Tool kinds whose calls change files (the Changed files panel's domain).
 pub(crate) fn is_file_change_kind(kind: Option<&str>) -> bool {
     matches!(kind, Some("edit" | "delete" | "move"))
@@ -238,13 +242,51 @@ fn tool_event_path(tool: &serde_json::Map<String, Value>) -> Option<&str> {
         })
 }
 
-/// Add the bounded, path-only file-change summary (`locations: [{path}]`,
-/// `diffStat: {added, removed}`) to a reduced tool DTO when the gate admits
-/// the event: a `tool_call` whose `kind` is edit/delete/move, or a
-/// `tool_call_update` whose own `kind` is one of those OR that carries diff
-/// content. Fields are added only when derivable; a path that is longer than
-/// [`MAX_SUMMARY_PATH_CHARS`] is omitted. Diff text, titles, `rawInput`, and
-/// line numbers are never persisted — only the derived path and counts.
+/// Every path a file-changing tool event claims, mirroring the renderer's
+/// `toolCallChangedPaths`: [`tool_event_path`] first, then each `locations`
+/// entry (both ends of a move), then each diff item's `path` (a multi-file
+/// edit that lists its files only as diffs). Trimmed, deduped in order;
+/// a blank path or one longer than [`MAX_SUMMARY_PATH_CHARS`] is skipped, and
+/// at most [`MAX_SUMMARY_PATHS`] are kept.
+fn file_change_paths(tool: &serde_json::Map<String, Value>) -> Vec<&str> {
+    let items = |field: &str| {
+        tool.get(field)
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice)
+    };
+    let locations = items("locations").iter();
+    let diffs = items("content")
+        .iter()
+        .filter(|item| diff_stat::is_diff_item(item));
+    let mut paths: Vec<&str> = Vec::new();
+    let candidates = tool_event_path(tool)
+        .into_iter()
+        .chain(
+            locations
+                .chain(diffs)
+                .filter_map(|item| item.get("path").and_then(Value::as_str)),
+        )
+        .map(str::trim)
+        .filter(|path| !path.is_empty() && path.chars().count() <= MAX_SUMMARY_PATH_CHARS);
+    for path in candidates {
+        if paths.len() == MAX_SUMMARY_PATHS {
+            break;
+        }
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+/// Add the bounded, path-only file-change summary (`locations: [{path}, …]`
+/// from [`file_change_paths`], `diffStat: {added, removed}`) to a reduced
+/// tool DTO when the gate admits the event: a `tool_call` whose `kind` is
+/// edit/delete/move, or a `tool_call_update` whose own `kind` is one of those
+/// OR that carries diff content. Fields are added only when derivable; a path
+/// that is longer than [`MAX_SUMMARY_PATH_CHARS`] is omitted. Diff text,
+/// titles, `rawInput`, and line numbers are never persisted — only the derived
+/// paths and counts.
 fn add_file_change_summary(
     type_: &str,
     tool: &serde_json::Map<String, Value>,
@@ -267,13 +309,13 @@ fn add_file_change_summary(
         return;
     }
     let stat = diff_stat::content_diff_stat(tool.get("content"));
-    if let Some(path) =
-        tool_event_path(tool).filter(|path| path.chars().count() <= MAX_SUMMARY_PATH_CHARS)
-    {
-        reduced.insert(
-            "locations".to_string(),
-            serde_json::json!([{ "path": path }]),
-        );
+    let paths = file_change_paths(tool);
+    if !paths.is_empty() {
+        let locations = paths
+            .into_iter()
+            .map(|path| serde_json::json!({ "path": path }))
+            .collect();
+        reduced.insert("locations".to_string(), Value::Array(locations));
     }
     if let Some(counts) = stat {
         reduced.insert(
@@ -359,7 +401,13 @@ fn add_child_call_summary(
         let masked = crate::acp::manager::stderr_ring::redact_line(title);
         reduced.insert("title".to_string(), Value::String(masked));
     }
-    if reduced.contains_key("locations") {
+    // A file-change summary already claimed the call's paths: mask each one.
+    if let Some(Value::Array(locations)) = reduced.get_mut("locations") {
+        for location in locations {
+            if let Some(Value::String(path)) = location.get_mut("path") {
+                *path = crate::acp::manager::stderr_ring::redact_line(path);
+            }
+        }
         return;
     }
     if let Some(path) =
@@ -546,7 +594,11 @@ pub(crate) fn normalize_title(text: &str) -> String {
 }
 
 pub(super) fn derive_title(payload: &Value) -> String {
-    let text = user_prompt_text(payload).unwrap_or_else(|| "Untitled Chat".to_string());
+    // Tool pills become their labels in the title only: automation
+    // suggestions read `user_prompt_text` and must keep the instruction.
+    let text = user_prompt_text(payload)
+        .map(|text| tool_pill_labels(&text).unwrap_or(text))
+        .unwrap_or_else(|| "Untitled Chat".to_string());
     normalize_title(&text)
 }
 
@@ -575,6 +627,65 @@ pub fn user_prompt_text(payload: &Value) -> Option<String> {
             },
         )
         .map(|text| skills_framing_title(&text).unwrap_or(text))
+}
+
+/// The tool hints a composer tool pill sends, keyed to the pill's label. Must
+/// match `wireText()` in `src/renderer/lib/composer/termul-tools.ts`.
+const TOOL_PILL_LABELS: &[(&str, &str)] = &[
+    ("the browser tool", "Browser"),
+    ("the canvas tools", "Canvas"),
+    ("the automation tools", "Automations"),
+];
+
+/// How a tool pill's frame ends, current name first. 0.4.x hosts named their
+/// server `termul`, and chats persisted then still carry that frame.
+const TOOL_PILL_CLOSES: &[&str] = &[
+    " from the troupe MCP server)",
+    " from the termul MCP server)",
+];
+
+/// `text` with each `(Use <hint> from the troupe MCP server)` frame (or its
+/// 0.4.x `termul` twin) replaced by its pill label, an unknown hint dropped.
+/// `None` when there is no frame.
+fn tool_pill_labels(text: &str) -> Option<String> {
+    const OPEN: &str = "(Use ";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut found = false;
+    while let Some(start) = rest.find(OPEN) {
+        let after = &rest[start + OPEN.len()..];
+        let Some((end, close_len)) = TOOL_PILL_CLOSES
+            .iter()
+            .filter_map(|close| after.find(close).map(|end| (end, close.len())))
+            .min()
+            .filter(|(end, _)| !after[..*end].contains(['(', ')', '\n']))
+        else {
+            out.push_str(&rest[..start + OPEN.len()]);
+            rest = after;
+            continue;
+        };
+        found = true;
+        out.push_str(&rest[..start]);
+        if let Some((_, label)) = TOOL_PILL_LABELS
+            .iter()
+            .find(|(hint, _)| *hint == &after[..end])
+        {
+            out.push_str(&format!(" {label} "));
+        }
+        rest = &after[end + close_len..];
+    }
+    if !found {
+        return None;
+    }
+    out.push_str(rest);
+    Some(
+        out.lines()
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string(),
+    )
 }
 
 fn skills_framing_title(text: &str) -> Option<String> {

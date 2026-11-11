@@ -28,8 +28,8 @@
 //! [`CanvasPersistence::open`] evicts the least recently active one through
 //! [`CanvasPersistence::close`] before it makes room for another.
 //!
-//! A mount also remembers what Termul last read from or wrote to its file,
-//! so a change on disk is told apart from Termul's own write and never
+//! A mount also remembers what Troupe last read from or wrote to its file,
+//! so a change on disk is told apart from Troupe's own write and never
 //! overwritten unseen ([`disk`], AD-27), and it counts timed-out calls to
 //! notice a dead editor and remount it ([`crash`]).
 //!
@@ -232,9 +232,9 @@ struct MountState {
     lifecycle: Lifecycle,
     activity: Activity,
     link: Link,
-    /// The file as Termul last read or wrote it; `None` before the first
+    /// The file as Troupe last read or wrote it; `None` before the first
     /// read. A write is checked against it, and a watcher event whose file
-    /// still matches it is Termul's own write.
+    /// still matches it is Troupe's own write.
     disk: Option<Expected>,
     /// Consecutive stalls (calls that timed out) on this ready mount.
     timeouts: u32,
@@ -639,7 +639,7 @@ impl CanvasPersistence {
     /// `Ok`. A failed write keeps the previous saved version and reports
     /// `save_error` in the view.
     ///
-    /// The write only replaces the file Termul last read or wrote (AD-27):
+    /// The write only replaces the file Troupe last read or wrote (AD-27):
     /// a file that changed on disk since is not overwritten, and the view
     /// comes back with the conflict instead. Nothing is written while a
     /// conflict is open.
