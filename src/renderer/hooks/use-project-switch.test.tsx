@@ -128,6 +128,20 @@ describe('useProjectSwitch (client-only)', () => {
     expect(lifetime.retainedByProject.p2).toEqual(['dst'])
   })
 
+  it('does not resolve the restore onto a discovered continuation', () => {
+    useAcpStore.setState({
+      sessionIndex: [
+        indexEntry('src', 'p2', 9),
+        { ...indexEntry('mirror', 'p2', 5), continuedFrom: 'src', discovered: true }
+      ]
+    })
+    const { result } = renderHook(() => useProjectSwitch('test'))
+
+    result.current.switchTo('p2')
+
+    expect(useAgentChatLifetimeStore.getState().focusSessionByProject.p2).toBe('src')
+  })
+
   it('leaves a chat the user already had open in the target project to win', () => {
     useAcpStore.setState({ sessionIndex: [indexEntry('newest', 'p2', 9)] })
     useAgentChatLifetimeStore.getState().retainProjectChats('p2', ['kept'])

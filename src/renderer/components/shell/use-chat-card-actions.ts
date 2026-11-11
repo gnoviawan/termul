@@ -4,7 +4,7 @@ import type { ProjectChatEntry } from '@/components/sidebar/project-chat-row'
 import { clipboardApi, openerApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { openAgentChatPlaced } from '@/lib/open-agent-chat'
-import { projectScopedMembers, sessionChainIndex } from '@/lib/session-chain'
+import { conversationDeleteIds } from '@/lib/session-chain'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { useAcpStore } from '@/stores/acp-store'
 import { liveSwitchSources } from '@/stores/acp-store/shared-state'
@@ -74,11 +74,7 @@ export function useChatCardActions(projectId: string): ChatCardActions {
   const onDelete = useCallback(
     (entry: ProjectChatEntry) => {
       const { sessionIndex } = useAcpStore.getState()
-      const memberIds = new Set(projectScopedMembers(sessionChainIndex(sessionIndex), entry.id))
-      for (const [targetId, link] of liveSwitchSources) {
-        if (memberIds.has(link.sourceId)) memberIds.add(targetId)
-      }
-      for (const memberId of memberIds) {
+      for (const memberId of conversationDeleteIds(sessionIndex, entry.id, liveSwitchSources)) {
         void deleteHistorySession(memberId).catch((error: unknown) => {
           warnFailure('delete', error)
           toast.error('Could not delete that chat. Try again.')

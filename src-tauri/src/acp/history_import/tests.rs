@@ -285,3 +285,38 @@ async fn import_carries_continued_from_edge() {
     assert_eq!(persistence.metadata("legacy-src").unwrap().continued_from, None);
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// Legacy `switches` arrays are backfilled into chain edges only once the
+/// renderer has finished transferring its legacy history: a backfill over a
+/// partial store would write its one-time marker and miss the later saves.
+#[tokio::test]
+async fn chain_edge_backfill_waits_for_the_legacy_transfer() {
+    let (root, persistence, chat_history) = setup("backfill-wait").await;
+    let cwd = root.join("cwd").to_string_lossy().into_owned();
+    let mut source = legacy_payload("legacy-src", &cwd, "closed", turn_messages());
+    source["switches"] = json!([{ "newSessionId": "legacy-dst", "timestamp": 5 }]);
+    chat_history.save("legacy-src", source).unwrap();
+    chat_history
+        .save(
+            "legacy-dst",
+            legacy_payload("legacy-dst", &cwd, "closed", turn_messages()),
+        )
+        .unwrap();
+
+    assert_eq!(import_chat_history(&persistence, &chat_history).await, 2);
+    assert_eq!(persistence.metadata("legacy-dst").unwrap().continued_from, None);
+    assert!(!persistence.root().join(CHAIN_EDGE_BACKFILL_FILE).exists());
+
+    chat_history.mark_legacy_import_complete().unwrap();
+    assert_eq!(import_chat_history(&persistence, &chat_history).await, 0);
+    assert_eq!(
+        persistence
+            .metadata("legacy-dst")
+            .unwrap()
+            .continued_from
+            .as_deref(),
+        Some("legacy-src")
+    );
+    assert!(persistence.root().join(CHAIN_EDGE_BACKFILL_FILE).exists());
+    let _ = std::fs::remove_dir_all(root);
+}

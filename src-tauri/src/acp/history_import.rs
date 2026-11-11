@@ -75,7 +75,7 @@ pub async fn import_chat_history(
     chat_history: &Arc<ChatHistoryStore>,
 ) -> usize {
     let mut ledger = load_imported(persistence);
-    let (entries, _) = chat_history.list();
+    let (entries, legacy_transfer_complete) = chat_history.list();
     let mut imported = 0usize;
     for entry in &entries {
         // Skip live catalog members AND anything imported before (deleted or
@@ -100,7 +100,12 @@ pub async fn import_chat_history(
         persist_imported(persistence, &ledger);
         log::info!("[acp-history] legacy import finished imported={imported}");
     }
-    backfill_continued_from(persistence, chat_history, &entries, &ledger).await;
+    // The renderer copies its legacy history in one save at a time and marks
+    // the transfer complete last: a backfill before that would write its
+    // marker over a partial store and never see the later switch arrays.
+    if legacy_transfer_complete {
+        backfill_continued_from(persistence, chat_history, &entries, &ledger).await;
+    }
     imported
 }
 

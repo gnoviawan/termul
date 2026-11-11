@@ -3,8 +3,9 @@ import { useMemo, useRef, useState } from 'react'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import type { ProjectChatEntry } from '@/components/sidebar/project-chat-row'
 import { SidebarSearchField } from '@/components/sidebar/sidebar-search-field'
-import { projectScopedMembers, sessionChainIndex } from '@/lib/session-chain'
+import { conversationDeleteIds } from '@/lib/session-chain'
 import { useAcpStore } from '@/stores/acp-store'
+import { liveSwitchSources } from '@/stores/acp-store/shared-state'
 import { useShellLayoutStore } from '@/stores/shell-layout-store'
 import { findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
@@ -67,6 +68,12 @@ export function ChatsList({ project }: ChatsListProps): React.JSX.Element {
 
   // Delete is irreversible: confirm first.
   const [deleteConfirm, setDeleteConfirm] = useState<ProjectChatEntry | null>(null)
+  // The open dialog's chat gained or lost sessions since it opened.
+  const [deleteChanged, setDeleteChanged] = useState(false)
+  const requestDelete = (entry: ProjectChatEntry | null): void => {
+    setDeleteChanged(false)
+    setDeleteConfirm(entry)
+  }
 
   const cardButton = (index: number): HTMLElement | null =>
     scrollRef.current?.querySelector<HTMLElement>(`[data-chat-card-index="${index}"]`) ?? null
@@ -135,7 +142,7 @@ export function ChatsList({ project }: ChatsListProps): React.JSX.Element {
                         (card.entry.chainIds?.includes(activeChatSessionId) ?? false))
                     }
                     actions={cardActions}
-                    onRequestDelete={setDeleteConfirm}
+                    onRequestDelete={requestDelete}
                   />
                 </div>
               )
@@ -148,7 +155,11 @@ export function ChatsList({ project }: ChatsListProps): React.JSX.Element {
         isOpen={deleteConfirm !== null}
         title="Delete chat"
         message={
-          deleteConfirm ? `Delete “${deleteConfirm.title}”? This action cannot be undone.` : ''
+          deleteConfirm
+            ? deleteChanged
+              ? `“${deleteConfirm.title}” changed while this dialog was open. Delete all ${(deleteConfirm.chainIds ?? [deleteConfirm.id]).length} of its sessions? This action cannot be undone.`
+              : `Delete “${deleteConfirm.title}”? This action cannot be undone.`
+            : ''
         }
         confirmLabel="Delete"
         cancelLabel="Cancel"
@@ -156,22 +167,24 @@ export function ChatsList({ project }: ChatsListProps): React.JSX.Element {
         onConfirm={() => {
           if (!deleteConfirm) return
           // A switch completing after this dialog opened extends the chain:
-          // re-resolve membership, and when it changed since the snapshot the
-          // user approved, refresh the snapshot and require a new
-          // confirmation rather than silently widening the delete.
+          // re-resolve membership with the same rule `onDelete` applies, and
+          // when it changed since the snapshot the user approved, refresh the
+          // snapshot and require a new confirmation rather than silently
+          // widening the delete.
           const { sessionIndex } = useAcpStore.getState()
-          const fresh = projectScopedMembers(sessionChainIndex(sessionIndex), deleteConfirm.id)
+          const fresh = conversationDeleteIds(sessionIndex, deleteConfirm.id, liveSwitchSources)
           const captured = deleteConfirm.chainIds ?? [deleteConfirm.id]
           const changed =
             fresh.length !== captured.length || fresh.some((id) => !captured.includes(id))
           if (changed) {
+            setDeleteChanged(true)
             setDeleteConfirm({ ...deleteConfirm, chainIds: fresh })
             return
           }
-          setDeleteConfirm(null)
+          requestDelete(null)
           onDelete(deleteConfirm)
         }}
-        onCancel={() => setDeleteConfirm(null)}
+        onCancel={() => requestDelete(null)}
       />
     </div>
   )

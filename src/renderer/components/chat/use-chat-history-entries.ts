@@ -13,8 +13,8 @@ import {
 import { activeWorktreeOf } from '@/lib/active-worktree'
 import { logFrontendError } from '@/lib/log-api'
 import {
+  conversationDeleteIds,
   foldEntries,
-  projectScopedMembers,
   sessionChainIndex,
   UNTITLED_PATTERN
 } from '@/lib/session-chain'
@@ -153,26 +153,29 @@ export function useChatHistoryEntries({
   // reach them. Display membership derives from the SCOPED index: a chain
   // whose members cross a scope boundary degrades to per-scope rows rather
   // than hiding a chat.
-  const scopedChain = useMemo(() => sessionChainIndex(scopedIndex), [scopedIndex])
+  // Discovered mirrors leave before the fold: a chain must never fold into a
+  // row the list then hides.
+  const scopedChain = useMemo(
+    () => sessionChainIndex(scopedIndex.filter((e) => e.discovered !== true)),
+    [scopedIndex]
+  )
   const foldedScopedIndex = useMemo(() => foldEntries(scopedChain), [scopedChain])
 
   const mergedEntries = useMemo(() => {
-    const entries: ChatHistorySidebarEntry[] = foldedScopedIndex
-      .filter((e) => e.discovered !== true)
-      .map((e) => ({
-        id: e.id,
-        title: e.title,
-        messageCount: e.messageCount,
-        status: e.status,
-        discovered: false,
-        agentId: e.agentId,
-        agentConfigId: e.agentConfigId,
-        agents: e.agents,
-        chainIds: e.chainIds,
-        lastActivityAt: e.lastActivityAt,
-        createdAt: e.createdAt,
-        canOpen: true
-      }))
+    const entries: ChatHistorySidebarEntry[] = foldedScopedIndex.map((e) => ({
+      id: e.id,
+      title: e.title,
+      messageCount: e.messageCount,
+      status: e.status,
+      discovered: false,
+      agentId: e.agentId,
+      agentConfigId: e.agentConfigId,
+      agents: e.agents,
+      chainIds: e.chainIds,
+      lastActivityAt: e.lastActivityAt,
+      createdAt: e.createdAt,
+      canOpen: true
+    }))
 
     if (!extraEntries || extraEntries.length === 0) return entries
     // An extra entry the scoped history already lists appears once, as
@@ -339,11 +342,7 @@ export function useChatHistoryEntries({
       // malformed cross-project edge from deleting another project's
       // transcript; in-flight switch targets of a member are swept too.
       const { sessionIndex: fullIndex } = useAcpStore.getState()
-      const memberIds = new Set(projectScopedMembers(sessionChainIndex(fullIndex), id))
-      for (const [targetId, link] of liveSwitchSources) {
-        if (memberIds.has(link.sourceId)) memberIds.add(targetId)
-      }
-      for (const memberId of memberIds) {
+      for (const memberId of conversationDeleteIds(fullIndex, id, liveSwitchSources)) {
         void deleteHistorySession(memberId).catch(() => {
           toast.error('Could not delete that chat. Try again.')
           void logFrontendError({

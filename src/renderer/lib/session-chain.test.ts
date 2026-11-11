@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionIndexEntry } from './acp-history-persistence'
-import { chainIds, foldSessionChains, liveSessionIdOf } from './session-chain'
+import {
+  chainIds,
+  conversationDeleteIds,
+  foldSessionChains,
+  liveSessionIdOf,
+  projectScopedMembers
+} from './session-chain'
 
 function entry(id: string, over: Partial<SessionIndexEntry> = {}): SessionIndexEntry {
   return {
@@ -204,5 +210,47 @@ describe('chainIds', () => {
   it('walks partial membership when a link is missing', () => {
     const entries = [entry('b', { continuedFrom: 'gone' }), entry('c', { continuedFrom: 'b' })]
     expect(chainIds(entries, 'c')).toEqual(['b', 'c'])
+  })
+})
+
+describe('projectScopedMembers', () => {
+  it('does not bridge an edge through another project back into this one', () => {
+    // a (p1) → b (p2) → c (p1): the p1 list shows a and c as separate chats.
+    const entries = [
+      entry('a', { createdAt: 100 }),
+      entry('b', { continuedFrom: 'a', createdAt: 200, projectId: 'p2' }),
+      entry('c', { continuedFrom: 'b', createdAt: 300 })
+    ]
+    expect(projectScopedMembers(entries, 'a')).toEqual(['a'])
+    expect(projectScopedMembers(entries, 'c')).toEqual(['c'])
+    expect(projectScopedMembers(entries, 'b')).toEqual(['b'])
+  })
+
+  it('keeps same-project members in other worktrees', () => {
+    const entries = [
+      entry('a', { createdAt: 100, cwd: '/repo/.worktrees/x' }),
+      entry('b', { continuedFrom: 'a', createdAt: 200 })
+    ]
+    expect(projectScopedMembers(entries, 'b')).toEqual(['a', 'b'])
+  })
+
+  it('never claims a discovered mirror', () => {
+    const entries = [
+      entry('a', { createdAt: 100 }),
+      entry('b', { continuedFrom: 'a', createdAt: 200, discovered: true })
+    ]
+    expect(projectScopedMembers(entries, 'a')).toEqual(['a'])
+  })
+})
+
+describe('conversationDeleteIds', () => {
+  it('adds the in-flight switch target of a member', () => {
+    const entries = [entry('a', { createdAt: 100 }), entry('b', { continuedFrom: 'a' })]
+    const links = new Map([
+      ['pending', { sourceId: 'b' }],
+      ['b', { sourceId: 'a' }],
+      ['elsewhere', { sourceId: 'other' }]
+    ])
+    expect(conversationDeleteIds(entries, 'b', links)).toEqual(['a', 'b', 'pending'])
   })
 })

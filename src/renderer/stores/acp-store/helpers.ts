@@ -2157,7 +2157,8 @@ export function appendOrderedAgents(
  * projection. Idempotent: an already-set edge wins (the FIRST durable
  * switch is authoritative; a corrupted or replayed later value must not
  * repoint the chain). A missing target entry is a no-op — the fold reads
- * only what exists, and the host index is the fallback authority.
+ * only what exists, and the host index is the fallback authority. A source
+ * in another project is refused, matching the host's `note_continued_from`.
  */
 export function stampSwitchContinuation(
   state: Pick<AcpState, 'sessionIndex'>,
@@ -2167,6 +2168,10 @@ export function stampSwitchContinuation(
   if (targetSessionId === sourceSessionId) return state.sessionIndex
   const existing = state.sessionIndex.find((e) => e.id === targetSessionId)
   if (!existing || existing.continuedFrom !== undefined) return state.sessionIndex
+  // A switch creates its target in the source's project; an edge naming a
+  // session elsewhere (a stray marker) would fold another project's chat.
+  const source = state.sessionIndex.find((e) => e.id === sourceSessionId)
+  if (source !== undefined && source.projectId !== existing.projectId) return state.sessionIndex
   const entry: SessionIndexEntry = { ...existing, continuedFrom: sourceSessionId }
   return [entry, ...state.sessionIndex.filter((e) => e.id !== targetSessionId)]
 }

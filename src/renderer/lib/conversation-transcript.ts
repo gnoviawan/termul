@@ -4,7 +4,7 @@ import { acpHistoryApi } from '@/lib/acp-history-api'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { conversationEnvelope, type TranscriptGap } from '@/lib/conversation-envelope'
 import { logFrontendError } from '@/lib/log-api'
-import { projectScopedMembers, sessionChainIndex } from '@/lib/session-chain'
+import { projectScopedMembers } from '@/lib/session-chain'
 import { type ChatMessage, useAcpStore } from '@/stores/acp-store'
 import { SWITCH_SPLICE_ID_PREFIX } from '@/stores/acp-store/helpers'
 
@@ -39,7 +39,9 @@ type AcpSnapshot = ReturnType<typeof useAcpStore.getState>
  */
 function ownTurns(state: AcpSnapshot, sessionId: string): Transcript | null {
   const loaded = state.messages[sessionId]
-  if (!loaded || state.sessions[sessionId]?.replaying) return null
+  // An empty live list (a cleared or failed reopen) is not the member's
+  // history: let the durable read supply it.
+  if (!loaded || loaded.length === 0 || state.sessions[sessionId]?.replaying) return null
   return {
     messages: loaded.filter((m) => !m.id.startsWith(SWITCH_SPLICE_ID_PREFIX)),
     toolCalls: (state.toolCalls[sessionId] ?? []).filter(
@@ -50,21 +52,27 @@ function ownTurns(state: AcpSnapshot, sessionId: string): Transcript | null {
 
 export async function readConversationTranscript(sessionId: string): Promise<Transcript | null> {
   const state = useAcpStore.getState()
-  const ix = sessionChainIndex(state.sessionIndex)
   // The mention picker folds a switch chain into its terminal row, so a
   // terminal-only read would silently drop every pre-switch turn. Project
   // scoping keeps a malformed cross-project edge from leaking another
   // project's transcript into this conversation.
-  const memberIds = projectScopedMembers(ix, sessionId)
+  const memberIds = projectScopedMembers(state.sessionIndex, sessionId)
   const loaded = state.messages[sessionId]
   if (loaded && !state.sessions[sessionId]?.replaying) {
     // Use the loaded transcript only when its splice provably covers every
     // ancestor — a marker count alone can pass while the band itself is
     // missing (a failed reload leaves own turns with the switch recorded).
+    // A live switch re-splices the previous target's list, so an earlier
+    // hop's band nests (`switch-splice:B:switch-splice:A:<id>`).
     const coversAncestors = memberIds
       .filter((memberId) => memberId !== sessionId)
       .every((ancestorId) =>
-        loaded.some((m) => m.id.startsWith(`${SWITCH_SPLICE_ID_PREFIX}${ancestorId}:`))
+        loaded.some((m) =>
+          m.id
+            .split(SWITCH_SPLICE_ID_PREFIX)
+            .slice(1)
+            .some((band) => band.startsWith(`${ancestorId}:`))
+        )
       )
     if (coversAncestors) return { messages: loaded, toolCalls: state.toolCalls[sessionId] ?? [] }
   } else if (memberIds.length === 1) {
@@ -72,13 +80,20 @@ export async function readConversationTranscript(sessionId: string): Promise<Tra
   }
   // Per member, prefer own-turns from the live store (freshest, band-free);
   // the durable payload is the fallback and the only source for cold members.
+  // A member whose durable read rejects counts as unreadable: the others'
+  // turns still go out, marked partial.
   const parts = await Promise.all(
-    memberIds.map((memberId) => ownTurns(state, memberId) ?? readPersistedTranscript(memberId))
+    memberIds.map(
+      (memberId) => ownTurns(state, memberId) ?? readPersistedTranscript(memberId).catch(() => null)
+    )
   )
   if (parts.every((part) => part === null)) return null
   // Each member's payload restarts its seq space at 1 — re-stamp into
   // increasing bands so the context formatter's seq-first sort preserves
-  // chain order instead of interleaving same-seqd turns.
+  // chain order instead of interleaving same-seqd turns. Each band spans the
+  // member's highest seq actually read, so a stale or missing index cursor
+  // cannot make the next member's records sort before this one's.
+  const lastSeqById = new Map(state.sessionIndex.map((entry) => [entry.id, entry.lastSeq ?? 0]))
   const messages: ChatMessage[] = []
   const toolCalls: ToolCall[] = []
   let offset = 0
@@ -100,7 +115,11 @@ export async function readConversationTranscript(sessionId: string): Promise<Tra
     for (const call of part.toolCalls) {
       toolCalls.push({ ...call, seq: offset + (call.seq ?? 0) })
     }
-    offset += ix.byId.get(memberId)?.lastSeq ?? Math.max(part.messages.length, 1)
+    let span = Math.max(lastSeqById.get(memberId) ?? 0, 1)
+    for (const record of [...part.messages, ...part.toolCalls]) {
+      span = Math.max(span, record.seq ?? 0)
+    }
+    offset += span
   })
   return { messages, toolCalls, ...(partial ? { partial: true } : {}) }
 }

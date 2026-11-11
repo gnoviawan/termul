@@ -140,10 +140,76 @@ describe('readConversationTranscript', () => {
       messages: { src: [message('own-1'), message('switch-splice:older:x', -9)] }
     })
     mockHistoryApi.getTail.mockImplementation((id: string) =>
-      Promise.resolve(id === 'dst' ? payloadOf(['dst-1']) : null)
+      Promise.resolve(id === 'dst' ? payloadOf(['dst-1']) : payloadOf(['persisted-src-1']))
     )
     const transcript = await readConversationTranscript('dst')
     expect(transcript?.messages.map((m) => m.id)).toEqual(['own-1', 'dst-1'])
+  })
+
+  it('reads the durable payload of a member whose live list is empty', async () => {
+    useAcpStore.setState({
+      sessionIndex: [entry('src'), entry('dst', 'src')],
+      messages: { src: [] }
+    })
+    mockHistoryApi.getTail.mockImplementation((id: string) =>
+      Promise.resolve(payloadOf([`${id}-1`]))
+    )
+    const transcript = await readConversationTranscript('dst')
+    expect(transcript?.messages.map((m) => m.id)).toEqual(['src-1', 'dst-1'])
+  })
+
+  it('keeps the readable members when one member read rejects', async () => {
+    useAcpStore.setState({
+      sessionIndex: [entry('src'), entry('dst', 'src')]
+    })
+    mockHistoryApi.getTail.mockImplementation((id: string) =>
+      id === 'src' ? Promise.reject(new Error('io')) : Promise.resolve(payloadOf(['dst-1']))
+    )
+    const transcript = await readConversationTranscript('dst')
+    expect(transcript?.partial).toBe(true)
+    expect(transcript?.messages.map((m) => m.id)).toEqual(['dst-1'])
+  })
+
+  it('sizes each seq band from the records read when the index cursor is stale', async () => {
+    useAcpStore.setState({
+      sessionIndex: [entry('src', undefined, 'p1', 0), entry('dst', 'src', 'p1', 0)]
+    })
+    mockHistoryApi.getTail.mockImplementation((id: string) =>
+      Promise.resolve(id === 'src' ? payloadOf(['s1', 's2'], [5, 9]) : payloadOf(['d1'], [1]))
+    )
+    const transcript = await readConversationTranscript('dst')
+    expect(transcript?.messages.map((m) => m.seq)).toEqual([5, 9, 10])
+  })
+
+  it('treats nested splice bands of a multi-hop live chain as covered', async () => {
+    useAcpStore.setState({
+      sessionIndex: [entry('src'), entry('mid', 'src'), entry('dst', 'mid')],
+      messages: {
+        dst: [
+          message('switch-splice:mid:switch-splice:src:s1', -90),
+          message('switch-splice:mid:m1', -50),
+          message('dst-1')
+        ]
+      },
+      toolCalls: { dst: [] }
+    })
+    const transcript = await readConversationTranscript('dst')
+    expect(mockHistoryApi.getTail).not.toHaveBeenCalled()
+    expect(transcript?.messages).toHaveLength(3)
+    expect(transcript?.partial).toBeUndefined()
+  })
+
+  it('does not bridge an edge through another project back into this one', async () => {
+    // a (p1) → b (p2) → c (p1): the p1 list shows a and c as separate chats.
+    useAcpStore.setState({
+      sessionIndex: [entry('a', undefined, 'p1'), entry('b', 'a', 'p2'), entry('c', 'b', 'p1')]
+    })
+    mockHistoryApi.getTail.mockImplementation((id: string) =>
+      Promise.resolve(payloadOf([`${id}-1`]))
+    )
+    const transcript = await readConversationTranscript('c')
+    expect(mockHistoryApi.getTail).toHaveBeenCalledTimes(1)
+    expect(transcript?.messages.map((m) => m.id)).toEqual(['c-1'])
   })
 
   it('does not read a chain member in another project', async () => {

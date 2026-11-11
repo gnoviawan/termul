@@ -34,16 +34,18 @@ function requestMostRecentChat(projectId: string): string | null {
   ) {
     return null
   }
-  const index = useAcpStore.getState().sessionIndex
+  const projectChats = useAcpStore
+    .getState()
+    .sessionIndex.filter((entry) => entry.projectId === projectId && !entry.discovered)
   let latest: { id: string; lastActivityAt: number } | null = null
-  for (const entry of index) {
-    if (entry.projectId !== projectId || entry.discovered) continue
+  for (const entry of projectChats) {
     if (!latest || entry.lastActivityAt > latest.lastActivityAt) latest = entry
   }
   if (!latest) return null
   // The raw index still lists a switch chain's absorbed sources; retain and
-  // focus the terminal (live) session of whatever the newest entry continues.
-  const liveId = liveSessionIdOf(index, latest.id)
+  // focus the terminal (live) session of whatever the newest entry continues,
+  // never a discovered mirror or another project's session.
+  const liveId = liveSessionIdOf(projectChats, latest.id)
   lifetime.retainProjectChats(projectId, [liveId])
   lifetime.requestFocus(projectId, liveId)
   return liveId

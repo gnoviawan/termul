@@ -138,16 +138,41 @@ export function membersOf(ix: SessionChainIndex, id: string): string[] {
 }
 
 /**
- * Chain membership restricted to `id`'s project. A malformed or legacy
- * `continuedFrom` edge can name a session in another project; destructive
- * actions (delete) and cross-boundary reads (mention context) must not
- * follow it. `id` itself is always included.
+ * Chain membership of `id` among its own project's Troupe-created sessions,
+ * oldest → newest. The walk runs over that project's entries only, so an edge
+ * into another project is never followed and cannot bridge back: in an
+ * A → B → C chain spanning projects 1 → 2 → 1, A and C stay separate, exactly
+ * as the project-scoped history list shows them. Destructive actions (delete)
+ * and cross-boundary reads (mention context) resolve membership here.
  */
-export function projectScopedMembers(ix: SessionChainIndex, id: string): string[] {
-  const projectId = ix.byId.get(id)?.projectId
-  return membersOf(ix, id).filter(
-    (memberId) => memberId === id || ix.byId.get(memberId)?.projectId === projectId
+export function projectScopedMembers(entries: readonly SessionIndexEntry[], id: string): string[] {
+  const projectId = entries.find((entry) => entry.id === id)?.projectId
+  const scoped = entries.filter(
+    (entry) => entry.projectId === projectId && entry.discovered !== true
   )
+  return membersOf(sessionChainIndex(scoped), id)
+}
+
+/**
+ * Every session deleting `id`'s conversation removes: its project-scoped
+ * chain plus the target of any in-flight switch out of a member, whose index
+ * edge has not landed yet. The confirm gate and both delete paths share it so
+ * the set the user approves is the set that gets deleted.
+ */
+export function conversationDeleteIds(
+  entries: readonly SessionIndexEntry[],
+  id: string,
+  liveSwitchLinks: Iterable<readonly [string, { sourceId: string }]>
+): string[] {
+  const members = projectScopedMembers(entries, id)
+  const memberSet = new Set(members)
+  for (const [targetId, link] of liveSwitchLinks) {
+    if (memberSet.has(link.sourceId) && !memberSet.has(targetId)) {
+      memberSet.add(targetId)
+      members.push(targetId)
+    }
+  }
+  return members
 }
 
 /**

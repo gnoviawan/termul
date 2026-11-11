@@ -43,7 +43,7 @@ export function projectConversations({
       title: conversationTitleText(e.title) || 'Untitled chat',
       agentName: e.agentConfigId ? (agentNames.get(e.agentConfigId) ?? null) : null,
       lastActivityAt: e.lastActivityAt,
-      running: runningIds.has(e.id)
+      running: (e.chainIds ?? [e.id]).some((memberId) => runningIds.has(memberId))
     }))
 }
 

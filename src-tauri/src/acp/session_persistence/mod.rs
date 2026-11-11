@@ -1102,18 +1102,33 @@ impl SessionPersistence {
     /// session writer snapshots, so a later writer flush cannot lose it.
     /// Idempotent: a same-value stamp is a no-op; an unknown session is
     /// `SessionNotFound`; a mismatched prior value wins (a session has at
-    /// most one switch-source).
+    /// most one switch-source). An edge outside the session's project (see
+    /// `continuation_in_scope`) is refused as a logged no-op.
     pub async fn note_continued_from(&self, session_id: &str, continued_from: &str) -> Result<()> {
-        let entry = self
-            .inner
-            .catalog
-            .lock()
-            .get(session_id)
-            .cloned()
-            .ok_or(SessionPersistenceError::SessionNotFound)?;
+        // `reopen_writer` snapshots the catalog metadata and installs a new
+        // entry under this lock; stamping under it too means a reopen either
+        // runs first (the stamp lands on its new entry) or copies the stamp.
+        let registration = self.inner.registration_lock.lock().await;
+        let (entry, source) = {
+            let catalog = self.inner.catalog.lock();
+            let entry = catalog
+                .get(session_id)
+                .cloned()
+                .ok_or(SessionPersistenceError::SessionNotFound)?;
+            (entry, catalog.get(continued_from).cloned())
+        };
+        let source_project = source.map(|source| source.lock().project_id.clone());
         {
             let mut metadata = entry.lock();
             if metadata.continued_from.as_deref() == Some(continued_from) {
+                return Ok(());
+            }
+            if !continuation_in_scope(&metadata, continued_from, source_project.as_ref()) {
+                log::warn!(
+                    "[acp-history] continued_from refused session_id={} source={}: not a same-project continuation",
+                    crate::logging::redact_session_id(session_id),
+                    crate::logging::redact_session_id(continued_from)
+                );
                 return Ok(());
             }
             if let Some(prior) = metadata.continued_from.as_deref() {
@@ -1127,6 +1142,7 @@ impl SessionPersistence {
             }
             metadata.continued_from = Some(continued_from.to_string());
         }
+        drop(registration);
         // Route the metadata write through the session writer when one is
         // installed: it is the one thread that writes this session's
         // metadata, so no stale snapshot can overtake the stamp. The Flush
@@ -2251,8 +2267,11 @@ impl SessionPersistence {
         let mut continued_from_stamped = 0usize;
         if migrate_continued_from {
             for (target, source) in &continued_from_edges {
+                let source_project = recovered.get(source).map(|source| source.project_id.clone());
                 if let Some(metadata) = recovered.get_mut(target) {
-                    if metadata.continued_from.is_none() {
+                    if metadata.continued_from.is_none()
+                        && continuation_in_scope(metadata, source, source_project.as_ref())
+                    {
                         metadata.continued_from = Some(source.clone());
                         if let Err(error) = self.persist_metadata(metadata) {
                             continued_from_incomplete = true;
@@ -2562,6 +2581,21 @@ fn open_turn_step<'a>(
         "agent_switch" => None,
         _ => pending,
     }
+}
+
+/// A switch creates its target in the source's project, so a continuation
+/// edge only ever joins two sessions of one project. Any other edge (a WS
+/// caller naming an unrelated `newSessionId`, a stray marker) would fold, and
+/// a chat delete would then remove, another project's history. A source the
+/// catalog does not know cannot be checked; the fold ignores edges to absent
+/// sessions, so it is allowed.
+fn continuation_in_scope(
+    target: &SessionMetadata,
+    source_id: &str,
+    source_project: Option<&Option<String>>,
+) -> bool {
+    target.session_id != source_id
+        && source_project.is_none_or(|project| *project == target.project_id)
 }
 
 #[cfg(test)]

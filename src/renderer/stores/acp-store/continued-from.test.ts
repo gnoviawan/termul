@@ -43,6 +43,14 @@ describe('mergeSessionIndexEntries continuedFrom carry', () => {
     const [merged] = mergeSessionIndexEntries(local, host, new Set())
     expect(merged.continuedFrom).toBe('src')
   })
+
+  it('lets the host edge win over a newer local row', () => {
+    const local = [indexEntry({ continuedFrom: 'stale', lastActivityAt: NOW + 20 })]
+    const host = [indexEntry({ continuedFrom: 'src', lastActivityAt: NOW + 10 })]
+    const [merged] = mergeSessionIndexEntries(local, host, new Set())
+    expect(merged.continuedFrom).toBe('src')
+    expect(merged.lastActivityAt).toBe(NOW + 20)
+  })
 })
 
 describe('persistSession continuedFrom carry', () => {
@@ -92,6 +100,13 @@ describe('stampSwitchContinuation', () => {
       'second' as never
     )
     expect(index.find((e) => e.id === 'dst')?.continuedFrom).toBe('first')
+  })
+
+  it('refuses a source in another project', () => {
+    const index = [indexEntry({ id: 'dst' }), indexEntry({ id: 'src', projectId: 'p2' })]
+    expect(stampSwitchContinuation({ sessionIndex: index }, 'dst' as never, 'src' as never)).toBe(
+      index
+    )
   })
 
   it('is a no-op for a missing target or a self-edge', () => {

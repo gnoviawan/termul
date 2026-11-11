@@ -114,6 +114,69 @@ async fn note_continued_from_is_idempotent_and_first_write_wins() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// A WS caller can name any session as a switch's `newSessionId`; the edge
+/// must never join two projects (a fold there would let one chat's delete
+/// remove another project's transcript) or point a session at itself.
+#[tokio::test]
+async fn note_continued_from_refuses_cross_project_and_self_edges() {
+    let root = temp_dir("scope");
+    let persistence = SessionPersistence::open(root.join("store")).await.unwrap();
+    persistence
+        .register_session(registration("src"))
+        .await
+        .unwrap();
+    persistence
+        .register_session(SessionRegistration {
+            project_id: Some("project-2".to_string()),
+            ..registration("elsewhere")
+        })
+        .await
+        .unwrap();
+
+    persistence
+        .note_continued_from("elsewhere", "src")
+        .await
+        .unwrap();
+    persistence.note_continued_from("src", "src").await.unwrap();
+
+    assert_eq!(persistence.metadata("elsewhere").unwrap().continued_from, None);
+    assert_eq!(persistence.metadata("src").unwrap().continued_from, None);
+    persistence.shutdown().await.unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The recovery backfill applies the same scope rule to a marker that names
+/// a session in another project.
+#[tokio::test]
+async fn recovery_backfill_skips_cross_project_markers() {
+    let root = temp_dir("backfill-scope");
+    let store = root.join("store");
+    let persistence = SessionPersistence::open(store.clone()).await.unwrap();
+    persistence
+        .register_session(registration("src"))
+        .await
+        .unwrap();
+    persistence
+        .register_session(SessionRegistration {
+            project_id: Some("project-2".to_string()),
+            ..registration("elsewhere")
+        })
+        .await
+        .unwrap();
+    persistence
+        .enqueue_event(switch_record("src", 1, "elsewhere"))
+        .unwrap();
+    persistence.flush_session("src").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    fs::remove_file(store.join(CONTINUED_FROM_MIGRATION_MARKER)).unwrap();
+    let reopened = SessionPersistence::open(store.clone()).await.unwrap();
+    assert_eq!(reopened.metadata("elsewhere").unwrap().continued_from, None);
+    assert!(store.join(CONTINUED_FROM_MIGRATION_MARKER).exists());
+    reopened.shutdown().await.unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
 #[tokio::test]
 async fn note_continued_from_unknown_session_is_an_error_not_a_panic() {
     let root = temp_dir("unknown");
