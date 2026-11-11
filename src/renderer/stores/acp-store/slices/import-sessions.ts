@@ -10,20 +10,24 @@ import { acpApi } from '@/lib/acp-api'
 import { AcpTransportError } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
 import { agentReuseKey } from '../../acp-reuse-keys'
-import { ensureLiveAgent, resolveSpawnProject } from '../shared-state'
+import { ensureLiveAgent, resolveSpawnProject, runsCurrentLaunch } from '../shared-state'
 import type { AcpState, ImportSessionOutcome } from '../types'
 import { withAuthRetry } from './agent'
 
 type ImportSliceState = Pick<AcpState, 'listImportableSessions' | 'importAgentSessions'>
 
-/** Safety cap on `session/list` pages, as in discovery. */
-const MAX_LIST_PAGES = 10
+/**
+ * Safety cap on `session/list` pages. A repeated cursor also ends the listing,
+ * so the cap only stops a runaway agent.
+ */
+const MAX_LIST_PAGES = 200
 
 export const createImportSlice: StateCreator<AcpState, [], [], ImportSliceState> = (set, get) => ({
   listImportableSessions: async (configId, cwd, projectId) => {
     const trimmedCwd = cwd.trim()
     // A live agent of this config and folder serves the listing as it is: the
-    // import neither holds it nor detaches the one a chat runs on.
+    // import neither holds it nor detaches the one a chat runs on. One started
+    // with an outdated launch (env or account) is not reused.
     const reuseKey = agentReuseKey(
       configId,
       trimmedCwd,
@@ -31,7 +35,9 @@ export const createImportSlice: StateCreator<AcpState, [], [], ImportSliceState>
     )
     const live = get().configToLiveAgent[reuseKey]
     const agentId =
-      live && get().agentStatus[live] === 'connected'
+      live &&
+      get().agentStatus[live] === 'connected' &&
+      runsCurrentLaunch(get(), live, configId, trimmedCwd, projectId)
         ? live
         : await ensureLiveAgent(get, set, configId, trimmedCwd, { projectId })
     if (!agentId) {
@@ -55,8 +61,14 @@ export const createImportSlice: StateCreator<AcpState, [], [], ImportSliceState>
     const known = new Set(get().sessionIndex.map((entry) => entry.id))
     const sessions = []
     const seen = new Set<string>()
+    const cursors = new Set<string>()
     let cursor: string | undefined
-    for (let page = 0; page < MAX_LIST_PAGES; page++) {
+    let truncated = false
+    for (let page = 0; ; page++) {
+      if (page === MAX_LIST_PAGES) {
+        truncated = true
+        break
+      }
       const res = await withAuthRetry(get, agentId, 'session/list', 'text', () =>
         acpApi.listSessions(agentId, trimmedCwd, cursor)
       )
@@ -66,7 +78,20 @@ export const createImportSlice: StateCreator<AcpState, [], [], ImportSliceState>
         if (!known.has(info.sessionId)) sessions.push(info)
       }
       if (res.nextCursor == null) break
+      // A repeated cursor would loop forever.
+      if (cursors.has(res.nextCursor)) {
+        truncated = true
+        break
+      }
+      cursors.add(res.nextCursor)
       cursor = res.nextCursor
+    }
+    if (truncated) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.importSessions.list',
+        message: `Stopped listing agent sessions after ${seen.size}: the agent kept returning a cursor`
+      })
     }
     if (get().agentStatus[agentId] !== 'connected') {
       void logFrontendError({

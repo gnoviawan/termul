@@ -208,6 +208,37 @@ describe('listImportableSessions', () => {
     expect(list).toHaveBeenNthCalledWith(2, 'agent-1', '/work', '')
   })
 
+  it('keeps listing past the tenth page', async () => {
+    const list = vi.spyOn(acpApi, 'listSessions')
+    for (let page = 0; page < 12; page++) {
+      list.mockResolvedValueOnce({
+        sessions: [{ sessionId: `s${page}`, cwd: '/work', title: `S${page}` }],
+        nextCursor: page < 11 ? `c${page}` : null
+      })
+    }
+
+    const result = await useAcpStore.getState().listImportableSessions('cfg-1', '/work', 'p1')
+
+    expect(result.status).toBe('ready')
+    if (result.status !== 'ready') return
+    expect(result.sessions).toHaveLength(12)
+    expect(list).toHaveBeenCalledTimes(12)
+  })
+
+  it('stops listing when the agent repeats a cursor', async () => {
+    const list = vi.spyOn(acpApi, 'listSessions').mockResolvedValue({
+      sessions: [{ sessionId: 'a', cwd: '/work', title: 'A' }],
+      nextCursor: 'same'
+    })
+
+    const result = await useAcpStore.getState().listImportableSessions('cfg-1', '/work', 'p1')
+
+    expect(result.status).toBe('ready')
+    if (result.status !== 'ready') return
+    expect(result.sessions.map((s) => s.sessionId)).toEqual(['a'])
+    expect(list).toHaveBeenCalledTimes(2)
+  })
+
   it('offers nothing when the agent cannot list or load sessions', async () => {
     seedAgent({ loadSession: false, sessionCapabilities: { list: {} } })
     const list = vi.spyOn(acpApi, 'listSessions')
