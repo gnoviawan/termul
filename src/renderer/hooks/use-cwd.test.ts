@@ -77,6 +77,11 @@ describe('formatPath', () => {
       expect(formatPath('//?/UNC/srv/share/proj', undefined)).toBe('//srv/share/proj')
     })
 
+    test('keeps a volume GUID path whole', () => {
+      const volume = String.raw`\\?\Volume{0b1c2d3e-0000-0000-0000-100000000000}\proj`
+      expect(formatPath(volume, undefined, 200)).toBe(volume)
+    })
+
     test('still abbreviates the home directory under a verbatim path', () => {
       expect(formatPath(String.raw`\\?\C:\Users\John\proj`, String.raw`C:\Users\John`)).toBe(
         '~/proj'

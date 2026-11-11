@@ -318,7 +318,7 @@ describe('read-only guard', () => {
         'You may read it with `gh pr view 15 --repo acme/app --comments`, `gh pr diff 15 --repo acme/app` and `gh pr checks 15 --repo acme/app`, and read files in the current checkout.\n' +
         'Do not create, edit or delete files. Do not check out branches, create worktrees, commit or push.\n' +
         'Do not post to GitHub: no comments, reviews, labels, merges, closing or reopening.\n' +
-        "If the user asks you to change code or GitHub, decline and point them to Termul's Start, Fix CI or Resolve comments actions.\n" +
+        "If the user asks you to change code or GitHub, decline and point them to Troupe's Start, Fix CI or Resolve comments actions.\n" +
         'These rules apply to every message in this chat, including this one.\n' +
         '<<<END_TERMUL_READ_ONLY_GUARD>>>'
     )

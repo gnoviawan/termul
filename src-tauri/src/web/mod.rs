@@ -58,6 +58,8 @@ pub mod project_registry;
 pub mod projects_api;
 pub mod prompt_turn;
 #[cfg(test)]
+mod oauth_redirect_base_tests;
+#[cfg(test)]
 mod prompt_turn_tests;
 pub mod route_deadline;
 pub mod router;
@@ -101,6 +103,17 @@ pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
     let git = Arc::new(GitTracker::new(events.clone()));
     let exit = Arc::new(ExitCodeTracker::new(events.clone()));
     Arc::new(PtyManager::new(events, cwd, git, exit))
+}
+
+/// The base of the web OAuth redirect URI: `127.0.0.1` on the bound port,
+/// whatever the bind address, because authorization servers accept plain http
+/// only on loopback. A browser on the host machine reaches the callback
+/// directly only when the server listens on all interfaces or on loopback;
+/// any other browser pastes the address it landed on into
+/// `POST /mcp-servers/oauth/complete`. Desktop shared-live denies all OAuth
+/// control routes before this is read.
+fn oauth_redirect_base(addr: SocketAddr) -> String {
+    format!("http://127.0.0.1:{}", addr.port())
 }
 
 /// Bind and serve the standalone ACP HTTP server until SIGINT/SIGTERM.
@@ -272,12 +285,12 @@ pub async fn serve(
     // path and does not write that marker.
     if let Err(e) = acp.kill_all_checked().await {
         let e: Box<dyn std::error::Error + Send + Sync> = e.into();
-        log::error!("[termul-server] ACP kill_all failed during shutdown: {e}");
+        log::error!("[troupe-server] ACP kill_all failed during shutdown: {e}");
         cleanup_errors.push(e);
     }
     if let Err(e) = acp.shutdown_persistence().await {
         let e: Box<dyn std::error::Error + Send + Sync> = e.into();
-        log::error!("[termul-server] ACP persistence shutdown failed: {e}");
+        log::error!("[troupe-server] ACP persistence shutdown failed: {e}");
         cleanup_errors.push(e);
     }
     // PTY cleanup always runs — never skip terminal process-tree kill.
@@ -289,11 +302,11 @@ pub async fn serve(
 
     match serve_result {
         Ok(()) => {
-            info!("termul-server stopped");
+            info!("troupe-server stopped");
             Ok(())
         }
         Err(join_err) if join_err.is_cancelled() => {
-            warn!("termul-server serve task cancelled");
+            warn!("troupe-server serve task cancelled");
             Ok(())
         }
         Err(join_err) => Err(Box::new(join_err)),
@@ -422,13 +435,7 @@ pub async fn serve_router(
         Some(store),
         cfg.allow_remote_writes,
         shared_live_writes_denied,
-        // The effective externally reachable origin for OAuth redirect URIs.
-        // The bound address is known here (before `router()` is called), so
-        // the callback route's `redirect_uri` uses it instead of the
-        // hardcoded loopback default. Desktop shared-live denies all OAuth
-        // control routes before this is read, so it stays `http://127.0.0.1`
-        // (harmless — never used).
-        format!("http://{}", addr),
+        oauth_redirect_base(addr),
         web_auth,
         cfg.allowed_origins.clone(),
         host_allow,
@@ -487,7 +494,7 @@ pub async fn serve_router(
 /// instead.
 async fn shutdown_signal_future() {
     match shutdown_signal().await {
-        Ok(()) => info!("termul-server shutting down…"),
+        Ok(()) => info!("troupe-server shutting down…"),
         Err(e) => {
             warn!("shutdown signal setup failed ({e}); serving until process exit");
             // Do not complete the shutdown future — that would stop the

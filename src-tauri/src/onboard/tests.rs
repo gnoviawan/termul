@@ -90,7 +90,7 @@ fn generated_unit_text_pins_projects_file() {
     // build_systemd_unit_text.
     let a = answers_localhost();
     let exec_start = build_exec_start(
-        Path::new("/usr/local/bin/termul-server"),
+        Path::new("/usr/local/bin/troupe-server"),
         &a.to_command_args(),
     );
     let unit = build_systemd_unit_text(&exec_start, None, SystemdScope::System);
@@ -113,7 +113,7 @@ fn generated_unit_preserves_literal_percent_in_projects_file() {
     let mut a = answers_localhost();
     a.projects_file = PathBuf::from("/home/opus/.local/state/termul/100%/projects.json");
     let exec_start = build_exec_start(
-        Path::new("/usr/local/bin/termul-server"),
+        Path::new("/usr/local/bin/troupe-server"),
         &a.to_command_args(),
     );
     let unit = build_systemd_unit_text(&exec_start, None, SystemdScope::System);
@@ -212,11 +212,11 @@ fn env_lines_loopback_no_updates_has_shell_home_only() {
     assert!(
         !lines
             .iter()
-            .any(|l| l.starts_with("TERMUL_SERVER_ALLOW_REMOTE_WRITES")),
+            .any(|l| l.contains("SERVER_ALLOW_REMOTE_WRITES")),
         "loopback must not emit remote-writes"
     );
     assert!(
-        !lines.iter().any(|l| l.starts_with("TERMUL_SERVER_UPDATE")),
+        !lines.iter().any(|l| l.contains("SERVER_UPDATE")),
         "no update channel must not emit update vars"
     );
     #[cfg(unix)]
@@ -242,7 +242,7 @@ fn env_lines_expose_remote_writes() {
     let lines = a.to_env_lines();
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_ALLOW_REMOTE_WRITES=true"));
+        .any(|l| l == "TROUPE_SERVER_ALLOW_REMOTE_WRITES=true"));
 }
 
 #[test]
@@ -251,13 +251,13 @@ fn env_lines_with_update_channel() {
     let lines = a.to_env_lines();
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_UPDATE_ENABLED=true"));
+        .any(|l| l == "TROUPE_SERVER_UPDATE_ENABLED=true"));
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_UPDATE_CHANNEL=stable"));
+        .any(|l| l == "TROUPE_SERVER_UPDATE_CHANNEL=stable"));
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_UPDATE_INTERVAL_SECS=21600"));
+        .any(|l| l == "TROUPE_SERVER_UPDATE_INTERVAL_SECS=21600"));
 }
 
 #[test]
@@ -286,7 +286,8 @@ fn detect_from_systemd_root_is_system_scope() {
     assert_eq!(
         detect_from(true, true),
         ServiceManager::Systemd {
-            scope: SystemdScope::System
+            scope: SystemdScope::System,
+            unit: "troupe-server",
         }
     );
 }
@@ -296,7 +297,8 @@ fn detect_from_systemd_nonroot_is_user_scope() {
     assert_eq!(
         detect_from(true, false),
         ServiceManager::Systemd {
-            scope: SystemdScope::User
+            scope: SystemdScope::User,
+            unit: "troupe-server",
         }
     );
 }
@@ -308,9 +310,22 @@ fn detect_from_no_systemd_is_setsid() {
 }
 
 #[test]
+fn service_unit_is_troupe_server_on_a_fresh_host() {
+    let dir = temp_state_dir("unit-fresh");
+    assert_eq!(service_unit_in(&dir), "troupe-server");
+}
+
+#[test]
+fn service_unit_reuses_an_installed_termul_server_unit() {
+    let dir = temp_state_dir("unit-legacy");
+    std::fs::write(dir.join("termul-server.service"), "[Unit]\n").expect("write legacy unit");
+    assert_eq!(service_unit_in(&dir), "termul-server");
+}
+
+#[test]
 fn systemd_unit_text_with_env_file_has_required_fields() {
     let unit = build_systemd_unit_text(
-        "/usr/local/bin/termul-server --host 127.0.0.1",
+        "/usr/local/bin/troupe-server --host 127.0.0.1",
         Some("/etc/termul/termul-server.env"),
         SystemdScope::System,
     );
@@ -323,7 +338,7 @@ fn systemd_unit_text_with_env_file_has_required_fields() {
 #[test]
 fn systemd_unit_text_without_env_file_omits_environment_file() {
     let unit = build_systemd_unit_text(
-        "/usr/local/bin/termul-server --host 127.0.0.1",
+        "/usr/local/bin/troupe-server --host 127.0.0.1",
         None,
         SystemdScope::System,
     );
@@ -336,7 +351,7 @@ fn systemd_unit_text_without_env_file_omits_environment_file() {
 fn systemd_unit_text_keeps_the_server_up_when_a_child_is_oom_killed() {
     for scope in [SystemdScope::System, SystemdScope::User] {
         let unit = build_systemd_unit_text(
-            "/usr/local/bin/termul-server --host 127.0.0.1",
+            "/usr/local/bin/troupe-server --host 127.0.0.1",
             None,
             scope,
         );
@@ -357,7 +372,7 @@ fn systemd_unit_text_user_scope_uses_default_target() {
     // `multi-user.target` (which doesn't exist in the user systemd
     // instance and makes `systemctl --user enable` fail).
     let unit = build_systemd_unit_text(
-        "/usr/local/bin/termul-server --host 127.0.0.1",
+        "/usr/local/bin/troupe-server --host 127.0.0.1",
         None,
         SystemdScope::User,
     );
@@ -374,7 +389,7 @@ fn systemd_unit_text_user_scope_uses_default_target() {
 #[test]
 fn systemd_unit_text_system_scope_uses_multi_user_target() {
     let unit = build_systemd_unit_text(
-        "/usr/local/bin/termul-server --host 127.0.0.1",
+        "/usr/local/bin/troupe-server --host 127.0.0.1",
         None,
         SystemdScope::System,
     );
@@ -390,16 +405,16 @@ fn env_lines_expose_with_update_channel_orders_remote_then_update() {
     let lines = a.to_env_lines();
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_ALLOW_REMOTE_WRITES=true"));
+        .any(|l| l == "TROUPE_SERVER_ALLOW_REMOTE_WRITES=true"));
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_UPDATE_ENABLED=true"));
+        .any(|l| l == "TROUPE_SERVER_UPDATE_ENABLED=true"));
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_UPDATE_CHANNEL=nightly"));
+        .any(|l| l == "TROUPE_SERVER_UPDATE_CHANNEL=nightly"));
     assert!(lines
         .iter()
-        .any(|l| l == "TERMUL_SERVER_UPDATE_INTERVAL_SECS=3600"));
+        .any(|l| l == "TROUPE_SERVER_UPDATE_INTERVAL_SECS=3600"));
 }
 
 #[test]
@@ -411,19 +426,20 @@ fn write_access_info_systemd_user_scope_includes_user_flag() {
         &mut out,
         &ServiceManager::Systemd {
             scope: SystemdScope::User,
+            unit: "troupe-server",
         },
         "127.0.0.1",
         8080,
         Path::new("/tmp"),
         false,
         None,
-        Path::new("/usr/local/bin/termul-server"),
+        Path::new("/usr/local/bin/troupe-server"),
         &[],
     );
     let s = String::from_utf8(out).unwrap();
-    assert!(s.contains("journalctl --user -u termul-server"), "got: {s}");
+    assert!(s.contains("journalctl --user -u troupe-server -f"), "got: {s}");
     assert!(
-        s.contains("systemctl --user stop termul-server"),
+        s.contains("systemctl --user stop troupe-server"),
         "got: {s}"
     );
 }
@@ -435,17 +451,19 @@ fn write_access_info_systemd_system_scope_omits_user_flag() {
         &mut out,
         &ServiceManager::Systemd {
             scope: SystemdScope::System,
+            unit: "termul-server",
         },
         "127.0.0.1",
         8080,
         Path::new("/tmp"),
         false,
         None,
-        Path::new("/usr/local/bin/termul-server"),
+        Path::new("/usr/local/bin/troupe-server"),
         &[],
     );
     let s = String::from_utf8(out).unwrap();
-    assert!(s.contains("journalctl -u termul-server"), "got: {s}");
+    assert!(s.contains("journalctl -u termul-server -f"), "got: {s}");
+    assert!(s.contains("systemctl stop termul-server"), "got: {s}");
     assert!(!s.contains("journalctl --user"), "got: {s}");
 }
 
@@ -462,7 +480,7 @@ fn write_access_info_surfaces_update_channel_when_some() {
         Path::new("/tmp"),
         false,
         Some(UpdateChannel::Insider),
-        Path::new("/usr/local/bin/termul-server"),
+        Path::new("/usr/local/bin/troupe-server"),
         &[],
     );
     let s = String::from_utf8(out).unwrap();
@@ -553,7 +571,7 @@ fn write_access_info_public_bind_points_at_token_file_not_logs() {
         Path::new("/tmp/state"),
         false,
         None,
-        Path::new("/usr/local/bin/termul-server"),
+        Path::new("/usr/local/bin/troupe-server"),
         &[],
     );
     let s = String::from_utf8(out).unwrap();

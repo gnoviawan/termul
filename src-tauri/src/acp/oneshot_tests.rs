@@ -420,7 +420,7 @@ async fn a_one_shot_session_gets_no_termul_mcp_server_but_a_chat_session_does() 
         )
         .await
         .expect("chat session starts");
-    assert_eq!(std::fs::read_to_string(&mcp_file).unwrap(), r#"["termul"]"#);
+    assert_eq!(std::fs::read_to_string(&mcp_file).unwrap(), r#"["troupe"]"#);
     mock.manager.kill_detached(&spawned.agent_id);
 }
 

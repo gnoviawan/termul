@@ -1,9 +1,9 @@
 ---
 name: perf-toolkit
-description: Run Termul performance benchmarks, read the reports, and do before/after A/B compares with the tools/perf toolkit. Use when the user asks to measure app performance, run a perf scenario (stream-storm, project-switch, pty-flood, soak), compare runs, or investigate renderer jank/memory.
+description: Run Troupe performance benchmarks, read the reports, and do before/after A/B compares with the tools/perf toolkit. Use when the user asks to measure app performance, run a perf scenario (stream-storm, project-switch, pty-flood, soak), compare runs, or investigate renderer jank/memory.
 ---
 
-# Termul Perf Toolkit
+# Troupe Perf Toolkit
 
 Measures the desktop app's renderer performance under controlled, deterministic load: fake ACP agents stream seeded `sessionUpdate` traffic through the app's real custom-agent path while passive collectors capture React commits, page-level jank (LoAF/longtask/INP/rAF), and OS-level renderer memory/CPU. Every run writes a result directory with `result.json` + a self-contained `report.html`.
 
@@ -25,7 +25,8 @@ exactly as registered.
 
 
 The app exe must exist — **the worktree dev-identifier perf build**
-(`src-tauri/target-perf/release/termul-manager.exe`, identifier
+(`src-tauri/target-perf/release/troupe.exe`; builds from before the rename named it
+`termul-manager.exe`, and the runner takes the newer of the two; identifier
 `com.termul-manager.app.dev`). It must be built with the dev config so it
 escapes the user's installed-instance single-instance mutex AND carries
 `withGlobalTauri`, and with debug assertions on: the host scrubs the
@@ -57,7 +58,7 @@ the renderer.
 | `project-switch` | Repeated project switches under live agent+terminal load | `--projects 3 --cycles 10 --ui` (click sidebar vs store action) |
 | `pty-flood` | T terminals running the canned flood script (ANSI/wide/block lines + resize churn) | `--terminals 3 --lines-per-sec 200 --with-agent-stream` |
 | `soak` | Long stream + periodic switches (memory slope) | `--minutes 30 --yes` (ask-first: >15 min needs consent) |
-| `browser` | CAP-7 secondary lane vs termul-server (stream-storm/project-switch) | `--server http://127.0.0.1:3000` |
+| `browser` | CAP-7 secondary lane vs troupe-server (stream-storm/project-switch) | `--server http://127.0.0.1:3000` |
 
 Shared: `--seed` (determinism), `--exe`, `--keep-state` (debugging),
 `--use-real-agent <id>` (drive a REAL catalog agent instead of the fake —
@@ -166,7 +167,7 @@ Counts commits of `ChatMessage` / `ChatMessageList` / `AgentChatPanel` under a s
 
 ## Gotchas
 
-- The runner owns the spawned PID tree and kills it (`taskkill /T /F` + parent-PID sweep). If a run crashes hard, check for orphan `termul-manager`/`msedgewebview2` processes.
+- The runner owns the spawned PID tree and kills it (`taskkill /T /F` + parent-PID sweep). If a run crashes hard, check for orphan `troupe`/`termul-manager`/`msedgewebview2` processes.
 - Each run uses a scratch `WEBVIEW2_USER_DATA_FOLDER` under `tools/perf/results/<run-id>/userdata/` — the single-instance plugin stays isolated and user data is never touched. `--keep-state` preserves it for debugging.
 - Numbers are per-machine: only compare runs from the same machine; use the same `--seed`.
 - Windows-only desktop lane (WebView2 needs an interactive session). Browser lane covers headless.

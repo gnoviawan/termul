@@ -30,19 +30,19 @@ To see the exact error, click **Technical details** in the tab. After you fix th
 | **The server doesn't allow this sign-in method** | The server has that method turned off. Choose another **Authentication** method in the host settings. |
 | **Wrong passphrase** | The passphrase did not unlock the key. Type it again. |
 
-## Termul can't use your key or agent
+## Troupe can't use your key or agent
 
 | Message | What to do |
 | --- | --- |
 | **Private key not found** | The key file moved or was deleted. Choose the key again in the host settings. |
-| **Termul can't use this key** | Choose a private key in OpenSSH or PEM format. If the key is a PuTTY `.ppk` file, convert it to OpenSSH format with PuTTYgen. |
+| **Troupe can't use this key** | Choose a private key in OpenSSH or PEM format. If the key is a PuTTY `.ppk` file, convert it to OpenSSH format with PuTTYgen. |
 | **SSH agent not available** | Start your SSH agent and add a key with `ssh-add`. You can also choose a key file in the host settings. |
 
 ## Other problems
 
 | Message | What to do |
 | --- | --- |
-| **Server not trusted** | You clicked **Cancel** on the server's key, so Termul sent no credentials. Connect again to review the key. |
+| **Server not trusted** | You clicked **Cancel** on the server's key, so Troupe sent no credentials. Connect again to review the key. |
 | **Signed in, but the shell didn't start** | The server refused a terminal. Check the account's login shell and the server's session limits. |
 | **Too many terminals open** | Close a terminal or a session tab, then try again. |
 | **This host was removed** | The host was deleted while the tab was open. Close the tab, or add the host again. |

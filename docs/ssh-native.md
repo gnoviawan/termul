@@ -27,7 +27,7 @@ the refactor followed, kept as the reference for the SSH surface.
   key confirmation, password/passphrase prompts and failures render inline
   in that same screen, never as chained modals.
 * **Ask for the minimum.** The host editor needs four fields
-  (address, port, username, auth); label, group, tags are optional. Termul
+  (address, port, username, auth); label, group, tags are optional. Troupe
   keeps an explicit Save (its dialog convention) — Termius auto-saves.
 * **Short keyboard path.** Command palette lists every host; Enter on a host
   row connects; tabs are a real `tablist` (arrow keys).
@@ -72,7 +72,7 @@ SSHFileExplorer ── sftp_* ──► ssh/connection.rs  │ (shell, SFTP, for
 * **Host keys:** SHA256 fingerprint; app-managed `~/.ssh/known_hosts_termul`
   checked first, then the user's `~/.ssh/known_hosts` (read-only). Unknown →
   inline confirm (trust is persisted). Changed → destructive warning; the
-  user may replace the Termul entry explicitly. Never auto-accept.
+  user may replace the Troupe entry explicitly. Never auto-accept.
 * **Secrets:** OS keychain (`keyring`) for saved password/passphrase. A secret
   typed at a prompt is kept in process memory only while a session for that
   host is alive (for SFTP and reconnect), and optionally saved to the keychain.
@@ -101,7 +101,7 @@ SSHFileExplorer ── sftp_* ──► ssh/connection.rs  │ (shell, SFTP, for
 | Password, key + passphrase, agent auth | In scope. Keyboard-interactive is used as a password fallback. OpenSSH, PEM and PuTTY `.ppk` keys. |
 | SFTP browser, port forwarding | Kept; both run over the active session's connection. Port forwarding stays API-only (no UI before or after). |
 | Jump host | Not built yet. russh can stack a session on a `direct-tcpip` channel (`connect_stream`), so it is a follow-up, not a blocker. `jumpHostId` kept. |
-| Snippets, identities, cloud sync, teams | Out of scope; Termul already has command history/palette. |
+| Snippets, identities, cloud sync, teams | Out of scope; Troupe already has command history/palette. |
 
 ## 6. Acceptance checks
 

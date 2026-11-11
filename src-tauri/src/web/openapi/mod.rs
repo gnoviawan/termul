@@ -272,7 +272,7 @@ impl Tag {
             Tag::BrowserPolicy => "What agent browser automation may reach.",
             Tag::Canvas => "The design canvas: open, persist and serve the editor bundle.",
             Tag::Diagnostics => "Frontend error forwarding and bug reports.",
-            Tag::ServerAdmin => "Reconfigure a standalone termul-server.",
+            Tag::ServerAdmin => "Reconfigure a standalone troupe-server.",
         }
     }
 }

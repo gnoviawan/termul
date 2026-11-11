@@ -139,6 +139,9 @@ jobs:
       - name: Install Bun dependencies
         run: bun install --frozen-lockfile
 
+      - name: Rebrand check (no old product name)
+        run: bun run rebrand --check
+
       - name: Biome (lint + format + imports)
         run: bun run ci
 
@@ -155,7 +158,9 @@ jobs:
     name: Rust Checks
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    # Check, test and clippy run about 17 minutes on a warm cache, and the
+    # post-job cache save adds about one more.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -297,18 +302,18 @@ jobs:
       - name: Assert dist-web/index.html exists
         run: test -f dist-web/index.html && test -s dist-web/index.html
 
-      - name: Build termul-server (native host)
+      - name: Build troupe-server (native host)
         working-directory: src-tauri
-        run: cargo build --bin termul-server --features standalone-server
+        run: cargo build --bin troupe-server --features standalone-server
 
-      - name: Clippy termul-server (feature on)
+      - name: Clippy troupe-server (feature on)
         working-directory: src-tauri
-        run: cargo clippy --bin termul-server --features standalone-server -- -D warnings
+        run: cargo clippy --bin troupe-server --features standalone-server -- -D warnings
 
       # The headless server must not link GTK/WebKit (#1349); it has to start on
       # hosts without them. Runs against the dev build above (rust-lld).
-      - name: Assert termul-server links no GUI libraries
-        run: scripts/check-server-no-gui-libs.sh src-tauri/target/debug/termul-server
+      - name: Assert troupe-server links no GUI libraries
+        run: scripts/check-server-no-gui-libs.sh src-tauri/target/debug/troupe-server
 
   rust-windows-check:
     name: Rust Windows Smoke Check
@@ -353,9 +358,9 @@ jobs:
         working-directory: src-tauri
         run: cargo check --all-targets
 
-      - name: Build termul-server (Windows host)
+      - name: Build troupe-server (Windows host)
         working-directory: src-tauri
-        run: cargo build --bin termul-server --features standalone-server
+        run: cargo build --bin troupe-server --features standalone-server
 
   build-check:
     name: Verify Tauri Frontend Build

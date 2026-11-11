@@ -4,8 +4,8 @@
 //! subagent in its own ACP session when the client advertises
 //! `clientCapabilities.subagents`. Versions 0.78-0.89 send the AIR draft
 //! form; 0.90 and newer send the RFD form to clients that are not AIR
-//! clients, which Termul is not. Codex ACP 2.5 sends the RFD form too.
-//! Termul advertises the capability only to the versions whose wire was
+//! clients, which Troupe is not. Codex ACP 2.5 sends the RFD form too.
+//! Troupe advertises the capability only to the versions whose wire was
 //! verified ([`VERIFIED_ADAPTERS`]), but routes the subagent updates of any
 //! agent that sends them.
 //!
@@ -47,7 +47,7 @@ use crate::web::EventSink;
 
 /// `clientCapabilities` key that turns the native form on.
 const SUBAGENTS_CAPABILITY_KEY: &str = "subagents";
-/// An adapter whose native subagent wire Termul verified, and for which
+/// An adapter whose native subagent wire Troupe verified, and for which
 /// versions. A later major may change the form, so it keeps the legacy
 /// behavior until verified.
 struct VerifiedAdapter {

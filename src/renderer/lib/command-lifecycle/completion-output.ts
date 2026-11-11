@@ -30,7 +30,7 @@ function lastWordRange(draft: string, cursor: number): { from: number; to: numbe
   return { from, to: point }
 }
 
-function containsDisallowedControls(text: string): boolean {
+export function containsDisallowedControls(text: string): boolean {
   if (/\p{Cf}/u.test(text)) return true
   for (const char of text) {
     const code = char.codePointAt(0) ?? 0

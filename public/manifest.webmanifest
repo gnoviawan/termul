@@ -1,8 +1,8 @@
 {
   "id": "/",
   "lang": "en",
-  "name": "Termul",
-  "short_name": "Termul",
+  "name": "Troupe",
+  "short_name": "Troupe",
   "description": "Project-aware terminal that treats workspaces as first-class citizens",
   "start_url": "/",
   "scope": "/",

@@ -10,7 +10,11 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { confirmInstallAndRestart } from '@/lib/confirm-install-update'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { supportsSignedChannelUpdate, type UpdateChannel } from '@/lib/tauri-updater-api'
+import {
+  AUR_UPDATE_COMMAND,
+  supportsSignedChannelUpdate,
+  type UpdateChannel
+} from '@/lib/tauri-updater-api'
 import type { UpdaterErrorSource } from '@/stores/updater-store'
 
 interface UpdatesSectionProps {
@@ -39,9 +43,9 @@ const CHANNELS: Array<{ value: UpdateChannel; label: string; description: string
 ]
 
 const UPDATE_ERROR_COPY: Record<UpdaterErrorSource, string> = {
-  check: 'Termul could not check for updates. Check your connection, then try again.',
-  download: 'Termul could not download the update. Check your connection, then try again.',
-  install: 'Termul could not install the update. Try again, or download it from the release page.'
+  check: 'Troupe could not check for updates. Check your connection, then try again.',
+  download: 'Troupe could not download the update. Check your connection, then try again.',
+  install: 'Troupe could not install the update. Try again, or download it from the release page.'
 }
 
 const formatLastChecked = (date: Date): string =>
@@ -74,7 +78,7 @@ export function UpdatesSection({
   if (!isTauriContext()) return null
 
   // "Try again" retries the step that failed, matching the error copy. A
-  // signed install restarts Termul, so it goes through the same confirm
+  // signed install restarts Troupe, so it goes through the same confirm
   // dialog as the install button; a manual install only opens the page.
   const retryInstall = isManualUpdateMode
     ? installAndRestart
@@ -113,7 +117,7 @@ export function UpdatesSection({
           >
             <span className="font-medium text-foreground">Version {version} is available.</span>{' '}
             {isAurUpdater
-              ? 'Update through the AUR with: yay -S termul-manager'
+              ? `Update through the AUR with: ${AUR_UPDATE_COMMAND}`
               : isManualUpdateMode
                 ? 'Automatic update is not available. Download and install it from the release page.'
                 : 'A new version is ready to download.'}
@@ -144,7 +148,7 @@ export function UpdatesSection({
         <SettingsCard>
           <SettingsRow
             id={rowId('check-updates')}
-            label={`Termul ${APP_VERSION}`}
+            label={`Troupe ${APP_VERSION}`}
             description={versionDescription}
             layout="inline"
           >
@@ -162,7 +166,7 @@ export function UpdatesSection({
         </SettingsCard>
         {skippedVersion && (
           <SettingsNotice>
-            You skipped version <span className="font-mono">{skippedVersion}</span>. Termul offers
+            You skipped version <span className="font-mono">{skippedVersion}</span>. Troupe offers
             updates again when a newer version is out.
           </SettingsNotice>
         )}
@@ -207,7 +211,7 @@ export function UpdatesSection({
             id={rowId('auto-update')}
             htmlFor="auto-update"
             label="Check for updates automatically"
-            description="Termul checks for a new version from time to time."
+            description="Troupe checks for a new version from time to time."
             layout="inline"
           >
             <Switch

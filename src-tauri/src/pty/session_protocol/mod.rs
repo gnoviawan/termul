@@ -1,8 +1,8 @@
-//! Termul session protocol shared by the host filter and both clients.
+//! Troupe session protocol shared by the host filter and both clients.
 //!
 //! The ident is private. It is not an ambient shell-integration OSC.
 
-/// OSC ident for Termul session frames. Not 133, 633, or 9278.
+/// OSC ident for Troupe session frames. Not 133, 633, or 9278.
 pub const TERMUL_SESSION_OSC: u16 = 9477;
 
 /// Clears the shell line editor. No command text.

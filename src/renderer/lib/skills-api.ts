@@ -34,7 +34,7 @@ export interface AgentSkillContent {
   path: string
 }
 
-/** A skill `SKILL.md` an agent can load — from Termul's `.agents` roots or a
+/** A skill `SKILL.md` an agent can load — from Troupe's `.agents` roots or a
  * harness root (`.opencode/skills`, `.claude/skills`, ...). */
 export interface SkillFileEntry {
   name: string

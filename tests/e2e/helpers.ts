@@ -74,7 +74,7 @@ export interface SeededServer {
 
 /** The release binary name (`.exe` on Windows). */
 export function serverBinaryName(): string {
-  return process.platform === 'win32' ? 'termul-server.exe' : 'termul-server'
+  return process.platform === 'win32' ? 'troupe-server.exe' : 'troupe-server'
 }
 
 /**
@@ -119,7 +119,7 @@ export async function startSeededServer(opts: {
       child.once('exit', (code, signal) => {
         reject(
           new Error(
-            `termul-server exited during startup (code=${code} signal=${signal}) — port ${E2E_PORT} may already be bound by a leaked server`
+            `troupe-server exited during startup (code=${code} signal=${signal}) — port ${E2E_PORT} may already be bound by a leaked server`
           )
         )
       })
@@ -142,7 +142,7 @@ export async function startSeededServer(opts: {
       // Bound the wait: a healthy port answer with no bind log and a live
       // child would otherwise hang forever (weird partial-start state).
       sleep(30_000).then(() => {
-        throw new Error(`termul-server did not report its bind on port ${E2E_PORT} within 30s`)
+        throw new Error(`troupe-server did not report its bind on port ${E2E_PORT} within 30s`)
       })
     ])
 

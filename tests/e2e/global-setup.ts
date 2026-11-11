@@ -12,7 +12,7 @@ import { type SeededServer, serverBinaryName, startSeededServer } from './helper
  *
  * Requires (enforced, with the exact command printed on failure):
  * - `bun run build:web` — serves the freshly built web client.
- * - `cargo build --release --bin termul-server --features standalone-server`
+ * - `cargo build --release --bin troupe-server --features standalone-server`
  *
  * Everything is throwaway: mkdtemp state dir, loopback bind, fixed port via
  * E2E_PORT (default 8188). The fake agent (tests/e2e/fake-longrun-agent.ts)
@@ -32,8 +32,8 @@ export default async function globalSetup(_config: FullConfig): Promise<() => Pr
 
   if (!existsSync(serverBinary)) {
     throw new Error(
-      `termul-server binary missing at ${serverBinary}.\n` +
-        'Build it first: cargo build --release --bin termul-server --features standalone-server'
+      `troupe-server binary missing at ${serverBinary}.\n` +
+        'Build it first: cargo build --release --bin troupe-server --features standalone-server'
     )
   }
   const distWeb = join(repoRoot, 'dist-web', 'index.html')

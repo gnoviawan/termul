@@ -14,10 +14,10 @@ export interface ColorThemeFamily {
 
 /** Built-in dark appearance themes (OpenCode palette-compatible). */
 const BUNDLED_DARK_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
-  // syntax: bright Termul palette (see termul-syntax.ts)
+  // syntax: bright Troupe palette (see termul-syntax.ts)
   termul: {
     id: 'termul',
-    name: 'Termul',
+    name: 'Troupe',
     appearance: 'dark',
     familyId: 'termul',
     dark: {

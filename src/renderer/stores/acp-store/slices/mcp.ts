@@ -4,7 +4,13 @@
 
 import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
-import { acpApi, type McpServerConfig, type ProbeResult } from '@/lib/acp-api'
+import {
+  acpApi,
+  MCP_OAUTH_CANCELLED,
+  McpOAuthError,
+  type McpServerConfig,
+  type ProbeResult
+} from '@/lib/acp-api'
 import {
   catalogInstallEntry,
   loadMcpServers as loadMcpServersFromDisk,
@@ -46,6 +52,7 @@ type McpSliceState = Pick<
   | 'mcpProbeStatus'
   | 'mcpOAuthConnecting'
   | 'mcpOAuthConnected'
+  | 'mcpOAuthPasteBack'
   | 'mcpTools'
   | 'mcpToolsLoaded'
   | 'mcpProbing'
@@ -60,6 +67,8 @@ type McpSliceState = Pick<
   | 'probeMcpServer'
   | 'loadMcpTools'
   | 'connectMcpOAuth'
+  | 'completeMcpOAuthPaste'
+  | 'cancelMcpOAuth'
   | 'checkMcpOAuthStatus'
   | 'disconnectMcpOAuth'
 >
@@ -123,6 +132,15 @@ function deletionGuard(id: string): () => boolean {
   return () => mcpServerDeletionCount(id) !== before
 }
 
+// The running OAuth flow per server id. Not store state: nothing renders the
+// controller. A flow only clears its own UI state while it is still the
+// entry here, so a cancelled or superseded flow never clobbers a newer one.
+const oauthFlows = new Map<string, AbortController>()
+
+function isOAuthCancelled(err: unknown): boolean {
+  return err instanceof McpOAuthError && err.code === MCP_OAUTH_CANCELLED
+}
+
 // Ids whose in-flight probe started before an OAuth sign-in or sign-out
 // finished, so its result is stale. The host joins identical in-flight probes,
 // so the fresh probe can only start once this one ends.
@@ -180,6 +198,7 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
   mcpProbeStatus: {},
   mcpOAuthConnecting: {},
   mcpOAuthConnected: {},
+  mcpOAuthPasteBack: {},
   mcpTools: {},
   mcpToolsLoaded: {},
   mcpProbing: {},
@@ -313,10 +332,13 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
         throw err
       }
       deletionCounts.set(id, mcpServerDeletionCount(id) + 1)
+      oauthFlows.get(id)?.abort()
+      oauthFlows.delete(id)
       set((s) => ({
         ...withoutProbeState(s, id),
         mcpOAuthConnected: omitKey(s.mcpOAuthConnected, id),
-        mcpOAuthConnecting: omitKey(s.mcpOAuthConnecting, id)
+        mcpOAuthConnecting: omitKey(s.mcpOAuthConnecting, id),
+        mcpOAuthPasteBack: omitKey(s.mcpOAuthPasteBack, id)
       }))
     }),
 
@@ -376,7 +398,7 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
         mcpProbeStatus: { ...s.mcpProbeStatus, [id]: 'disconnected' },
         // A throw means the probe never produced a result — drop any tools left
         // over from a prior successful probe so the UI shows the disconnected
-        // state (McpBadge checks the tool list first), and mark tools as not
+        // state (McpServerList checks the tool list first), and mark tools as not
         // loaded so a later expand auto-retries instead of caching the failure.
         mcpTools: { ...s.mcpTools, [id]: [] },
         mcpToolsLoaded: { ...s.mcpToolsLoaded, [id]: false },
@@ -397,39 +419,121 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
   },
   connectMcpOAuth: async (projectId, id) => {
     const server = get().mcpServers.find((s) => s.id === id)
-    if (!server) return
+    if (!server) return false
     const url = (server as Extract<StoredMcpServer, { type: 'http' | 'sse' }>).url
-    if (!url) return
+    if (!url) return false
     const deleted = deletionGuard(id)
+    oauthFlows.get(id)?.abort()
+    const flow = new AbortController()
+    oauthFlows.set(id, flow)
+    // Clears this flow's spinner and paste-back entry, unless a cancel or a
+    // newer flow already took them over.
+    const settle = (): void => {
+      if (oauthFlows.get(id) !== flow) return
+      oauthFlows.delete(id)
+      if (deleted()) return
+      set((s) => ({
+        mcpOAuthConnecting: { ...s.mcpOAuthConnecting, [id]: false },
+        mcpOAuthPasteBack: omitKey(s.mcpOAuthPasteBack, id)
+      }))
+    }
     set((s) => ({ mcpOAuthConnecting: { ...s.mcpOAuthConnecting, [id]: true } }))
     void logFrontendError({
+      level: 'info',
       source: 'acp-store.connectMcpOAuth',
       message: `OAuth flow started for server '${server.name}'`
     })
     try {
-      await acpApi.startMcpOAuth(projectId, url)
-      // startMcpOAuth now blocks until the token is stored (desktop: the
-      // Tauri command blocks; web: polls the status endpoint). Setting
-      // connected state here is correct — the token is confirmed.
-      if (deleted()) return
-      set((s) => ({
-        mcpOAuthConnected: { ...s.mcpOAuthConnected, [id]: true },
-        mcpOAuthConnecting: { ...s.mcpOAuthConnecting, [id]: false }
-      }))
-      void logFrontendError({
-        source: 'acp-store.connectMcpOAuth',
-        message: `OAuth token confirmed for server '${server.name}'`
+      await acpApi.startMcpOAuth(projectId, url, {
+        signal: flow.signal,
+        // Web only: the sign-in link is known, so the paste-back dialog opens.
+        onAuthUrl: (authUrl, redirectUri) => {
+          if (oauthFlows.get(id) !== flow || deleted()) return
+          set((s) => ({
+            mcpOAuthPasteBack: {
+              ...s.mcpOAuthPasteBack,
+              [id]: { projectId, serverUrl: url, serverName: server.name, authUrl, redirectUri }
+            }
+          }))
+        }
       })
-      // Re-probe now that we have a token — should succeed.
-      await probeAfterInFlight(get, id)
     } catch (err) {
-      if (!deleted()) set((s) => ({ mcpOAuthConnecting: { ...s.mcpOAuthConnecting, [id]: false } }))
+      // Desktop ignores the signal, so a superseded flow can still settle here.
+      const superseded = oauthFlows.get(id) !== flow
+      settle()
+      if (isOAuthCancelled(err) || superseded) {
+        void logFrontendError({
+          level: 'info',
+          source: 'acp-store.connectMcpOAuth',
+          message: `OAuth flow cancelled for server '${server.name}'`
+        })
+        return false
+      }
       void logFrontendError({
         source: 'acp-store.connectMcpOAuth',
         message: `OAuth flow failed for server '${server.name}' (${String(err)})`
       })
       throw err
     }
+    // startMcpOAuth blocks until the token is stored (desktop: the Tauri
+    // command blocks; web: polls the status endpoint). Setting connected
+    // state here is correct — the token is confirmed.
+    const superseded = oauthFlows.get(id) !== flow
+    settle()
+    if (superseded || deleted()) return false
+    set((s) => ({ mcpOAuthConnected: { ...s.mcpOAuthConnected, [id]: true } }))
+    void logFrontendError({
+      level: 'info',
+      source: 'acp-store.connectMcpOAuth',
+      message: `OAuth token confirmed for server '${server.name}'`
+    })
+    // Re-probe now that we have a token — should succeed.
+    await probeAfterInFlight(get, id)
+    return true
+  },
+
+  completeMcpOAuthPaste: async (id, callbackUrl) => {
+    const pending = get().mcpOAuthPasteBack[id]
+    if (!pending) return
+    // Never log the pasted URL: it carries the authorization code and state.
+    try {
+      await acpApi.completeMcpOAuth(pending.projectId, callbackUrl)
+    } catch (err) {
+      const code = err instanceof McpOAuthError ? err.code : 'UNKNOWN'
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp-store.completeMcpOAuthPaste',
+        message: `OAuth paste-back failed for server '${pending.serverName}' (${code})`
+      })
+      if (code !== 'OAUTH_UNKNOWN_STATE') throw err
+      // The host holds no flow for this sign-in. It may already have used it
+      // (its own callback won, or a lost reply to an earlier paste): then the
+      // token is stored and the running poll finishes the connect. A failed
+      // check rejects as is: the dialog stays open for another try.
+      const stored = await acpApi.hasMcpOAuthToken(pending.projectId, pending.serverUrl)
+      if (!stored) {
+        // Expired: polling for its token can never succeed.
+        get().cancelMcpOAuth(id)
+        throw err
+      }
+    }
+    set((s) => ({ mcpOAuthPasteBack: omitKey(s.mcpOAuthPasteBack, id) }))
+    void logFrontendError({
+      level: 'info',
+      source: 'acp-store.completeMcpOAuthPaste',
+      message: `OAuth paste-back accepted for server '${pending.serverName}'`
+    })
+  },
+
+  cancelMcpOAuth: (id) => {
+    const flow = oauthFlows.get(id)
+    if (!flow) return
+    oauthFlows.delete(id)
+    flow.abort()
+    set((s) => ({
+      mcpOAuthConnecting: { ...s.mcpOAuthConnecting, [id]: false },
+      mcpOAuthPasteBack: omitKey(s.mcpOAuthPasteBack, id)
+    }))
   },
 
   checkMcpOAuthStatus: async (projectId, id) => {

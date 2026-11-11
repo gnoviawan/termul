@@ -10,7 +10,7 @@ Scope is the desktop Application Preferences modal (`src/renderer/pages/AppPrefe
 | Topic | Decision |
 |---|---|
 | Navigation | One page per category. Scroll-spy over one long page is removed. |
-| Visual direction | Current Termul tokens (OKLCH, Inter, keycap). New structure and components. |
+| Visual direction | Current Troupe tokens (OKLCH, Inter, keycap). New structure and components. |
 | Surfaces | Desktop modal. Browser client to be checked with the parity checklist. |
 | Pilot | Editor + Notifications (from the old Behavior section). |
 

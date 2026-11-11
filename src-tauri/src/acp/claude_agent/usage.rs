@@ -1,7 +1,7 @@
 //! Claude Account usage: a cached read of each Account's usage windows through
 //! the Claude Agent SDK that ships with the managed Claude ACP package. The
 //! probe runs Claude with the Account's own config dir, so Claude Code reads
-//! and refreshes its own login; Termul never sees a token.
+//! and refreshes its own login; Troupe never sees a token.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

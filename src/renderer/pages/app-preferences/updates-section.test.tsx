@@ -92,6 +92,13 @@ describe('UpdatesSection update mode copy', () => {
     expect(screen.queryByRole('button', { name: /Open download page/ })).toBeNull()
   })
 
+  it('tells an AUR install to update the troupe package with yay', () => {
+    renderSection({ isAurUpdater: true, updateAvailable: true, version: '0.5.0' })
+
+    expect(screen.getByText(/Update through the AUR with: yay -S troupe$/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Open download page/ })).toBeNull()
+  })
+
   it('keeps insider on the manual-download copy', () => {
     renderSection({ updateChannel: 'insider' })
 
@@ -105,20 +112,20 @@ describe('UpdatesSection error copy', () => {
   it('reports a failed check as a check failure', () => {
     renderSection({ updateError: 'network down', updateErrorSource: 'check' })
 
-    expect(screen.getByText(/Termul could not check for updates\./)).toBeTruthy()
+    expect(screen.getByText(/Troupe could not check for updates\./)).toBeTruthy()
   })
 
   it('reports a failed download as a download failure, not a check failure', () => {
     renderSection({ updateError: 'signature mismatch', updateErrorSource: 'download' })
 
-    expect(screen.getByText(/Termul could not download the update\./)).toBeTruthy()
+    expect(screen.getByText(/Troupe could not download the update\./)).toBeTruthy()
     expect(screen.queryByText(/could not check for updates/)).toBeNull()
   })
 
   it('reports a failed install as an install failure, not a check failure', () => {
     renderSection({ updateError: 'install failed', updateErrorSource: 'install' })
 
-    expect(screen.getByText(/Termul could not install the update\./)).toBeTruthy()
+    expect(screen.getByText(/Troupe could not install the update\./)).toBeTruthy()
     expect(screen.queryByText(/could not check for updates/)).toBeNull()
   })
 })

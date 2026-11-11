@@ -312,6 +312,8 @@ impl ExitSweep {
 // Every test in it is unix-only (it spawns `sleep`), so the module is too.
 #[cfg(all(test, unix))]
 mod lifecycle_tests;
+#[cfg(all(test, unix))]
+mod launcher_env_tests;
 #[cfg(test)]
 mod lifetime_tests;
 #[cfg(test)]

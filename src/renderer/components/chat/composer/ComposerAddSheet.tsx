@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { Camera, FileText, ImageIcon, Plus, Server } from '@/components/icons'
+import { Camera, FileText, ImageIcon, Plus, Server, Wrench } from '@/components/icons'
 import {
   MobileSheetContent,
   SheetGroup,
@@ -9,15 +9,19 @@ import {
   useSheetStack
 } from '@/components/ui/mobile-sheet'
 import { Sheet, SheetTrigger } from '@/components/ui/sheet'
+import type { TermulToolId } from '@/lib/composer/termul-tools'
 import type { BrowserPickOptions } from '@/lib/composer-attachments-io'
 import { logFrontendError } from '@/lib/log-api'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
-import { McpServerList, type McpServerListProps } from '../McpBadge'
+import { McpServerList, type McpServerListProps } from '../McpServerList'
+import { TERMUL_TOOL_ICONS } from '../ToolChip'
+import { type ConnectorsHost, connectorsMenuModel } from './connectors-menu-model'
+import type { TermulToolRow } from './use-termul-tools'
 
 /**
- * What the + sheet can ask of the composer. `ChatInputBar` owns the attachments
- * hook and the editor, so it hands these four capabilities down instead of the
- * sheet reaching into either.
+ * What the + sheet and the desktop + menu can ask of the composer. The host
+ * (`ChatInputBar`, `AgentLauncher`) owns the attachments hook and the editor,
+ * so it hands these capabilities down instead of the menus reaching into either.
  */
 export interface ComposerAddHandle {
   /** Whether attaching is allowed (false while the session is closed). */
@@ -29,17 +33,28 @@ export interface ComposerAddHandle {
   insertTrigger: (trigger: '@' | '/') => boolean
   /** Blur the editor synchronously (dismisses the on-screen keyboard). */
   blurEditor: () => void
+  /** Return focus to the editor (the desktop menu's close). */
+  focusEditor: () => void
+  /** Insert a Troupe tool pill at the caret; false when the editor is unavailable. */
+  insertTool: (id: TermulToolId) => boolean
 }
 
 interface ComposerAddSheetProps extends Omit<McpServerListProps, 'listClassName'> {
   handle: ComposerAddHandle
   /** Session closed: the editor is unavailable. */
   disabled: boolean
+  termulTools: TermulToolRow[]
+  connectorsHost: ConnectorsHost
 }
 
 const LOG_SOURCE = 'composer-add-sheet'
 
-type AddSheetView = 'mcp'
+type AddSheetView = 'connectors' | 'tools'
+
+const SHEET_TITLE: Record<AddSheetView, string> = {
+  tools: 'Troupe tools',
+  connectors: 'Connectors'
+}
 
 const TILE =
   'flex h-24 flex-col items-center justify-center gap-2 rounded-2xl bg-foreground/[0.05] text-sm text-foreground transition-colors duration-150 ease-out enabled:active:bg-foreground/[0.1] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:text-disabled-foreground'
@@ -63,17 +78,20 @@ function AttachTile({
   )
 }
 
-function mcpSummary(servers: McpServerListProps['servers']): string {
+function connectorsSummary(servers: McpServerListProps['servers']): string {
   if (servers.length === 0) return 'None added'
-  const on = servers.filter((server) => server.enabled).length
-  return `${on} of ${servers.length} on`
+  const { onCount } = connectorsMenuModel(servers, undefined, 'launcher')
+  return `${onCount} of ${servers.length} on`
 }
 
 export function ComposerAddSheet({
   handle,
   disabled,
+  termulTools,
+  connectorsHost,
   ...mcp
 }: ComposerAddSheetProps): React.JSX.Element {
+  const { footnote } = connectorsMenuModel(mcp.servers, mcp.probeStatus, connectorsHost)
   const [open, setOpen] = useState(false)
   // Set while a Mention/Commands tap hands focus to the editor, so the sheet's
   // own focus restore (back to +) does not steal it again.
@@ -96,12 +114,13 @@ export function ComposerAddSheet({
   // A closed sheet stays mounted until its exit animation ends, so a second tap
   // (a double-tap) can still reach these rows: `open` is already false then, and
   // the guards below make that tap a no-op instead of a second insert or picker.
-  const onTrigger = (trigger: '@' | '/'): void => {
+  const intoEditor = (insert: () => boolean): void => {
     if (!open) return
     keepEditorFocusRef.current = true
     flushSync(() => setOpen(false))
-    if (!handle.insertTrigger(trigger)) keepEditorFocusRef.current = false
+    if (!insert()) keepEditorFocusRef.current = false
   }
+  const onTrigger = (trigger: '@' | '/'): void => intoEditor(() => handle.insertTrigger(trigger))
 
   // The picker has to open from this tap (browsers require user activation), so
   // call it before closing the sheet. Focus then returns to +.
@@ -130,7 +149,7 @@ export function ComposerAddSheet({
         </button>
       </SheetTrigger>
       <MobileSheetContent
-        title={nav.top === 'mcp' ? 'MCP servers' : 'Add to chat'}
+        title={nav.top ? SHEET_TITLE[nav.top] : 'Add to chat'}
         nav={nav}
         aria-describedby={undefined}
         onEscapeKeyDown={nav.onEscapeKeyDown}
@@ -140,12 +159,36 @@ export function ComposerAddSheet({
           keepEditorFocusRef.current = false
         }}
       >
-        {nav.top === 'mcp' ? (
+        {nav.top === 'tools' ? (
+          <SheetGroup>
+            {termulTools.map(({ tool, state }) => {
+              const Icon = TERMUL_TOOL_ICONS[tool.id]
+              return (
+                <SheetRow
+                  key={tool.id}
+                  icon={
+                    <SheetIconWell>
+                      <Icon size={16} />
+                    </SheetIconWell>
+                  }
+                  title={tool.label}
+                  subtitle={state === 'closed' ? `${tool.description} · Closed` : tool.description}
+                  disabled={disabled}
+                  onSelect={() => intoEditor(() => handle.insertTool(tool.id))}
+                />
+              )
+            })}
+          </SheetGroup>
+        ) : nav.top === 'connectors' ? (
           <div className="rounded-2xl bg-foreground/[0.05] px-4 py-3 text-xs">
             {/* The sheet scrolls itself, so lift the popover's nested 300px scroller.
                 `max-h-fit` rather than `max-h-none`: tailwind-merge 2.x does not know
                 `max-h-none`, so it would leave `max-h-[300px]` in place. */}
-            <McpServerList {...mcp} listClassName="max-h-fit overflow-visible pr-0" />
+            <McpServerList
+              {...mcp}
+              footnote={footnote}
+              listClassName="max-h-fit overflow-visible pr-0"
+            />
           </div>
         ) : (
           <>
@@ -189,14 +232,27 @@ export function ComposerAddSheet({
               <SheetRow
                 icon={
                   <SheetIconWell>
+                    <Wrench size={16} />
+                  </SheetIconWell>
+                }
+                title="Troupe tools"
+                subtitle="Browser, canvas and automations"
+                accessory="chevron"
+                subview="tools"
+                disabled={disabled}
+                onSelect={() => nav.push('tools')}
+              />
+              <SheetRow
+                icon={
+                  <SheetIconWell>
                     <Server size={16} />
                   </SheetIconWell>
                 }
-                title="MCP servers"
-                subtitle={mcpSummary(mcp.servers)}
+                title="Connectors"
+                subtitle={connectorsSummary(mcp.servers)}
                 accessory="chevron"
-                subview="mcp"
-                onSelect={() => nav.push('mcp')}
+                subview="connectors"
+                onSelect={() => nav.push('connectors')}
               />
             </SheetGroup>
           </>

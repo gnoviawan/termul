@@ -11,20 +11,20 @@ export function TermsPage() {
   return (
     <LegalPage
       title="Terms"
-      description="Terms for using the Termul app and website: MIT license, no warranty, and testimonial submission terms."
+      description="Terms for using the Troupe app and website: MIT license, no warranty, and testimonial submission terms."
       path="/terms/"
       lastUpdated={LEGAL_LAST_UPDATED}
     >
-      <LegalSection title="The Termul app">
+      <LegalSection title="The Troupe app">
         <p>
-          Termul is free software released under the{' '}
+          Troupe is free software released under the{' '}
           <LegalLink href={LICENSE_URL}>MIT License</LegalLink>. The license
           text in the repository is the authoritative document; if anything on
           this page differs from it, the license wins. Source code is at{' '}
           <LegalLink href={GITHUB_REPO_URL}>github.com/gnoviawan/termul</LegalLink>.
         </p>
         <p>
-          Termul is free to download and use. Nothing on this website asks for
+          Troupe is free to download and use. Nothing on this website asks for
           payment.
         </p>
       </LegalSection>
@@ -38,7 +38,7 @@ export function TermsPage() {
           arising from the software or its use. This follows the MIT License.
         </p>
         <p>
-          Termul can run terminals, edit files, run Git commands, and launch
+          Troupe can run terminals, edit files, run Git commands, and launch
           third-party AI coding agents that can run commands on your machine.
           You are responsible for what you run and for backing up your work.
         </p>
@@ -94,7 +94,7 @@ export function TermsPage() {
           pull request and the date above is updated.
         </p>
         <p>
-          <em>Ringkasan:</em> Termul gratis dan berlisensi MIT, diberikan apa
+          <em>Ringkasan:</em> Troupe gratis dan berlisensi MIT, diberikan apa
           adanya tanpa garansi. Dengan mengirim testimoni, kamu setuju
           kutipan, nama, peran, dan avatar ditampilkan di termul.dev setelah
           disetujui, dan bisa minta dihapus lewat issue GitHub.

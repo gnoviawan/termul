@@ -632,7 +632,7 @@ test('with no dock on screen the property is absent and the toast sits 12px abov
   // Open the file from the Files sheet (header ⋯ → Files → the file row).
   await page.getByRole('button', { name: 'More', exact: true }).tap()
   await page
-    .getByRole('dialog', { name: 'Termul' })
+    .getByRole('dialog', { name: 'Troupe' })
     .getByRole('button', { name: 'Files', exact: true })
     .tap()
   const files = page.getByRole('dialog', { name: project.name })
@@ -869,7 +869,8 @@ test.describe('desktop browser', () => {
 
     // A toast keeps the desktop offset of 20px above the viewport bottom.
     const chooserOpened = page.waitForEvent('filechooser')
-    await page.getByRole('button', { name: 'Attach files' }).click()
+    await page.getByRole('button', { name: 'Add to chat' }).click()
+    await page.getByRole('menuitem', { name: /^Add files/ }).click()
     const chooser = await chooserOpened
     await chooser.setFiles({
       name: 'notes.txt',

@@ -70,6 +70,7 @@ vi.mock('@/lib/tauri-safe-update', () => ({
 }))
 
 import { toast } from 'sonner'
+import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import { showUpdateDownloadedToast, showUpdateToast } from './UpdateAvailableToast'
 
 type ToastAction = { onClick: () => void | Promise<void> }
@@ -267,5 +268,18 @@ describe('UpdateAvailableToast channel-aware labeling', () => {
     ]
     expect(opts.description).toBe('Version 0.4.9. Open the download page to install it manually.')
     expect(renderToStaticMarkup(opts.action.label)).toContain('Open download page')
+  })
+
+  it('tells AUR installs to update with yay -S troupe', async () => {
+    vi.mocked(isAurUpdateMode).mockReturnValueOnce(true)
+    showUpdateToast('0.5.0')
+    const action = lastToastAction(vi.mocked(toast.success))
+
+    await action.onClick()
+
+    expect(downloadUpdate).not.toHaveBeenCalled()
+    expect(vi.mocked(toast.info)).toHaveBeenCalledWith('Run in terminal', {
+      description: 'yay -S troupe'
+    })
   })
 })

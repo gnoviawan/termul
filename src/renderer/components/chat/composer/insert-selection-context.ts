@@ -1,9 +1,9 @@
 import type { Editor } from '@tiptap/core'
-import { TextSelection } from '@tiptap/pm/state'
 import { type MutableRefObject, useEffect } from 'react'
 import { CONTEXT_PILL_NODE } from '@/lib/composer/doc-to-prompt'
 import { contextToAttrs, type SelectionContext } from '@/lib/composer/selection-context'
 import { logFrontendError } from '@/lib/log-api'
+import { insertPillAtCaret } from './insert-pill'
 
 const LOG_SOURCE = 'insert-selection-context'
 
@@ -32,40 +32,7 @@ export function insertSelectionContext(editor: Editor | null, context: Selection
     return false
   }
   try {
-    const { state } = editor.view
-    const pill = state.schema.nodes[CONTEXT_PILL_NODE].create(contextToAttrs(context))
-    // Delete first, then work from a caret inside a paragraph: a select-all
-    // (Ctrl+A) selection starts at the doc level, outside any paragraph.
-    const tr = state.tr.deleteSelection()
-    const caret = TextSelection.near(tr.doc.resolve(tr.selection.from))
-    const { $from } = caret
-    const charBefore = $from.parent.textBetween(
-      Math.max(0, $from.parentOffset - 1),
-      $from.parentOffset,
-      undefined,
-      '\uFFFC'
-    )
-    const charAfter = $from.parent.textBetween(
-      $from.parentOffset,
-      Math.min($from.parent.content.size, $from.parentOffset + 1),
-      undefined,
-      '\uFFFC'
-    )
-    const needsLeadingSpace = charBefore.length > 0 && !/\s/.test(charBefore)
-    let pos = $from.pos
-    if (needsLeadingSpace) {
-      tr.insertText(' ', pos)
-      pos += 1
-    }
-    tr.insert(pos, pill)
-    pos += pill.nodeSize
-    if (!/^\s/.test(charAfter)) {
-      tr.insertText(' ', pos)
-      pos += 1
-    }
-    tr.setSelection(TextSelection.create(tr.doc, pos))
-    editor.view.dispatch(tr)
-    editor.view.focus()
+    insertPillAtCaret(editor, CONTEXT_PILL_NODE, contextToAttrs(context))
     void logFrontendError({
       level: 'info',
       source: LOG_SOURCE,
@@ -78,12 +45,6 @@ export function insertSelectionContext(editor: Editor | null, context: Selection
       message: `Could not add a selection context: ${err instanceof Error ? err.name : 'unknown error'}`
     })
     return false
-  }
-  // Best effort, after the insert: a view without layout (jsdom) cannot scroll.
-  try {
-    editor.view.dispatch(editor.view.state.tr.scrollIntoView())
-  } catch {
-    // Not scrollable: the caret stays where it is.
   }
   return true
 }

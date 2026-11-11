@@ -25,7 +25,7 @@ fn echo_then_exit(project: &str) -> SpawnOptions {
 }
 
 #[cfg(unix)]
-async fn wait_for_exit(instance: &TerminalInstance) {
+pub(super) async fn wait_for_exit(instance: &TerminalInstance) {
     for _ in 0..100 {
         if instance.has_exited() {
             return;
@@ -39,7 +39,7 @@ async fn wait_for_exit(instance: &TerminalInstance) {
 /// the last buffered output. The flusher ends only after that final publish,
 /// so joining it is the point where the output is replayable.
 #[cfg(unix)]
-async fn wait_for_output_published(instance: &TerminalInstance) {
+pub(super) async fn wait_for_output_published(instance: &TerminalInstance) {
     let flusher = instance
         .flusher_handle
         .lock()

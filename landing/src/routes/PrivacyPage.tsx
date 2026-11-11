@@ -11,13 +11,13 @@ export function PrivacyPage() {
   return (
     <LegalPage
       title="Privacy"
-      description="What the Termul website collects and loads, and what is and is not known about the Termul desktop app."
+      description="What the Troupe website collects and loads, and what is and is not known about the Troupe desktop app."
       path="/privacy/"
       lastUpdated={LEGAL_LAST_UPDATED}
     >
       <LegalSection title="Summary">
         <p>
-          Termul is a free, open-source desktop app. This website (termul.dev)
+          Troupe is a free, open-source desktop app. This website (termul.dev)
           loads Google Tag Manager, may load Cloudflare Web Analytics, and
           stores testimonial submissions. We did not find analytics or crash
           reporting code in the desktop app source. Details below.

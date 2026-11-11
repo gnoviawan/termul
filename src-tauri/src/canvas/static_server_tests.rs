@@ -383,7 +383,12 @@ mod served_from_dev_dir {
         let second = get(&uri, &revalidate);
         assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
 
-        let head = serve_bundle(&Method::HEAD, &uri.parse::<Uri>().unwrap(), &none);
+        // The route, not `serve_bundle`, drops a HEAD body (after setting
+        // Content-Length from it).
+        let head = web_router()
+            .oneshot(Request::head(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
         assert_eq!(head.status(), StatusCode::OK);
         assert_eq!(body_text(head).await, "");
 
@@ -447,6 +452,17 @@ mod served_from_dev_dir {
     }
 
     #[tokio::test]
+    async fn an_empty_index_answers_the_same_typed_error() {
+        let _bundle = Bundle::with(&[("index.html", b""), ("app.js", b"export default 1")]);
+        let id = "cv_empty_index";
+        let token = bundle_tokens().issue(id).unwrap();
+        let response = get(&format!("/canvas/{id}/{token}/"), &HeaderMap::new());
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+        assert_eq!(body["code"], "BUNDLE_MISSING");
+    }
+
+    #[tokio::test]
     async fn web_router_and_desktop_router_serve_the_same_bundle() {
         let _bundle = Bundle::standard();
         let id = "cv_parity";
@@ -481,6 +497,123 @@ mod served_from_dev_dir {
                 .await
                 .unwrap();
             assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    fn content_length(response: &Response) -> Option<&str> {
+        response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+    }
+
+    /// #1728: HEAD carries the same `Content-Length` as GET (RFC 9110
+    /// §9.3.2) on both the web router and the desktop listener.
+    #[tokio::test]
+    async fn head_reports_the_file_length_on_both_routers() {
+        let _bundle = Bundle::standard();
+        let id = "cv_head_length";
+        let token = bundle_tokens().issue(id).unwrap();
+        let files: [(&str, usize); 3] = [
+            ("", INDEX.len()),
+            ("app_bg.wasm", 4),
+            ("app.js", "export default 1".len()),
+        ];
+        for (router, name) in [(web_router(), "web"), (bundle_router(), "desktop")] {
+            for (file, size) in files {
+                let uri = format!("/canvas/{id}/{token}/{file}");
+                let head = router
+                    .clone()
+                    .oneshot(Request::head(&uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(head.status(), StatusCode::OK, "{name} {file}");
+                let expected = size.to_string();
+                assert_eq!(
+                    content_length(&head),
+                    Some(expected.as_str()),
+                    "{name} HEAD {file}"
+                );
+                assert_eq!(body_text(head).await, "", "{name} HEAD {file} has no body");
+
+                let get = get_from(router.clone(), uri).await;
+                assert_eq!(get.status(), StatusCode::OK, "{name} {file}");
+                assert_eq!(
+                    content_length(&get),
+                    Some(expected.as_str()),
+                    "{name} GET {file}"
+                );
+                assert_eq!(body_text(get).await.len(), size, "{name} GET {file}");
+            }
+        }
+    }
+
+    /// #1728 on the wire: hyper keeps the routed `Content-Length` on a HEAD
+    /// response and sends no body.
+    #[tokio::test]
+    async fn head_content_length_reaches_the_wire() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let _bundle = Bundle::standard();
+        let id = "cv_head_wire";
+        let token = bundle_tokens().issue(id).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, web_router()).await });
+
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "HEAD /canvas/{id}/{token}/app.js HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        server.abort();
+
+        let (head, body) = response.split_once("\r\n\r\n").unwrap();
+        assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+        let length = head
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().to_string())
+            })
+            .expect("a content-length header");
+        assert_eq!(length, "export default 1".len().to_string());
+        assert_eq!(body, "", "HEAD sends no body");
+    }
+
+    /// #1801: a 304 to a conditional HEAD carries no `Content-Length`, like
+    /// the 304 to GET (RFC 9110 §8.6), on both routers.
+    #[tokio::test]
+    async fn a_conditional_head_304_has_no_content_length_on_both_routers() {
+        let _bundle = Bundle::standard();
+        let id = "cv_head_304";
+        let token = bundle_tokens().issue(id).unwrap();
+        for file in ["", "app.js"] {
+            let uri = format!("/canvas/{id}/{token}/{file}");
+            let etag = get(&uri, &HeaderMap::new()).headers()[header::ETAG].clone();
+            for (router, name) in [(web_router(), "web"), (bundle_router(), "desktop")] {
+                for method in [Method::HEAD, Method::GET] {
+                    let response = router
+                        .clone()
+                        .oneshot(
+                            Request::builder()
+                                .method(method.clone())
+                                .uri(&uri)
+                                .header(header::IF_NONE_MATCH, etag.clone())
+                                .body(Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    let what = format!("{name} {method} {file}");
+                    assert_eq!(response.status(), StatusCode::NOT_MODIFIED, "{what}");
+                    assert_eq!(content_length(&response), None, "{what}");
+                    assert_eq!(response.headers()[header::ETAG], etag, "{what}");
+                    assert_eq!(body_text(response).await, "", "{what}");
+                }
+            }
         }
     }
 

@@ -130,7 +130,7 @@ export function SSHHostsView({
           <div className="space-y-1.5">
             <h2 className="text-base font-semibold text-foreground">No hosts yet</h2>
             <p className="text-sm text-muted-foreground">
-              Add a server to open a terminal on it from Termul, or import the hosts in your
+              Add a server to open a terminal on it from Troupe, or import the hosts in your
               ~/.ssh/config.
             </p>
           </div>
@@ -228,7 +228,7 @@ export function SSHHostsView({
 
       {!desktop && (
         <p className="border-b border-border bg-card px-6 py-2 text-center text-xs text-muted-foreground">
-          You can manage hosts here. Connecting to them works in the Termul desktop app.
+          You can manage hosts here. Connecting to them works in the Troupe desktop app.
         </p>
       )}
 

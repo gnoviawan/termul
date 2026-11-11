@@ -26,7 +26,7 @@ const productCtaConfig = {
     buttonClassName: undefined,
     size: 'md',
     githubVariant: 'dark',
-    downloadLabel: 'Download Termul',
+    downloadLabel: 'Download Troupe',
     showDownloadArrow: false,
   },
 } as const;

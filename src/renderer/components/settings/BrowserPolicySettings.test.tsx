@@ -95,7 +95,7 @@ describe('BrowserPolicySettings', () => {
     addOrigin('http://tauri.localhost')
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent(
-        "Termul's own addresses and local-only addresses can't be allowed."
+        "Troupe's own addresses and local-only addresses can't be allowed."
       )
     )
     expect(host.projects.get('p1')?.allowList).toEqual([])
@@ -218,7 +218,7 @@ describe('BrowserPolicySettings', () => {
     render(<BrowserPolicySettings />)
 
     expect(await screen.findByText('https://kept.example')).toBeInTheDocument()
-    expect(screen.getByText(/saved by a newer version of Termul/)).toBeInTheDocument()
+    expect(screen.getByText(/saved by a newer version of Troupe/)).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Allowed sites' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Remove https://kept.example' })).toBeDisabled()
   })

@@ -68,7 +68,7 @@ To fix the message of your last commit, or add forgotten changes to it:
 
 With **Amend last commit** selected, you can commit with nothing staged. That changes only the message.
 
-If the last commit is already pushed, Termul asks you to confirm with **Amend anyway**. Amending a pushed commit means you must force-push it from a terminal. Termul has no force-push button.
+If the last commit is already pushed, Troupe asks you to confirm with **Amend anyway**. Amending a pushed commit means you must force-push it from a terminal. Troupe has no force-push button.
 
 ## Let an agent write the message
 
@@ -80,12 +80,12 @@ If the last commit is already pushed, Termul asks you to confirm with **Amend an
 
 Before you start:
 
-- You need an agent that is set up. Termul uses the agent that is selected in the agent picker of the new chat screen. See [Agent setup](/docs/agent-setup).
+- You need an agent that is set up. Troupe uses the agent that is selected in the agent picker of the new chat screen. See [Agent setup](/docs/agent-setup).
 - The message replaces anything you already typed in **Summary** and **Description**.
-- The agent sees only staged changes. If they are very large, Termul refuses to send them and shows a message. Commit in smaller parts.
+- The agent sees only staged changes. If they are very large, Troupe refuses to send them and shows a message. Commit in smaller parts.
 - The agent has 60 seconds to answer.
 
-If no agent is selected, Termul shows a message that asks you to configure and select an agent. Set up an agent, pick it on the new chat screen, then try again.
+If no agent is selected, Troupe shows a message that asks you to configure and select an agent. Set up an agent, pick it on the new chat screen, then try again.
 
 ## Push your commits
 
@@ -95,6 +95,6 @@ Under the commit button, the push button shows what it will do:
 - **Push** with a number: you have that many commits to push. Click it to push them.
 - **Up to date**: there is nothing to push.
 
-A down arrow with a number means the remote has commits you do not have. Termul does not fetch or pull. The number is only as new as your last `git fetch`, and you pull from a terminal.
+A down arrow with a number means the remote has commits you do not have. Troupe does not fetch or pull. The number is only as new as your last `git fetch`, and you pull from a terminal.
 
 If the push needs you to type a password or a passphrase, it fails. Set up an SSH key or a credential helper for Git first.

@@ -32,7 +32,7 @@ pub(crate) use crate::web::fan_out;
 /// Mirror of the pre-1.3 schema `SessionModel` wire shape (`{ modelId, name,
 /// description? }`). Models are no longer a dedicated protocol type since ACP
 /// 0.14 — they are a `SessionConfigOption` with `category = "model"` — so
-/// Termul reconstructs this legacy view from `config_options` to keep the
+/// Troupe reconstructs this legacy view from `config_options` to keep the
 /// renderer's Model Picker contract byte-compatible.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -257,7 +257,7 @@ pub struct AuthMethodInfo {
     pub api_key: Option<ApiKeyShape>,
 }
 
-/// How an agent reads a key typed into Termul from
+/// How an agent reads a key typed into Troupe from
 /// `authenticate._meta["api-key"]`. ACP leaves the shape to each agent, so
 /// the host tells them apart by the provider the method advertises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

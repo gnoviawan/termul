@@ -39,11 +39,28 @@ is_release_prerelease() {
   [[ "$version" == *-* ]]
 }
 
+# 0.5.0 renamed the app from "Termul Manager" to Troupe. The DMG assets carry
+# the product name with spaces turned into dots, and the DMG holds
+# "<name>.app".
+release_product_name() {
+  local version core major minor
+  version="$(normalize_release_version "$1")" || return 1
+  core="${version%%[-+]*}"
+  IFS=. read -r major minor _ <<<"$core"
+  if ((major > 0 || minor >= 5)); then
+    printf '%s\n' "Troupe"
+  else
+    printf '%s\n' "Termul Manager"
+  fi
+}
+
 resolve_dmg_checksums() {
   local checksum_file="$1"
   local version="$2"
-  local arm_dmg="Termul.Manager_${version}_aarch64.dmg"
-  local intel_dmg="Termul.Manager_${version}_x64.dmg"
+  local name
+  name="$(release_product_name "$version")" || return 1
+  local arm_dmg="${name// /.}_${version}_aarch64.dmg"
+  local intel_dmg="${name// /.}_${version}_x64.dmg"
   local arm_sha256 intel_sha256
 
   arm_sha256="$(awk -v file="$arm_dmg" '$2 == file || $2 == "*" file { print $1 }' "$checksum_file")"
@@ -128,39 +145,78 @@ generate_sha256sums() {
   fi
 }
 
+# The cask token follows the product name: "troupe" from 0.5.0, "termul"
+# before.
+homebrew_cask_token() {
+  local name
+  name="$(release_product_name "$1")" || return 1
+  if [[ "$name" == "Troupe" ]]; then
+    printf '%s\n' "troupe"
+  else
+    printf '%s\n' "termul"
+  fi
+}
+
+# Writes the cask for <version> into a checkout of the tap. From 0.5.0 it also
+# deletes Casks/termul.rb and maps termul to troupe in cask_renames.json:
+# `brew update` then moves installed termul casks to troupe, and Homebrew
+# ignores the rename while the old cask file still exists.
+#
+#   update_homebrew_tap <tap_dir> <version> <arm_sha256> <intel_sha256>
+update_homebrew_tap() {
+  local tap_dir="$1"
+  local version="$2"
+  local token
+  token="$(homebrew_cask_token "$version")" || return 1
+
+  if [[ "$token" == "termul" && -e "$tap_dir/Casks/troupe.rb" ]]; then
+    echo "The tap already ships the troupe cask; publishing termul $version would undo the rename." >&2
+    return 1
+  fi
+
+  write_homebrew_cask "$tap_dir/Casks/$token.rb" "$version" "$3" "$4" || return 1
+  if [[ "$token" == "troupe" ]]; then
+    rm -f -- "$tap_dir/Casks/termul.rb"
+    printf '{\n  "termul": "troupe"\n}\n' >"$tap_dir/cask_renames.json"
+  fi
+}
+
 write_homebrew_cask() {
   local output_file="$1"
   local version="$2"
   local arm_sha256="$3"
   local intel_sha256="$4"
+  local name token
+  name="$(release_product_name "$version")" || return 1
+  token="$(homebrew_cask_token "$version")" || return 1
 
   mkdir -p "$(dirname "$output_file")"
   cat >"$output_file" <<EOF
-cask "termul" do
+cask "$token" do
   arch arm: "aarch64", intel: "x64"
 
   version "$version"
   sha256 arm:   "$arm_sha256",
          intel: "$intel_sha256"
 
-  url "https://github.com/gnoviawan/termul/releases/download/v#{version}/Termul.Manager_#{version}_#{arch}.dmg"
-  name "Termul Manager"
+  url "https://github.com/gnoviawan/termul/releases/download/v#{version}/${name// /.}_#{version}_#{arch}.dmg"
+  name "$name"
   desc "Terminal-native workspace and CLI agent manager"
   homepage "https://github.com/gnoviawan/termul"
 
   auto_updates true
 
-  app "Termul Manager.app"
+  app "$name.app"
 EOF
 
   if [[ "$version" == "0.4.8" ]]; then
-    cat >>"$output_file" <<'EOF'
+    cat >>"$output_file" <<EOF
 
   # v0.4.8 predates Developer ID signing and notarization. Do not copy this
   # narrowly scoped compatibility exception to later casks.
   postflight do
     system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/Termul Manager.app"]
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/$name.app"]
   end
 EOF
   fi

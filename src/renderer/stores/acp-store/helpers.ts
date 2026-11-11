@@ -34,10 +34,10 @@ import {
 } from '@/lib/acp-api'
 import {
   type AgentSwitchRecord,
+  isUntitledTitle,
   maxPayloadSeq,
   type PersistedTurnError,
-  type SessionIndexEntry,
-  UNTITLED_HOST_TITLE
+  type SessionIndexEntry
 } from '@/lib/acp-history-persistence'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { agentConfigIdentityKey } from '@/lib/agents/acp-config-identity'
@@ -1109,7 +1109,17 @@ export function mergeSessionIndexEntries(
             turnActive: mergeTurnActive(entry.turnActive, hostEntry.turnActive, true),
             // The host stamps `created_at` once at registration; a local
             // projection re-stamped by a reopen must not override it.
-            createdAt: keepCreatedAt(hostEntry.createdAt, entry.createdAt)
+            createdAt: keepCreatedAt(hostEntry.createdAt, entry.createdAt),
+            // A newer local row must not downgrade a real host-derived title to
+            // the `Untitled Chat` placeholder (issue #1798): a watching device
+            // re-stamps the stale placeholder at turn end with a fresh
+            // `lastActivityAt`, which would otherwise beat the host's derived
+            // title on every refetch. Keep the host title when ours is a
+            // placeholder and theirs is real; a real local rename still wins.
+            title:
+              isUntitledTitle(entry.title) && !isUntitledTitle(hostEntry.title)
+                ? hostEntry.title
+                : entry.title
           }
         }
       } else {
@@ -1117,7 +1127,7 @@ export function mergeSessionIndexEntries(
         // and the host cannot know yet: the host titles a chat only once its
         // first prompt is durable (a promoted warm session registers
         // untitled), and its index omits `turnActive`.
-        const keepTitle = hostEntry.title === UNTITLED_HOST_TITLE
+        const keepTitle = isUntitledTitle(hostEntry.title)
         const keepTurn = entry.turnActive === true && hostEntry.turnActive === undefined
         const idx = merged.findIndex((e) => e.id === entry.id)
         if ((keepTitle || keepTurn) && idx >= 0) {
@@ -1141,6 +1151,44 @@ export function mergeSessionIndexEntries(
   return merged.map((e) =>
     e.title.includes('# Conversation handoff') ? { ...e, title: normalizeIndexTitle(e.title) } : e
   )
+}
+
+/**
+ * The title a live session should show when it may still hold the
+ * `Untitled Chat` placeholder (issue #1808). A watching device can install a
+ * chat started on another device before the host has titled it (the payload
+ * then carries the placeholder); the host's later title only reaches the index
+ * row, while the tab, phone header and drawer read `session.title`. A
+ * placeholder gives way to a real index title; any other title (including a
+ * user rename) and a `null` title are kept as they are.
+ */
+export function preferIndexTitle(
+  title: string | null,
+  entries: readonly SessionIndexEntry[],
+  sessionId: SessionId
+): string | null {
+  if (!isUntitledTitle(title)) return title
+  const indexTitle = entries.find((e) => e.id === sessionId)?.title
+  return indexTitle && !isUntitledTitle(indexTitle) ? indexTitle : title
+}
+
+/**
+ * Give every live session that still shows a placeholder title the real title
+ * its index row now carries (issue #1808). Returns `sessions` itself when
+ * nothing changes, so subscribers do not re-render.
+ */
+export function adoptIndexTitles(
+  sessions: Record<SessionId, AcpSession>,
+  entries: readonly SessionIndexEntry[]
+): Record<SessionId, AcpSession> {
+  let next: Record<SessionId, AcpSession> | null = null
+  for (const [id, session] of Object.entries(sessions)) {
+    const title = preferIndexTitle(session.title, entries, id)
+    if (title === session.title) continue
+    next ??= { ...sessions }
+    next[id] = { ...session, title }
+  }
+  return next ?? sessions
 }
 
 /**

@@ -1,15 +1,15 @@
 ---
-title: Use Termul in a browser
-description: Open Termul in a web browser, enter the token, and read the connection light.
+title: Use Troupe in a browser
+description: Open Troupe in a web browser, enter the token, and read the connection light.
 ---
 
 <Callout type="info">This works in a browser or on a phone only.</Callout>
 
-In a browser, Termul looks and works like the desktop app. Your projects, chats, terminals and files live on the machine that runs the server. The browser shows them and sends what you type.
+In a browser, Troupe looks and works like the desktop app. Your projects, chats, terminals and files live on the machine that runs the server. The browser shows them and sends what you type.
 
-![Termul in a desktop browser, with the Connected tooltip over the connection light in the status bar](/screenshots/remote-browser-connected.png)
+![Troupe in a desktop browser, with the Connected tooltip over the connection light in the status bar](/screenshots/remote-browser-connected.png)
 
-## Open Termul the first time
+## Open Troupe the first time
 
 Use the link that has the token in it. It looks like this:
 
@@ -17,20 +17,20 @@ Use the link that has the token in it. It looks like this:
 https://termul.example.com/#token=<token>
 ```
 
-You get this link from the QR code or **Copy link** when you [share your desktop app](/docs/remote/share-desktop), or you build it from the server's token file when you [run termul-server](/docs/remote/server-options#the-access-token).
+You get this link from the QR code or **Copy link** when you [share your desktop app](/docs/remote/share-desktop), or you build it from the server's token file when you [run troupe-server](/docs/remote/server-options#the-access-token).
 
 The browser saves the token, so later you can open the address without `#token=`. The token is saved per browser. A second browser, a private window, or a phone each need the token once.
 
 ## Enter the token
 
-If you open a server that needs a token and your browser doesn't have it, Termul shows **Server access token required**.
+If you open a server that needs a token and your browser doesn't have it, Troupe shows **Server access token required**.
 
 ![The Server access token required screen with a token field and a Continue button](/screenshots/remote-token-screen.png)
 
 1. Paste the token into the field.
 2. Click **Continue**.
 
-If the token is wrong, Termul says it is invalid and lets you try again. You also see this screen after someone changes the server's token.
+If the token is wrong, Troupe says it is invalid and lets you try again. You also see this screen after someone changes the server's token.
 
 ## Check the connection
 
@@ -38,7 +38,7 @@ In the browser, the status bar has a small connection light. Point at it to see 
 
 - **Connected.** Everything works.
 - **Control channel** or **Terminal channel** with a state such as `reconnecting`. The browser lost its connection and is trying again. Chats and terminals catch up when it reconnects. Terminals keep what you type and send it when the connection comes back.
-- **Host offline.** The server or the shared desktop app stopped on purpose. Termul checks now and then whether it is back. Click the light to try again right away.
+- **Host offline.** The server or the shared desktop app stopped on purpose. Troupe checks now and then whether it is back. Click the light to try again right away.
 
 An open chat also shows **Host offline** or **Reconnecting…** in its top corner.
 
@@ -48,7 +48,7 @@ The desktop app has no connection light, because it doesn't connect over the net
 
 ## Shortcuts that use Alt in the browser
 
-Browsers keep some `Ctrl` shortcuts for themselves, such as `Ctrl+T` for a new browser tab. In the browser version, Termul uses `Alt` for these instead:
+Browsers keep some `Ctrl` shortcuts for themselves, such as `Ctrl+T` for a new browser tab. In the browser version, Troupe uses `Alt` for these instead:
 
 | Action | Desktop app | Browser |
 | --- | --- | --- |
@@ -79,4 +79,4 @@ Some things work differently:
 
 - When you create a project, **Browse** opens a folder picker that shows the server's folders.
 - If the server is view-only for your device, you can watch but not make changes. See [Allow changes from other devices](/docs/remote/server-options#allow-changes-from-other-devices).
-- On a narrow window or a phone, Termul switches to a phone layout. See [Use Termul on a phone](/docs/remote/phone).
+- On a narrow window or a phone, Troupe switches to a phone layout. See [Use Troupe on a phone](/docs/remote/phone).

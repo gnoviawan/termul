@@ -296,7 +296,9 @@ export function useMcpCatalogInstall(): McpCatalogInstall {
     void useAcpStore
       .getState()
       .connectMcpOAuth(useProjectStore.getState().activeProjectId, server.id)
-      .then(() => toast.success(`Connected to ${server.name}`))
+      .then((connected) => {
+        if (connected) toast.success(`Connected to ${server.name}`)
+      })
       .catch((error: unknown) => toast.error(oauthFailureMessage(error)))
   }, [])
 

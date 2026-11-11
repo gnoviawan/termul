@@ -7,7 +7,7 @@ A snapshot saves the terminals of the active project: their names, shells, and f
 
 A snapshot doesn't save running programs, the split layout, or tabs that aren't terminals, such as chats and files. A terminal that runs an AI agent comes back as a plain shell.
 
-Each project has its own snapshots. Termul also keeps snapshots per device. A snapshot you save on your phone doesn't appear in the browser on your computer, and the reverse.
+Each project has its own snapshots. Troupe also keeps snapshots per device. A snapshot you save on your phone doesn't appear in the browser on your computer, and the reverse.
 
 ## Save a snapshot
 
@@ -18,16 +18,16 @@ Each project has its own snapshots. Termul also keeps snapshots per device. A sn
 
 ![The Create Snapshot dialog with the name Discount work and a short description](/screenshots/terminals-snapshot-create.png)
 
-Termul saves the snapshot. It doesn't show a confirmation message.
+Troupe saves the snapshot. It doesn't show a confirmation message.
 
-You can also save a snapshot from the **Workspace Snapshots** page. Select **Create New Snapshot**, or **Create First Snapshot** if the list is empty. On a phone, the button is **New**. After you save a snapshot on a phone, Termul goes back to the chat screen. Open the snapshots page again to see it.
+You can also save a snapshot from the **Workspace Snapshots** page. Select **Create New Snapshot**, or **Create First Snapshot** if the list is empty. On a phone, the button is **New**. After you save a snapshot on a phone, Troupe goes back to the chat screen. Open the snapshots page again to see it.
 
 ## See your snapshots
 
 The **Workspace Snapshots** page lists the snapshots of the active project, newest first.
 
 - **On a phone**, open the menu and select the camera icon at the bottom.
-- **In a browser on a computer**, add `#/snapshots` to the end of the Termul address, for example `https://termul.example.com/#/snapshots`.
+- **In a browser on a computer**, add `#/snapshots` to the end of the Troupe address, for example `https://termul.example.com/#/snapshots`.
 
 <Callout type="info">The desktop app has no button or command that opens the snapshots page yet. You can save snapshots there, but you can't restore them.</Callout>
 
@@ -45,7 +45,7 @@ The **Workspace Snapshots** page lists the snapshots of the active project, newe
 
 ![The Restore Snapshot dialog, which says it will close all current terminals and recreate 2 terminals, with a warning about running processes](/screenshots/terminals-snapshot-restore.png)
 
-Termul closes the project's terminals. Then it opens a new shell for each terminal in the snapshot, with the saved name, shell, and folder. The restored terminals start with a new prompt, without the old output. They open as tabs in the active pane, and Termul takes you back to the workspace. Chats, files, and terminals in other projects are not affected.
+Troupe closes the project's terminals. Then it opens a new shell for each terminal in the snapshot, with the saved name, shell, and folder. The restored terminals start with a new prompt, without the old output. They open as tabs in the active pane, and Troupe takes you back to the workspace. Chats, files, and terminals in other projects are not affected.
 
 ## Rename or delete a snapshot
 
@@ -63,4 +63,4 @@ The pencil icon on a computer doesn't work yet.
 
 ## When snapshot storage is full
 
-Each project has limited room for snapshots. When it fills up, Termul first removes the saved terminal output from older snapshots. If that isn't enough, it deletes the oldest snapshots. It never deletes the newest one. Termul shows a warning that says how many snapshots it changed or removed.
+Each project has limited room for snapshots. When it fills up, Troupe first removes the saved terminal output from older snapshots. If that isn't enough, it deletes the oldest snapshots. It never deletes the newest one. Troupe shows a warning that says how many snapshots it changed or removed.

@@ -3,7 +3,7 @@ title: App settings
 description: What each tab in Application Preferences does.
 ---
 
-App settings apply to every project. Open them with `Ctrl+,` (`Cmd+,` on macOS, `Alt+,` in the browser version) or the **Settings** button at the bottom left of the sidebar. Termul saves each change as soon as you make it.
+App settings apply to every project. Open them with `Ctrl+,` (`Cmd+,` on macOS, `Alt+,` in the browser version) or the **Settings** button at the bottom left of the sidebar. Troupe saves each change as soon as you make it.
 
 ![The Terminal Appearance tab with sliders for zoom and font size](/screenshots/settings-app-preferences.png)
 
@@ -11,7 +11,7 @@ App settings apply to every project. Open them with `Ctrl+,` (`Cmd+,` on macOS, 
 
 These options change how text looks in the app and in terminals.
 
-- **UI Zoom Level** makes the whole window bigger or smaller, from 50% to 300%. Select **Reset to 100%** to go back. You can also press `Ctrl+=`, `Ctrl+-`, and `Ctrl+0`. In the browser version these keys belong to the browser, so Termul uses `Alt+=`, `Alt+-`, and `Alt+0`.
+- **UI Zoom Level** makes the whole window bigger or smaller, from 50% to 300%. Select **Reset to 100%** to go back. You can also press `Ctrl+=`, `Ctrl+-`, and `Ctrl+0`. In the browser version these keys belong to the browser, so Troupe uses `Alt+=`, `Alt+-`, and `Alt+0`.
 - **Font Size** sets the size of terminal text, from 10 to 24 pixels. The default is 14.
 - **Scrollback Buffer Size** sets how many lines each terminal keeps for scrolling back, from 1,000 to 50,000. The default is 10,000. More lines use more memory.
 - **Terminal Renderer** chooses how terminals draw text. **Auto** uses **WebGL**, which draws with your graphics card, and falls back to **DOM** when WebGL is not available.
@@ -22,7 +22,7 @@ The scrollback, renderer, and screen reader options apply to terminals you open 
 
 ## Default Shell
 
-**Shell** picks the shell that new terminals start. **System Default** uses your computer's default shell. The list also shows every shell Termul found on your computer. A project can use a different shell. See [Project settings](/docs/settings/project-settings).
+**Shell** picks the shell that new terminals start. **System Default** uses your computer's default shell. The list also shows every shell Troupe found on your computer. A project can use a different shell. See [Project settings](/docs/settings/project-settings).
 
 ## Terminal Profiles
 
@@ -39,15 +39,15 @@ A terminal profile is a saved way to open a terminal: a shell, its arguments, a 
 
 To open a terminal from a profile, press `Ctrl+K` and choose **New Terminal:** followed by the profile name. Use the pencil button to edit a profile and the trash button to delete it.
 
-<Callout type="warn">Termul saves profile variables as plain text with your settings. Do not put passwords or API keys in a profile.</Callout>
+<Callout type="warn">Troupe saves profile variables as plain text with your settings. Do not put passwords or API keys in a profile.</Callout>
 
 ## Behavior
 
 ![The Behavior tab with link, auto save, and notification options](/screenshots/settings-behavior.png)
 
-- **Open Terminal Links In** decides where a link opens when you `Ctrl+click` it in a terminal (`Cmd+click` on macOS). Choose **System Default Browser** or **Termul Browser**. Termul Browser opens the link in a browser tab inside Termul, which is in the desktop app only.
+- **Open Terminal Links In** decides where a link opens when you `Ctrl+click` it in a terminal (`Cmd+click` on macOS). Choose **System Default Browser** or **Troupe Browser**. Troupe Browser opens the link in a browser tab inside Troupe, which is in the desktop app only.
 - **Enable auto save** saves files in the editor after you stop typing. It is off by default.
-- **Auto Save Delay** is how long Termul waits after your last edit before it saves: 0.5, 1, 2, or 5 seconds. You can change it only while auto save is on.
+- **Auto Save Delay** is how long Troupe waits after your last edit before it saves: 0.5, 1, 2, or 5 seconds. You can change it only while auto save is on.
 - **Notifications** has three switches for agent notifications. See [Notifications](/docs/settings/notifications).
 
 ## New Project Defaults
@@ -58,7 +58,7 @@ To open a terminal from a profile, press `Ctrl+K` and choose **New Terminal:** f
 
 These tabs set up the agents you chat with. [Agent setup](/docs/agent-setup) explains each one.
 
-- **Agent chats** lists the agents Termul can start, shows whether each is ready, and sets how long Termul waits for an agent. **Suggest automations from repeated chats** turns [automation suggestions](/docs/automations#suggestions-from-repeated-asks) on or off.
+- **Agent chats** lists the agents Troupe can start, shows whether each is ready, and sets how long Troupe waits for an agent. **Suggest automations from repeated chats** turns [automation suggestions](/docs/automations#suggestions-from-repeated-asks) on or off.
 - **Skills** shows the skills installed for every project and for the open project.
 - **Provider** adds Claude accounts, picks the default account, and shows how much of each account's limits you have used.
 - **MCP Servers** manages the tool servers that new agent chats can use, and lets you browse the MCP catalog.
@@ -79,15 +79,15 @@ Pick a release channel, check for updates, and turn automatic checks on or off. 
 
 ## Server
 
-<Callout type="info">This works in the browser version only, when Termul is served by `termul-server`.</Callout>
+<Callout type="info">This works in the browser version only, when Troupe is served by `troupe-server`.</Callout>
 
 This tab changes how the server itself runs: its bind host and port, sessions directory, projects file, whether other devices can make changes, and its update channel. It is the same page as the setup wizard shown on a fresh install.
 
-Applying saves the settings to `server-config.json` in the server's state folder and restarts the server. If the address changes, your browser follows the server to the new address by itself. See [Install and start termul-server](/docs/remote/server#set-it-up-in-the-browser).
+Applying saves the settings to `server-config.json` in the server's state folder and restarts the server. If the address changes, your browser follows the server to the new address by itself. See [Install and start troupe-server](/docs/remote/server#set-it-up-in-the-browser).
 
 ## Diagnostics & Logs
 
-Termul writes a log file that helps find the cause of a problem. This tab gets the log out of the app.
+Troupe writes a log file that helps find the cause of a problem. This tab gets the log out of the app.
 
 ![The Diagnostics and Logs tab in the browser version, with the Copy Log Contents button](/screenshots/settings-diagnostics.png)
 
@@ -100,6 +100,6 @@ In the browser version, the log is on the computer that runs the server, so only
 
 ## Reset Settings
 
-**Reset to Defaults** puts every app setting and every keyboard shortcut back to its default. It also shows the sidebar and side panels again if you hid them. Termul asks you to confirm first. You cannot undo a reset.
+**Reset to Defaults** puts every app setting and every keyboard shortcut back to its default. It also shows the sidebar and side panels again if you hid them. Troupe asks you to confirm first. You cannot undo a reset.
 
 A reset keeps your terminal profiles. Delete them under **Terminal Profiles** if you want them gone.

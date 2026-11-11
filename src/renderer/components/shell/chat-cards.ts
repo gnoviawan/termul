@@ -50,7 +50,7 @@ interface BuildChatCardsInput {
 }
 
 /**
- * Cards for the active project: Termul-created chats only, scoped by the pick
+ * Cards for the active project: Troupe-created chats only, scoped by the pick
  * (a picked worktree keeps its own chats; Workspace keeps all of them), newest
  * activity first with the id as the tie-break.
  */

@@ -1,4 +1,4 @@
-# Termul Manager - Project Overview
+# Troupe - Project Overview
 
 **Date:** 2026-05-09
 **Type:** Desktop Application
@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-Termul Manager is a project-aware desktop terminal workspace built on **Tauri 2**, with a **React 18 + TypeScript** frontend and a **Rust** backend runtime. The app organizes terminals by project, persists workspace state, supports snapshots and command history, and combines multiple interaction surfaces in a single desktop shell: terminal panes, file explorer, editor panels, and embedded browser tabs with annotation support.
+Troupe is a project-aware desktop terminal workspace built on **Tauri 2**, with a **React 18 + TypeScript** frontend and a **Rust** backend runtime. The app organizes terminals by project, persists workspace state, supports snapshots and command history, and combines multiple interaction surfaces in a single desktop shell: terminal panes, file explorer, editor panels, and embedded browser tabs with annotation support.
 
 The repository is a **single desktop application** rather than a multi-part monorepo. Its architecture separates concerns cleanly between:
 

@@ -63,7 +63,7 @@ const ALLOWED_AGENT_CONFIG_FIELDS = new Set<string>([
   'icon'
 ])
 
-/** Zed session-preference fields silently dropped on import (no Termul equivalent). */
+/** Zed session-preference fields silently dropped on import (no Troupe equivalent). */
 const DROPPED_ZED_FIELDS = new Set([
   'type',
   'default_mode',

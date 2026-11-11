@@ -10,7 +10,7 @@ The message box at the bottom of a chat is where you talk to the agent. Besides 
 - Press `Enter` to send. `Ctrl+Enter` (`Cmd+Enter` on macOS) also sends.
 - Press `Shift+Enter` to start a new line.
 
-If the agent is still working when you send, Termul queues your message and sends it when the agent finishes. See [Queue prompts](/docs/agents/follow-the-work#queue-prompts).
+If the agent is still working when you send, Troupe queues your message and sends it when the agent finishes. See [Queue prompts](/docs/agents/follow-the-work#queue-prompts).
 
 ## Change the model, effort, and fast mode
 
@@ -34,13 +34,13 @@ Hover over a model and click its star to add it to **Favorites**. Favorites appe
 
 ## Choose how much the agent may do
 
-The mode button sits between the model button and the send arrow. A mode controls whether the agent asks you before it edits files or runs commands. Each agent has its own list of modes. Termul sorts them into groups so you can see how much each one allows:
+The mode button sits between the model button and the send arrow. A mode controls whether the agent asks you before it edits files or runs commands. Each agent has its own list of modes. Troupe sorts them into groups so you can see how much each one allows:
 
 - **Ask first**. The agent asks before it edits files or runs commands, or it only reads and plans. Pick these when you want to check each step.
 - **Let _agent_ act**, where _agent_ is the agent's name. The agent edits files, and sometimes runs commands, without asking first. Pick these for routine work you will review afterwards.
 - **Use with care**. The agent does everything without asking, including commands that can delete files or push code. These modes sit at the bottom of the menu, under a line. They have a yellow icon, and their description ends with "Use with care." While one is on, the icon on the mode button is yellow too.
 
-Modes that Termul does not recognize are listed under **Other modes**. Read their descriptions in the menu. Termul shows the group names only when the agent's modes fall into more than one group.
+Modes that Troupe does not recognize are listed under **Other modes**. Read their descriptions in the menu. Troupe shows the group names only when the agent's modes fall into more than one group.
 
 ![The mode menu. Default and Plan are under Ask first. Accept edits is under "Let ... act" with the agent's name. Bypass permissions is at the bottom, below a line, with a yellow icon and the words "Use with care."](/screenshots/agents-modes.png)
 
@@ -94,13 +94,13 @@ Each file shows as a chip above your text. Hover an image chip to see a preview.
 
 ![The message box with an attached screenshot named checkout.png and a question about it.](/screenshots/agents-attachment.png)
 
-Other file types, such as PDFs, are not supported. Termul shows "Unsupported file type (text or image only)".
+Other file types, such as PDFs, are not supported. Troupe shows "Unsupported file type (text or image only)".
 
 Files that you drag in or paste, and every file you attach in a browser, go into the message itself. These limits apply to them:
 
-- A text or code file can be up to 512 KB. The agent must accept files in a message. If it does not, Termul asks you to use the paperclip instead, in the desktop app.
+- A text or code file can be up to 512 KB. The agent must accept files in a message. If it does not, Troupe asks you to use the paperclip instead, in the desktop app.
 - An image can be up to 10 MB when the agent accepts images.
-- In a browser, the agent must accept images. If it does not, Termul shows "This agent can't accept images in the browser".
+- In a browser, the agent must accept images. If it does not, Troupe shows "This agent can't accept images in the browser".
 - In the desktop app, an image for an agent that does not accept images is saved to a temporary file. The agent gets its path.
 
 A file over the limit shows "File too large".

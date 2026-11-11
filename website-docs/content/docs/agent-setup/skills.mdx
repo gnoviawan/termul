@@ -7,17 +7,17 @@ A skill is a set of instructions that you write once and reuse in any chat. For 
 
 ## Where skills live
 
-Each skill is a folder with a `SKILL.md` file in it. Termul looks in these places:
+Each skill is a folder with a `SKILL.md` file in it. Troupe looks in these places:
 
 - **Global** skills are in `~/.agents/skills/` in your home folder. Every project can use them.
-- **Claude Code** skills are in `~/.claude/skills/`, and in the skills of the Claude Code plugins you have enabled. Termul lists them with your global skills, so a skill you already installed for Claude Code shows up without copying it.
+- **Claude Code** skills are in `~/.claude/skills/`, and in the skills of the Claude Code plugins you have enabled. Troupe lists them with your global skills, so a skill you already installed for Claude Code shows up without copying it.
 - **Project** skills are in `.agents/skills/` inside the project folder. Only that project can use them.
 
-If two skills have the same name, the more specific one wins. A project skill beats `~/.agents/skills/`, which beats `~/.claude/skills/`, which beats a Claude Code plugin skill. Termul does not list skills from a Claude Code plugin that you turned off.
+If two skills have the same name, the more specific one wins. A project skill beats `~/.agents/skills/`, which beats `~/.claude/skills/`, which beats a Claude Code plugin skill. Troupe does not list skills from a Claude Code plugin that you turned off.
 
-These are the same folders the Zed editor uses, so skills you wrote for Zed show up in Termul too.
+These are the same folders the Zed editor uses, so skills you wrote for Zed show up in Troupe too.
 
-<Callout type="info">In the browser version, "your home folder" is the home folder of the account that runs the Termul server.</Callout>
+<Callout type="info">In the browser version, "your home folder" is the home folder of the account that runs the Troupe server.</Callout>
 
 ## Write a skill
 
@@ -37,9 +37,9 @@ description: Review a diff against the Acme Shop checklist before you open a PR.
 2. Check that every price uses cents, not floats.
 ```
 
-The `name` can use only lowercase letters, digits and single hyphens, such as `release-notes`. Termul skips a skill with any other name. If you leave out `name`, Termul uses the folder name.
+The `name` can use only lowercase letters, digits and single hyphens, such as `release-notes`. Troupe skips a skill with any other name. If you leave out `name`, Troupe uses the folder name.
 
-Write the `description` on one line. Termul does not read a description that spans several lines, such as one that starts with `>-`.
+Write the `description` on one line. Troupe does not read a description that spans several lines, such as one that starts with `>-`.
 
 ## See your skills
 
@@ -56,4 +56,4 @@ Open Settings with `Ctrl+,` (`Cmd+,` on macOS) and click **Skills**. The page li
 
 ![The slash menu in a new chat, filtered with /rev, showing the review-checklist skill](/screenshots/agent-setup-slash-skills.png)
 
-Termul tells the agent where the skill's `SKILL.md` file is, and the agent reads the instructions from there. You can use more than one skill in a message.
+Troupe tells the agent where the skill's `SKILL.md` file is, and the agent reads the instructions from there. You can use more than one skill in a message.

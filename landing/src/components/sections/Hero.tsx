@@ -21,7 +21,7 @@ export const Hero = () => {
           </h1>
 
           <p className="t-stagger-line t-stagger-line--3 text-lg md:text-xl max-w-2xl mb-10 text-slate-600">
-            Termul treats workspaces as first-class citizens. Organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.
+            Troupe treats workspaces as first-class citizens. Organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.
           </p>
         </div>
 
@@ -32,7 +32,7 @@ export const Hero = () => {
         <div className="relative w-full max-w-5xl mx-auto t-emphasis-fade">
           <img
             src="/termulmock.png"
-            alt="Termul application with project workspaces, multiple terminals, and file explorer"
+            alt="Troupe application with project workspaces, multiple terminals, and file explorer"
             className="w-full h-auto rounded-lg shadow-2xl shadow-black/10"
             width={1024}
             height={640}

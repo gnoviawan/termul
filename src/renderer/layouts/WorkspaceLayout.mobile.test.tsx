@@ -1485,7 +1485,7 @@ describe('WorkspaceLayout mobile branch', () => {
     /** Open the drawer, switch it to `section` with its nav row, and tap `row`. */
     const tapSectionRow = async (section: string, row: string): Promise<void> => {
       fireEvent.click(await screen.findByLabelText('Open menu'))
-      const drawer = await screen.findByRole('dialog', { name: 'Termul' })
+      const drawer = await screen.findByRole('dialog', { name: 'Troupe' })
       fireEvent.click(
         within(within(drawer).getByRole('navigation', { name: 'Sections' })).getByRole('button', {
           name: section
@@ -1567,7 +1567,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
       // Opening and closing the drawer re-renders the shell around the pane.
       fireEvent.click(await screen.findByLabelText('Open menu'))
-      await screen.findByRole('dialog', { name: 'Termul' })
+      await screen.findByRole('dialog', { name: 'Troupe' })
       fireEvent.keyDown(document.body, { key: 'Escape' })
 
       await waitFor(() =>
@@ -1696,12 +1696,12 @@ describe('WorkspaceLayout mobile branch', () => {
       renderLayout()
       const menu = await screen.findByLabelText('Open menu')
       fireEvent.click(menu)
-      const drawer = await screen.findByRole('dialog', { name: 'Termul' })
+      const drawer = await screen.findByRole('dialog', { name: 'Troupe' })
 
       fireEvent.click(within(drawer).getByRole('button', { name: 'Close terminal' }))
 
       // The drawer is gone, so its overlay no longer covers the confirm.
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Troupe' })).toBeNull())
       expect(await screen.findByText('Close Terminal')).toBeVisible()
       expect(screen.getByRole('button', { name: 'Cancel' })).toBeVisible()
       expect(tabIds()).toEqual(['term-t1'])
@@ -1718,7 +1718,7 @@ describe('WorkspaceLayout mobile branch', () => {
       renderLayout()
       const menu = await screen.findByLabelText('Open menu')
       fireEvent.click(menu)
-      const drawer = await screen.findByRole('dialog', { name: 'Termul' })
+      const drawer = await screen.findByRole('dialog', { name: 'Troupe' })
       fireEvent.click(within(drawer).getByRole('button', { name: 'Close terminal' }))
       await screen.findByText('Close Terminal')
 
@@ -1742,11 +1742,11 @@ describe('WorkspaceLayout mobile branch', () => {
       renderLayout()
       const menu = await screen.findByLabelText('Open menu')
       fireEvent.click(menu)
-      const drawer = await screen.findByRole('dialog', { name: 'Termul' })
+      const drawer = await screen.findByRole('dialog', { name: 'Troupe' })
 
       fireEvent.click(within(drawer).getByRole('button', { name: 'Close a.ts' }))
 
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Troupe' })).toBeNull())
       expect(await screen.findByText('Unsaved Changes')).toBeVisible()
       fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
       await waitFor(() => expect(screen.queryByText('Unsaved Changes')).toBeNull())
@@ -1759,12 +1759,12 @@ describe('WorkspaceLayout mobile branch', () => {
       seedLeaf(leafWith([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1'))
       renderLayout()
       fireEvent.click(await screen.findByLabelText('Open menu'))
-      const drawer = await screen.findByRole('dialog', { name: 'Termul' })
+      const drawer = await screen.findByRole('dialog', { name: 'Troupe' })
 
       fireEvent.click(within(drawer).getByRole('button', { name: 'Close terminal' }))
 
       await settleOverlayBackStack()
-      expect(screen.getByRole('dialog', { name: 'Termul' })).toBe(drawer)
+      expect(screen.getByRole('dialog', { name: 'Troupe' })).toBe(drawer)
       expect(screen.queryByText('Close Terminal')).not.toBeInTheDocument()
     })
 
@@ -1780,12 +1780,12 @@ describe('WorkspaceLayout mobile branch', () => {
       )
       renderLayout()
       fireEvent.click(await screen.findByLabelText('Open menu'))
-      const drawer = await screen.findByRole('dialog', { name: 'Termul' })
+      const drawer = await screen.findByRole('dialog', { name: 'Troupe' })
 
       fireEvent.click(within(drawer).getByRole('button', { name: 'Close a.ts' }))
 
       await settleOverlayBackStack()
-      expect(screen.getByRole('dialog', { name: 'Termul' })).toBe(drawer)
+      expect(screen.getByRole('dialog', { name: 'Troupe' })).toBe(drawer)
       expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument()
       expect(tabIds()).toEqual(['edit-/demo/a.ts'])
     })
@@ -1799,14 +1799,14 @@ describe('WorkspaceLayout mobile branch', () => {
       )
       renderLayout()
       fireEvent.click(await screen.findByLabelText('Open menu'))
-      const drawer = await screen.findByRole('dialog', { name: 'Termul' })
+      const drawer = await screen.findByRole('dialog', { name: 'Troupe' })
       const close = within(drawer).getByRole('button', { name: 'Close a.ts' })
       close.focus()
 
       fireEvent.click(close)
 
       await waitFor(() => expect(tabIds()).toEqual([]))
-      expect(screen.getByRole('dialog', { name: 'Termul' })).toBe(drawer)
+      expect(screen.getByRole('dialog', { name: 'Troupe' })).toBe(drawer)
       expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument()
       // The row (and its ✕) is gone; focus did not fall to <body> inside the trap.
       expect(drawer.contains(document.activeElement)).toBe(true)

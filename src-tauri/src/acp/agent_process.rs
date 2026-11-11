@@ -1,7 +1,7 @@
 //! ACP agent process transport with whole-tree teardown.
 //!
 //! [`TreeKillAgent`] is a drop-in replacement for
-//! [`agent_client_protocol::AcpAgent`] as the `connect_with` transport. Termul
+//! [`agent_client_protocol::AcpAgent`] as the `connect_with` transport. Troupe
 //! spawns the agent itself on every platform and mirrors the crate's
 //! `ConnectTo` impl: stdin/stdout/stderr debug lines, an error with a stderr
 //! tail on a non-zero early exit, and a 1s shutdown grace.
@@ -19,7 +19,7 @@
 //!   their own workers (Antigravity's `agy_acp_server.exe`, `npx → node`
 //!   wrappers) leak one orphan per agent. Here the process is assigned to a
 //!   kill-on-close Job Object, and the job is terminated on every exit path:
-//!   protocol shutdown, early child exit, connection drop/cancel, and Termul
+//!   protocol shutdown, early child exit, connection drop/cancel, and Troupe
 //!   exiting (the OS closes the job handle).
 //!
 //! Job creation failure is logged (`warn`) and the agent runs without

@@ -29,7 +29,8 @@ import {
   CONTEXT_PILL_NODE,
   CONVERSATION_PILL_NODE,
   FILE_PILL_NODE,
-  SKILL_PILL_NODE
+  SKILL_PILL_NODE,
+  TOOL_PILL_NODE
 } from './doc-to-prompt'
 import {
   contextToAttrs,
@@ -37,6 +38,7 @@ import {
   type SelectionContext,
   type SelectionContextSegment
 } from './selection-context'
+import { parseToolSegments, type ToolSegment } from './tool-tokens'
 
 interface PmDocJSON {
   type: 'doc'
@@ -65,6 +67,7 @@ type ComposerSegment =
   | { kind: 'file'; display: string; absPath: string }
   | { kind: 'context'; context: SelectionContext }
   | { kind: 'conversation'; title: string; sessionId: string }
+  | ToolSegment
 
 /**
  * Split a composer value into ordered text/skill/command segments. Delegates
@@ -87,8 +90,13 @@ function parseComposerSegments(value: string): ComposerSegment[] {
       seg.kind === 'skill' ? [seg] : parseSelectionContextSegments(seg.text)
   )
   const pillSegments = skillSegments.flatMap(
-    (seg): Array<SkillSegment | SelectionContextSegment | ConversationSegment> =>
-      seg.kind === 'text' ? parseConversationSegments(seg.text) : [seg]
+    (seg): Array<SkillSegment | SelectionContextSegment | ConversationSegment | ToolSegment> =>
+      seg.kind === 'text'
+        ? parseConversationSegments(seg.text).flatMap(
+            (c): Array<ConversationSegment | ToolSegment> =>
+              c.kind === 'text' ? parseToolSegments(c.text) : [c]
+          )
+        : [seg]
   )
   const segments: ComposerSegment[] = []
   for (const seg of pillSegments) {
@@ -96,7 +104,7 @@ function parseComposerSegments(value: string): ComposerSegment[] {
       segments.push({ kind: 'skill', name: seg.name })
       continue
     }
-    if (seg.kind === 'context' || seg.kind === 'conversation') {
+    if (seg.kind === 'context' || seg.kind === 'conversation' || seg.kind === 'tool') {
       segments.push(seg)
       continue
     }
@@ -217,6 +225,10 @@ export function draftFromTokens(
         type: CONVERSATION_PILL_NODE,
         attrs: { title: seg.title, sessionId: seg.sessionId }
       })
+      continue
+    }
+    if (seg.kind === 'tool') {
+      paragraphs.at(-1)!.push({ type: TOOL_PILL_NODE, attrs: { id: seg.tool.id } })
       continue
     }
     // Text segment: split on `\n` to open new paragraphs.

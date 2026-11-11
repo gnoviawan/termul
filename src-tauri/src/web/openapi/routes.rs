@@ -56,8 +56,8 @@ use crate::web::git_hunk_api::GitHunkRequest;
 use crate::web::log_api::FrontendErrorRequest;
 use crate::web::mcp_catalog_api::{SetMcpCatalogSyncRequest, WithClient};
 use crate::web::mcp_oauth_api::{
-    OAuthCallbackQuery, OAuthStartRequest, OAuthStartResponse, OAuthStatusRequest,
-    OAuthStatusResponse,
+    OAuthCallbackQuery, OAuthCompleteRequest, OAuthStartRequest, OAuthStartResponse,
+    OAuthStatusRequest, OAuthStatusResponse,
 };
 use crate::web::mcp_servers_api::McpProjectQuery;
 use crate::web::project_icon_api::ProjectIconRequest;
@@ -370,6 +370,9 @@ pub static ROUTES: &[ApiRoute] = &[
         .ipc::<OAuthStatusResponse>(),
     ApiRoute::post("/mcp-servers/oauth/disconnect", Tag::McpServers, "Forget an MCP OAuth token")
         .json::<OAuthStatusRequest>(),
+    ApiRoute::post("/mcp-servers/oauth/complete", Tag::McpServers, "Finish an MCP OAuth flow from a pasted redirect address")
+        .json::<OAuthCompleteRequest>()
+        .describe("`callbackUrl` is the address the browser landed on after sign-in; it is never fetched. Failures answer 400 with `OAUTH_BAD_REDIRECT` (flow kept), `OAUTH_UNKNOWN_STATE` or `OAUTH_DENIED`, or 502 with `OAUTH_EXCHANGE_FAILED`."),
     ApiRoute::get("/oauth/callback", Tag::McpServers, "OAuth redirect target")
         .query::<OAuthCallbackQuery>()
         .reply(Reply::Redirect)
@@ -502,10 +505,10 @@ pub static ROUTES: &[ApiRoute] = &[
     // Server admin
     ApiRoute::get("/server/config", Tag::ServerAdmin, "The running server's configuration")
         .ipc::<ServerConfigResponse>()
-        .describe("Standalone `termul-server` only."),
+        .describe("Standalone `troupe-server` only."),
     ApiRoute::post("/server/config", Tag::ServerAdmin, "Reconfigure and restart the server")
         .json::<ServerSetupAnswers>()
         .ipc::<ServerConfigApply>()
-        .describe("Standalone `termul-server` only. Invalid answers come back as `ok: false` with `fieldErrors`. On success the server restarts: reconnect to `host:port` with `webAuthToken`. A host without a token needs a loopback `Origin` header (`403 SERVER_CONFIG_LOCAL_ORIGIN_REQUIRED`). A second apply while a restart is pending answers `409 SERVER_CONFIG_APPLY_IN_PROGRESS`."),
+        .describe("Standalone `troupe-server` only. Invalid answers come back as `ok: false` with `fieldErrors`. On success the server restarts: reconnect to `host:port` with `webAuthToken`. A host without a token needs a loopback `Origin` header (`403 SERVER_CONFIG_LOCAL_ORIGIN_REQUIRED`). A second apply while a restart is pending answers `409 SERVER_CONFIG_APPLY_IN_PROGRESS`."),
 ];
 

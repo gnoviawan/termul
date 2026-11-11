@@ -2,6 +2,9 @@
 //!
 //! `POST /mcp-servers/oauth/start` — discover + register + build auth URL.
 //! `GET /oauth/callback` — the AS redirect target; exchanges code for token.
+//! `POST /mcp-servers/oauth/complete` — paste-back: a browser on another
+//! machine cannot reach the loopback redirect, so the user pastes the address
+//! it landed on and this route finishes the same exchange.
 //! `POST /mcp-servers/oauth/status` — check for stored token.
 //! `POST /mcp-servers/oauth/disconnect` — delete stored token.
 //!
@@ -13,12 +16,17 @@
 //! `status`/`disconnect` validate the project but read and delete the one
 //! URL-keyed token.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::time::Instant;
 
 use axum::extract::{ConnectInfo, Query, State};
+use axum::http::StatusCode;
 use axum::response::Redirect;
 use axum::Json;
+use rmcp::transport::auth::AuthorizationSession;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::acp::mcp_oauth;
 use crate::acp::safe_url::{check_safe_url, Opener, MCP_UNSAFE_URL};
@@ -41,9 +49,10 @@ pub struct OAuthStartResponse {
 }
 
 /// Start the OAuth flow: discover metadata, register the client (PKCE), and
-/// build the authorization URL. The generated CSRF state is stored as the flow
-/// key so callbacks can be correlated by `query.state` (not by an arbitrary
-/// HashMap entry). Redacted boundary logging records the start + outcome.
+/// build the authorization URL. The flow keeps the session (PKCE verifier and
+/// client id) under its CSRF state so the redirect, reached directly or pasted
+/// back, finishes the exchange with it. Redacted boundary logging records the
+/// start + outcome.
 pub async fn oauth_start(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -82,17 +91,20 @@ pub async fn oauth_start(
         state.oauth_base_url.trim_end_matches('/')
     );
     match build_web_auth_url(&request.server_url, &redirect_uri).await {
-        Ok((auth_url, registered_uri, csrf_token)) => {
-            // Key the flow by its CSRF state so the callback can look it up
-            // by `query.state` instead of selecting an arbitrary entry.
-            state.pending_oauth_flows.write().insert(
-                csrf_token.clone(),
+        Ok((auth_url, csrf_token, session)) => {
+            let now = Instant::now();
+            let mut flows = state.pending_oauth_flows.write();
+            prune_expired(&mut flows, now);
+            flows.insert(
+                csrf_token,
                 mcp_oauth::PendingOAuthFlow {
                     server_url: request.server_url.clone(),
-                    redirect_uri: registered_uri,
-                    csrf_token,
+                    redirect_uri: session.redirect_uri.clone(),
+                    session,
+                    created_at: now,
                 },
             );
+            drop(flows);
             log::info!("[mcp-oauth] web flow started (url redacted)");
             Json(IpcBody::ok(OAuthStartResponse {
                 auth_url,
@@ -116,82 +128,270 @@ fn start_error_code(error: &mcp_oauth::McpOAuthError) -> &'static str {
     }
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+/// The parameters of an authorization-server redirect, whether it reached
+/// `GET /oauth/callback` or was pasted back. A denied consent carries
+/// `error` (and maybe `error_description`) instead of `code`.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct OAuthCallbackQuery {
-    pub code: String,
-    pub state: String,
+    pub code: Option<String>,
+    pub state: Option<String>,
     pub iss: Option<String>,
+    pub error: Option<String>,
+    pub error_description: Option<String>,
 }
 
-/// The OAuth authorization-server redirect target. Correlates the callback
-/// with the pending flow by `query.state` (the CSRF token). Rejects unknown
-/// or mismatched states before token exchange. Atomically removes the matched
-/// flow only after validation succeeds.
-pub async fn oauth_callback(
-    State(state): State<AppState>,
-    Query(query): Query<OAuthCallbackQuery>,
-) -> Result<Redirect, (axum::http::StatusCode, String)> {
-    // Correlate by the CSRF state — NOT an arbitrary HashMap entry. Reject
-    // unknown states before token exchange.
-    let flow = {
-        let mut flows = state.pending_oauth_flows.write();
-        match flows.remove(&query.state) {
-            Some(f) => f,
-            None => {
-                log::warn!("[mcp-oauth] web callback rejected: unknown OAuth state (url redacted)");
-                return Err((
-                    axum::http::StatusCode::BAD_REQUEST,
-                    "No pending OAuth flow matching the provided state".to_string(),
-                ));
+impl OAuthCallbackQuery {
+    fn from_url(url: &Url) -> Self {
+        let mut query = Self::default();
+        for (key, value) in url.query_pairs() {
+            let slot = match key.as_ref() {
+                "code" => &mut query.code,
+                "state" => &mut query.state,
+                "iss" => &mut query.iss,
+                "error" => &mut query.error,
+                "error_description" => &mut query.error_description,
+                _ => continue,
+            };
+            *slot = Some(value.into_owned());
+        }
+        query
+    }
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthCompleteRequest {
+    pub project_id: String,
+    /// The address the browser landed on after sign-in (the redirect URI with
+    /// `code` and `state`, or `error`). Never fetched.
+    pub callback_url: String,
+}
+
+/// Why a redirect could not finish its flow. Each maps to the wire `code` the
+/// paste-back dialog branches on.
+#[derive(Debug, PartialEq, Eq)]
+enum CompleteError {
+    /// Not a URL, not the flow's redirect endpoint, or no `state`/`code`.
+    /// The flow is kept so the user can paste again.
+    BadRedirect(&'static str),
+    /// No pending flow for the `state` (never started, used, or expired).
+    UnknownState,
+    /// The provider reported an `error`; carries its description. The flow is
+    /// removed.
+    Denied(String),
+    /// The token exchange failed. The flow is removed.
+    ExchangeFailed(String),
+}
+
+impl CompleteError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::BadRedirect(_) => "OAUTH_BAD_REDIRECT",
+            Self::UnknownState => "OAUTH_UNKNOWN_STATE",
+            Self::Denied(_) => "OAUTH_DENIED",
+            Self::ExchangeFailed(_) => "OAUTH_EXCHANGE_FAILED",
+        }
+    }
+
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::ExchangeFailed(_) => StatusCode::BAD_GATEWAY,
+            _ => StatusCode::BAD_REQUEST,
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::BadRedirect(why) => (*why).to_string(),
+            Self::UnknownState => {
+                "No pending sign-in matches this address. Start Connect again.".to_string()
             }
-        }
-    };
-
-    let callback_url = format!(
-        "{}/oauth/callback?code={}&state={}",
-        state.oauth_base_url.trim_end_matches('/'),
-        urlencode(&query.code),
-        urlencode(&query.state)
-    );
-    let server_url = flow.server_url.clone();
-    let redirect_uri = flow.redirect_uri.clone();
-
-    // The full OAuth token exchange runs in a spawn to avoid holding !Send
-    // futures in the axum handler (AuthorizationManager internals are not
-    // guaranteed Send).
-    let result = tokio::task::spawn(async move {
-        mcp_oauth::run_full_flow(&server_url, &redirect_uri, callback_url).await
-    })
-    .await;
-
-    match result {
-        Ok(Ok(stored)) => {
-            log::info!(
-                "[mcp-oauth] web flow completed (url redacted), has refresh: {}",
-                stored.refresh_token.is_some()
-            );
-            Ok(Redirect::to("/"))
-        }
-        Ok(Err(e)) => {
-            log::warn!("[mcp-oauth] web flow token exchange failed (url redacted): {e}");
-            Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-        }
-        Err(e) => {
-            log::warn!("[mcp-oauth] web flow task join failed (url redacted): {e}");
-            Err((
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("task join: {e}"),
-            ))
+            Self::Denied(why) => why.clone(),
+            Self::ExchangeFailed(why) => why.clone(),
         }
     }
 }
 
-fn urlencode(s: &str) -> String {
-    s.replace('%', "%25")
-        .replace('&', "%26")
-        .replace('=', "%3D")
-        .replace('+', "%2B")
-        .replace(' ', "%20")
+type PendingFlows = HashMap<String, mcp_oauth::PendingOAuthFlow>;
+
+fn prune_expired(flows: &mut PendingFlows, now: Instant) {
+    flows.retain(|_, flow| !flow.is_expired(now));
+}
+
+/// A pending flow taken out of the map with the redirect values to exchange.
+struct ClaimedFlow {
+    flow: mcp_oauth::PendingOAuthFlow,
+    code: String,
+    csrf_token: String,
+    iss: Option<String>,
+}
+
+/// Match a redirect to its pending flow by `state` and take the flow out.
+/// When `pasted` is given (paste-back), its scheme, host, port and path must
+/// equal the flow's registered redirect URI first. Expired flows are dropped
+/// before the lookup.
+fn claim_flow(
+    flows: &mut PendingFlows,
+    query: OAuthCallbackQuery,
+    pasted: Option<&Url>,
+    now: Instant,
+) -> Result<ClaimedFlow, CompleteError> {
+    prune_expired(flows, now);
+    let Some(csrf_token) = query.state else {
+        return Err(CompleteError::BadRedirect(
+            "This address is not a sign-in redirect: it has no state parameter.",
+        ));
+    };
+    let Some(flow) = flows.get(&csrf_token) else {
+        return Err(CompleteError::UnknownState);
+    };
+    if let Some(url) = pasted {
+        if !is_redirect_endpoint(url, &flow.redirect_uri) {
+            return Err(CompleteError::BadRedirect(
+                "This address is not the sign-in redirect. Paste the address the browser landed on after sign-in.",
+            ));
+        }
+    }
+    if let Some(error) = query.error {
+        flows.remove(&csrf_token);
+        let description = query
+            .error_description
+            .filter(|description| !description.trim().is_empty());
+        return Err(CompleteError::Denied(description.unwrap_or(error)));
+    }
+    let Some(code) = query.code else {
+        return Err(CompleteError::BadRedirect(
+            "This address has no authorization code.",
+        ));
+    };
+    let Some(flow) = flows.remove(&csrf_token) else {
+        return Err(CompleteError::UnknownState);
+    };
+    Ok(ClaimedFlow {
+        flow,
+        code,
+        csrf_token,
+        iss: query.iss,
+    })
+}
+
+/// Whether `url` names the same endpoint as the registered redirect URI:
+/// scheme, host, port and path equal (query and fragment ignored).
+fn is_redirect_endpoint(url: &Url, registered: &str) -> bool {
+    let Ok(registered) = Url::parse(registered) else {
+        return false;
+    };
+    url.scheme() == registered.scheme()
+        && url.host_str() == registered.host_str()
+        && url.port_or_known_default() == registered.port_or_known_default()
+        && url.path() == registered.path()
+}
+
+/// Finish a flow from its redirect: claim it, then exchange the code with the
+/// session stored at start and persist the token. Shared by the direct
+/// callback and the paste-back route.
+async fn complete_flow(
+    flows: &parking_lot::RwLock<PendingFlows>,
+    query: OAuthCallbackQuery,
+    pasted: Option<&Url>,
+) -> Result<mcp_oauth::StoredToken, CompleteError> {
+    let ClaimedFlow {
+        flow,
+        code,
+        csrf_token,
+        iss,
+    } = claim_flow(&mut flows.write(), query, pasted, Instant::now())?;
+    let server_url = flow.server_url;
+    let session: AuthorizationSession = flow.session;
+    // The exchange runs in its own task so a client that disconnects
+    // mid-request cannot drop it after the flow left the map.
+    let joined = tokio::task::spawn(async move {
+        mcp_oauth::finish_session(&server_url, session, &code, &csrf_token, iss.as_deref()).await
+    })
+    .await;
+    match joined {
+        Ok(Ok(stored)) => Ok(stored),
+        Ok(Err(e)) => Err(CompleteError::ExchangeFailed(e.to_string())),
+        Err(e) => Err(CompleteError::ExchangeFailed(format!("task join: {e}"))),
+    }
+}
+
+/// Log a failed redirect: the code always, plus the reason for a provider
+/// denial or a failed exchange (neither carries the code, state or URL).
+fn log_failure(route: &str, error: &CompleteError) {
+    match error {
+        CompleteError::Denied(why) | CompleteError::ExchangeFailed(why) => log::warn!(
+            "[mcp-oauth] web {route} failed (url redacted): {}: {why}",
+            error.code()
+        ),
+        _ => log::warn!(
+            "[mcp-oauth] web {route} failed (url redacted): {}",
+            error.code()
+        ),
+    }
+}
+
+/// The OAuth authorization-server redirect target, reached when the browser
+/// runs on the host's machine. Redirects to the app on success.
+pub async fn oauth_callback(
+    State(state): State<AppState>,
+    Query(query): Query<OAuthCallbackQuery>,
+) -> Result<Redirect, (StatusCode, String)> {
+    match complete_flow(&state.pending_oauth_flows, query, None).await {
+        Ok(stored) => {
+            log::info!(
+                "[mcp-oauth] web flow completed via callback (url redacted), has refresh: {}",
+                stored.refresh_token.is_some()
+            );
+            Ok(Redirect::to("/"))
+        }
+        Err(e) => {
+            log_failure("callback", &e);
+            Err((e.status(), e.message()))
+        }
+    }
+}
+
+/// Paste-back: finish a flow from the redirect address the user copied out
+/// of a browser that could not reach the host's loopback callback.
+pub async fn oauth_complete(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(request): Json<OAuthCompleteRequest>,
+) -> (StatusCode, Json<IpcBody<()>>) {
+    if let Some(err) = check_local_only(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        "/mcp-servers/oauth/complete",
+    ) {
+        return (StatusCode::OK, Json(err));
+    }
+    if let Err(body) = project_root_or_not_found(&state.registry, &request.project_id) {
+        return (StatusCode::OK, Json(body));
+    }
+    let result = match Url::parse(request.callback_url.trim()) {
+        Ok(url) => {
+            let query = OAuthCallbackQuery::from_url(&url);
+            complete_flow(&state.pending_oauth_flows, query, Some(&url)).await
+        }
+        Err(_) => Err(CompleteError::BadRedirect(
+            "This is not a web address. Paste the full address from the browser's address bar.",
+        )),
+    };
+    match result {
+        Ok(stored) => {
+            log::info!(
+                "[mcp-oauth] web flow completed via paste-back (url redacted), has refresh: {}",
+                stored.refresh_token.is_some()
+            );
+            (StatusCode::OK, Json(IpcBody::ok(())))
+        }
+        Err(e) => {
+            log_failure("paste-back", &e);
+            (e.status(), Json(IpcBody::err(e.message(), e.code())))
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -288,13 +488,13 @@ async fn is_authorized_mcp_server_url(project_root: &std::path::Path, server_url
 }
 
 /// Discover metadata, register a client (PKCE), and build the authorization URL.
-/// Returns `(auth_url, redirect_uri, csrf_token)` so the caller can key the
-/// pending flow by the CSRF state for callback correlation.
+/// Returns `(auth_url, csrf_token, session)`; the caller keys the pending flow
+/// by the CSRF state and keeps the session for the code exchange.
 async fn build_web_auth_url(
     server_url: &str,
     redirect_uri: &str,
-) -> Result<(String, String, String), mcp_oauth::McpOAuthError> {
-    use rmcp::transport::auth::{AuthorizationManager, AuthorizationRequest, AuthorizationSession};
+) -> Result<(String, String, AuthorizationSession), mcp_oauth::McpOAuthError> {
+    use rmcp::transport::auth::{AuthorizationManager, AuthorizationRequest};
     let mut manager = AuthorizationManager::new(server_url)
         .await
         .map_err(|e| mcp_oauth::McpOAuthError::DiscoveryFailed(e.to_string()))?;
@@ -303,12 +503,12 @@ async fn build_web_auth_url(
         .await
         .map_err(|e| mcp_oauth::McpOAuthError::DiscoveryFailed(e.to_string()))?;
     manager.set_metadata(resolution.metadata);
-    let request = AuthorizationRequest::new(redirect_uri).with_client_name("Termul");
+    let request = AuthorizationRequest::new(redirect_uri).with_client_name("Troupe");
     let session = AuthorizationSession::new(manager, request)
         .await
         .map_err(|(_manager, e)| mcp_oauth::McpOAuthError::RegistrationFailed(e.to_string()))?;
     let (auth_url, csrf_token) = remote_auth_url(session.get_authorization_url())?;
-    Ok((auth_url, session.redirect_uri.clone(), csrf_token))
+    Ok((auth_url, csrf_token, session))
 }
 
 fn remote_auth_url(raw: &str) -> Result<(String, String), mcp_oauth::McpOAuthError> {

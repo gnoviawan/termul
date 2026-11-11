@@ -403,7 +403,10 @@ fn gh_success_returns_issue_url_and_cleans_up_body_file() {
         vec!["auth", "status", "--hostname", "github.com"]
     );
     let create = calls.nth(2);
-    assert_eq!(create[..4], ["issue", "create", "-R", "gnoviawan/termul"]);
+    assert_eq!(
+        create[..4],
+        ["issue", "create", "-R", "github.com/gnoviawan/termul"]
+    );
     assert!(
         create
             .windows(2)
@@ -514,6 +517,16 @@ fn staged_body_file_is_owner_only_and_cleaned_up() {
 }
 
 #[test]
+fn parse_issue_url_accepts_both_repo_names() {
+    // Built from the bare names so the rebrand codemod, which rewrites full
+    // repo URLs, cannot turn the old-name case into a second new-name case.
+    for name in ["termul", "troupe"] {
+        let url = format!("https://github.com/gnoviawan/{name}/issues/7");
+        assert_eq!(parse_issue_url(&format!("{url}\n")), Some(url));
+    }
+}
+
+#[test]
 fn parse_issue_url_anchors_to_the_issue_repo_shape() {
     // A warning URL printed before the issue URL must not be captured.
     assert_eq!(
@@ -526,6 +539,14 @@ fn parse_issue_url_anchors_to_the_issue_repo_shape() {
     assert_eq!(parse_issue_url("https://example.com/x"), None);
     assert_eq!(
         parse_issue_url("https://github.com/other/repo/issues/9"),
+        None
+    );
+    assert_eq!(
+        parse_issue_url("https://github.com/gnoviawan/other/issues/9"),
+        None
+    );
+    assert_eq!(
+        parse_issue_url("https://github.com/other/troupe/issues/9"),
         None
     );
     assert_eq!(

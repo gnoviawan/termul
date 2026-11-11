@@ -9,7 +9,7 @@ fn no_topic_returns_the_index() {
     assert_eq!(read_guide(None), Ok(INDEX));
     assert_eq!(read_guide(Some("  ")), Ok(INDEX));
     assert_eq!(read_guide(Some("SKILL.md")), Ok(INDEX));
-    assert!(INDEX.starts_with("---\nname: termul-canvas\n"));
+    assert!(INDEX.starts_with("---\nname: troupe-canvas\n"));
 }
 
 #[test]

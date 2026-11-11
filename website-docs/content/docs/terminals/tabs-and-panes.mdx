@@ -5,7 +5,7 @@ description: Rename, reorder, and close tabs, split the window into panes, and l
 
 Everything you open in a project is a tab: terminals, chats, files, Git views, the canvas, and browser tabs in the desktop app. Tabs live in panes. You start with one pane, and you can split it to see several tabs side by side.
 
-On a phone, Termul shows one tab at a time and has no tab bar. This page is about the layout on a computer.
+On a phone, Troupe shows one tab at a time and has no tab bar. This page is about the layout on a computer.
 
 ## Work with tabs
 
@@ -14,7 +14,7 @@ On a phone, Termul shows one tab at a time and has no tab bar. This page is abou
 - **Reorder tabs.** Drag a tab along the tab bar. A line shows where it will land.
 - **Close a tab.** Select the **×** on the tab, middle-click the tab, or press `Ctrl+W` (`Cmd+W` on macOS, `Alt+W` in a browser). The shortcut doesn't close the canvas tab.
 
-When you close a terminal, Termul ends the shell and anything running in it. By default it asks first, in a **Close Terminal** dialog. To stop the question, select **Don't ask again when closing terminals** in that dialog, then select **Close**. Settings has no switch to turn the question back on.
+When you close a terminal, Troupe ends the shell and anything running in it. By default it asks first, in a **Close Terminal** dialog. To stop the question, select **Don't ask again when closing terminals** in that dialog, then select **Close**. Settings has no switch to turn the question back on.
 
 ### Tab menu
 
@@ -29,7 +29,7 @@ Right-click a tab to see more actions. The menu shows only the actions that appl
 - **Close Other Tabs** and **Close All Tabs** close tabs of every kind in this pane.
 - **Copy Path** copies the path of a file tab.
 
-If the tabs you close include terminals or files with unsaved changes, Termul asks you to confirm in a **Close Tabs** dialog. For unsaved files you can pick **Save & Close** or **Don't Save**. If you turned off the terminal question, terminals close without it.
+If the tabs you close include terminals or files with unsaved changes, Troupe asks you to confirm in a **Close Tabs** dialog. For unsaved files you can pick **Save & Close** or **Don't Save**. If you turned off the terminal question, terminals close without it.
 
 ## Split a pane
 
@@ -77,8 +77,8 @@ The browser uses `Alt` for some shortcuts because browsers keep `Ctrl+W` and `Ct
 
 **Switching projects.** Terminals keep running in the projects you leave. When you come back, the tabs, panes, and output are where you left them.
 
-**Closing the browser tab.** If you use Termul in a browser, closing the tab doesn't stop your terminals. They keep running on the Termul server and still count toward the [terminal limits](/docs/terminals/open-a-terminal#terminal-limits). When you open Termul again in the same browser, your tabs come back and connect to the same running shells, with their output. Terminals stop only when you close them, when their shell exits, or when the server stops.
+**Closing the browser tab.** If you use Troupe in a browser, closing the tab doesn't stop your terminals. They keep running on the Troupe server and still count toward the [terminal limits](/docs/terminals/open-a-terminal#terminal-limits). When you open Troupe again in the same browser, your tabs come back and connect to the same running shells, with their output. Terminals stop only when you close them, when their shell exits, or when the server stops.
 
-**Closing the desktop window.** On macOS and Linux, closing the window hides Termul in the system tray. Your terminals keep running. To quit, select **Quit Termul** in the tray menu. On Windows, closing the window quits Termul.
+**Closing the desktop window.** On macOS and Linux, closing the window hides Troupe in the system tray. Your terminals keep running. To quit, select **Quit Troupe** in the tray menu. On Windows, closing the window quits Troupe.
 
-**Quitting the desktop app.** Quitting ends every terminal and the programs running in it. The next time you start Termul, it restores your panes and tabs. Each terminal comes back as a new shell with the same name, shell, and folder. The output that Termul saved last is shown above the new prompt. Programs that were running don't restart. Terminals that run an AI agent start the agent again.
+**Quitting the desktop app.** Quitting ends every terminal and the programs running in it. The next time you start Troupe, it restores your panes and tabs. Each terminal comes back as a new shell with the same name, shell, and folder. The output that Troupe saved last is shown above the new prompt. Programs that were running don't restart. Terminals that run an AI agent start the agent again.

@@ -11,7 +11,7 @@ import {
 
 const baseRow: TestimonialRow = {
   id: 'testimonial-1',
-  quote: 'Termul keeps my project terminals exactly where I need them.',
+  quote: 'Troupe keeps my project terminals exactly where I need them.',
   name: 'Alex Chen',
   role: 'Staff Engineer',
   status: 'pending',
@@ -26,7 +26,7 @@ function submissionForm(overrides: Record<string, FormDataEntryValue> = {}) {
   const formData = new FormData();
   formData.set(
     'quote',
-    'Termul keeps my project terminals exactly where I need them.',
+    'Troupe keeps my project terminals exactly where I need them.',
   );
   formData.set('name', 'Alex Chen');
   formData.set('role', 'Staff Engineer');
@@ -49,7 +49,7 @@ describe('testimonial API helpers', () => {
   test('maps public testimonials without landing-only fields', () => {
     expect(toPublicTestimonial(baseRow)).toEqual({
       id: 'testimonial-1',
-      quote: 'Termul keeps my project terminals exactly where I need them.',
+      quote: 'Troupe keeps my project terminals exactly where I need them.',
       name: 'Alex Chen',
       role: 'Staff Engineer',
       avatarUrl: 'https://example.com/avatar.png',
@@ -85,7 +85,7 @@ describe('testimonial API helpers', () => {
 
   test('parses a valid submission', () => {
     expect(parseSubmission(submissionForm())).toMatchObject({
-      quote: 'Termul keeps my project terminals exactly where I need them.',
+      quote: 'Troupe keeps my project terminals exactly where I need them.',
       name: 'Alex Chen',
       role: 'Staff Engineer',
       avatarUrl: 'https://example.com/avatar.png',

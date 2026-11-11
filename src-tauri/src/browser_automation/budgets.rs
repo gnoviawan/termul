@@ -57,6 +57,16 @@ pub const EVAL_STEP: Duration = CDP_CALL;
 /// WebKit: how long a file input may take to open its chooser after the
 /// helper clicked it.
 pub const FILE_CHOOSER: Duration = secs(5);
+/// WebKit: how long the input may take to hold the files after the
+/// chooser hook answered. WKWebView on macOS 15 fills it a moment later.
+pub const UPLOAD_SETTLE: Duration = secs(2);
+/// WebKit: how long the upload's `input`/`change` watch listens. It starts
+/// before the chooser opens, so it outlasts the open call, the chooser
+/// wait, the settle wait and that wait's last file-count poll.
+pub const UPLOAD_WATCH: Duration = EVAL_STEP
+    .saturating_add(FILE_CHOOSER)
+    .saturating_add(UPLOAD_SETTLE)
+    .saturating_add(EVAL_STEP);
 
 /// Per-verb action budgets, referenced by the action registry. Each is the
 /// worst case of the steps the verb runs.
@@ -106,8 +116,11 @@ pub const ACTION_SELECT: Duration = EVAL_STEP.saturating_add(EVAL_STEP);
 /// confirming read after the click runs only if it still fits.
 pub const ACTION_TOGGLE: Duration = ACTION_CLICK;
 /// Revalidate the ref, then set the staged file: one helper call, plus the
-/// chooser round trip on WebKit.
-pub const ACTION_UPLOAD: Duration = EVAL_STEP.saturating_add(EVAL_STEP).saturating_add(FILE_CHOOSER);
+/// chooser round trip and the wait for the input to hold the files on WebKit.
+pub const ACTION_UPLOAD: Duration = EVAL_STEP
+    .saturating_add(EVAL_STEP)
+    .saturating_add(FILE_CHOOSER)
+    .saturating_add(UPLOAD_SETTLE);
 
 /// An absolute point in time a call must finish by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

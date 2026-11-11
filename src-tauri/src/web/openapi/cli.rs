@@ -14,7 +14,7 @@ pub enum Format {
     Json,
 }
 
-const USAGE: &str = "usage: termul-server openapi [--format yaml|json]";
+const USAGE: &str = "usage: troupe-server openapi [--format yaml|json]";
 
 /// The `--format` choice from the arguments after `openapi`.
 pub fn parse_format(args: &[String]) -> Result<Format, String> {

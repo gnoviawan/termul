@@ -715,6 +715,7 @@ fn requires_token_covers_api_prefixes_and_public_paths() {
         "/mcp-servers",
         "/mcp-servers/probe",
         "/mcp-servers/oauth/start",
+        "/mcp-servers/oauth/complete",
         "/mcp-catalog/search",
         "/mcp-catalog/install/form",
         "/mcp-catalog/install/plan",

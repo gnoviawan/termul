@@ -3,9 +3,9 @@ title: Ask AI about terminal output
 description: Have your agent explain terminal output or suggest a fix for a failed command.
 ---
 
-When a command fails or prints something you don't understand, you can ask an AI agent about it from the terminal. The agent explains the output, and for a failed command it suggests a corrected one. Termul puts a suggested command at your prompt for you to check. It never runs the command for you.
+When a command fails or prints something you don't understand, you can ask an AI agent about it from the terminal. The agent explains the output, and for a failed command it suggests a corrected one. Troupe puts a suggested command at your prompt for you to check. It never runs the command for you.
 
-Termul uses the agent you last picked in the chat launcher. If you never picked one, Termul uses a default agent. You need at least one agent set up. See [Agent setup](/docs/agent-setup).
+Troupe uses the agent you last picked in the chat launcher. If you never picked one, Troupe uses a default agent. You need at least one agent set up. See [Agent setup](/docs/agent-setup).
 
 ## Explain output or fix a command
 
@@ -23,27 +23,27 @@ A panel opens at the bottom right of the pane. It says **Asking the configured a
 
 ## Use a suggested command
 
-Suggested commands appear as buttons under the **Suggested commands** heading. The heading also reminds you that Termul inserts them for review and never runs them.
+Suggested commands appear as buttons under the **Suggested commands** heading. The heading also reminds you that Troupe inserts them for review and never runs them.
 
-1. Select a suggested command. Termul types it at your prompt, without pressing `Enter`.
+1. Select a suggested command. Troupe types it at your prompt, without pressing `Enter`.
 2. Read the command and edit it if you need to.
 3. Press `Enter` to run it.
 
-Termul offers a command as a button only if it is one line of shell code. A longer script stays in the answer text, and you can copy it from there.
+Troupe offers a command as a button only if it is one line of shell code. A longer script stays in the answer text, and you can copy it from there.
 
 To close the panel, select **×** or press `Esc`.
 
 ## What the agent sees
 
-The agent gets the text you selected, the terminal's folder, and the exit code of the last command, if Termul knows it. It doesn't see the rest of the terminal. The request runs in a separate, temporary session that doesn't appear in your chat list. The agent may not run tools, ask for permission, or ask you questions. If it tries, Termul stops the request.
+The agent gets the text you selected, the terminal's folder, and the exit code of the last command, if Troupe knows it. It doesn't see the rest of the terminal. The request runs in a separate, temporary session that doesn't appear in your chat list. The agent may not run tools, ask for permission, or ask you questions. If it tries, Troupe stops the request.
 
 ## If it doesn't work
 
 Most error messages in the panel start with "Error:".
 
-- **"Select some terminal output first"** means the selection is only spaces, or Termul doesn't know the terminal's folder yet. Select other text, or wait a moment and try again.
+- **"Select some terminal output first"** means the selection is only spaces, or Troupe doesn't know the terminal's folder yet. Select other text, or wait a moment and try again.
 - **"Configure and select an ACP agent before using terminal assist"** means no agent is set up. [Add an agent](/docs/agent-setup), then pick it in the chat launcher.
-- **"The selected ACP agent is unavailable"** means Termul couldn't start the agent. Check the agent's setup and try again.
+- **"The selected ACP agent is unavailable"** means Troupe couldn't start the agent. Check the agent's setup and try again.
 - **"The selected terminal output is too large to assist safely"** means the selection is longer than 20,000 characters. Select less text.
 - **"Terminal assist timed out"** means the agent didn't answer within 90 seconds. Try again.
 - **"The ACP agent attempted to use a tool"**, **"requested permission"**, or **"asked an interactive question"** means the agent didn't answer in plain text. Try again, or pick another agent.

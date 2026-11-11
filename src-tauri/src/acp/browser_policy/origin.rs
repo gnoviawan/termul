@@ -2,7 +2,7 @@
 //!
 //! An origin is `scheme://host[:port]` for http(s) only, with the host
 //! lowercased and punycoded and the default port elided. A pattern is one
-//! exact origin or a `*.` subdomain suffix. Termul's own listeners, the app
+//! exact origin or a `*.` subdomain suffix. Troupe's own listeners, the app
 //! webview origins and metadata or unspecified addresses can never be
 //! allow-listed, because the policy only ever widens what an agent may reach.
 

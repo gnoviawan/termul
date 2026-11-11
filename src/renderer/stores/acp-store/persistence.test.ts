@@ -1390,7 +1390,11 @@ describe('acp-store', () => {
       expect(useAcpStore.getState().mcpOAuthConnected.h1).toBe(true)
 
       await useAcpStore.getState().connectMcpOAuth('proj-oauth', 'h1')
-      expect(startMcpOAuth).toHaveBeenCalledWith('proj-oauth', 'https://x.test/mcp')
+      expect(startMcpOAuth).toHaveBeenCalledWith(
+        'proj-oauth',
+        'https://x.test/mcp',
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      )
 
       await useAcpStore.getState().disconnectMcpOAuth('proj-oauth', 'h1')
       expect(disconnectMcpOAuth).toHaveBeenCalledWith('proj-oauth', 'https://x.test/mcp')

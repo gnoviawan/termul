@@ -433,7 +433,7 @@ Line 3`
         await result.current.pasteFromClipboard()
       })
 
-      expect(mockPasteText).toHaveBeenCalledWith('\x1b[200~Hello World\x1b[201~')
+      expect(mockPasteText).toHaveBeenCalledWith('\x1b[200~Hello World\x1b[201~', 'Hello World')
       expect(mockTerminal.paste).not.toHaveBeenCalled()
     })
 
@@ -455,7 +455,8 @@ Line 3`
       })
 
       expect(mockPasteText).toHaveBeenCalledWith(
-        '\x1b[200~\u241b[?2004hmalicious\u241b[?2004l\x1b[201~'
+        '\x1b[200~\u241b[?2004hmalicious\u241b[?2004l\x1b[201~',
+        clipboardText
       )
     })
 
@@ -478,7 +479,10 @@ Line 3`
         await result.current.pasteFromClipboard()
       })
 
-      expect(mockPasteText).toHaveBeenCalledWith('\x1b[200~Line 1\rLine 2\rLine 3\x1b[201~')
+      expect(mockPasteText).toHaveBeenCalledWith(
+        '\x1b[200~Line 1\rLine 2\rLine 3\x1b[201~',
+        'Line 1\rLine 2\rLine 3'
+      )
       expect(mockTerminal.paste).not.toHaveBeenCalled()
     })
 
