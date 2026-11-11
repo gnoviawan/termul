@@ -191,7 +191,7 @@ function Body({ chats }: { chats: ImportChats }): React.JSX.Element {
 }
 
 /**
- * "Import chats": copies chats an agent keeps outside Termul (for example
+ * "Import chats": copies chats an agent keeps outside Troupe (for example
  * Claude Code CLI chats) into the chat history of the active working copy.
  * The user picks one, several or all; an imported chat opens and continues
  * like any other chat.
@@ -213,7 +213,7 @@ export function ImportChatsDialog({
         <DialogHeader>
           <DialogTitle>Import chats</DialogTitle>
           <DialogDescription>
-            Bring chats you had with the agent outside Termul into your history. You can continue
+            Bring chats you had with the agent outside Troupe into your history. You can continue
             them afterwards.
           </DialogDescription>
         </DialogHeader>

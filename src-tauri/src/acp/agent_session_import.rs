@@ -2,8 +2,8 @@
 //!
 //! An agent can list the sessions it knows (`session/list`), among them the
 //! chats a user had in the agent's own CLI. Those sessions have no durable log
-//! in Termul, so the chat cannot show them. This service registers the session
-//! as a Termul session, has the agent replay its history into the log, and
+//! in Troupe, so the chat cannot show them. This service registers the session
+//! as a Troupe session, has the agent replay its history into the log, and
 //! leaves it closed. The chat then opens it like any session of its own, and
 //! `session/resume` continues it on the agent.
 
