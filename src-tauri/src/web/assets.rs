@@ -15,13 +15,16 @@
 //! shadow them (Story 1.3 AC1).
 
 use std::borrow::Cow;
+use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 
 use axum::body::Body;
 use axum::extract::Request;
-use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
+use axum::http::{header, Extensions, HeaderMap, HeaderValue, Method, StatusCode, Uri, Version};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use tower_http::compression::predicate::{And, DefaultPredicate, Predicate};
+use tower_http::compression::CompressionLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 // Release builds with a missing/stale `dist-web/` fail clearly here (set by
@@ -127,8 +130,26 @@ pub async fn immutable_asset_cache_headers(request: Request, next: Next) -> Resp
 /// SSE; a response already carrying `Content-Encoding` is never recompressed.
 /// WS upgrades bypass body framing entirely (101 has no body), so `/ws` and
 /// `/terminal/ws` are unaffected.
-pub fn static_compression_layer() -> tower_http::compression::CompressionLayer {
-    tower_http::compression::CompressionLayer::new()
+///
+/// A 304 is never compressed: it has no body, and the encoder would add a
+/// `Content-Encoding` header to the bodiless reply from [`not_modified`].
+pub fn static_compression_layer() -> CompressionLayer<And<DefaultPredicate, CompressWhen>> {
+    let not_304: CompressWhen = |status, _, _, _| status != StatusCode::NOT_MODIFIED;
+    CompressionLayer::new().compress_when(DefaultPredicate::new().and(not_304))
+}
+
+/// Extra predicate of [`static_compression_layer`].
+pub type CompressWhen = fn(StatusCode, Version, &HeaderMap, &Extensions) -> bool;
+
+/// A bodiless `304 Not Modified`. Its body has no exact size, so axum adds
+/// no `Content-Length`. For HEAD, axum would otherwise set `Content-Length: 0`
+/// from an empty body, and hyper passes it through, while a GET 304 goes out
+/// without one. RFC 9110 §8.6 only allows Content-Length on a 304 when it
+/// equals the size a 200 would send, so `0` would tell caches the resource is
+/// empty (#1801). Hyper sends no body on a 304 either way.
+fn not_modified() -> Response {
+    let empty = futures_util::stream::empty::<Result<axum::body::Bytes, Infallible>>();
+    (StatusCode::NOT_MODIFIED, Body::from_stream(empty)).into_response()
 }
 
 /// Whether `path` is one of the unversioned shell/PWA files that must be
@@ -304,7 +325,7 @@ fn embedded_file(file: rust_embed::EmbeddedFile, path: &str, request: &HeaderMap
         .collect();
     let opaque = format!("\"{opaque}\"");
     let mut resp = if if_none_match_names(request, &opaque) {
-        let mut resp = StatusCode::NOT_MODIFIED.into_response();
+        let mut resp = not_modified();
         resp.headers_mut()
             .insert(header::CACHE_CONTROL, cache_control(path));
         resp
@@ -464,7 +485,7 @@ pub fn canvas_bundle_response(method: &Method, path: &str, request: &HeaderMap) 
     };
     let opaque = format!("\"{}\"", file.opaque);
     let mut response = if if_none_match_names(request, &opaque) {
-        StatusCode::NOT_MODIFIED.into_response()
+        not_modified()
     } else {
         (
             [(header::CONTENT_TYPE, HeaderValue::from_static(file.mime))],
