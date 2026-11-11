@@ -16,14 +16,26 @@ async function launch(): Promise<void> {
   vi.resetModules()
   const { Toaster } = await import('@/components/ui/sonner')
   const { useRenameNotice } = await import('./use-rename-notice')
-  function Harness(): React.JSX.Element {
+  // Mirror both renderer roots: the effects host is an *earlier sibling* of
+  // <Toaster />, so the hook's mount effect runs before the Toaster subscribes
+  // (gh-1799). A harness that nested <Toaster /> under the hook caller would
+  // flip that order and hide the regression.
+  function RenameNoticeEffect(): null {
     useRenameNotice()
-    return <Toaster />
+    return null
+  }
+  function Harness(): React.JSX.Element {
+    return (
+      <>
+        <RenameNoticeEffect />
+        <Toaster />
+      </>
+    )
   }
   render(<Harness />)
-  // sonner defers each toast create to a setTimeout.
+  // Flush the hook's deferred publish and sonner's own create setTimeout.
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    for (let i = 0; i < 3; i++) await new Promise((resolve) => setTimeout(resolve, 0))
   })
 }
 
