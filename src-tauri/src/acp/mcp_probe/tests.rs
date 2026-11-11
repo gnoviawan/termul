@@ -287,10 +287,9 @@ async fn panicking_probe_task_leaves_no_in_flight_entry() {
     assert!(!IN_FLIGHT_PROBES.lock().contains_key(&key));
 }
 
-/// A configured `Authorization` header wins over a stored OAuth token, the
-/// same rule the chat path applies in `inject_oauth_tokens`.
-#[tokio::test]
-async fn configured_authorization_header_is_sent_instead_of_the_stored_token() {
+/// Probes a local server that records every `Authorization` value it gets,
+/// with a stored OAuth token and the given configured `Authorization` value.
+async fn authorization_values_sent(configured: &str) -> Vec<String> {
     use std::sync::Arc;
     let seen: Arc<parking_lot::Mutex<Vec<String>>> = Arc::default();
     let recorder = seen.clone();
@@ -336,16 +335,35 @@ async fn configured_authorization_header_is_sent_instead_of_the_stored_token() {
         url: Some(url.clone()),
         headers: vec![McpNameValuePair {
             name: "Authorization".to_string(),
-            value: "Bearer api-key".to_string(),
+            value: configured.to_string(),
         }],
     })
     .await;
     crate::acp::mcp_oauth::delete_stored_token(&url).unwrap();
-
     let seen = seen.lock().clone();
+    seen
+}
+
+/// A configured `Authorization` header wins over a stored OAuth token, the
+/// same rule the chat path applies in `inject_oauth_tokens`.
+#[tokio::test]
+async fn configured_authorization_header_is_sent_instead_of_the_stored_token() {
+    let seen = authorization_values_sent("Bearer api-key").await;
     assert!(!seen.is_empty(), "the probe reached the server");
     assert!(
         seen.iter().all(|value| value == "Bearer api-key"),
         "only the configured header is sent: {seen:?}"
+    );
+}
+
+/// A configured `Authorization` value that is not a valid header value is
+/// dropped before sending, so the stored OAuth token is used instead.
+#[tokio::test]
+async fn malformed_configured_authorization_falls_back_to_the_stored_token() {
+    let seen = authorization_values_sent("Bearer api-key\n").await;
+    assert!(!seen.is_empty(), "the probe reached the server");
+    assert!(
+        seen.iter().all(|value| value == "Bearer oauth-access"),
+        "the stored token is sent: {seen:?}"
     );
 }

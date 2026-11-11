@@ -536,7 +536,10 @@ async fn connect_http(
     let has_auth_header = server
         .headers
         .iter()
-        .any(|pair| pair.name.eq_ignore_ascii_case("Authorization"));
+        .any(|pair| {
+            pair.name.eq_ignore_ascii_case("Authorization")
+                && reqwest::header::HeaderValue::from_str(&pair.value).is_ok()
+        });
     let stored_token = if has_auth_header {
         None
     } else {
