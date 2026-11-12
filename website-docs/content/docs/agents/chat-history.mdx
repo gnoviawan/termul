@@ -1,6 +1,6 @@
 ---
 title: Find and reopen chats
-description: Search your chats, pick up an old conversation, open a chat next to another one, or delete it.
+description: Search your chats, pick up an old conversation, import chats from another client, open a chat next to another one, or delete it.
 ---
 
 Troupe saves every chat with its project. The **Chats** tab in the side panel lists them, newest activity first, so you can return to any conversation and carry on where you left off.
@@ -36,6 +36,21 @@ If Troupe cannot resume the chat on its own, a bar says "This chat stopped." Cli
 To change how long an idle chat stays open, go to **Settings** > **Agent chats** > **Close idle chats after**. The default is 30 minutes. A chat that is working or waiting for your answer stays open.
 
 Some agents cannot reload an old conversation. With those agents you can read the chat, but you cannot continue it. Start a new chat instead.
+
+## Import chats from outside Troupe
+
+Chats you had with an agent outside Troupe, for example in the Claude Code CLI, can join your chat history. Troupe asks the agent for the chats it keeps for the current folder and copies the ones you pick, with their messages and tool activity.
+
+1. In the **Chats** tab, click the **Import chats** button next to **Search chats…**. On a phone, tap **Import chats** at the top of **Recents**.
+2. If you have more than one agent set up, pick one under **Agent**. The dialog starts with Claude Code when you have it.
+3. Check the chats you want, or check the **All … chats** box at the top to take every one. Each row shows the chat's title and when it was last active.
+4. Click **Import**. The button shows how many chats you picked.
+
+Troupe imports the chats one at a time and shows its progress, for example "Importing 2 of 5…". To stop, click **Stop import**. The chat in progress finishes, and no other one starts. If a chat fails, the row says why, and the others still import. Click **Try again** to retry the ones that failed.
+
+An imported chat appears in the list as a closed chat, with the time it was last active in the other client. Open it and send a message to continue it, the same way you [resume a chat](#reopen-and-resume-a-chat). A chat you already imported does not show up in the dialog again.
+
+The dialog lists the chats of the folder the Chats tab shows, so pick a worktree in the menu at the top of the side panel to import its chats. Some agents cannot list and load their chats. For those, the dialog says there is nothing to import. When you use Troupe through a server that does not allow changes from your device, the button is off. Hover it to see why.
 
 ## Open a chat next to another one
 
