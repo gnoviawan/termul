@@ -48,11 +48,20 @@ let sharedMcpSyncStarted = false
  * only updates memory, so a later save starts from the host's list instead of
  * overwriting it with this page's stale one.
  */
-function startSharedMcpSync(set: (partial: { mcpServers: StoredMcpServer[] }) => void): void {
+function startSharedMcpSync(
+  set: Parameters<McpSliceCreator>[0],
+  get: Parameters<McpSliceCreator>[1]
+): void {
   if (sharedMcpSyncStarted) return
   sharedMcpSyncStarted = true
   syncSharedKey<unknown>(PersistenceKeys.acpMcpServers, (change) => {
-    set({ mcpServers: change.exists ? normalizeMcpRegistry(change.data) : [] })
+    const previous = get().mcpServers
+    const next = change.exists ? normalizeMcpRegistry(change.data) : []
+    set({ mcpServers: next })
+    for (const server of next) {
+      const before = previous.find((item) => item.id === server.id)
+      if (before && !sameProbeConfig(before, server)) reprobeEditedServer(set, get, server)
+    }
   })
 }
 
@@ -213,7 +222,7 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
     try {
       const list = await loadMcpServersFromDisk()
       set({ mcpServers: list, mcpServersLoaded: true })
-      startSharedMcpSync(set)
+      startSharedMcpSync(set, get)
     } catch (err) {
       void logFrontendError({
         source: 'acp-store.loadMcpServers',

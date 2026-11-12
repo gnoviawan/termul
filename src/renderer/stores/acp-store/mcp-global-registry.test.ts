@@ -84,6 +84,10 @@ describe('the web MCP server list is one list for every project', () => {
     for (const watcher of host.watchers) watcher({ exists: true, data: [FILES, added] })
     expect(useAcpStore.getState().mcpServers).toEqual([FILES, added])
 
+    const edited = { ...FILES, args: ['-y', 'another-server'] }
+    for (const watcher of host.watchers) watcher({ exists: true, data: [edited, added] })
+    expect(useAcpStore.getState().mcpToolsLoaded.files).toBe(false)
+
     const mine = { ...FILES, id: 'mine', name: 'Mine' }
     await useAcpStore.getState().saveMcpServer(mine)
     expect((host.store.get('acp/mcp-servers') as unknown[]).length).toBe(3)
