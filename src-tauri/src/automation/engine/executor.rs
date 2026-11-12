@@ -293,8 +293,11 @@ impl<'a> Walk<'a> {
         row.started_at = Some(started_at);
         // A result that is not stored would make a resume run the node again,
         // so the walk stops here rather than reach a later park.
+        // A cancel stays a cancel: the run settles `cancelled` either way.
         if let Err(error) = self.record(row) {
-            return Err(NodeError::Halt(format!("{id}: step_not_recorded: {error}")));
+            if !matches!(result, Err(NodeError::Cancelled)) {
+                return Err(NodeError::Halt(format!("{id}: step_not_recorded: {error}")));
+            }
         }
         log::info!(
             "[Automation] run {} step {id}{} {}",

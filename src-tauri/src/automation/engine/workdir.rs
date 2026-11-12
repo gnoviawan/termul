@@ -47,6 +47,7 @@ impl Workdir {
             // Recreating it would resume the run without the edits it made.
             if !existing.path().is_dir() {
                 log::warn!("[Automation] run worktree {name} is listed but its directory is gone");
+                existing.release().await;
                 return Err("worktree_missing".to_string());
             }
             log::info!("[Automation] run worktree {name} reused");

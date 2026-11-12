@@ -434,4 +434,13 @@ async fn a_resume_whose_worktree_directory_is_gone_fails_instead_of_running_else
         (RunStatus::Failed, Some("worktree_missing"))
     );
     assert!(f.seen.posts.lock().is_empty());
+    let listed = std::process::Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(
+        !String::from_utf8_lossy(&listed.stdout).contains("automation/"),
+        "the dead worktree and its branch are released"
+    );
 }
