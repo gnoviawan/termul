@@ -367,3 +367,24 @@ async fn malformed_configured_authorization_falls_back_to_the_stored_token() {
         "the stored token is sent: {seen:?}"
     );
 }
+
+#[test]
+fn a_listed_tool_keeps_its_input_schema_on_the_wire() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": { "labels": { "type": "array", "items": { "type": "string" } } },
+        "required": ["labels"]
+    });
+    let serde_json::Value::Object(object) = schema.clone() else {
+        unreachable!("the schema literal is an object")
+    };
+    let info = tool_info(rmcp::model::Tool::new("add_labels", "Add labels", object));
+    assert_eq!(
+        serde_json::to_value(&info).unwrap(),
+        serde_json::json!({
+            "name": "add_labels",
+            "description": "Add labels",
+            "inputSchema": schema
+        })
+    );
+}

@@ -326,6 +326,8 @@ export type ProbeStatus = 'connected' | 'disconnected' | 'authRequired'
 export interface McpToolInfo {
   name: string
   description?: string
+  /** The tool's `inputSchema`; null when the server sent none or not an object. */
+  inputSchema?: Record<string, unknown> | null
 }
 
 /** Probe result. On `disconnected`, `error` is a short, value-free message.

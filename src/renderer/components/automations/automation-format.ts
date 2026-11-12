@@ -177,7 +177,7 @@ export function nodeLabels(nodes: AutomationNode[]): Map<string, string> {
   return new Map(nodes.map((node) => [node.id, node.label]))
 }
 
-const AGENT_TOOL_LABELS: Record<AgentTool, string> = {
+export const AGENT_TOOL_LABELS: Record<AgentTool, string> = {
   read: 'read files',
   search: 'search',
   edit: 'edit files',

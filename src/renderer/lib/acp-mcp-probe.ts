@@ -40,6 +40,26 @@ import { webServerMcpProbe } from '@/lib/web-server-api'
  * failure outcome (server name + transport/code only — no env/header values).
  */
 export async function probeMcpServer(server: McpServerConfig): Promise<ProbeResult> {
+  const result = await probe(server)
+  // The reply is the host's (or a test double's) word; reshape only a tool list.
+  if (!Array.isArray(result?.tools)) return result
+  return { ...result, tools: result.tools.map(toolInfo) }
+}
+
+/** A listed tool's `inputSchema` is the server's word: keep it only when it is an object. */
+function toolInfo(tool: McpToolInfo): McpToolInfo {
+  const schema: unknown = tool.inputSchema
+  if (schema === undefined) return tool
+  return {
+    ...tool,
+    inputSchema:
+      typeof schema === 'object' && schema !== null && !Array.isArray(schema)
+        ? (schema as Record<string, unknown>)
+        : null
+  }
+}
+
+async function probe(server: McpServerConfig): Promise<ProbeResult> {
   if (isTauriContext()) {
     try {
       return await invoke<ProbeResult>('acp_probe_mcp_server', { server })
