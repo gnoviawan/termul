@@ -133,7 +133,24 @@ What you can change depends on the step kind:
 - **Transform**: **Fields**, each one a key of the step's output;
 - **Fail**: **Message**, the failure message the run stops with.
 
-Every step also has a **Label**. **Agent** and **MCP tool** steps show their settings read-only for now; ask an agent in a chat to change them.
+Every step also has a **Label**.
+
+An **Agent** step has these settings:
+
+- **Agent** and **Model**. The list shows agents you have started at least once in a chat, and **Model** lists the models that agent last reported, plus **Default**. Changing the agent sets the model back to **Default**;
+- **Prompt**, what the agent should do. Type `{{` to insert a value from an earlier step;
+- **Output schema**, what the agent must answer with. Pick a **Kind**; for an object, add **Fields**, each with a name, a kind and whether it is required, and for an array, pick what **Each item** is. **As JSON** shows the whole schema and also sets an enum, a description and nested fields. A schema the app would refuse shows why above the editor;
+- **Tools**, one switch each for read files, search, edit files, run commands (full access), fetch from the network, and MCP and other tools;
+- **Timeout**, from 1 to 900 seconds, and **Max attempts**, from 1 to 3.
+
+The tool switches follow the same rules as a run listed under **Agents** in [Review and approve](#review-and-approve). When a switch breaks a rule, a red note under the switches names the tools the agent may not use together with what is already on; turn those tools off to fix it. An amber note appears when the agent reads web content or an MCP tool result and a later step sends data out or calls a tool; it is a reminder to check those steps before you approve.
+
+An **MCP tool** step has these settings:
+
+- **Server**, one of the MCP servers that are turned on in your [MCP settings](/docs/agent-setup/mcp-servers). If the step names a server that is missing or turned off, the field and the step card say **Server not configured**;
+- **Tool**, picked from the tools the server lists, with a search box when it lists many. If the tool is gone, the field and the card say **Tool not found**. If the server could not list its tools, press **List again**;
+- **Arguments**. When the tool describes its input, each argument gets its own field in that order, with a **Required** mark and the tool's description as help: a text box for text and numbers, a list for a fixed set of choices (and **Not set**, **true** or **false** for a yes/no argument), and a JSON box for anything else. Arguments the tool does not describe stay under **Other arguments**. A tool that does not describe its input gets plain name and value rows. A value that is a single `{{ }}` reference keeps the type of what it reads;
+- **Timeout**.
 
 In a field that takes references, type `{{` to insert one. The list offers only what the step can read when it runs: the trigger, the output of steps that run before it, and, inside a **For each** loop, the current item and its index. It does not list [secrets](#secrets); in an HTTP step, type `{{ secrets.NAME }}` yourself.
 
