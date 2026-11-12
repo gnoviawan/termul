@@ -6,6 +6,7 @@
 //! `src/renderer`.
 
 pub mod agent_process;
+pub mod agent_session_import;
 pub mod archive;
 pub mod atomic_file;
 pub mod browser_policy;

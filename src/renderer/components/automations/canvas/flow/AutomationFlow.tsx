@@ -34,7 +34,14 @@ import { CardNodeView } from './CardNodeView'
 import { ConnectBanner } from './ConnectBanner'
 import { FlowToolbar, type Tool } from './FlowToolbar'
 import { type ConnectFrom, EdgeHoverContext, type FlowEdit, FlowEditContext } from './flow-edit'
-import { type CardNode, contentBounds, type PortEdge, reuseUnchanged, toFlow } from './flow-graph'
+import {
+  type CardNode,
+  contentBounds,
+  type PortEdge,
+  panToShow,
+  reuseUnchanged,
+  toFlow
+} from './flow-graph'
 import { PortEdgeView } from './PortEdgeView'
 import './flow.css'
 
@@ -114,6 +121,24 @@ function FocusCard({ focus }: { focus: { id: string; nonce: number } | null }): 
   return null
 }
 
+/**
+ * Pans the inspected card into the part of the canvas the inspector leaves
+ * free: beside the floating panel, above the phone sheet once it has
+ * shrunk the canvas.
+ */
+function KeepInView({ id, rightInset }: { id: string | null; rightInset: number }): null {
+  const flow = useReactFlow<CardNode, PortEdge>()
+  const width = useStore((s) => s.width)
+  const height = useStore((s) => s.height)
+  useEffect(() => {
+    const node = id ? flow.getNode(id) : undefined
+    if (!node || width === 0 || height === 0) return
+    const next = panToShow(node, flow.getViewport(), { width, height, rightInset })
+    if (next) void flow.setViewport(next, { duration: 200 })
+  }, [flow, id, width, height, rightInset])
+  return null
+}
+
 function edgeOf(connection: Connection): Edge {
   return {
     from: connection.source as NodeId,
@@ -161,9 +186,25 @@ interface FlowProps {
   /** Present in edit mode; absent, the canvas is view-only. */
   edit?: FlowEdit
   focus?: { id: string; nonce: number } | null
+  /**
+   * The card the inspector shows (`trigger` or a step id). A click on a card
+   * picks it, a click on blank canvas clears it; a click that draws an edge
+   * does neither. A null `id` also clears the selection on the canvas.
+   */
+  inspect?: { id: string | null; onChange: (id: string | null) => void }
+  /** Room the floating inspector takes at the right edge, kept clear of the minimap. */
+  rightInset?: number
 }
 
-function Flow({ automation, phone, issues, edit, focus = null }: FlowProps): React.JSX.Element {
+function Flow({
+  automation,
+  phone,
+  issues,
+  edit,
+  focus = null,
+  inspect,
+  rightInset = 0
+}: FlowProps): React.JSX.Element {
   const { graph, trigger, layout } = automation
   const editing = edit !== undefined
   const live = editing && !edit.locked
@@ -177,6 +218,15 @@ function Flow({ automation, phone, issues, edit, focus = null }: FlowProps): Rea
     setNodes((prev) => reuseUnchanged(prev, next.nodes))
     setEdges((prev) => reuseUnchanged(prev, next.edges))
   }, [next])
+  const cleared = inspect !== undefined && inspect.id === null
+  useEffect(() => {
+    if (!cleared) return
+    setNodes((prev) =>
+      prev.some((node) => node.selected)
+        ? prev.map((node) => (node.selected ? { ...node, selected: false } : node))
+        : prev
+    )
+  }, [cleared])
   const [tool, setTool] = useState<Tool>('select')
   const [connecting, setConnecting] = useState<ConnectFrom | null>(null)
   const connectingRef = useRef<ConnectFrom | null>(null)
@@ -471,10 +521,14 @@ function Flow({ automation, phone, issues, edit, focus = null }: FlowProps): Rea
               // A tap on a handle bubbles here after React Flow handled it.
               if ((event.target as Element).closest('.react-flow__handle')) return
               if (connectingRef.current) finishConnecting(node.id)
+              else inspect?.onChange(node.id)
             }}
             onPaneClick={(event) => {
               const from = connectingRef.current
-              if (!from) return
+              if (!from) {
+                inspect?.onChange(null)
+                return
+              }
               cancelConnecting()
               // A tap on blank canvas while connecting offers a new step there, like a drop.
               const point = clientPoint(event)
@@ -511,11 +565,12 @@ function Flow({ automation, phone, issues, edit, focus = null }: FlowProps): Rea
                 pannable
                 ariaLabel="Diagram overview"
                 className="m-3 overflow-hidden rounded-lg border border-border shadow-lg"
-                style={{ width: 144, height: 88 }}
+                style={{ width: 144, height: 88, marginRight: 12 + rightInset }}
               />
             )}
             <ReadableStart phone={phone} />
             <FocusCard focus={focus} />
+            <KeepInView id={inspect?.id ?? null} rightInset={rightInset} />
           </ReactFlow>
         </div>
         {connecting && (

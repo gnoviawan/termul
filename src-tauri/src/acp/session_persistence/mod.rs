@@ -62,6 +62,7 @@ const STALE_TEMP_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 
 
 mod controls;
 mod diff_stat;
+mod imported;
 mod jsonl;
 mod model;
 mod normalize;
@@ -757,6 +758,15 @@ impl SessionPersistence {
             return Err(SessionPersistenceError::PersistenceUnhealthy(message));
         }
         Ok(())
+    }
+
+    /// Test seam: flag the session writer unhealthy, as a failed durable
+    /// append or a stopped writer does.
+    #[cfg(test)]
+    pub(crate) fn mark_writer_unhealthy_for_test(&self, session_id: &str, message: &str) {
+        if let Ok(runtime) = self.runtime(session_id) {
+            *runtime.unhealthy.lock() = Some(message.to_string());
+        }
     }
 
     /// Queue `command` under the session send lock, without ever blocking the

@@ -838,6 +838,32 @@ export interface AcpState {
   setSelectedAgentConfigId: (configId: string | null) => void
   /** Drain stale pooled sessions for `cwd` (other agents) and seed `configId`'s pool. */
   retargetWarmPool: (configId: string, cwd: string, projectId: string) => void
+  /**
+   * Sessions the agent of `configId` lists for `cwd` that are not yet in the
+   * chat history. Reuses the live agent of that config and folder, else
+   * spawns one. `unsupported` when the agent cannot list and load sessions.
+   */
+  listImportableSessions: (
+    configId: string,
+    cwd: string,
+    projectId: string
+  ) => Promise<ImportableSessions>
+  /**
+   * Import `sessions` one by one through the host, then refresh the chat
+   * history index. One session's failure never stops the rest; `shouldStop`
+   * returning true does: the session in flight finishes and the rest are not
+   * started (they get no outcome).
+   */
+  importAgentSessions: (input: {
+    agentId: AgentId
+    cwd: string
+    projectId: string
+    sessions: SessionInfo[]
+    /** Called after each session finished, with the number done so far and its outcome. */
+    onProgress?: (done: number, outcome: ImportSessionOutcome) => void
+    /** Asked before each session; true leaves the remaining sessions unstarted. */
+    shouldStop?: () => boolean
+  }) => Promise<ImportSessionOutcome[]>
   /** Generate a commit message in a hidden, non-persisted one-shot ACP session. */
   generateCommitMessage: (cwd: string, stagedDiff: string) => Promise<GeneratedCommitMessage>
   /** Inline terminal AI assist (#259): explain selected output or suggest a
@@ -1163,6 +1189,17 @@ export class ChatLaunchCancelledError extends Error {
  * the local transcript in place.
  */
 export type ReopenControlBaseline = Pick<AcpSession, 'modes' | 'models' | 'configOptions'>
+
+export type ImportableSessions =
+  | { status: 'ready'; agentId: AgentId; sessions: SessionInfo[] }
+  | { status: 'unsupported' }
+  | { status: 'unavailable' }
+
+export interface ImportSessionOutcome {
+  sessionId: SessionId
+  status: 'imported' | 'duplicate' | 'failed'
+  message?: string
+}
 
 export interface AgentIdentity {
   /** Human-friendly agent name (e.g. "Cursor"), or null when unresolved. */
