@@ -120,12 +120,14 @@ function untrustedOutputs(graph: Graph, bodies: Map<string, Set<string>>): Set<s
   return tainted
 }
 
+/** `graph::descendants`: like the host's `children`, an edge to a missing step leads nowhere. */
 function descendants(graph: Graph, id: string): Set<string> {
+  const ids = new Set<string>(graph.nodes.map((node) => node.id))
   const seen = new Set<string>()
   const queue = [id]
   for (let at = queue.shift(); at !== undefined; at = queue.shift()) {
     for (const edge of graph.edges) {
-      if (edge.from !== at || seen.has(edge.to)) continue
+      if (edge.from !== at || !ids.has(edge.to) || seen.has(edge.to)) continue
       seen.add(edge.to)
       queue.push(edge.to)
     }

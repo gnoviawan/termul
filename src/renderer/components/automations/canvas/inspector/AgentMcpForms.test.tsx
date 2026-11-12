@@ -8,7 +8,7 @@ import type {
   NodeId,
   NodeSpec
 } from '@shared/types/automation.types'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { McpToolInfo } from '@/lib/acp-api'
 import { detailWith, fixtureAutomation } from '@/lib/test-utils/automation-fixtures'
@@ -299,6 +299,46 @@ describe('AgentForm', () => {
     expect(status()).toBe('Draft · 4 unsaved changes')
   })
 
+  it('clears an enum a field edit leaves stale, and says so', async () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { a: { type: 'string' as const } },
+      enum: [{ a: 'x' }]
+    }
+    open(graphWith({ output_schema: schema }))
+    const panel = inspect('extract', 'Extract')
+    fireEvent.click(within(panel).getByRole('button', { name: /Output schema/ }))
+    fireEvent.click(within(panel).getByRole('button', { name: 'Add field' }))
+
+    await expectPending([
+      updated('extract', {
+        ...extractSpec,
+        output_schema: {
+          type: 'object',
+          properties: { a: { type: 'string' }, field: { type: 'string' } },
+          required: ['field']
+        }
+      })
+    ])
+    expect(
+      within(panel).getByText(
+        'The enum no longer fit this shape, so it was cleared. Set it again under As JSON.'
+      )
+    ).toBeVisible()
+  })
+
+  it.each([
+    [{ type: 'object', required: 42 }, '$: required must be an array of strings'],
+    [{ type: 'toString' }, '$: unsupported type "toString"']
+  ])('a stored schema the host refuses (%j) shows why and stays repairable as JSON', (schema, why) => {
+    open(graphWith({ output_schema: schema as unknown as typeof extractSpec.output_schema }))
+    const panel = inspect('extract', 'Extract')
+    expect(within(panel).getByText(`The host refuses this schema: ${why}`)).toBeVisible()
+    fireEvent.click(within(panel).getByRole('button', { name: /Output schema/ }))
+    expect(within(panel).queryByRole('button', { name: 'Add field' })).toBeNull()
+    expect(within(panel).getByLabelText('As JSON')).toBeVisible()
+  })
+
   it('keeps a prompt or schema name typed while Save runs, and says why', async () => {
     open(graphWith({ output_schema: { type: 'object', properties: { a: { type: 'string' } } } }))
     const panel = inspect('extract', 'Extract')
@@ -433,6 +473,25 @@ describe('McpToolForm', () => {
       'tool_10',
       'tool_11'
     ])
+
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Search tools' }), { key: 'Escape' })
+    fireEvent.click(within(panel).getByRole('button', { name: /^Tool/ }))
+    expect(screen.getByRole('textbox', { name: 'Search tools' })).toHaveValue('')
+    expect(screen.getAllByRole('option')).toHaveLength(12)
+  })
+
+  it('Enter in the search picks the first match; Enter on another option does not', async () => {
+    seedMcp(Array.from({ length: 12 }, (_, i) => ({ name: `tool_${i}` })))
+    open()
+    const panel = inspect('label_it', 'Post label')
+    fireEvent.click(within(panel).getByRole('button', { name: /^Tool/ }))
+    fireEvent.keyDown(screen.getByRole('option', { name: 'tool_3' }), { key: 'Enter' })
+    expect(api.previewAutomationOps).not.toHaveBeenCalled()
+
+    const search = screen.getByRole('textbox', { name: 'Search tools' })
+    fireEvent.change(search, { target: { value: 'tool_5' } })
+    fireEvent.keyDown(search, { key: 'Enter' })
+    await expectPending([updated('label_it', { ...mcpSpec, tool: 'tool_5' })])
   })
 
   it('lists the tools of a server nothing has listed yet', () => {
@@ -484,6 +543,29 @@ describe('McpToolForm', () => {
       'gone (not configured)'
     )
     expect(within(panel).getByRole('button', { name: /^Tool/ })).toBeDisabled()
+  })
+
+  it('shows a listing that failed before it loaded, and lists again on request', () => {
+    seedMcp(null)
+    const probeMcpServer = vi.fn(async () => {})
+    useAcpStore.setState({
+      mcpProbeStatus: { gh: 'disconnected' },
+      mcpProbeError: { gh: 'IPC transport down' },
+      probeMcpServer
+    })
+    open()
+    const panel = inspect('label_it', 'Post label')
+    expect(
+      within(panel).getByText('github did not list its tools: IPC transport down')
+    ).toBeVisible()
+    fireEvent.click(within(panel).getByRole('button', { name: 'List again' }))
+    expect(probeMcpServer).toHaveBeenCalledWith('gh')
+  })
+
+  it('names the timeout unit to assistive technology', () => {
+    open()
+    const panel = inspect('label_it', 'Post label')
+    expect(within(panel).getByLabelText('Timeout')).toHaveAccessibleDescription('seconds')
   })
 
   it('says why a server listed no tools', () => {
@@ -547,9 +629,15 @@ describe('McpToolForm arguments from the tool input schema', () => {
     expect(within(panel).getByLabelText('repo')).toHaveValue('acme/app')
     expect(within(panel).getByRole('combobox', { name: 'kind' })).toHaveTextContent('Pick one')
     expect(within(panel).getByLabelText('count')).toHaveValue('')
-    expect(within(panel).getByRole('switch', { name: 'notify' })).not.toBeChecked()
+    expect(within(panel).getByRole('combobox', { name: 'notify' })).toHaveTextContent('Not set')
     expect(within(panel).getByLabelText('labels').tagName).toBe('TEXTAREA')
     expect(within(panel).getAllByText('Required')).toHaveLength(3)
+    expect(within(panel).getByLabelText('repo')).toHaveAttribute('aria-required', 'true')
+    expect(within(panel).getByRole('combobox', { name: 'kind' })).toHaveAttribute(
+      'aria-required',
+      'true'
+    )
+    expect(within(panel).getByLabelText('count')).not.toHaveAttribute('aria-required')
     expect(within(panel).getByText('owner/name')).toBeVisible()
     expect(within(panel).getByText('Ping the assignee')).toBeVisible()
     expect(within(panel).getByLabelText('Argument 1 name')).toHaveValue('legacy')
@@ -559,7 +647,7 @@ describe('McpToolForm arguments from the tool input schema', () => {
     open(withArgs(start))
     const panel = inspect('label_it', 'Post label')
     choose(panel, 'kind', 'bug')
-    fireEvent.click(within(panel).getByRole('switch', { name: 'notify' }))
+    choose(panel, 'notify', 'true')
     enter(within(panel).getByLabelText('count'), '3')
     enter(within(panel).getByLabelText('labels'), '["bug"]')
     enter(within(panel).getByLabelText('repo'), '')
@@ -584,11 +672,11 @@ describe('McpToolForm arguments from the tool input schema', () => {
     open(withArgs([]))
     const panel = inspect('label_it', 'Post label')
     enter(within(panel).getByLabelText('weight'), 'heavy')
-    expect(within(panel).getByText('Enter a number')).toBeVisible()
+    expect(within(panel).getByText('Not a valid number')).toBeVisible()
     enter(within(panel).getByLabelText('count'), '1.5')
-    expect(within(panel).getByText('Enter a whole number')).toBeVisible()
+    expect(within(panel).getByText('Not a valid integer')).toBeVisible()
     enter(within(panel).getByLabelText('labels'), '[bug')
-    expect(within(panel).getByText('Not valid JSON')).toBeVisible()
+    expect(within(panel).getByText('Not a valid array')).toBeVisible()
     enter(within(panel).getByLabelText('labels'), '{{ nodes.shape.output }}')
 
     await expectPending([
@@ -610,6 +698,60 @@ describe('McpToolForm arguments from the tool input schema', () => {
     enter(weight, '2.5')
     expect(weight).toHaveValue('2.5')
     expect(within(panel).getByText('Saving. Try that again once it finishes.')).toBeVisible()
+  })
+
+  it('a boolean can go back to not set, and stray boolean text shows to be fixed', async () => {
+    open(withArgs([{ name: 'notify', value: 'yes' }]))
+    const panel = inspect('label_it', 'Post label')
+    const stray = within(panel).getByLabelText('notify')
+    expect(stray).toHaveValue('yes')
+    expect(within(panel).getByText('Not a valid boolean')).toBeVisible()
+    enter(stray, 'false')
+    choose(panel, 'notify', 'Not set')
+
+    await expectPending([
+      updated('label_it', { ...mcpSpec, arguments: [{ name: 'notify', value: 'false' }] }),
+      updated('label_it', { ...mcpSpec, arguments: [] })
+    ])
+  })
+
+  it('keeps an enum value outside the list in the select, marked, until an option is picked', async () => {
+    open(withArgs([{ name: 'kind', value: 'chore' }]))
+    const panel = inspect('label_it', 'Post label')
+    const kind = within(panel).getByRole('combobox', { name: 'kind' })
+    expect(kind).toHaveTextContent('chore (not an option)')
+    expect(within(panel).getByText("Not one of the tool's options")).toBeVisible()
+    choose(panel, 'kind', 'feature')
+
+    await expectPending([
+      updated('label_it', { ...mcpSpec, arguments: [{ name: 'kind', value: 'feature' }] })
+    ])
+  })
+
+  it('shows a declared name given twice as a row that can be removed', async () => {
+    open(withArgs([...start, { name: 'repo', value: 'acme/other' }]))
+    const panel = inspect('label_it', 'Post label')
+    expect(within(panel).getByLabelText('repo')).toHaveValue('acme/app')
+    expect(within(panel).getByLabelText('Argument 2 name')).toHaveValue('repo')
+    expect(
+      within(panel).getByText(
+        'A name above is given again here; the host refuses a name given twice.'
+      )
+    ).toBeVisible()
+    fireEvent.click(within(panel).getByRole('button', { name: 'Remove argument repo' }))
+
+    await expectPending([updated('label_it', { ...mcpSpec, arguments: start })])
+  })
+
+  it('adds an argument the schema does not name, unless the tool refuses others', () => {
+    open(withArgs([]))
+    const panel = inspect('label_it', 'Post label')
+    expect(within(panel).getByRole('button', { name: 'Add argument' })).toBeVisible()
+    cleanup()
+    seedMcp([{ name: 'add_labels', inputSchema: { ...inputSchema, additionalProperties: false } }])
+    open(withArgs([]))
+    const closed = inspect('label_it', 'Post label')
+    expect(within(closed).queryByRole('button', { name: 'Add argument' })).toBeNull()
   })
 
   it('with no input schema, keeps the name and value rows', () => {

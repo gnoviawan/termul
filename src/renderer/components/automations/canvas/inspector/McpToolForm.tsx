@@ -1,6 +1,5 @@
 import type { NamedTemplate } from '@shared/types/automation.types'
-import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
+import { Button } from '@/components/ui/button'
 import type { McpToolInfo } from '@/lib/acp-api'
 import { SAVING_MESSAGE } from '../draft/use-draft'
 import { LIMITS, timeoutError } from './checks'
@@ -13,7 +12,8 @@ import {
   argumentError,
   argumentFields,
   isTemplate,
-  setArgument
+  setArgument,
+  takesOtherArguments
 } from './tool-arguments'
 
 export function McpToolForm({ id, spec, commit, scope }: FormProps<'mcp_tool'>): React.JSX.Element {
@@ -93,21 +93,28 @@ function ToolPicker({
         ? `Tool not found. ${server.name} has no tool ${value}.`
         : null
   return (
-    <PickerField
-      id={id}
-      label="Tool"
-      value={value}
-      options={tools.map((tool) => ({ value: tool.name, detail: tool.description }))}
-      placeholder={server ? 'Pick a tool' : 'Pick a server first'}
-      disabled={!server || list.state !== 'ready'}
-      error={error}
-      help={
-        server && list.state === 'loading'
-          ? `Listing the tools of ${server.name}…`
-          : picked?.description
-      }
-      onChange={onChange}
-    />
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <PickerField
+        id={id}
+        label="Tool"
+        value={value}
+        options={tools.map((tool) => ({ value: tool.name, detail: tool.description }))}
+        placeholder={server ? 'Pick a tool' : 'Pick a server first'}
+        disabled={!server || list.state !== 'ready'}
+        error={error}
+        help={
+          server && list.state === 'loading'
+            ? `Listing the tools of ${server.name}…`
+            : picked?.description
+        }
+        onChange={onChange}
+      />
+      {server && list.state === 'failed' && (
+        <Button variant="outline" size="xs" className="self-start" onClick={list.retry}>
+          List again
+        </Button>
+      )}
+    </div>
   )
 }
 
@@ -116,8 +123,9 @@ const ARGUMENTS_HELP =
 
 /**
  * The picked tool's arguments: a field per property of its input schema,
- * then any argument the schema does not name. With no schema, name and
- * value rows.
+ * then the other arguments (names the schema does not declare, and repeats
+ * of one it does) as rows, so each stays visible and removable. With no
+ * schema, name and value rows.
  */
 function ToolArguments({
   id,
@@ -147,16 +155,18 @@ function ToolArguments({
     )
   }
   const named = new Set(fields.map((field) => field.name))
-  const extras = args.filter((arg) => !named.has(arg.name))
-  const typed = fields.some((field) => field.kind !== 'string' && field.kind !== 'enum')
+  // The first argument of each declared name fills its field; the rest are rows.
+  const filled = new Set(
+    fields.map((field) => args.findIndex((arg) => arg.name === field.name)).filter((at) => at >= 0)
+  )
+  const others = args.filter((_, i) => !filled.has(i))
+  const repeated = others.some((arg) => named.has(arg.name))
   return (
     <fieldset className="flex min-w-0 flex-col gap-3">
       <legend className="mb-1.5 text-xs font-medium">Arguments</legend>
-      {typed && (
-        <p className="-mt-1.5 text-xs text-muted-foreground">
-          The host sends a typed value as text. A value that is a single {'{{ }}'} keeps its type.
-        </p>
-      )}
+      <p className="-mt-1.5 text-xs text-muted-foreground">
+        A value that is a single {'{{ }}'} keeps the type of what it reads.
+      </p>
       {fields.map((field) => (
         <ArgumentInput
           key={field.name}
@@ -167,14 +177,19 @@ function ToolArguments({
           set={(value) => commit(setArgument(args, field.name, value))}
         />
       ))}
-      {extras.length > 0 && (
+      {(others.length > 0 || takesOtherArguments(tool?.inputSchema)) && (
         <NamedTemplates
           id={`${id}-other`}
-          label="Not in the tool's input"
+          label="Other arguments"
           noun="Argument"
-          items={extras}
+          help={
+            repeated
+              ? 'A name above is given again here; the host refuses a name given twice.'
+              : "Names the tool's input does not declare."
+          }
+          items={others}
           scope={scope}
-          commit={(next) => commit([...args.filter((arg) => named.has(arg.name)), ...next])}
+          commit={(next) => commit([...args.filter((_, i) => filled.has(i)), ...next])}
         />
       )}
     </fieldset>
@@ -183,6 +198,9 @@ function ToolArguments({
 
 /** The value of a select whose argument is not set; a select item needs a non-empty value. */
 const UNSET = '\u0000unset'
+
+/** A literal a select can show: unset, or one of its options. */
+const picks = (value: string, options: readonly string[]) => value === '' || options.includes(value)
 
 function ArgumentInput({
   id,
@@ -198,38 +216,26 @@ function ArgumentInput({
   /** False when the draft did not take the value. */
   set: (value: string) => boolean
 }): React.JSX.Element {
-  const missing = field.required && value === '' ? 'Required' : null
-  if (field.kind === 'boolean' && !isTemplate(value)) {
-    return (
-      <div className="flex min-w-0 flex-col gap-1">
-        <div className="flex h-7 items-center justify-between gap-3 pointer-coarse:h-11">
-          <span className="flex items-baseline gap-2">
-            <Label htmlFor={id} className="text-xs">
-              {field.name}
-            </Label>
-            {field.required && <span className="text-xs text-muted-foreground">Required</span>}
-          </span>
-          <Switch
-            id={id}
-            checked={value === 'true'}
-            onCheckedChange={(checked) => set(checked ? 'true' : 'false')}
-          />
-        </div>
-        {field.description && <p className="text-xs text-muted-foreground">{field.description}</p>}
-      </div>
-    )
-  }
-  if (field.kind === 'enum' && (value === '' || field.options?.includes(value))) {
-    const options = (field.options ?? []).map((option) => ({ value: option, label: option }))
+  const problem = field.required && value === '' ? 'Required' : argumentError(field, value)
+  const choices =
+    field.kind === 'boolean'
+      ? ['true', 'false']
+      : field.kind === 'enum'
+        ? (field.options ?? [])
+        : null
+  // A boolean's stray text goes to the text field to be fixed; an enum's stays in its select.
+  if (choices && !isTemplate(value) && (field.kind === 'enum' || picks(value, choices))) {
+    const options = choices.map((option) => ({ value: option, label: option }))
+    if (!picks(value, choices)) options.push({ value, label: `${value} (not an option)` })
     return (
       <ChoiceField
         id={id}
         label={field.name}
-        value={value === '' && !field.required ? UNSET : value}
+        value={value === '' ? (field.required ? '' : UNSET) : value}
         options={field.required ? options : [{ value: UNSET, label: 'Not set' }, ...options]}
         placeholder="Pick one"
         required={field.required}
-        error={missing}
+        error={problem}
         help={field.description}
         onChange={(next) => set(next === UNSET ? '' : next)}
       />
@@ -243,11 +249,9 @@ function ArgumentInput({
       scope={scope}
       multiline={field.kind === 'json'}
       required={field.required}
-      error={missing}
+      error={problem}
       help={field.description ?? (field.kind === 'json' ? 'JSON, or a single {{ }}.' : undefined)}
-      commit={(text) => {
-        return argumentError(field.kind, text) ?? (set(text) ? null : SAVING_MESSAGE)
-      }}
+      commit={(text) => argumentError(field, text) ?? (set(text) ? null : SAVING_MESSAGE)}
     />
   )
 }

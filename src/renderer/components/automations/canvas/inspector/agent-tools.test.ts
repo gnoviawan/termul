@@ -92,6 +92,37 @@ describe('agentToolRules', () => {
     expect(rulesOf(noPost, 'extract').untrustedFlow).toBe(false)
   })
 
+  it('rule8: an MCP tool result is untrusted and an MCP tool step is a sink', () => {
+    const tool: NodeSpec = {
+      kind: 'mcp_tool',
+      server_id: 'srv',
+      tool: 't',
+      arguments: [],
+      timeout_ms: 60_000
+    }
+    const trusted = withSpec(sample, 'fetch', {
+      kind: 'transform',
+      fields: [{ name: 'items', value: 'x' }]
+    })
+    expect(rulesOf(trusted, 'extract').untrustedFlow).toBe(false)
+    expect(rulesOf(withSpec(trusted, 'fetch', tool), 'extract').untrustedFlow).toBe(true)
+    expect(rulesOf(withSpec(sample, 'post', tool), 'extract').untrustedFlow).toBe(true)
+    expect(rulesOf(withSpec(trusted, 'post', tool), 'extract').untrustedFlow).toBe(false)
+  })
+
+  it('an edge to a missing step leads nowhere, as the host reads the graph', () => {
+    const fetching = withSpec(sample, 'extract', agent('Look up {{trigger.kind}}', ['fetch']))
+    const throughGhost = {
+      ...fetching,
+      edges: [
+        ...fetching.edges.filter((e) => !(e.from === 'extract' && e.to === 'check')),
+        { from: 'extract', port: 'out', to: 'ghost' },
+        { from: 'ghost', port: 'out', to: 'post' }
+      ]
+    } as Graph
+    expect(rulesOf(throughGhost, 'extract').untrustedFlow).toBe(false)
+  })
+
   it('rule9: a prompt reading untrusted data may not send out or edit, and outbound tools exclude file tools', () => {
     const all = withSpec(
       sample,

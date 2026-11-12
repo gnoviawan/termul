@@ -79,9 +79,19 @@ export function Field({
   )
 }
 
-export function describedBy(id: string, error: string | null | undefined, help?: string) {
-  if (error) return { 'aria-invalid': true, 'aria-describedby': `${id}-error` } as const
-  return help ? ({ 'aria-describedby': `${id}-help` } as const) : {}
+export function describedBy(
+  id: string,
+  error: string | null | undefined,
+  help?: string,
+  /** Another element that describes the control, such as a unit. */
+  also?: string
+): { 'aria-invalid'?: true; 'aria-describedby'?: string } {
+  const text = error ? `${id}-error` : help ? `${id}-help` : undefined
+  const ids = [text, also].filter(Boolean).join(' ')
+  return {
+    ...(error ? { 'aria-invalid': true } : {}),
+    ...(ids ? { 'aria-describedby': ids } : {})
+  }
 }
 
 /**
@@ -169,7 +179,7 @@ export function TextField({
       value={field.text}
       placeholder={placeholder}
       className={cn(FIELD_HEIGHT, mono && 'font-mono', suffix && 'pr-20 tabular-nums')}
-      {...describedBy(id, shown, help)}
+      {...describedBy(id, shown, help, suffix ? `${id}-unit` : undefined)}
       onChange={(event) => field.setText(event.target.value)}
       onBlur={field.save}
       onKeyDown={(event) => field.onKeyDown(event)}
@@ -181,7 +191,7 @@ export function TextField({
         <div className="relative">
           {input}
           <span
-            aria-hidden="true"
+            id={`${id}-unit`}
             className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground"
           >
             {suffix}
@@ -265,6 +275,7 @@ export function TemplateField({
     'aria-expanded': open,
     'aria-controls': open ? listId : undefined,
     'aria-activedescendant': open ? `${listId}-${active}` : undefined,
+    'aria-required': required || undefined,
     ...describedBy(id, shown, help),
     onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       field.setText(event.target.value)
@@ -537,7 +548,12 @@ export function ChoiceField<T extends string>({
         disabled={disabled}
         onValueChange={(next) => next !== value && onChange(next as T)}
       >
-        <SelectTrigger id={id} className={FIELD_HEIGHT} {...describedBy(id, error, help)}>
+        <SelectTrigger
+          id={id}
+          className={FIELD_HEIGHT}
+          aria-required={required || undefined}
+          {...describedBy(id, error, help)}
+        >
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>
@@ -597,7 +613,13 @@ export function PickerField({
   }
   return (
     <Field id={id} label={label} error={error} help={help}>
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next)
+          if (!next) setQuery('')
+        }}
+      >
         <PopoverTrigger asChild>
           <button
             id={id}
@@ -621,7 +643,8 @@ export function PickerField({
           align="start"
           className={cn(MENU_CONTENT_CLASS, 'w-[var(--radix-popover-trigger-width)] p-0')}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && shown[0]) {
+            // Enter in the search picks the first match; a focused option picks itself.
+            if (event.key === 'Enter' && shown[0] && event.target instanceof HTMLInputElement) {
               event.preventDefault()
               pick(shown[0].value)
             }

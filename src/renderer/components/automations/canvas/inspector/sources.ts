@@ -79,21 +79,31 @@ export function useMcpServers(): { loaded: boolean; servers: McpServerChoice[] }
 
 export type McpToolList =
   | { state: 'loading' }
-  | { state: 'failed'; error: string }
+  | { state: 'failed'; error: string; retry: () => void }
   | { state: 'ready'; tools: McpToolInfo[] }
 
-/** `serverId`'s tools, listed once when nothing has listed them yet. */
+/**
+ * `serverId`'s tools, listed once when nothing has listed them yet. A failed
+ * listing is final until `retry` lists again, whether or not the store marked
+ * the tools as loaded.
+ */
 export function useMcpTools(serverId: string): McpToolList {
   const loaded = useAcpStore((s) => s.mcpToolsLoaded[serverId] === true)
+  const probing = useAcpStore((s) => s.mcpProbing[serverId] === true)
   const tools = useAcpStore((s) => s.mcpTools[serverId])
   const status = useAcpStore((s) => s.mcpProbeStatus[serverId])
   const error = useAcpStore((s) => s.mcpProbeError[serverId])
   const loadMcpTools = useAcpStore((s) => s.loadMcpTools)
+  const probeMcpServer = useAcpStore((s) => s.probeMcpServer)
   useEffect(() => {
     if (serverId && !loaded) void loadMcpTools(serverId)
   }, [serverId, loaded, loadMcpTools])
+  if (probing) return { state: 'loading' }
+  const retry = () => void probeMcpServer(serverId)
+  if (status === 'authRequired') return { state: 'failed', error: 'needs a sign-in', retry }
+  if (status === 'disconnected') {
+    return { state: 'failed', error: error ?? 'not reachable', retry }
+  }
   if (!loaded) return { state: 'loading' }
-  if (status === 'authRequired') return { state: 'failed', error: 'needs a sign-in' }
-  if (status === 'disconnected') return { state: 'failed', error: error ?? 'not reachable' }
   return { state: 'ready', tools: tools ?? [] }
 }

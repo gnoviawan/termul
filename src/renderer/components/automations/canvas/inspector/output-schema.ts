@@ -56,10 +56,10 @@ function mismatch(schema: Record<string, unknown>, value: unknown, path: string)
   }
   if (kind === 'object' && isObject(value)) {
     const required = (schema.required as string[] | undefined) ?? []
-    const missing = required.find((name) => !(name in value))
+    const missing = required.find((name) => !Object.hasOwn(value, name))
     if (missing !== undefined) return `${path}: missing required property "${missing}"`
     for (const [name, sub] of Object.entries((schema.properties ?? {}) as Record<string, never>)) {
-      if (!(name in value)) continue
+      if (!Object.hasOwn(value, name)) continue
       const inner = mismatch(sub, value[name], `${path}.${name}`)
       if (inner) return inner
     }
@@ -73,7 +73,26 @@ function mismatch(schema: Record<string, unknown>, value: unknown, path: string)
   return null
 }
 
-const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+/** `serde_json::Value` equality: objects by their members in any order, arrays in order. */
+function same(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((item, i) => same(item, b[i]))
+    )
+  }
+  if (isObject(a) || isObject(b)) {
+    if (!isObject(a) || !isObject(b)) return false
+    const keys = Object.keys(a)
+    return (
+      keys.length === Object.keys(b).length &&
+      keys.every((key) => Object.hasOwn(b, key) && same(a[key], b[key]))
+    )
+  }
+  return a === b
+}
 
 function check(schema: unknown, path: string): void {
   if (!isObject(schema)) throw new PathError(`${path}: schema must be an object`)
@@ -85,8 +104,10 @@ function check(schema: unknown, path: string): void {
   if (typeof schema.type !== 'string') {
     throw new PathError(`${path}: type is required and must be a string`)
   }
+  if (!Object.hasOwn(REJECTED, schema.type)) {
+    throw new PathError(`${path}: unsupported type "${schema.type}"`)
+  }
   const kind = schema.type as SchemaKind
-  if (!(kind in REJECTED)) throw new PathError(`${path}: unsupported type "${schema.type}"`)
   const rejected = REJECTED[kind].find((key) => key in schema)
   if (rejected) throw new PathError(`${path}: ${rejected} is not allowed with type "${kind}"`)
   if (kind === 'object') checkObject(schema, path)
@@ -108,7 +129,8 @@ function check(schema: unknown, path: string): void {
 }
 
 function checkObject(schema: Record<string, unknown>, path: string): void {
-  const properties = schema.properties ?? {}
+  // Absent is no properties; present must be an object, null included.
+  const properties = Object.hasOwn(schema, 'properties') ? schema.properties : {}
   if (!isObject(properties)) throw new PathError(`${path}: properties must be an object`)
   for (const [name, sub] of Object.entries(properties)) check(sub, `${path}.properties.${name}`)
   if (!('required' in schema)) return
@@ -117,7 +139,7 @@ function checkObject(schema: Record<string, unknown>, path: string): void {
   }
   for (const [i, name] of schema.required.entries()) {
     if (typeof name !== 'string') throw new PathError(`${path}.required[${i}]: must be a string`)
-    if (!(name in properties)) {
+    if (!Object.hasOwn(properties, name)) {
       throw new PathError(`${path}.required[${i}]: "${name}" is not declared in properties`)
     }
   }
@@ -176,4 +198,22 @@ export function freshFieldName(fields: readonly SchemaField[]): string {
   let n = 2
   while (taken.has(`field_${n}`)) n += 1
   return `field_${n}`
+}
+
+/**
+ * `schema` after an edit to its shape. An enum whose values no longer fit
+ * the new shape is dropped, since the host refuses the schema with it;
+ * `cleared` says so.
+ */
+export function withoutStaleEnum(schema: JsonSchemaSubset): {
+  schema: JsonSchemaSubset
+  cleared: boolean
+} {
+  if (schema.enum === undefined || outputSchemaError(schema) === null) {
+    return { schema, cleared: false }
+  }
+  const { enum: _stale, ...rest } = schema
+  return outputSchemaError(rest) === null
+    ? { schema: rest, cleared: true }
+    : { schema, cleared: false }
 }

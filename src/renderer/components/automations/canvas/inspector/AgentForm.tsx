@@ -28,7 +28,8 @@ import {
   type SchemaField,
   type SchemaKind,
   schemaFields,
-  withFields
+  withFields,
+  withoutStaleEnum
 } from './output-schema'
 import { useAgentModels, useKnownAgents } from './sources'
 
@@ -266,7 +267,15 @@ function OutputSchemaSection({
   commit: (schema: JsonSchemaSubset) => boolean
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  const [cleared, setCleared] = useState(false)
   const problem = outputSchemaError(schema)
+  /** A field or item edit; an enum the new shape no longer fits is cleared, and says so. */
+  const reshape = (next: JsonSchemaSubset): boolean => {
+    const fixed = withoutStaleEnum(next)
+    const taken = commit(fixed.schema)
+    if (taken) setCleared(fixed.cleared)
+    return taken
+  }
   return (
     <section className="flex min-w-0 flex-col gap-3">
       <button
@@ -299,10 +308,20 @@ function OutputSchemaSection({
             value={schema.type}
             options={KIND_OPTIONS}
             help="What the agent must answer with."
-            onChange={(kind) => commit(ofKind(kind, schema.description))}
+            onChange={(kind) => {
+              if (commit(ofKind(kind, schema.description))) setCleared(false)
+            }}
           />
-          {schema.type === 'object' && <SchemaFields id={id} schema={schema} commit={commit} />}
-          {schema.type === 'array' && (
+          {cleared && (
+            <p className="text-xs text-muted-foreground">
+              The enum no longer fit this shape, so it was cleared. Set it again under As JSON.
+            </p>
+          )}
+          {/* The controls read a valid schema; a refused one is repaired as JSON. */}
+          {!problem && schema.type === 'object' && (
+            <SchemaFields id={id} schema={schema} commit={reshape} />
+          )}
+          {!problem && schema.type === 'array' && (
             <ChoiceField
               id={`${id}-items`}
               label="Each item"
@@ -310,11 +329,19 @@ function OutputSchemaSection({
               options={[{ value: ANY_ITEM, label: 'anything' }, ...KIND_OPTIONS]}
               onChange={(kind) => {
                 const { items: _items, ...rest } = schema
-                commit(kind === ANY_ITEM ? rest : { ...rest, items: ofKind(kind as SchemaKind) })
+                reshape(kind === ANY_ITEM ? rest : { ...rest, items: ofKind(kind as SchemaKind) })
               }}
             />
           )}
-          <SchemaJson id={`${id}-json`} schema={schema} commit={commit} />
+          <SchemaJson
+            id={`${id}-json`}
+            schema={schema}
+            commit={(next) => {
+              const taken = commit(next)
+              if (taken) setCleared(false)
+              return taken
+            }}
+          />
         </div>
       )}
     </section>
