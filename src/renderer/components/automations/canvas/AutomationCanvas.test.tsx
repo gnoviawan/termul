@@ -146,6 +146,33 @@ describe('AutomationCanvas', () => {
     expect(document.querySelectorAll('.react-flow__edge')).toHaveLength(8)
   })
 
+  it('draws an approval step with its timeout and an error port', () => {
+    const gated: Shown = {
+      trigger: { kind: 'manual' },
+      layout: {},
+      graph: {
+        nodes: [
+          {
+            id: id('gate'),
+            label: 'Ship it?',
+            spec: {
+              kind: 'approval',
+              message: 'Ship {{nodes.trigger.output}}?',
+              timeout_ms: 3_600_000
+            }
+          }
+        ],
+        edges: [{ from: 'trigger', port: 'out', to: id('gate') }]
+      }
+    }
+    render(<AutomationCanvas automation={gated} phone={false} />)
+
+    const gate = within(card('gate'))
+    expect(gate.getByText('Ship it?')).toBeInTheDocument()
+    expect(gate.getByText(/^Approval · times out after /)).toBeInTheDocument()
+    expect(gate.getByText('error')).toBeInTheDocument()
+  })
+
   it('reads out every step and branch as a list', () => {
     render(<AutomationCanvas automation={fixtureAutomation} phone={false} />)
 

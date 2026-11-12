@@ -37,6 +37,8 @@ function cardDetail(spec: NodeSpec): string {
       return spec.mode === 'all' ? 'every branch' : 'any branch'
     case 'wait':
       return formatDuration(spec.duration_ms)
+    case 'approval':
+      return `times out after ${formatDuration(spec.timeout_ms)}`
     case 'mcp_tool':
       return spec.server_id
   }

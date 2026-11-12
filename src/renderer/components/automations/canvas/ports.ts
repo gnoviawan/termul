@@ -18,6 +18,7 @@ export const OUTPUT_PORTS: Record<NodeKind | typeof TRIGGER, readonly Port[]> = 
   http: ['out', 'error'],
   agent: ['out', 'error'],
   transform: ['out', 'error'],
+  approval: ['out', 'error'],
   mcp_tool: ['out', 'error'],
   condition: ['error', 'true', 'false'],
   for_each: ['error', 'out', 'item'],
