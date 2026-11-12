@@ -1,14 +1,20 @@
 //! `mcp_tool` nodes: one `tools/call` on a project MCP server, with no LLM.
 //! The server is resolved when the step runs, the arguments render with no
-//! secrets, and the call never answers a request for user input. Logs name
-//! the server, tool, outcome and duration, never arguments or results.
+//! secrets, and the call never answers a request for user input. A literal
+//! argument is parsed into the type the tool's input schema declares for it
+//! (listing the server first when no listing is kept), and a literal that
+//! fits none fails the step. Logs name the
+//! server, tool, outcome, duration and argument names, never argument values
+//! or results.
 
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
 use super::nodes::{render, NodeError, NodeScope};
-use crate::automation::mcp::{CallOutcome, McpFailure, ToolResponse};
+use crate::automation::mcp::{
+    is_literal, literal_argument, CallOutcome, Literal, McpFailure, ToolResponse,
+};
 use crate::automation::model::NamedTemplate;
 use crate::automation::schema;
 
@@ -32,10 +38,57 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: McpSpec<'_>) -> Result<Valu
         .mcp
         .server(project_id, spec.server_id)
         .ok_or_else(|| NodeError::failed(format!("mcp_server_unknown:{}", spec.server_id)))?;
+    let input_schema = if spec.arguments.iter().any(is_literal) {
+        let schema = engine
+            .mcp
+            .input_schema(project_id, &server, spec.tool)
+            .await;
+        if schema.is_none() {
+            log::warn!(
+                "[Automation] run {} step {}: no input schema for MCP {} tool {}; literal arguments go as text",
+                scope.run.run.id,
+                scope.node_id,
+                server.server_id,
+                spec.tool
+            );
+        }
+        schema
+    } else {
+        None
+    };
     let ctx = scope.render_context(None);
     let mut arguments = Map::new();
     for argument in spec.arguments {
-        arguments.insert(argument.name.clone(), render(&argument.value, &ctx)?);
+        let literal = input_schema
+            .as_ref()
+            .map_or(Literal::Render, |schema| literal_argument(schema, argument));
+        let value = match literal {
+            Literal::Render => render(&argument.value, &ctx)?,
+            Literal::Typed(value) => {
+                log::debug!(
+                    "[Automation] run {} step {}: MCP tool {} argument {} typed by the input schema",
+                    scope.run.run.id,
+                    scope.node_id,
+                    spec.tool,
+                    argument.name
+                );
+                value
+            }
+            Literal::Mismatch(mismatch) => {
+                log::warn!(
+                    "[Automation] run {} step {}: MCP tool {} argument {} does not fit its declared type {}",
+                    scope.run.run.id,
+                    scope.node_id,
+                    spec.tool,
+                    argument.name,
+                    mismatch.expected
+                );
+                return Err(NodeError::failed(format!(
+                    "mcp_argument_invalid: {mismatch}"
+                )));
+            }
+        };
+        arguments.insert(argument.name.clone(), value);
     }
     let started = Instant::now();
     let call =

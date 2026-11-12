@@ -82,6 +82,8 @@ pub struct FakeMcp {
     pub responses: Mutex<HashMap<String, ToolResponse>>,
     /// Calls wait this long before answering.
     pub call_delay: Mutex<Option<Duration>>,
+    /// `tools/list` fails with this while `tools/call` still answers.
+    pub list_failure: Mutex<Option<McpFailure>>,
     pub list_calls: AtomicUsize,
     /// The working directory of every listing, in order.
     pub list_cwds: Mutex<Vec<Option<PathBuf>>>,
@@ -122,7 +124,10 @@ impl McpClient for FakeMcp {
     ) -> BoxFuture<'a, Result<Vec<ToolSchema>, McpFailure>> {
         self.list_calls.fetch_add(1, Ordering::SeqCst);
         self.list_cwds.lock().push(cwd.map(Path::to_path_buf));
-        let listing = self.listing(server);
+        let listing = match self.list_failure.lock().clone() {
+            Some(failure) => Err(failure),
+            None => self.listing(server),
+        };
         async move { listing }.boxed()
     }
 
