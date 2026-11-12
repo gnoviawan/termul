@@ -52,8 +52,12 @@ summary travels on the wire.
   the reopen is idempotent, no doubled turns or separators.) Late output
   from the old agent never lands in the new session's chat.
 - The conversation continues in the same tab (same pane, same focus).
-- The sidebar row for the chat shows the ordered agent icon sequence
-  (original → current) instead of a single icon.
+- The sidebar and history lists show ONE row for the conversation — the
+  session a switch spawns is folded into the chat it continues, not listed
+  as a separate chat. The row carries the ordered agent icon sequence
+  (original → current) instead of a single icon, and opens, reloads and
+  status signals land on the newest session in the chain. Deleting the row
+  deletes the whole conversation chain.
 
 ## Busy behavior
 
@@ -104,6 +108,18 @@ the agent the conversation ended with:
 - Resolution follows the **last** switch record's target session and agent,
   walking a multi-switch chain (A → B → C reopens on C) so the whole chain's
   transcript renders above the separator.
+- The one-row history fold rides on `continuedFrom`, a durable edge the host
+  stamps on the new session's metadata once the marker is flushed. The
+  durable `agent_switch` record stays authoritative — the edge is the O(1)
+  lookup that avoids scanning every transcript. Sessions switched before the
+  edge existed are backfilled by a one-time startup migration that reads
+  their markers, and the renderer heals the edge whenever it installs a
+  payload that carries one. Opening any chain member from history — the
+  sidebar, cards, mention picker, or a project-switch restore — lands on
+  the newest session via the fold or the marker redirect; a live tab
+  already pinned to a pre-switch member id can still reattach that member
+  directly. Opening the newest session directly splices the earlier
+  transcript back in via the same edge.
 - The pre-switch transcript remains visible above the separator; new prompts
   go to the current agent.
 - Unswitched chats reopen exactly as before — no switch machinery runs.

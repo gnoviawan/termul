@@ -78,8 +78,10 @@ import {
   refreshHostOwnedIndex,
   resolveSwitchRedirect,
   SWITCH_SPLICE_ID_PREFIX,
+  type SwitchMarkerFacts,
   scanPlanFenceFromMessages,
   spliceSwitchTranscript,
+  stampSwitchContinuation,
   trimLiveToolCalls,
   withCommands,
   withSessionActive,
@@ -466,6 +468,31 @@ export function _resetSessionIndexLoadGenerationForTesting(): void {
 }
 
 /**
+ * Heal `sessionIndex` chain edges at payload install: stamp `id`'s own
+ * `continuedFrom` (from the host-stamped payload metadata) and point each
+ * marker-named `newSessionId` back at `id`. Pre-feature chains carry the
+ * markers but no index edge — installing their payload makes them fold
+ * without waiting for the host's backfill migration.
+ */
+function healChainEdges(
+  s: Pick<AcpState, 'sessionIndex'>,
+  id: SessionId,
+  continuedFrom: string | undefined,
+  switches: AgentSwitchRecord[]
+): SessionIndexEntry[] {
+  let index = s.sessionIndex
+  if (continuedFrom) {
+    index = stampSwitchContinuation({ sessionIndex: index }, id, continuedFrom as SessionId)
+  }
+  for (const sw of switches) {
+    if (sw.newSessionId) {
+      index = stampSwitchContinuation({ sessionIndex: index }, sw.newSessionId as SessionId, id)
+    }
+  }
+  return index
+}
+
+/**
  * spec-agent-switch-live-merged-transcript: re-splice the pre-switch band
  * after an in-session wholesale reinstall on a live switch TARGET (crash
  * retry, direct history open, resume install). The durable install replaces
@@ -478,11 +505,19 @@ export function _resetSessionIndexLoadGenerationForTesting(): void {
  * chain's namespace (`switch-splice:<source>:<durable id>`), so a repeat
  * reinstall dedups via `seen` instead of doubling rows — live-slices ids
  * (`…:<live id>`) could never match a durable reinstall.
+ *
+ * The walk prefers the warm in-memory link; when it misses (fresh app
+ * session, remote/shared-live client) the durable `continuedFrom` edge —
+ * carried on each payload's metadata — walks the same chain. The source's
+ * own projected markers supply the separator; `withSwitchMarker` fabricates
+ * one only when the log predates durable markers entirely.
  */
 async function respliceLiveSwitchTarget(
   set: TurnEndSetter,
+  get: () => AcpState,
   targetId: SessionId,
-  stillCurrent?: () => boolean
+  stillCurrent?: () => boolean,
+  targetContinuedFrom?: string
 ): Promise<void> {
   const hopsNewestFirst: Array<{
     sourceId: SessionId
@@ -491,25 +526,48 @@ async function respliceLiveSwitchTarget(
   }> = []
   const visited = new Set<SessionId>([targetId])
   let successor = targetId
-  for (let link = liveSwitchSources.get(successor); link; link = liveSwitchSources.get(successor)) {
-    if (visited.has(link.sourceId)) break
-    const sourcePayload = await loadFreshSourcePayload(link.sourceId).catch(() => null)
+  let durableEdge = targetContinuedFrom
+  for (;;) {
+    const live = liveSwitchSources.get(successor)
+    const sourceId = (live?.sourceId ?? durableEdge) as SessionId | undefined
+    if (sourceId === undefined || visited.has(sourceId)) break
+    const sourcePayload = await loadFreshSourcePayload(sourceId).catch(() => null)
     if (!sourcePayload) {
       void logFrontendError({
         level: 'info',
         source: 'acp.switchAgent.splice',
-        message: `Re-splice for switch target ${targetId} stopped: source session ${link.sourceId} payload unavailable`
+        message: `Re-splice for switch target ${targetId} stopped: source session ${sourceId} payload unavailable`
       })
       break
     }
     const installed = projectTranscript(sourcePayload, { headAnchored: true })
+    const marker = live?.marker ?? installed.switches.find((sw) => sw.newSessionId === successor)
+    // A `continuedFrom` edge without a readable durable marker (legacy log
+    // predating markers, or a marker write that never landed) still splices —
+    // the boundary is fabricated from the index's from/to config ids so the
+    // reopened chain keeps its handoff separator.
+    const facts: SwitchMarkerFacts =
+      marker ??
+      (() => {
+        const index = get().sessionIndex
+        const sourceEntry = index.find((e) => e.id === sourceId)
+        const successorEntry = index.find((e) => e.id === successor)
+        return {
+          fromConfigId: sourceEntry?.agentConfigId ?? '',
+          toConfigId: successorEntry?.agentConfigId ?? '',
+          newSessionId: successor,
+          summaryText: '',
+          timestamp: successorEntry?.createdAt ?? sourcePayload.metadata.lastActivityAt
+        }
+      })()
     hopsNewestFirst.push({
-      sourceId: link.sourceId,
+      sourceId,
       payload: sourcePayload,
-      band: withSwitchMarker(installed, link.marker)
+      band: withSwitchMarker(installed, facts)
     })
-    visited.add(link.sourceId)
-    successor = link.sourceId
+    visited.add(sourceId)
+    successor = sourceId
+    durableEdge = sourcePayload.metadata.continuedFrom
   }
   if (hopsNewestFirst.length === 0) return
   if (stillCurrent && !stillCurrent()) return
@@ -886,6 +944,11 @@ async function openHistorySessionInner(
     // CAP-2: restore the durable switch markers so the timeline shows the
     // borderless separators at their seq positions after a reopen.
     agentSwitches: { ...s.agentSwitches, [id]: installed.switches },
+    // CAP-8: heal the fold's chain edges from authoritative payload data —
+    // this session's own `continuedFrom` (host-stamped) and the targets its
+    // markers name (pre-feature chains, and rows whose host stamp hasn't
+    // landed in the index yet). Idempotent; a missing entry is a no-op.
+    sessionIndex: healChainEdges(s, id, meta.continuedFrom, installed.switches),
     ...(Array.isArray(payload.commands)
       ? withCommands(
           s,
@@ -952,8 +1015,10 @@ async function openHistorySessionInner(
   // re-splice the pre-switch band while the in-memory source link is warm.
   await respliceLiveSwitchTarget(
     set,
+    get,
     id,
-    () => !deletedMidOpen() && isCurrentSessionReopen(id, reopenGeneration)
+    () => !deletedMidOpen() && isCurrentSessionReopen(id, reopenGeneration),
+    meta.continuedFrom
   )
   // Resolve the CURRENT live agent for this chat's config+cwd. Without this
   // remap the `agentStatus`/`agents` lookups miss (stale UUID after restart)

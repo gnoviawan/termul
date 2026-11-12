@@ -439,6 +439,10 @@ describe('switchAgent (story 3)', () => {
     // The ordered-agent cache on the old session's index entry.
     const entry = state.sessionIndex.find((e) => e.id === 's-old')
     expect(entry?.agents).toEqual(['cfg-old', 'cfg-new'])
+    // CAP-8: the durable chain edge lands on the TARGET entry — the fold's
+    // O(1) lookup while the host's own index stamp catches up.
+    expect(state.sessionIndex.find((e) => e.id === 's-new')?.continuedFrom).toBe('s-old')
+    expect(entry?.continuedFrom).toBeUndefined()
     // The armed switch is cleared; the old session stays live (not closed).
     expect(state.sessions['s-old'].switching).toBeNull()
     expect(state.sessions['s-old'].status).toBe('active')

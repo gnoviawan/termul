@@ -89,6 +89,52 @@ describe('buildChatCards', () => {
     expect(outside).toHaveLength(2)
   })
 
+  it('folds a switch chain to one card on the live session with its chain ids', () => {
+    const cards = buildChatCards({
+      sessionIndex: [
+        entry('src', { title: 'Debugging the deploy', lastActivityAt: 10, createdAt: 1 }),
+        entry('dst', {
+          continuedFrom: 'src',
+          title: 'Untitled Chat 2',
+          lastActivityAt: 20,
+          createdAt: 2,
+          agentConfigId: 'cfg-1'
+        })
+      ],
+      project: project(),
+      pick: undefined,
+      agentNames
+    })
+    expect(cards).toHaveLength(1)
+    expect(cards[0].entry.id).toBe('dst')
+    expect(cards[0].entry.title).toBe('Debugging the deploy')
+    expect(cards[0].entry.chainIds).toEqual(['src', 'dst'])
+    expect(cards[0].agentName).toBe('Claude Code')
+  })
+
+  it('keeps a chain member out of the picked scope as its own card', () => {
+    const cards = buildChatCards({
+      sessionIndex: [
+        entry('src', { title: 'Root chat' }),
+        entry('dst', {
+          continuedFrom: 'src',
+          cwd: '/repo/.termul/worktrees/feature/src',
+          title: 'Worktree chat'
+        })
+      ],
+      project: project(),
+      pick: '/repo/.termul/worktrees/feature',
+      agentNames
+    })
+    // Picked worktree scope shows only the worktree member — the display fold
+    // ran on the scoped set, where 'dst' has no in-scope source to fold into.
+    expect(cards.map((c) => c.entry.id)).toEqual(['dst'])
+    expect(cards[0].entry.title).toBe('Worktree chat')
+    // Delete membership still spans the project: removing the card removes
+    // the out-of-scope source too, so it cannot resurface in Workspace view.
+    expect(cards[0].entry.chainIds).toEqual(['src', 'dst'])
+  })
+
   it('resolves the agent name and the index model', () => {
     const [card] = buildChatCards({
       sessionIndex: [entry('a', { agentConfigId: 'cfg-1', modelId: 'm-1', modelName: 'Opus' })],

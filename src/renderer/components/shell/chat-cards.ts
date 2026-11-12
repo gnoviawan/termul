@@ -5,6 +5,7 @@
  */
 import type { ProjectChatEntry } from '@/components/sidebar/project-chat-row'
 import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
+import { foldEntries, membersOf, sessionChainIndex } from '@/lib/session-chain'
 import { pickedWorkingCopy, workingCopyOf } from '@/lib/working-copy'
 import type { Project } from '@/types/project'
 
@@ -63,28 +64,45 @@ export function buildChatCards({
   const picked = pickedWorkingCopy(project, pick)
   const narrowKey = picked?.state === 'resolved' && picked.kind === 'worktree' ? picked.key : null
 
-  return sessionIndex
-    .filter((e) => e.projectId === project.id && e.discovered !== true)
-    .filter((e) => narrowKey === null || workingCopyOf(e.cwd, project)?.key === narrowKey)
+  // CAP-8 (spec-in-chat-agent-switch): scope first, then fold every
+  // `continuedFrom` chain to its terminal session — a handed-off chat is one
+  // row, opened/reloaded on the live session, deleted as a whole via
+  // `chainIds`. Display membership derives from the picked scope (a chain
+  // member outside it stays its own row), but DELETE membership resolves
+  // against the whole project index so a folded card removes members beyond
+  // the pick too — otherwise the out-of-scope member resurfaces standalone.
+  const projectChats = sessionIndex.filter(
+    (e) => e.projectId === project.id && e.discovered !== true
+  )
+  const scoped = projectChats.filter(
+    (e) => narrowKey === null || workingCopyOf(e.cwd, project)?.key === narrowKey
+  )
+  const deleteIndex = sessionChainIndex(projectChats)
+
+  return foldEntries(sessionChainIndex(scoped))
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    .map((e) => ({
-      entry: {
-        id: e.id,
-        title: e.title,
-        messageCount: e.messageCount,
-        status: e.status,
-        discovered: false,
-        agentId: e.agentId,
-        agentConfigId: e.agentConfigId,
-        agents: e.agents,
-        lastActivityAt: e.lastActivityAt,
-        cwd: e.cwd,
-        canOpen: true
-      },
-      agentName: e.agentConfigId ? (agentNames.get(e.agentConfigId) ?? null) : null,
-      indexModel: e.modelName || e.modelId || null,
-      branch: branchLineOf(e, project)
-    }))
+    .map((e) => {
+      const members = membersOf(deleteIndex, e.id)
+      return {
+        entry: {
+          id: e.id,
+          title: e.title,
+          messageCount: e.messageCount,
+          status: e.status,
+          discovered: false,
+          agentId: e.agentId,
+          agentConfigId: e.agentConfigId,
+          agents: e.agents,
+          chainIds: members.length > 1 ? members : undefined,
+          lastActivityAt: e.lastActivityAt,
+          cwd: e.cwd,
+          canOpen: true
+        },
+        agentName: e.agentConfigId ? (agentNames.get(e.agentConfigId) ?? null) : null,
+        indexModel: e.modelName || e.modelId || null,
+        branch: branchLineOf(e, project)
+      }
+    })
 }
 
 /**

@@ -1107,6 +1107,11 @@ export function mergeSessionIndexEntries(
             // A projection made after the agent left the live map has no
             // config; the host's durable attribution must survive the spread.
             agentConfigId: entry.agentConfigId ?? hostEntry.agentConfigId,
+            // A local projection made before the host stamp landed must not
+            // erase the host's durable chain edge — and once the host has
+            // one it wins, so a stale local edge cannot hide a host
+            // correction. `undefined` still falls through to the local stamp.
+            continuedFrom: hostEntry.continuedFrom ?? entry.continuedFrom,
             turnActive: mergeTurnActive(entry.turnActive, hostEntry.turnActive, true),
             // The host stamps `created_at` once at registration; a local
             // projection re-stamped by a reopen must not override it.
@@ -1130,12 +1135,17 @@ export function mergeSessionIndexEntries(
         // untitled), and its index omits `turnActive`.
         const keepTitle = isUntitledTitle(hostEntry.title)
         const keepTurn = entry.turnActive === true && hostEntry.turnActive === undefined
+        // A locally-stamped/healed chain edge (switch just ran, or the
+        // payload-install backfill covered a pre-feature chain) survives a
+        // newer host row that predates the host's own stamp landing.
+        const keepEdge = entry.continuedFrom !== undefined && hostEntry.continuedFrom === undefined
         const idx = merged.findIndex((e) => e.id === entry.id)
-        if ((keepTitle || keepTurn) && idx >= 0) {
+        if ((keepTitle || keepTurn || keepEdge) && idx >= 0) {
           merged[idx] = {
             ...hostEntry,
             ...(keepTitle ? { title: entry.title } : {}),
-            ...(keepTurn ? { turnActive: true } : {})
+            ...(keepTurn ? { turnActive: true } : {}),
+            ...(keepEdge ? { continuedFrom: entry.continuedFrom } : {})
           }
         }
       }
@@ -2146,6 +2156,34 @@ export function appendOrderedAgents(
     agents: [...list, toConfigId]
   }
   return [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
+}
+
+/**
+ * CAP-8 (spec-in-chat-agent-switch): stamp the durable chain edge
+ * `target.continuedFrom = source` on the switch TARGET's index entry. The
+ * host writes the same edge (`note_continued_from`) after flushing the
+ * marker, but the renderer stamp closes the window where the host's index
+ * hasn't landed yet — and self-heals rows whose host stamp raced a stale
+ * projection. Idempotent: an already-set edge wins (the FIRST durable
+ * switch is authoritative; a corrupted or replayed later value must not
+ * repoint the chain). A missing target entry is a no-op — the fold reads
+ * only what exists, and the host index is the fallback authority. A source
+ * in another project is refused, matching the host's `note_continued_from`.
+ */
+export function stampSwitchContinuation(
+  state: Pick<AcpState, 'sessionIndex'>,
+  targetSessionId: SessionId,
+  sourceSessionId: SessionId
+): SessionIndexEntry[] {
+  if (targetSessionId === sourceSessionId) return state.sessionIndex
+  const existing = state.sessionIndex.find((e) => e.id === targetSessionId)
+  if (!existing || existing.continuedFrom !== undefined) return state.sessionIndex
+  // A switch creates its target in the source's project; an edge naming a
+  // session elsewhere (a stray marker) would fold another project's chat.
+  const source = state.sessionIndex.find((e) => e.id === sourceSessionId)
+  if (source !== undefined && source.projectId !== existing.projectId) return state.sessionIndex
+  const entry: SessionIndexEntry = { ...existing, continuedFrom: sourceSessionId }
+  return [entry, ...state.sessionIndex.filter((e) => e.id !== targetSessionId)]
 }
 
 /**

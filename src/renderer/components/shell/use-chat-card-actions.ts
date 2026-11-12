@@ -4,8 +4,10 @@ import type { ProjectChatEntry } from '@/components/sidebar/project-chat-row'
 import { clipboardApi, openerApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { openAgentChatPlaced } from '@/lib/open-agent-chat'
+import { conversationDeleteIds } from '@/lib/session-chain'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { useAcpStore } from '@/stores/acp-store'
+import { liveSwitchSources } from '@/stores/acp-store/shared-state'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
 const LOG_SOURCE = 'shell-chats-list'
@@ -23,7 +25,7 @@ function warnFailure(action: 'open' | 'delete', error: unknown): void {
 export interface ChatCardActions {
   onOpen: (entry: ProjectChatEntry) => void
   onOpenInSplit: (entry: ProjectChatEntry) => void
-  onDelete: (id: string) => void
+  onDelete: (entry: ProjectChatEntry) => void
   onOpenTerminal: (entry: ProjectChatEntry) => Promise<void>
   onOpenInFileExplorer: (cwd: string) => Promise<void>
   onCopyPath: (cwd: string) => Promise<void>
@@ -61,12 +63,23 @@ export function useChatCardActions(projectId: string): ChatCardActions {
     openAgentChatPlaced(entry.id, LOG_SOURCE, { paneId: activePaneId, zone: 'right' })
   }, [])
 
+  // A folded chain row deletes as one conversation. Membership is resolved
+  // at click time, not from the rendered `chainIds` snapshot: a switch that
+  // completes while the confirm dialog is open extends the chain, and a
+  // stale snapshot would leave the newest continuation behind (CodeRabbit
+  // 4515372916). Membership stays inside the chat's project so a malformed
+  // cross-project edge can't delete another project's transcript, and live
+  // in-flight switch targets of any member are swept up too — a target whose
+  // index entry lands a beat after the click would otherwise resurface.
   const onDelete = useCallback(
-    (id: string) => {
-      void deleteHistorySession(id).catch((error: unknown) => {
-        warnFailure('delete', error)
-        toast.error('Could not delete that chat. Try again.')
-      })
+    (entry: ProjectChatEntry) => {
+      const { sessionIndex } = useAcpStore.getState()
+      for (const memberId of conversationDeleteIds(sessionIndex, entry.id, liveSwitchSources)) {
+        void deleteHistorySession(memberId).catch((error: unknown) => {
+          warnFailure('delete', error)
+          toast.error('Could not delete that chat. Try again.')
+        })
+      }
     },
     [deleteHistorySession]
   )

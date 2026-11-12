@@ -419,6 +419,81 @@ describe('ChatsList interactions', () => {
     expect(mocks.deleteHistorySession).toHaveBeenCalledWith('a')
   })
 
+  it('deletes every member of a folded switch chain after confirmation', async () => {
+    setIndex([
+      entry('src', { lastActivityAt: 10 }),
+      entry('dst', { continuedFrom: 'src', lastActivityAt: 20 })
+    ])
+    render(<ChatsList project={project} />)
+    // The chain folds to one card on the terminal session.
+    fireEvent.contextMenu(screen.getByTitle('Chat dst'))
+    fireEvent.click(await screen.findByText('Delete Chat'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(mocks.deleteHistorySession).toHaveBeenCalledTimes(2))
+    expect(mocks.deleteHistorySession).toHaveBeenCalledWith('src')
+    expect(mocks.deleteHistorySession).toHaveBeenCalledWith('dst')
+  })
+
+  it('requires a new confirmation when the chain grew while the dialog was open', async () => {
+    setIndex([
+      entry('src', { lastActivityAt: 10 }),
+      entry('dst', { continuedFrom: 'src', lastActivityAt: 20 })
+    ])
+    render(<ChatsList project={project} />)
+    fireEvent.contextMenu(screen.getByTitle('Chat dst'))
+    fireEvent.click(await screen.findByText('Delete Chat'))
+    // A switch completes while the confirm dialog is open: 'new' continues 'dst'.
+    setIndex([
+      entry('src', { lastActivityAt: 10 }),
+      entry('dst', { continuedFrom: 'src', lastActivityAt: 20 }),
+      entry('new', { continuedFrom: 'dst', lastActivityAt: 30 })
+    ])
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    // Membership changed since the snapshot: no delete yet, dialog re-arms.
+    expect(mocks.deleteHistorySession).not.toHaveBeenCalled()
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(mocks.deleteHistorySession).toHaveBeenCalledTimes(3))
+    expect(mocks.deleteHistorySession).toHaveBeenCalledWith('src')
+    expect(mocks.deleteHistorySession).toHaveBeenCalledWith('dst')
+    expect(mocks.deleteHistorySession).toHaveBeenCalledWith('new')
+  })
+
+  it('does not delete a same-project chat reached through another project', async () => {
+    // a (p1) → b (p2) → c (p1): this project lists a and c as separate chats.
+    setIndex([
+      entry('a', { lastActivityAt: 10 }),
+      entry('b', { continuedFrom: 'a', projectId: 'p2', lastActivityAt: 20 }),
+      entry('c', { continuedFrom: 'b', lastActivityAt: 30 })
+    ])
+    render(<ChatsList project={project} />)
+    fireEvent.contextMenu(screen.getByTitle('Chat a'))
+    fireEvent.click(await screen.findByText('Delete Chat'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(mocks.deleteHistorySession).toHaveBeenCalledWith('a'))
+    expect(mocks.deleteHistorySession).toHaveBeenCalledTimes(1)
+  })
+
+  it('says the chat changed when the dialog re-arms', async () => {
+    setIndex([
+      entry('src', { lastActivityAt: 10 }),
+      entry('dst', { continuedFrom: 'src', lastActivityAt: 20 })
+    ])
+    render(<ChatsList project={project} />)
+    fireEvent.contextMenu(screen.getByTitle('Chat dst'))
+    fireEvent.click(await screen.findByText('Delete Chat'))
+    setIndex([
+      entry('src', { lastActivityAt: 10 }),
+      entry('dst', { continuedFrom: 'src', lastActivityAt: 20 }),
+      entry('new', { continuedFrom: 'dst', lastActivityAt: 30 })
+    ])
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    expect(
+      await screen.findByText(
+        '“Chat dst” changed while this dialog was open. Delete all 3 of its sessions? This action cannot be undone.'
+      )
+    ).toBeTruthy()
+  })
+
   it('toasts and logs once when deleting fails', async () => {
     mocks.deleteHistorySession.mockRejectedValue(new Error('nope'))
     render(<ChatsList project={project} />)

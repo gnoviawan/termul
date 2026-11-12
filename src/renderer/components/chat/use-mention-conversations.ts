@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
+import { foldEntries, membersOf, sessionChainIndex } from '@/lib/session-chain'
 import { conversationTitleText } from '@/lib/skill-tokens'
 import { useAcpStore } from '@/stores/acp-store'
 import type { ConversationMatch } from './mention-menu-model'
@@ -20,15 +21,29 @@ export function projectConversations({
   runningIds
 }: ProjectConversationsInput): ConversationMatch[] {
   if (!projectId) return []
-  return sessionIndex
-    .filter((e) => e.projectId === projectId && e.discovered !== true && e.id !== excludeSessionId)
+  // Scope BEFORE chaining: folding over the whole index would let a
+  // cross-project `continuedFrom` edge hide a source that still belongs to
+  // this project's list (and chain the exclusion past the scope).
+  const scoped = sessionIndex.filter((e) => e.projectId === projectId && e.discovered !== true)
+  // A switched conversation is mentionable once — the folded terminal row
+  // opens the merged transcript (CAP-8 / spec-in-chat-agent-switch). The
+  // exclusion covers every chain member: a composer open on a pre-switch
+  // source or an intermediate hop must not list its own merged conversation.
+  const chain = sessionChainIndex(scoped)
+  return foldEntries(chain)
+    .filter(
+      (e) =>
+        excludeSessionId === undefined ||
+        excludeSessionId === null ||
+        !membersOf(chain, e.id).includes(excludeSessionId)
+    )
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map((e) => ({
       sessionId: e.id,
       title: conversationTitleText(e.title) || 'Untitled chat',
       agentName: e.agentConfigId ? (agentNames.get(e.agentConfigId) ?? null) : null,
       lastActivityAt: e.lastActivityAt,
-      running: runningIds.has(e.id)
+      running: (e.chainIds ?? [e.id]).some((memberId) => runningIds.has(memberId))
     }))
 }
 
