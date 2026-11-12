@@ -10,6 +10,7 @@ use std::time::Duration;
 use futures::future::join_all;
 use parking_lot::Mutex;
 use serde::Serialize;
+use serde_json::Value;
 
 use super::{
     McpClient, McpFailure, McpServerConfig, McpServerEntry, ProjectMcpServers, ToolSchema,
@@ -229,6 +230,27 @@ impl McpTools {
             }
         }
         lookup
+    }
+
+    /// The input schema of `tool` in the listing kept for `server`'s current
+    /// config, without listing again.
+    pub fn input_schema(
+        &self,
+        project_id: &str,
+        server: &McpServerEntry,
+        tool: &str,
+    ) -> Option<Value> {
+        let key = (project_id.to_string(), server.server_id.clone());
+        let identity = identity(&server.config);
+        let state = self.state.lock();
+        let entry = state.entries.get(&key).filter(|e| e.identity == identity)?;
+        let Listing::Ready { tools, .. } = &entry.listing else {
+            return None;
+        };
+        tools
+            .iter()
+            .find(|t| t.name == tool)
+            .map(|t| t.input_schema.clone())
     }
 
     /// Lists every enabled server of the project concurrently, each within

@@ -154,6 +154,33 @@ async fn the_tool_and_its_arguments_are_checked_against_the_live_listing() {
 }
 
 #[tokio::test]
+async fn a_literal_that_fits_no_declared_type_is_an_argument_issue() {
+    let fake = FakeMcp::new();
+    fake.lists("files", Ok(vec![search_tool()]));
+    let service = service(fake);
+    let fits = with_tool(
+        &service,
+        "srv-1",
+        "search",
+        json!([{ "name": "query", "value": "42" }, { "name": "limit", "value": "5" }]),
+    );
+    assert_eq!(settled(&service, &fits).await, vec![]);
+    let unfit = with_tool(
+        &service,
+        "srv-1",
+        "search",
+        json!([{ "name": "query", "value": "open bugs" }, { "name": "limit", "value": "five" }]),
+    );
+    assert_eq!(
+        settled(&service, &unfit).await,
+        vec![(
+            IssueCode::InvalidMcpArguments,
+            "tool search: argument limit is not a valid integer".to_string()
+        )]
+    );
+}
+
+#[tokio::test]
 async fn an_unavailable_or_signed_out_server_says_why() {
     let fake = FakeMcp::new();
     fake.lists(

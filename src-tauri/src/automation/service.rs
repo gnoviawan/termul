@@ -13,7 +13,10 @@ use tokio::sync::broadcast;
 use super::agents::{self, AgentRegistry, KnownAgent};
 use super::engine::{Engine, EngineDeps, HttpConfig, ProjectRoots, SystemClock};
 use super::graph::{self, OpError};
-use super::mcp::{Lookup, McpFailure, McpServerEntry, ProjectMcpServers, RmcpClient, ToolSchema};
+use super::mcp::{
+    literal_argument, Literal, Lookup, McpFailure, McpServerEntry, ProjectMcpServers, RmcpClient,
+    ToolSchema,
+};
 use super::model::{
     ApplyOpsResult, Automation, AutomationChanged, AutomationId, Issue, IssueCode, Layout,
     NamedTemplate, NodeId, NodeKind, NodeSpec, Op, Run, RunId, RunPolicy, RunTrigger, Schedule,
@@ -721,8 +724,9 @@ fn mcp_issues(
         .collect()
 }
 
-/// A `required` input property with no argument, and an argument the
-/// schema does not declare while it sets `additionalProperties: false`.
+/// A `required` input property with no argument, an argument the schema
+/// does not declare while it sets `additionalProperties: false`, and a
+/// literal argument that fits none of its property's declared types.
 fn argument_issues(tool: &ToolSchema, arguments: &[NamedTemplate]) -> Vec<String> {
     let given = |name: &str| arguments.iter().any(|a| a.name == name);
     let schema = &tool.input_schema;
@@ -743,6 +747,14 @@ fn argument_issues(tool: &ToolSchema, arguments: &[NamedTemplate]) -> Vec<String
                 .map(|a| format!("tool {} takes no argument {}", tool.name, a.name)),
         );
     }
+    problems.extend(
+        arguments
+            .iter()
+            .filter_map(|a| match literal_argument(schema, a) {
+                Literal::Mismatch(mismatch) => Some(format!("tool {}: {mismatch}", tool.name)),
+                Literal::Render | Literal::Typed(_) => None,
+            }),
+    );
     problems
 }
 

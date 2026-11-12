@@ -152,6 +152,74 @@ async fn structured_content_is_the_output_and_arguments_keep_their_json_type() {
     );
 }
 
+/// `label(draft: boolean, title: string)`.
+fn label_tool() -> crate::automation::mcp::ToolSchema {
+    tool(
+        "label",
+        json!({ "type": "object",
+                "properties": { "draft": { "type": "boolean" }, "title": { "type": "string" } } }),
+        None,
+    )
+}
+
+fn label_call(draft: &str) -> Value {
+    call_node(
+        "label",
+        json!([{ "name": "draft", "value": draft }, { "name": "title", "value": "true" }]),
+        5_000,
+    )
+}
+
+fn sent_arguments(fake: &FakeMcp) -> Vec<Value> {
+    fake.calls
+        .lock()
+        .iter()
+        .map(|call| Value::Object(call.arguments.clone()))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_literal_argument_takes_the_type_its_kept_input_schema_declares() {
+    let f = fixture();
+    f.fake.lists("files", Ok(vec![label_tool()]));
+    f.te.engine.mcp().refresh("p1").await;
+    let a = manual(&f.te, graph(label_call("true"), json!([]), json!([])));
+    let run = run_to_end(&f.te, &a).await;
+    assert_eq!(run.status, RunStatus::Succeeded);
+    assert_eq!(
+        sent_arguments(&f.fake),
+        vec![json!({ "draft": true, "title": "true" })]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_literal_argument_stays_text_when_no_input_schema_is_kept() {
+    let f = fixture();
+    f.fake.lists("files", Ok(vec![label_tool()]));
+    let a = manual(&f.te, graph(label_call("true"), json!([]), json!([])));
+    let run = run_to_end(&f.te, &a).await;
+    assert_eq!(run.status, RunStatus::Succeeded);
+    assert_eq!(
+        sent_arguments(&f.fake),
+        vec![json!({ "draft": "true", "title": "true" })]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_literal_that_fits_no_declared_type_fails_the_step_before_the_call() {
+    let f = fixture();
+    f.fake.lists("files", Ok(vec![label_tool()]));
+    f.te.engine.mcp().refresh("p1").await;
+    let a = manual(&f.te, graph(label_call("maybe"), json!([]), json!([])));
+    let run = run_to_end(&f.te, &a).await;
+    assert_eq!(run.status, RunStatus::Failed);
+    assert_eq!(
+        step(&f.te, &run, "call"),
+        failed("mcp_argument_invalid: argument draft is not a valid boolean")
+    );
+    assert_eq!(sent_arguments(&f.fake), Vec::<Value>::new());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_declared_output_schema_requires_matching_structured_content() {
     let f = fixture();
