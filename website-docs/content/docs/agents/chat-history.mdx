@@ -51,6 +51,17 @@ Each chat works in a folder, which is your project folder or a worktree. Hover a
 - **Open in File Explorer**. Shows the folder in your system's file manager. In a browser, Troupe copies the path instead.
 - **Copy Path**. Copies the folder path.
 
+## Let an agent read another chat
+
+To give an agent the history of an earlier chat, even one from another project, copy the chat's reference and paste it into your message.
+
+1. Right-click the chat's card and choose **Copy Chat Reference**.
+2. Paste it into the chat where you want the agent to read it.
+
+The reference is a few lines of plain text: the chat's title, its chat ID, its project and folder, and a hint to read it with the `read_chat` tool. Every agent in Troupe has that tool. It reads the chat as plain text, oldest message first, a page at a time. If the chat switched agents, the agent reads the whole conversation. For each tool call, the agent sees only its kind, the files it changed and its status, not its output.
+
+To copy only the ID, choose **Copy Chat ID** instead. On a phone, long-press a chat in **Recents** and tap **Copy chat reference**.
+
 ## Delete a chat
 
 1. Right-click the card and choose **Delete Chat**.
