@@ -38,6 +38,7 @@ export function Field({
   error,
   help,
   labelHidden = false,
+  required = false,
   children
 }: {
   id: string
@@ -45,13 +46,25 @@ export function Field({
   error?: string | null
   help?: string
   labelHidden?: boolean
+  /** Marks a value the host requires. */
+  required?: boolean
   children: React.ReactNode
 }): React.JSX.Element {
+  const labelElement = (
+    <Label htmlFor={id} className={labelHidden ? 'sr-only' : 'text-xs'}>
+      {label}
+    </Label>
+  )
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      <Label htmlFor={id} className={labelHidden ? 'sr-only' : 'text-xs'}>
-        {label}
-      </Label>
+      {required ? (
+        <div className="flex items-baseline justify-between gap-2">
+          {labelElement}
+          <span className="text-xs text-muted-foreground">Required</span>
+        </div>
+      ) : (
+        labelElement
+      )}
       {children}
       {error ? (
         <p id={`${id}-error`} className="text-xs text-destructive">
@@ -196,7 +209,8 @@ export function TemplateField({
   help,
   placeholder,
   multiline = false,
-  labelHidden = false
+  labelHidden = false,
+  required = false
 }: {
   id: string
   label: string
@@ -208,6 +222,7 @@ export function TemplateField({
   placeholder?: string
   multiline?: boolean
   labelHidden?: boolean
+  required?: boolean
 }): React.JSX.Element {
   const field = useFieldText(value, commit)
   const ref = useRef<HTMLInputElement & HTMLTextAreaElement>(null)
@@ -281,7 +296,14 @@ export function TemplateField({
   } as const
 
   return (
-    <Field id={id} label={label} error={shown} help={help} labelHidden={labelHidden}>
+    <Field
+      id={id}
+      label={label}
+      error={shown}
+      help={help}
+      labelHidden={labelHidden}
+      required={required}
+    >
       <Popover open={open} onOpenChange={(next) => !next && setHole(null)}>
         <PopoverAnchor asChild>
           <div ref={anchor}>
@@ -485,7 +507,8 @@ export function ChoiceField<T extends string>({
   error,
   placeholder,
   disabled = false,
-  labelHidden = false
+  labelHidden = false,
+  required = false
 }: {
   id: string
   label: string
@@ -498,9 +521,17 @@ export function ChoiceField<T extends string>({
   placeholder?: string
   disabled?: boolean
   labelHidden?: boolean
+  required?: boolean
 }): React.JSX.Element {
   return (
-    <Field id={id} label={label} help={help} error={error} labelHidden={labelHidden}>
+    <Field
+      id={id}
+      label={label}
+      help={help}
+      error={error}
+      labelHidden={labelHidden}
+      required={required}
+    >
       <Select
         value={value}
         disabled={disabled}

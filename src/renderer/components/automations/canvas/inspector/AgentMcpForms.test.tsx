@@ -4,11 +4,13 @@ import type {
   AutomationOp,
   Graph,
   KnownAgent,
+  NamedTemplate,
   NodeId,
   NodeSpec
 } from '@shared/types/automation.types'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { McpToolInfo } from '@/lib/acp-api'
 import { detailWith, fixtureAutomation } from '@/lib/test-utils/automation-fixtures'
 import { useAcpStore } from '@/stores/acp-store'
 
@@ -107,7 +109,7 @@ const undo = () =>
 
 const UNTRUSTED_FLOW = /This agent reads content fetched from the web or returned by an MCP tool/
 
-function seedMcp(tools: { name: string; description?: string }[] | null) {
+function seedMcp(tools: McpToolInfo[] | null) {
   useAcpStore.setState({
     mcpServers: [
       { id: 'gh', name: 'github', type: 'http', url: 'https://mcp.example.com' },
@@ -507,5 +509,114 @@ describe('McpToolForm', () => {
         arguments: [{ name: 'labels', value: '{{ nodes.shape.output }}' }]
       })
     ])
+  })
+})
+
+describe('McpToolForm arguments from the tool input schema', () => {
+  const inputSchema = {
+    type: 'object',
+    properties: {
+      repo: { type: 'string', description: 'owner/name' },
+      kind: { type: 'string', enum: ['bug', 'feature'] },
+      count: { type: 'integer' },
+      weight: { type: 'number' },
+      notify: { type: 'boolean', description: 'Ping the assignee' },
+      labels: { type: 'array', items: { type: 'string' } }
+    },
+    required: ['repo', 'kind']
+  }
+  const withArgs = (args: NamedTemplate[]): Graph => {
+    const graph = graphWith({})
+    return {
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.id === 'label_it' ? { ...n, spec: { ...mcpSpec, arguments: args } } : n
+      )
+    }
+  }
+  const start: NamedTemplate[] = [
+    { name: 'repo', value: 'acme/app' },
+    { name: 'legacy', value: 'x' }
+  ]
+
+  beforeEach(() => seedMcp([{ name: 'add_labels', inputSchema }]))
+
+  it('shows a field per property with required marks and descriptions, and keeps unknown arguments', () => {
+    open(withArgs(start))
+    const panel = inspect('label_it', 'Post label')
+    expect(within(panel).getByLabelText('repo')).toHaveValue('acme/app')
+    expect(within(panel).getByRole('combobox', { name: 'kind' })).toHaveTextContent('Pick one')
+    expect(within(panel).getByLabelText('count')).toHaveValue('')
+    expect(within(panel).getByRole('switch', { name: 'notify' })).not.toBeChecked()
+    expect(within(panel).getByLabelText('labels').tagName).toBe('TEXTAREA')
+    expect(within(panel).getAllByText('Required')).toHaveLength(3)
+    expect(within(panel).getByText('owner/name')).toBeVisible()
+    expect(within(panel).getByText('Ping the assignee')).toBeVisible()
+    expect(within(panel).getByLabelText('Argument 1 name')).toHaveValue('legacy')
+  })
+
+  it('each field commits one update_node with the arguments as templates', async () => {
+    open(withArgs(start))
+    const panel = inspect('label_it', 'Post label')
+    choose(panel, 'kind', 'bug')
+    fireEvent.click(within(panel).getByRole('switch', { name: 'notify' }))
+    enter(within(panel).getByLabelText('count'), '3')
+    enter(within(panel).getByLabelText('labels'), '["bug"]')
+    enter(within(panel).getByLabelText('repo'), '')
+
+    const withArguments = (args: NamedTemplate[]) =>
+      updated('label_it', { ...mcpSpec, arguments: args })
+    const kind = { name: 'kind', value: 'bug' }
+    const notify = { name: 'notify', value: 'true' }
+    const count = { name: 'count', value: '3' }
+    const labels = { name: 'labels', value: '["bug"]' }
+    await expectPending([
+      withArguments([...start, kind]),
+      withArguments([...start, kind, notify]),
+      withArguments([...start, kind, notify, count]),
+      withArguments([...start, kind, notify, count, labels]),
+      withArguments([start[1], kind, notify, count, labels])
+    ])
+    expect(within(panel).getByLabelText('repo')).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('refuses a literal the type cannot read, but takes a template', async () => {
+    open(withArgs([]))
+    const panel = inspect('label_it', 'Post label')
+    enter(within(panel).getByLabelText('weight'), 'heavy')
+    expect(within(panel).getByText('Enter a number')).toBeVisible()
+    enter(within(panel).getByLabelText('count'), '1.5')
+    expect(within(panel).getByText('Enter a whole number')).toBeVisible()
+    enter(within(panel).getByLabelText('labels'), '[bug')
+    expect(within(panel).getByText('Not valid JSON')).toBeVisible()
+    enter(within(panel).getByLabelText('labels'), '{{ nodes.shape.output }}')
+
+    await expectPending([
+      updated('label_it', {
+        ...mcpSpec,
+        arguments: [{ name: 'labels', value: '{{ nodes.shape.output }}' }]
+      })
+    ])
+  })
+
+  it('keeps a typed argument while Save runs, and says why', () => {
+    open(withArgs(start))
+    const panel = inspect('label_it', 'Post label')
+    enter(within(panel).getByLabelText('count'), '3')
+    api.applyAutomationOps.mockReturnValue(new Promise(() => {}))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    const weight = within(panel).getByLabelText('weight')
+    enter(weight, '2.5')
+    expect(weight).toHaveValue('2.5')
+    expect(within(panel).getByText('Saving. Try that again once it finishes.')).toBeVisible()
+  })
+
+  it('with no input schema, keeps the name and value rows', () => {
+    seedMcp([{ name: 'add_labels', inputSchema: null }])
+    open(withArgs(start))
+    const panel = inspect('label_it', 'Post label')
+    expect(within(panel).getByLabelText('Argument 1 name')).toHaveValue('repo')
+    expect(within(panel).queryByRole('combobox', { name: 'kind' })).toBeNull()
   })
 })
