@@ -1,0 +1,20 @@
+/* base.css is unlayered; importing it into the `base` layer lets Tailwind
+   utilities (layer `utilities`) override it without `!important`. */
+@import "@xyflow/react/dist/base.css" layer(base);
+
+.automation-flow {
+  --xy-edge-stroke-width: 1.5;
+  --xy-background-color: oklch(var(--background));
+  --xy-minimap-background-color: oklch(var(--card));
+  --xy-minimap-mask-background-color: oklch(var(--background) / 0.6);
+  --xy-minimap-node-background-color: oklch(var(--field-border));
+  --xy-attribution-background-color: transparent;
+}
+
+.automation-flow .react-flow__attribution a {
+  color: oklch(var(--muted-foreground));
+}
+
+.automation-flow-touch .react-flow__pane {
+  touch-action: pan-y;
+}

@@ -22,7 +22,6 @@ import {
 } from '@/lib/automation-api'
 import { cn } from '@/lib/utils'
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
-import { AutomationDiagram } from './AutomationDiagram'
 import { AutomationSecretsDialog } from './AutomationSecretsDialog'
 import {
   automationState,
@@ -33,6 +32,7 @@ import {
   runStatusPresentation,
   STATE_PRESENTATION
 } from './automation-format'
+import { AutomationCanvas } from './canvas/AutomationCanvas'
 import { RunPolicyCard } from './RunPolicyCard'
 
 interface AutomationDetailProps {
@@ -229,7 +229,7 @@ export function AutomationDetail({
         <h3 id="automation-diagram-title" className="text-xs font-medium text-muted-foreground">
           Diagram
         </h3>
-        <AutomationDiagram graph={automation.graph} trigger={automation.trigger} narrow={narrow} />
+        <AutomationCanvas automation={automation} phone={narrow} />
       </section>
 
       <section aria-labelledby="automation-runs-title" className="flex flex-col gap-2">
