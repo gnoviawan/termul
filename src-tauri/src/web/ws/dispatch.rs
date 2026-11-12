@@ -138,7 +138,7 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "dispose_ephemeral_session" => {
             handle_dispose_ephemeral_session(id, &req.payload, acp, relay, subscribed_clients).await
         }
-        "list_sessions" => handle_list_sessions(id, &req.payload, acp).await,
+        "list_sessions" => handle_list_sessions(id, &req.payload, env).await,
         // Story 8: promote a backend-ephemeral warm-pool session to durable
         // (register persistence metadata + clear the ephemeral mark).
         "promote_session" => handle_promote_session(id, &req.payload, acp).await,

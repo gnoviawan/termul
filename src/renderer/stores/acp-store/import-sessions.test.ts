@@ -204,8 +204,8 @@ describe('listImportableSessions', () => {
     if (result.status !== 'ready') return
     expect(result.agentId).toBe('agent-1')
     expect(result.sessions.map((s) => s.sessionId)).toEqual(['a', 'b'])
-    expect(list).toHaveBeenNthCalledWith(1, 'agent-1', '/work', undefined)
-    expect(list).toHaveBeenNthCalledWith(2, 'agent-1', '/work', '')
+    expect(list).toHaveBeenNthCalledWith(1, 'agent-1', '/work', undefined, 'p1')
+    expect(list).toHaveBeenNthCalledWith(2, 'agent-1', '/work', '', 'p1')
   })
 
   it('keeps listing past the tenth page', async () => {
@@ -223,9 +223,9 @@ describe('listImportableSessions', () => {
     if (result.status !== 'ready') return
     expect(result.sessions).toHaveLength(12)
     expect(list).toHaveBeenCalledTimes(12)
-    expect(list).toHaveBeenNthCalledWith(1, 'agent-1', '/work', undefined)
+    expect(list).toHaveBeenNthCalledWith(1, 'agent-1', '/work', undefined, 'p1')
     for (let page = 1; page < 12; page++) {
-      expect(list).toHaveBeenNthCalledWith(page + 1, 'agent-1', '/work', `c${page - 1}`)
+      expect(list).toHaveBeenNthCalledWith(page + 1, 'agent-1', '/work', `c${page - 1}`, 'p1')
     }
   })
 
@@ -241,8 +241,8 @@ describe('listImportableSessions', () => {
     if (result.status !== 'ready') return
     expect(result.sessions.map((s) => s.sessionId)).toEqual(['a'])
     expect(list).toHaveBeenCalledTimes(2)
-    expect(list).toHaveBeenNthCalledWith(1, 'agent-1', '/work', undefined)
-    expect(list).toHaveBeenNthCalledWith(2, 'agent-1', '/work', 'same')
+    expect(list).toHaveBeenNthCalledWith(1, 'agent-1', '/work', undefined, 'p1')
+    expect(list).toHaveBeenNthCalledWith(2, 'agent-1', '/work', 'same', 'p1')
   })
 
   it('offers nothing when the agent cannot list or load sessions', async () => {

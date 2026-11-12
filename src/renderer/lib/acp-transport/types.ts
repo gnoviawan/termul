@@ -399,7 +399,12 @@ export interface AcpTransport {
     sessionId: SessionId,
     options?: CommandCallOptions
   ): Promise<void>
-  listSessions(agentId: AgentId, cwd?: string, cursor?: string): Promise<ListSessionsResponse>
+  listSessions(
+    agentId: AgentId,
+    cwd?: string,
+    cursor?: string,
+    projectId?: string
+  ): Promise<ListSessionsResponse>
   registerDiscoveredSession(
     input: {
       sessionId: SessionId

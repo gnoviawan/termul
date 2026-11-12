@@ -70,7 +70,7 @@ export const createImportSlice: StateCreator<AcpState, [], [], ImportSliceState>
         break
       }
       const res = await withAuthRetry(get, agentId, 'session/list', 'text', () =>
-        acpApi.listSessions(agentId, trimmedCwd, cursor)
+        acpApi.listSessions(agentId, trimmedCwd, cursor, projectId || undefined)
       )
       for (const info of res.sessions ?? []) {
         if (seen.has(info.sessionId)) continue

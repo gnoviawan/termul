@@ -195,7 +195,66 @@ pub(super) async fn handle_close_session(
     }
 }
 
-/// `list_sessions` → `AcpManager::list_sessions(agent_id, cwd?, cursor?)`.
+/// Folder `list_sessions` asks the agent to list.
+///
+/// Desktop IPC (`Carrier::Ipc`) keeps the client cwd. A remote `/ws` client
+/// cannot pick an arbitrary folder: the host uses the active project's path,
+/// and a supplied cwd is accepted only when it belongs to that project
+/// (the project root or a worktree/subfolder inside it).
+pub(super) fn resolve_list_sessions_cwd(
+    carrier: crate::web::capabilities::Carrier,
+    registry: &crate::web::project_registry::ProjectRegistry,
+    project_id: Option<&str>,
+    client_cwd: Option<&str>,
+) -> Result<Option<String>, String> {
+    if carrier == crate::web::capabilities::Carrier::Ipc {
+        return Ok(client_cwd.map(str::to_string));
+    }
+
+    let cwd = client_cwd.map(str::trim).filter(|value| !value.is_empty());
+    let explicit_id = project_id.map(str::trim).filter(|value| !value.is_empty());
+
+    if let Some(id) = explicit_id {
+        let ctx = registry
+            .switch_context(id)
+            .ok_or_else(|| format!("project '{id}' not found"))?;
+        return listing_cwd_for_project(registry, &ctx.project_id, &ctx.cwd, cwd);
+    }
+
+    if let Some(cwd) = cwd {
+        if registry.find_by_path(cwd).is_none() {
+            return Err("list_sessions cwd must be a registered project folder".to_string());
+        }
+        return Ok(Some(cwd.to_string()));
+    }
+
+    let default_id = registry
+        .snapshot()
+        .default_project_id
+        .ok_or_else(|| "list_sessions needs an active project folder".to_string())?;
+    let ctx = registry
+        .switch_context(&default_id)
+        .ok_or_else(|| "list_sessions needs an active project folder".to_string())?;
+    Ok(Some(ctx.cwd))
+}
+
+fn listing_cwd_for_project(
+    registry: &crate::web::project_registry::ProjectRegistry,
+    project_id: &str,
+    project_cwd: &str,
+    client_cwd: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(cwd) = client_cwd else {
+        return Ok(Some(project_cwd.to_string()));
+    };
+    match registry.find_by_path(cwd) {
+        Some(id) if id == project_id => Ok(Some(cwd.to_string())),
+        _ => Err("list_sessions cwd must be the active project folder".to_string()),
+    }
+}
+
+/// `list_sessions` → `AcpManager::list_sessions` with a host-resolved cwd
+/// on the `/ws` carrier (see [`resolve_list_sessions_cwd`]).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ListSessionsPayload {
@@ -204,25 +263,42 @@ pub(super) struct ListSessionsPayload {
     cwd: Option<String>,
     #[serde(default)]
     cursor: Option<String>,
+    #[serde(default)]
+    project_id: Option<String>,
 }
 
-pub(super) async fn handle_list_sessions(
-    id: String,
-    payload: &Value,
-    acp: &Arc<AcpManager>,
-) -> WsReply {
+pub(super) async fn handle_list_sessions(id: String, payload: &Value, env: &HandlerEnv) -> WsReply {
     let parsed: ListSessionsPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
             return WsReply::err(
                 id,
                 WsErrorCode::Unsupported,
-                format!("malformed list_sessions payload (want agentId, cwd?, cursor?): {e}"),
+                format!(
+                    "malformed list_sessions payload (want agentId, projectId?, cwd?, cursor?): {e}"
+                ),
             )
         }
     };
-    match acp
-        .list_sessions(&parsed.agent_id, parsed.cwd, parsed.cursor)
+    let cwd = match resolve_list_sessions_cwd(
+        env.carrier,
+        &env.registry,
+        parsed.project_id.as_deref(),
+        parsed.cwd.as_deref(),
+    ) {
+        Ok(cwd) => cwd,
+        Err(message) => {
+            let code = if message.contains("not found") {
+                WsErrorCode::NotFound
+            } else {
+                WsErrorCode::Unsupported
+            };
+            return WsReply::err(id, code, message);
+        }
+    };
+    match env
+        .acp
+        .list_sessions(&parsed.agent_id, cwd, parsed.cursor)
         .await
     {
         Ok(resp) => ok_with_payload(id, &resp),

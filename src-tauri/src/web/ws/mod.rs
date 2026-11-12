@@ -837,6 +837,8 @@ mod registry_check_tests;
 #[cfg(test)]
 mod spawn_rejection_tests;
 #[cfg(test)]
+mod list_sessions_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 pub(crate) mod harness;

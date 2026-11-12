@@ -1324,9 +1324,10 @@ export async function acpPromoteSession(agentId: AgentId, sessionId: SessionId):
 export async function acpListSessions(
   agentId: AgentId,
   cwd?: string,
-  cursor?: string
+  cursor?: string,
+  projectId?: string
 ): Promise<ListSessionsResponse> {
-  return getAcpTransport().listSessions(agentId, cwd, cursor)
+  return getAcpTransport().listSessions(agentId, cwd, cursor, projectId)
 }
 
 export async function acpRegisterDiscoveredSession(input: {

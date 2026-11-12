@@ -1357,9 +1357,15 @@ export class WsAcpTransport implements AcpTransport {
   async listSessions(
     agentId: AgentId,
     cwd?: string,
-    cursor?: string
+    cursor?: string,
+    projectId?: string
   ): Promise<ListSessionsResponse> {
-    return this.request<ListSessionsResponse>('list_sessions', { agentId, cwd, cursor })
+    return this.request<ListSessionsResponse>('list_sessions', {
+      agentId,
+      cwd,
+      cursor,
+      projectId
+    })
   }
 
   async registerDiscoveredSession(
