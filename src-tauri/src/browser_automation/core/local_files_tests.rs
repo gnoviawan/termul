@@ -377,6 +377,7 @@ mod host {
             root_of: Arc::new(move |_| Some(root.clone())),
         };
         let h = harness_parts(FakeEngine::new(webview2_like()), false, services, Support::Trusted);
+        let approved = Url::from_file_path(fs::canonicalize(&note).unwrap()).unwrap();
         let reply = h.call_as("s1", "navigate", json!({ "url": file_url(&note) })).await;
         assert_eq!(
             (reply["code"].as_str(), reply["reason"].as_str()),
@@ -384,6 +385,10 @@ mod host {
             "{reply}"
         );
         assert!(h.engine.file_loads.lock().is_empty(), "the swapped file never loads");
+        assert!(
+            h.host.gate.file_read_access("s1", &approved).is_none(),
+            "an allow-once approval whose open failed does not outlive it"
+        );
     }
 
     #[tokio::test]

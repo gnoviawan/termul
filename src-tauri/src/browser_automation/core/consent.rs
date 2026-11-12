@@ -368,6 +368,19 @@ impl ConsentGate {
         }
     }
 
+    /// A call approved to open a file failed before it dispatched the load:
+    /// end the "allow once" grants nothing holds or loads (see
+    /// [`SessionGrants::end_unused_once_files`]).
+    pub fn end_unused_file_grants(&self, session_id: &str) {
+        let ended = self.grants.end_unused_once_files(session_id);
+        if ended > 0 {
+            log::info!(
+                "[browser-agent] allow-once file grant ended count={ended} reason=open_failed session={}",
+                crate::logging::redact_session_id(session_id)
+            );
+        }
+    }
+
     /// Tab `tab` of the session committed `url`, or closed (`None`): end
     /// the "allow once" file grants no tab holds any longer.
     pub fn tab_moved(&self, session_id: &str, tab: &str, url: Option<&Url>) {

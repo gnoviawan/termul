@@ -255,9 +255,11 @@ impl DesktopBrowserHost {
         match verb {
             Verb::ListTabs => Ok(self.list_tabs(session_id)),
             Verb::NewTab => {
+                let asked = require_url_arg(args, "new_tab")?;
                 let url = self
-                    .agent_target(session_id, &require_url_arg(args, "new_tab")?, deadline)
-                    .await?;
+                    .agent_target(session_id, &asked, deadline)
+                    .await
+                    .inspect_err(|_| self.file_load_ended_badly(session_id, None, &asked))?;
                 let (label, rx) = self.open_agent_tab(session_id, &url).await.inspect_err(|_| {
                     self.file_load_ended_badly(session_id, None, &url);
                 })?;
@@ -418,14 +420,18 @@ impl DesktopBrowserHost {
     }
 
     async fn navigate(&self, session_id: &str, args: &Value, deadline: Deadline) -> Result<Success, BrowserError> {
+        let asked = require_url_arg(args, "navigate")?;
         let url = self
-            .agent_target(session_id, &require_url_arg(args, "navigate")?, deadline)
-            .await?;
-        let tab_id = tab_id_arg(args)?;
+            .agent_target(session_id, &asked, deadline)
+            .await
+            .inspect_err(|_| self.file_load_ended_badly(session_id, None, &asked))?;
+        let tab_id = tab_id_arg(args).inspect_err(|_| self.file_load_ended_badly(session_id, None, &url))?;
         let target = self.registry.lock().resolve(session_id, tab_id.as_deref());
         let (label, rx) = match target {
             Ok(Some(label)) => {
-                let rx = self.navigation_waiter(&label)?;
+                let rx = self
+                    .navigation_waiter(&label)
+                    .inspect_err(|_| self.file_load_ended_badly(session_id, None, &url))?;
                 self.load_page(&label, url.clone()).await.map_err(BrowserError::internal)?;
                 (label, rx)
             }
@@ -442,6 +448,7 @@ impl DesktopBrowserHost {
                     crate::logging::redact_session_id(session_id),
                     e.code
                 );
+                self.file_load_ended_badly(session_id, None, &url);
                 return Err(e);
             }
         };

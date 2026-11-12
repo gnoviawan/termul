@@ -18,7 +18,7 @@ use crate::browser_tab_manager::BrowserTabManager;
 /// Start loading the file `url` in `tab`, its page allowed to read
 /// `read_access`. Fails when WebKit refuses to start the load. A load the
 /// main thread gets to only after the wait ran out is not started: the
-/// caller already reported it failed.
+/// caller already reported it failed, or never will.
 pub async fn load(
     tabs: &Arc<BrowserTabManager>,
     tab: &str,
@@ -35,6 +35,7 @@ pub async fn load(
     let (tx, rx) = oneshot::channel::<Result<(), EngineErrorKind>>();
     let abandoned = Arc::new(AtomicBool::new(false));
     let late = Arc::clone(&abandoned);
+    let _caller = StoppedWaiting(Arc::clone(&abandoned));
     let tab_label = tab.to_string();
     webview
         .with_webview(move |platform| {
@@ -66,9 +67,18 @@ pub async fn load(
         Ok(Ok(Ok(()))) => Ok(()),
         Ok(Ok(Err(kind))) => Err(EngineError::new(kind)),
         Ok(Err(_)) => Err(EngineError::new(EngineErrorKind::NoReply)),
-        Err(_) => {
-            abandoned.store(true, Ordering::Release);
-            Err(EngineError::new(EngineErrorKind::Timeout))
-        }
+        Err(_) => Err(EngineError::new(EngineErrorKind::Timeout)),
+    }
+}
+
+/// Marks the load abandoned when the caller stops waiting: its timeout ran
+/// out, or its future was dropped (a dialog interrupting the call). A
+/// closure that runs afterwards starts nothing. After the closure ran the
+/// mark is harmless.
+struct StoppedWaiting(Arc<AtomicBool>);
+
+impl Drop for StoppedWaiting {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
     }
 }

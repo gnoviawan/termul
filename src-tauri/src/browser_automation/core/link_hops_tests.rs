@@ -330,7 +330,7 @@ async fn notes_are_bound_to_the_document_they_were_made_on() {
         (record.url.parse::<Url>().unwrap(), record.epoch)
     };
     let target: Url = file_url(&d.outside.path().join("a.html")).parse().unwrap();
-    let stale = Hop { label: &tab, session_id: "s1", from: &from, epoch: epoch + 1, url: &target };
+    let stale = Hop { label: &tab, session_id: "s1", from: &from, epoch: epoch.checked_sub(1).unwrap(), url: &target };
     h.host.note_file_link(&stale, "outside_project");
     assert!(h.host.registry.lock().get(&tab).is_some_and(|r| r.file_links.is_empty()), "a stale document gets no note");
 

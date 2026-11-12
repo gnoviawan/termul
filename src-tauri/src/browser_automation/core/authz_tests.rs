@@ -255,6 +255,26 @@ fn a_failed_load_ends_the_grant() {
 }
 
 #[test]
+fn an_open_that_failed_before_dispatch_ends_only_the_grants_nothing_holds() {
+    let grants = SessionGrants::default();
+    let unused = url("file:///C:/notes/a.html");
+    let loading = url("file:///C:/notes/b.html");
+    let shown = url("file:///C:/notes/c.html");
+    for file in [&unused, &loading, &shown] {
+        once(&grants, file);
+    }
+    grants.file_load_dispatched("s1", "tab-1", &loading);
+    grants.tab_moved("s1", "tab-2", Some(&shown));
+
+    assert_eq!(grants.end_unused_once_files("s1"), 1);
+    assert_eq!(grants.check_hop("s1", &unused), HopVerdict::Deny(DenyReason::FileNotGranted));
+    assert_eq!(grants.check_hop("s1", &loading), HopVerdict::Allow, "a load in flight keeps its grant");
+    assert_eq!(grants.check_hop("s1", &shown), HopVerdict::Allow, "a tab showing the file keeps its grant");
+    assert_eq!(grants.end_unused_once_files("s1"), 0);
+    assert_eq!(grants.end_unused_once_files("other"), 0);
+}
+
+#[test]
 fn a_failed_load_in_one_tab_keeps_a_grant_another_tab_holds() {
     let grants = SessionGrants::default();
     let file = url("file:///C:/notes/a.html");

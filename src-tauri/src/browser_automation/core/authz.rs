@@ -415,6 +415,28 @@ impl SessionGrants {
         true
     }
 
+    /// End every "allow once" grant no tab holds or is loading: a call that
+    /// was allowed to open a file failed before it dispatched the load, so
+    /// the approval would otherwise outlive the open it was given for.
+    /// Returns how many ended.
+    pub fn end_unused_once_files(&self, session_id: &str) -> usize {
+        let mut sessions = self.sessions.lock();
+        let Some(session) = sessions.get_mut(session_id) else {
+            return 0;
+        };
+        let unused: Vec<String> = session
+            .once_files
+            .iter()
+            .filter(|(_, once)| once.idle())
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in &unused {
+            session.once_files.remove(key);
+            session.granted_files.remove(key);
+        }
+        unused.len()
+    }
+
     /// Drop the grant of the file `url` (a later prompt for it was denied).
     pub fn revoke_file(&self, session_id: &str, url: &Url) {
         let Some(key) = file_key(url) else {

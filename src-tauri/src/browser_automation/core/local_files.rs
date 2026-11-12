@@ -482,11 +482,16 @@ impl DesktopBrowserHost {
 
     /// A file load the host started in `label` (or, with `None`, never
     /// got to start) ended without its page: release its "allow once"
-    /// hold.
+    /// hold. A load that never started may fail before its real path is
+    /// known (the agent named the file by a link or another spelling), so
+    /// it also ends every approval nothing holds.
     pub(super) fn file_load_ended_badly(&self, session_id: &str, label: Option<&str>, url: &str) {
         if let Ok(file) = url.parse::<Url>() {
             if file.scheme() == "file" {
                 self.gate.file_load_failed(session_id, label, &file);
+                if label.is_none() {
+                    self.gate.end_unused_file_grants(session_id);
+                }
             }
         }
     }
