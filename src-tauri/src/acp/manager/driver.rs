@@ -899,6 +899,16 @@ pub(super) async fn drive_connection(
                         ("form".to_string(), None, fields, dropped)
                     }
                     ElicitationMode::Url(url_mode) => {
+                        if let Err(refused) = crate::acp::safe_url::check_safe_url(
+                            &url_mode.url,
+                            crate::acp::safe_url::Opener::Remote,
+                        ) {
+                            log::warn!("[acp] url elicitation cancelled: {refused}");
+                            let _ = responder.respond(CreateElicitationResponse::new(
+                                ElicitationAction::Cancel,
+                            ));
+                            return Ok(());
+                        }
                         ("url".to_string(), Some(url_mode.url.clone()), Vec::new(), 0)
                     }
                     ElicitationMode::Other(_) | _ => {
