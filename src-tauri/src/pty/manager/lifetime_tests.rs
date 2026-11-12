@@ -186,3 +186,130 @@ async fn the_sweep_removes_only_the_exited_pty_and_frees_no_live_slot() {
     manager.force_kill(&live.info.id).await.unwrap();
     manager.force_kill(&next.info.id).await.unwrap();
 }
+
+/// A Tauri channel that records the bytes it is sent, or fails every send
+/// once `alive` is cleared (the webview behind it is gone).
+#[cfg(unix)]
+fn switchable_channel(
+    alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> tauri::ipc::Channel<tauri::ipc::Response> {
+    tauri::ipc::Channel::new(move |_| {
+        if alive.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err(tauri::Error::WebviewNotFound)
+        }
+    })
+}
+
+#[cfg(unix)]
+fn print_every_100ms(project: &str) -> SpawnOptions {
+    SpawnOptions {
+        project_id: Some(project.to_string()),
+        program: Some("sh".to_string()),
+        args: Some(vec![
+            "-c".to_string(),
+            "while true; do echo tick; sleep 0.1; done".to_string(),
+        ]),
+        ..Default::default()
+    }
+}
+
+/// #1362: a desktop spawn streams through its Channel, so it counts as a live
+/// attachment. A remote client's `list_preserved` then issues a SHARED claim
+/// and the desktop keeps its credential.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_live_spawn_channel_keeps_its_claim_when_a_remote_lists_the_project() {
+    let manager = crate::web::test_pty_manager();
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let spawned = manager
+        .spawn(print_every_100ms("a"), Some(switchable_channel(alive)))
+        .await
+        .expect("spawn");
+    let id = spawned.info.id.clone();
+
+    let listed = manager.list_preserved("a", None);
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].live_attachment);
+    let shared = listed[0].claim.as_deref().expect("shared claim");
+    assert_ne!(shared, spawned.claim);
+    assert!(manager.verify_claim(&id, &spawned.claim).is_ok());
+    assert!(manager.verify_claim(&id, shared).is_ok());
+
+    manager.force_kill(&id).await.unwrap();
+}
+
+/// #1256: once the renderer that held the Channel is gone, a listing must
+/// re-issue the claim again so the reloaded page can recover the terminal.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dead_spawn_channel_releases_its_attachment_so_a_listing_reissues() {
+    let manager = crate::web::test_pty_manager();
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let spawned = manager
+        .spawn(
+            print_every_100ms("a"),
+            Some(switchable_channel(std::sync::Arc::clone(&alive))),
+        )
+        .await
+        .expect("spawn");
+    let id = spawned.info.id.clone();
+    let instance = manager.get(&id).expect("tracked");
+    assert!(instance.has_live_attachment());
+
+    alive.store(false, Ordering::Release);
+    for _ in 0..100 {
+        if !instance.has_live_attachment() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        !instance.has_live_attachment(),
+        "a failed channel send releases the attachment"
+    );
+
+    let listed = manager.list_preserved("a", None);
+    assert!(!listed[0].live_attachment);
+    assert!(manager.verify_claim(&id, &spawned.claim).is_err());
+    assert!(manager
+        .verify_claim(&id, listed[0].claim.as_deref().expect("reissued"))
+        .is_ok());
+
+    manager.force_kill(&id).await.unwrap();
+}
+
+/// A detached spawn has no stream, so it never counts as attached.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_detached_spawn_counts_no_live_attachment() {
+    let manager = crate::web::test_pty_manager();
+    let spawned = manager
+        .spawn(project_options("a"), None)
+        .await
+        .expect("spawn");
+    let instance = manager.get(&spawned.info.id).expect("tracked");
+    assert!(!instance.has_live_attachment());
+    manager.force_kill(&spawned.info.id).await.unwrap();
+}
+
+/// The attachment also ends when the PTY exits and the flusher finishes.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_spawn_channel_attachment_ends_when_the_pty_exits() {
+    let manager = crate::web::test_pty_manager();
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let spawned = manager
+        .spawn(echo_then_exit("a"), Some(switchable_channel(alive)))
+        .await
+        .expect("spawn");
+    let id = spawned.info.id.clone();
+    let instance = manager.get(&id).expect("tracked");
+
+    wait_for_exit(&instance).await;
+    wait_for_output_published(&instance).await;
+    assert!(!instance.has_live_attachment());
+
+    manager.force_kill(&id).await.unwrap();
+}

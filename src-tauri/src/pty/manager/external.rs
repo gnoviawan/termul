@@ -94,6 +94,7 @@ impl PtyManager {
                 flusher_output_log_bytes,
                 flusher_next_seq,
                 None,
+                None,
                 flusher_id,
             );
         });

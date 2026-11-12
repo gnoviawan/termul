@@ -189,6 +189,10 @@ impl PtyManager {
             let flusher_pending = pending_buf.clone();
             let flusher_done = done_flag.clone();
             let flusher_channel = on_data.clone();
+            let flusher_attachment = on_data.is_some().then(|| {
+                instance.add_live_attachment();
+                instance.clone()
+            });
             let flusher_id = id.clone();
             let flusher_broadcast = instance.broadcast_tx.clone();
             let flusher_output_log = instance.output_log.clone();
@@ -205,6 +209,7 @@ impl PtyManager {
                     flusher_output_log_bytes,
                     flusher_next_seq,
                     flusher_channel,
+                    flusher_attachment,
                     flusher_id,
                 );
             });
@@ -351,6 +356,10 @@ impl PtyManager {
             let flusher_pending = pending_buf.clone();
             let flusher_done = done_flag.clone();
             let flusher_channel = on_data.clone();
+            let flusher_attachment = on_data.is_some().then(|| {
+                instance.add_live_attachment();
+                instance.clone()
+            });
             let flusher_id = id.clone();
             let flusher_broadcast = instance.broadcast_tx.clone();
             let flusher_output_log = instance.output_log.clone();
@@ -367,6 +376,7 @@ impl PtyManager {
                     flusher_output_log_bytes,
                     flusher_next_seq,
                     flusher_channel,
+                    flusher_attachment,
                     flusher_id,
                 );
             });
@@ -523,6 +533,10 @@ impl PtyManager {
     /// Takes pending buffer via std::mem::take every 4ms and sends via binary channel.
     /// If on_data is None, skips sending (just drains).
     ///
+    /// attachment: the instance whose live attachment this Channel holds. It is
+    /// released on the first failed send or when the flusher ends, so a desktop
+    /// terminal counts as attached exactly while its renderer can receive.
+    ///
     /// broadcast_tx: per-terminal broadcast channel. When present, each flushed
     /// batch is also sent so remote WebSocket clients receive live output.
     /// Send failures are ignored (no active remote subscribers is normal).
@@ -538,6 +552,7 @@ impl PtyManager {
         output_log_bytes: Arc<AtomicUsize>,
         next_output_seq: Arc<AtomicU64>,
         on_data: Option<Channel<Response>>,
+        mut attachment: Option<Arc<TerminalInstance>>,
         terminal_id: String,
     ) {
         let id = terminal_id;
@@ -593,6 +608,9 @@ impl PtyManager {
                 if let Some(ch) = channel_ref {
                     if let Err(e) = ch.send(Response::new(data)) {
                         log::error!("[PTY {}] Failed to send data via channel: {}", id, e);
+                        if let Some(instance) = attachment.take() {
+                            instance.remove_live_attachment();
+                        }
                     }
                 }
             }
@@ -624,6 +642,9 @@ impl PtyManager {
             }
         }
 
+        if let Some(instance) = attachment.take() {
+            instance.remove_live_attachment();
+        }
         log::info!("[PTY {}] Flusher thread ended", id);
     }
 }
