@@ -120,7 +120,7 @@ On a phone, tap a step's output, then tap the step to connect to. A banner says 
 
 Select a step or the trigger card in the editor to open its inspector. On a computer and in the browser, it floats on the right of the canvas; on a phone, it opens as a sheet from the bottom. A step you just added opens in the inspector too. The header shows the step's name and kind, with **Delete step** and **Close**.
 
-A field change is saved to the draft when you press Enter or leave the field, and a choice is saved when you pick it. Each change is one step you can undo. Press Escape in a field to put back its saved value. While a save is running, the editor keeps what you typed and says **Saving. Try that again once it finishes.**
+A change to a one-line field is saved to the draft when you press Enter or leave the field. In a field with several lines, such as **Body** or **Message**, Enter adds a new line; the change is saved when you leave the field or press Ctrl+Enter (Cmd+Enter on macOS). A choice is saved when you pick it. Each change is one step you can undo. Press Escape in a field to put back its saved value. While a save is running, the editor keeps what you typed and says **Saving. Try that again once it finishes.**
 
 What you can change depends on the step kind:
 
@@ -135,9 +135,9 @@ What you can change depends on the step kind:
 
 Every step also has a **Label**. **Agent** and **MCP tool** steps show their settings read-only for now; ask an agent in a chat to change them.
 
-In a text field, type `{{` to insert a reference. The list offers only what the step can read when it runs: the trigger, the output of steps that run before it, and, inside a **For each** loop, the current item and its index.
+In a field that takes references, type `{{` to insert one. The list offers only what the step can read when it runs: the trigger, the output of steps that run before it, and, inside a **For each** loop, the current item and its index. It does not list [secrets](#secrets); in an HTTP step, type `{{ secrets.NAME }}` yourself.
 
-The inspector checks fields as you type, such as required fields, allowed ranges, the URL and reference syntax, and shows problems under each field. **Issues on this step** at the bottom lists the draft's issues for that step.
+The inspector checks fields, such as required fields, allowed ranges, the URL and reference syntax, and shows problems under each field. Reference syntax is checked as you type; the other checks run when the change is saved to the draft. **Issues on this step** at the bottom lists the draft's issues for that step.
 
 For the trigger, **Runs** is **When you run it** or **On a schedule**. A schedule is a **Cron** expression with a **Time zone**, **Every interval**, or **Once** at the time in **Run at**. **Next runs** shows when it will run next.
 
