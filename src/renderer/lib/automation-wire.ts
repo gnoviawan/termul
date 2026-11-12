@@ -15,6 +15,7 @@ import type {
   AutomationChanged,
   AutomationDetail,
   AutomationId,
+  AutomationLayout,
   AutomationNode,
   AutomationRun,
   AutomationStep,
@@ -238,6 +239,14 @@ function lastRun(v: unknown, p: string): LastRun {
   }
 }
 
+function layout(v: unknown, p: string): AutomationLayout {
+  const entries = Object.entries(obj(v, p)).map(([key, at]) => {
+    const o = obj(at, `${p}.${key}`)
+    return [key, { x: num(o.x, `${p}.${key}.x`), y: num(o.y, `${p}.${key}.y`) }] as const
+  })
+  return Object.fromEntries(entries)
+}
+
 export function parseAutomation(v: unknown, p = 'automation'): Automation {
   const o = obj(v, p)
   return {
@@ -249,6 +258,7 @@ export function parseAutomation(v: unknown, p = 'automation'): Automation {
     enabled: bool(o.enabled, `${p}.enabled`),
     trigger: trigger(o.trigger, `${p}.trigger`),
     graph: graph(o.graph, `${p}.graph`),
+    layout: layout(o.layout, `${p}.layout`),
     isolation: oneOf(o.isolation, `${p}.isolation`, [
       'shared_in_root',
       'worktree_per_run'

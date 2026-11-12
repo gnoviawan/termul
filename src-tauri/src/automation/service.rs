@@ -15,8 +15,9 @@ use super::engine::{Engine, EngineDeps, HttpConfig, ProjectRoots, SystemClock};
 use super::graph::{self, OpError};
 use super::mcp::{Lookup, McpFailure, McpServerEntry, ProjectMcpServers, RmcpClient, ToolSchema};
 use super::model::{
-    ApplyOpsResult, Automation, AutomationChanged, AutomationId, Issue, IssueCode, NamedTemplate,
-    NodeId, NodeKind, NodeSpec, Op, Run, RunId, RunPolicy, RunTrigger, Schedule, Step,
+    ApplyOpsResult, Automation, AutomationChanged, AutomationId, Issue, IssueCode, Layout,
+    NamedTemplate, NodeId, NodeKind, NodeSpec, Op, Run, RunId, RunPolicy, RunTrigger, Schedule,
+    Step,
 };
 use super::policy;
 use super::schedule;
@@ -223,13 +224,7 @@ impl AutomationService {
         base_revision: u64,
         ops: &[Op],
     ) -> ServiceResult<ApplyOpsResult> {
-        let current = self.load(id)?;
-        if current.revision != base_revision {
-            return Err(ServiceError::RevisionConflict {
-                current: current.revision,
-            });
-        }
-        let next = graph::apply_ops(&current, ops).map_err(ServiceError::InvalidOps)?;
+        let next = self.staged(id, base_revision, ops)?;
         let saved = self
             .engine
             .store()
@@ -246,6 +241,70 @@ impl AutomationService {
             automation: saved,
             issues,
         })
+    }
+
+    /// What `apply_ops` would answer, without saving or announcing anything:
+    /// the same revision check, the same op rules, the same issues and run
+    /// policy. The automation carries the would-be graph and trigger at the
+    /// revision it was based on, never the one a save would assign, so a
+    /// caller cannot mistake it for a stored head.
+    pub fn preview_ops(
+        &self,
+        id: &AutomationId,
+        base_revision: u64,
+        ops: &[Op],
+    ) -> ServiceResult<AutomationDetail> {
+        let mut next = self.staged(id, base_revision, ops)?;
+        next.revision = base_revision;
+        next.layout.retain_nodes(&next.graph);
+        let servers = self.mcp_servers(&next);
+        let issues = self.issues_with(&next, &servers);
+        log::debug!(
+            "[Automation] previewed {} ops on {id} at revision {base_revision} ({} issue(s))",
+            ops.len(),
+            issues.len()
+        );
+        Ok(AutomationDetail {
+            issues,
+            policy: self.policy_with(&next, &servers),
+            automation: next,
+        })
+    }
+
+    /// `current` with `ops` applied, for a caller that holds `base_revision`.
+    fn staged(
+        &self,
+        id: &AutomationId,
+        base_revision: u64,
+        ops: &[Op],
+    ) -> ServiceResult<Automation> {
+        let current = self.load(id)?;
+        if current.revision != base_revision {
+            return Err(ServiceError::RevisionConflict {
+                current: current.revision,
+            });
+        }
+        graph::apply_ops(&current, ops).map_err(ServiceError::InvalidOps)
+    }
+
+    /// Saves node positions without a new revision: where a node sits is not
+    /// part of what runs, so an approval stands. Positions of anything that is
+    /// not `trigger` or a node of the stored graph are dropped; NaN and
+    /// infinite coordinates are refused.
+    pub fn set_layout(&self, id: &AutomationId, layout: Layout) -> ServiceResult<Automation> {
+        if let Some(key) = layout.non_finite_key() {
+            log::warn!("[Automation] layout for {id} refused: non-finite position for {key:?}");
+            return Err(ServiceError::InvalidInput(format!(
+                "layout: the position of {key:?} is not a finite number"
+            )));
+        }
+        let saved = self.engine.store().set_layout(id, layout)?;
+        log::info!(
+            "[Automation] layout saved for {id}: {} position(s)",
+            saved.layout.0.len()
+        );
+        self.changed(&saved);
+        Ok(saved)
     }
 
     /// Renames without a new revision: the name is not part of what runs, so

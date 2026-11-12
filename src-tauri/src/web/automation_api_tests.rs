@@ -87,7 +87,7 @@ fn automation_json(id: &str, revision: u64, approved: Option<u64>, graph: Value)
         "id": id, "project_id": "p1", "name": "Digest",
         "revision": revision, "approved_revision": approved, "enabled": true,
         "trigger": { "kind": "manual" }, "graph": graph,
-        "isolation": "shared_in_root", "next_run_at": null,
+        "layout": {}, "isolation": "shared_in_root", "next_run_at": null,
         "consecutive_errors": 0, "schedule_error_count": 0, "unseen_failures": 0,
         "last_run": null, "created_at": 1000, "updated_at": 1000, "deleted_at": null
     })
@@ -841,5 +841,210 @@ async fn answering_a_suggestion_is_a_write_and_matching_is_a_read() {
             .await
             .unwrap();
         assert_eq!(status(answered), 403, "{path}");
+    }
+}
+
+fn lan_post(path: &str, body: Value) -> Request<Body> {
+    let mut request = Request::builder()
+        .method(Method::POST)
+        .uri(path)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    request.extensions_mut().insert(BearerVerified);
+    request
+}
+
+#[tokio::test]
+async fn a_layout_is_saved_over_its_route_without_a_new_revision() {
+    let service = service();
+    let app = router(&service);
+    let id = create(&app).await;
+    send(
+        app.clone(),
+        Method::POST,
+        &format!("/api/automations/{id}/ops"),
+        Some(json!({ "base_revision": 1, "ops": transform_graph() })),
+    )
+    .await;
+    send(
+        app.clone(),
+        Method::POST,
+        &format!("/api/automations/{id}/approve"),
+        Some(json!({ "revision": 2 })),
+    )
+    .await;
+
+    let (status, saved) = send(
+        app.clone(),
+        Method::POST,
+        &format!("/api/automations/{id}/layout"),
+        Some(json!({ "layout": {
+            "trigger": { "x": 0, "y": 0 },
+            "shape": { "x": 240.5, "y": -8 },
+            "ghost": { "x": 1, "y": 1 }
+        } })),
+    )
+    .await;
+
+    let mut expected = automation_json(&id, 2, Some(2), shaped_graph());
+    expected["layout"] =
+        json!({ "trigger": { "x": 0.0, "y": 0.0 }, "shape": { "x": 240.5, "y": -8.0 } });
+    assert_eq!((status, saved), ok(expected.clone()));
+    assert_eq!(
+        send(app, Method::GET, &format!("/api/automations/{id}"), None)
+            .await
+            .1["data"]["automation"],
+        expected
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_layout_is_invalid_input_and_a_missing_automation_is_not_found() {
+    let service = service();
+    let app = router(&service);
+    let id = create(&app).await;
+    let uri = format!("/api/automations/{id}/layout");
+    for body in [
+        json!({ "layout": { "trigger": { "x": "left", "y": 0 } } }),
+        json!({ "layout": [] }),
+    ] {
+        let (status, refused) = send(app.clone(), Method::POST, &uri, Some(body.clone())).await;
+        assert_eq!(
+            (status, &refused["code"]),
+            (422, &json!("invalid_input")),
+            "{body}"
+        );
+    }
+    // A `Value` cannot hold 1e999, so this body goes over the wire as text.
+    let overflow = Request::builder()
+        .method(Method::POST)
+        .uri(&uri)
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"layout":{"trigger":{"x":1e999,"y":0}}}"#))
+        .unwrap();
+    let response = app.clone().oneshot(overflow).await.unwrap();
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let refused: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!((status, &refused["code"]), (422, &json!("invalid_input")));
+    let (status, no_body) = send(app.clone(), Method::POST, &uri, None).await;
+    assert_eq!((status, &no_body["code"]), (422, &json!("invalid_input")));
+    let (status, missing) = send(
+        app,
+        Method::POST,
+        "/api/automations/missing/layout",
+        Some(json!({ "layout": {} })),
+    )
+    .await;
+    assert_eq!((status, &missing["code"]), (404, &json!("not_found")));
+}
+
+#[tokio::test]
+async fn a_dry_run_answers_over_its_route_and_changes_nothing() {
+    let service = service();
+    let app = router(&service);
+    let id = create(&app).await;
+    let mut changes = service.subscribe();
+    let uri = format!("/api/automations/{id}/ops/preview");
+
+    let (status, previewed) = send(
+        app.clone(),
+        Method::POST,
+        &uri,
+        Some(json!({ "base_revision": 1, "ops": transform_graph() })),
+    )
+    .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(
+        previewed["data"]["automation"],
+        automation_json(&id, 1, None, shaped_graph()),
+        "the would-be graph at the revision it was based on"
+    );
+    assert_eq!(previewed["data"]["issues"], json!([]));
+    assert_eq!(
+        previewed["data"]["policy"]["trigger_summary"],
+        "manual only"
+    );
+    assert_eq!(
+        send(
+            app.clone(),
+            Method::GET,
+            &format!("/api/automations/{id}"),
+            None
+        )
+        .await
+        .1["data"]["automation"],
+        automation_json(&id, 1, None, json!({ "nodes": [], "edges": [] })),
+        "the stored automation is as it was"
+    );
+    assert!(changes.try_recv().is_err(), "nothing is announced");
+
+    let (status, stale) = send(
+        app.clone(),
+        Method::POST,
+        &uri,
+        Some(json!({ "base_revision": 7, "ops": transform_graph() })),
+    )
+    .await;
+    assert_eq!(
+        (status, stale),
+        (
+            409,
+            json!({
+                "success": false, "code": "revision_conflict", "current_revision": 1,
+                "error": "revision conflict: the automation is at revision 1"
+            })
+        )
+    );
+    let (status, malformed) = send(
+        app,
+        Method::POST,
+        &uri,
+        Some(json!({ "base_revision": 1, "ops": [{ "op": "explode" }] })),
+    )
+    .await;
+    assert_eq!((status, &malformed["code"]), (422, &json!("invalid_input")));
+}
+
+#[tokio::test]
+async fn saving_a_layout_is_a_write_and_a_dry_run_is_a_read() {
+    let service = service();
+    let created = service.create("p1", "Digest").unwrap();
+    let id = created.id.to_string();
+    let lan = router_for(Some(service.clone()), true, LAN, OPEN);
+    let shared_live = router_for(
+        Some(service.clone()),
+        true,
+        LOOPBACK,
+        WriteFlags {
+            allow_remote_writes: false,
+            shared_live_writes_denied: true,
+        },
+    );
+    let layout = (
+        format!("/api/automations/{id}/layout"),
+        json!({ "layout": {} }),
+    );
+    let preview = (
+        format!("/api/automations/{id}/ops/preview"),
+        json!({ "base_revision": 1, "ops": transform_graph() }),
+    );
+    for (app, (path, body), expected) in [
+        (lan.clone(), layout.clone(), 403),
+        (shared_live.clone(), layout, 403),
+        (lan, preview.clone(), 200),
+        (shared_live, preview, 200),
+    ] {
+        let status = app
+            .oneshot(lan_post(&path, body))
+            .await
+            .unwrap()
+            .status()
+            .as_u16();
+        assert_eq!(status, expected, "{path}");
     }
 }

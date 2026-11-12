@@ -2103,6 +2103,8 @@ pub fn run() {
             commands::automation_get,
             commands::automation_create,
             commands::automation_apply_ops,
+            commands::automation_preview_ops,
+            commands::automation_set_layout,
             commands::automation_delete,
             commands::automation_set_enabled,
             commands::automation_approve,

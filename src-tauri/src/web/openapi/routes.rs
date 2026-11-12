@@ -404,6 +404,14 @@ pub static ROUTES: &[ApiRoute] = &[
         .json::<automation::OpsBody>()
         .ipc::<ApplyOpsResult>()
         .describe("A stale `base_revision` is refused with `revision_conflict` (409) and `current_revision`."),
+    ApiRoute::post("/api/automations/{id}/ops/preview", Tag::Automations, "Dry-run an edit of an automation's graph")
+        .json::<automation::OpsBody>()
+        .ipc::<AutomationDetail>()
+        .describe("Runs the checks of an edit and returns the would-be graph, issues and policy at the revision it was based on. Saves and announces nothing. A stale `base_revision` is refused with `revision_conflict` (409) and `current_revision`."),
+    ApiRoute::post("/api/automations/{id}/layout", Tag::Automations, "Save canvas node positions")
+        .json::<automation::LayoutBody>()
+        .ipc::<Automation>()
+        .describe("Keys are node ids and `trigger`; others are dropped. Does not change the revision or the approval."),
     ApiRoute::post("/api/automations/{id}/enabled", Tag::Automations, "Enable or disable an automation")
         .json::<automation::EnabledBody>()
         .ipc::<Automation>(),

@@ -30,7 +30,11 @@ type Unbranded<T> = T extends string & { readonly __brand: string }
   : T extends (infer U)[]
     ? Unbranded<U>[]
     : T extends object
-      ? { [K in keyof T]: Unbranded<T[K]> }
+      ? {
+          [K in keyof T as K extends string & { readonly __brand: string } ? string : K]: Unbranded<
+            T[K]
+          >
+        }
       : T
 
 const runGraph: Unbranded<Graph> = {
@@ -218,6 +222,11 @@ const typed: Unbranded<WireFixture> = {
         }
       ]
     },
+    layout: {
+      trigger: { x: 0, y: 40 },
+      fetch: { x: 240, y: 40.5 },
+      extract: { x: 480, y: -16 }
+    },
     isolation: 'shared_in_root',
     next_run_at: 1773046800000,
     consecutive_errors: 1,
@@ -360,6 +369,7 @@ const typed: Unbranded<WireFixture> = {
         nodes: [],
         edges: []
       },
+      layout: {},
       isolation: 'worktree_per_run',
       next_run_at: null,
       consecutive_errors: 0,

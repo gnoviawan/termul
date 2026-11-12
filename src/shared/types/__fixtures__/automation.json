@@ -140,6 +140,11 @@
         }
       ]
     },
+    "layout": {
+      "extract": { "x": 480.0, "y": -16.0 },
+      "fetch": { "x": 240.0, "y": 40.5 },
+      "trigger": { "x": 0.0, "y": 40.0 }
+    },
     "isolation": "shared_in_root",
     "next_run_at": 1773046800000,
     "consecutive_errors": 1,
@@ -289,6 +294,7 @@
         "nodes": [],
         "edges": []
       },
+      "layout": {},
       "isolation": "worktree_per_run",
       "next_run_at": null,
       "consecutive_errors": 0,

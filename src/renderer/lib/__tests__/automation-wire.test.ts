@@ -1,6 +1,12 @@
 import wire from '@shared/types/__fixtures__/automation.json'
 import { describe, expect, it } from 'vitest'
-import { parseApprovalOutput, parseRun, parseRunList, parseStepList } from '@/lib/automation-wire'
+import {
+  parseApprovalOutput,
+  parseAutomation,
+  parseRun,
+  parseRunList,
+  parseStepList
+} from '@/lib/automation-wire'
 
 describe('automation wire parser', () => {
   it('round-trips the fixture runs and steps, loops, merges, waits and approvals included', () => {
@@ -78,5 +84,21 @@ describe('automation wire parser', () => {
     expect(parseApprovalOutput({ resumed_at: 9 })).toBeNull()
     expect(parseApprovalOutput({ message: 'x', decision: 'maybe', decided_at: 9 })).toBeNull()
     expect(parseApprovalOutput({ message: 'x', decision: 'approved' })).toBeNull()
+  })
+
+  it('reads the node positions of an automation', () => {
+    expect(parseAutomation(wire.automation).layout).toEqual({
+      trigger: { x: 0, y: 40 },
+      fetch: { x: 240, y: 40.5 },
+      extract: { x: 480, y: -16 }
+    })
+  })
+
+  it('rejects a reply without a layout and a position that is not a number', () => {
+    const { layout: _, ...bare } = wire.automation
+    expect(() => parseAutomation(bare)).toThrow(/layout/)
+    const bad = structuredClone(wire.automation)
+    ;(bad.layout as Record<string, unknown>).fetch = { x: '240', y: 0 }
+    expect(() => parseAutomation(bad)).toThrow(/layout\.fetch\.x/)
   })
 })

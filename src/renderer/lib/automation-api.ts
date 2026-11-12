@@ -15,6 +15,7 @@ import type {
   AutomationChanged,
   AutomationDetail,
   AutomationId,
+  AutomationLayout,
   AutomationOp,
   AutomationRun,
   AutomationStep,
@@ -62,6 +63,8 @@ export interface AutomationTransport {
   get(id: AutomationId): Reply
   create(projectId: string, name: string): Reply
   applyOps(id: AutomationId, baseRevision: number, ops: AutomationOp[]): Reply
+  previewOps(id: AutomationId, baseRevision: number, ops: AutomationOp[]): Reply
+  setLayout(id: AutomationId, layout: AutomationLayout): Reply
   remove(id: AutomationId): Reply
   setEnabled(id: AutomationId, enabled: boolean): Reply
   approve(id: AutomationId, revision: number): Reply
@@ -87,6 +90,9 @@ export const desktopAutomationTransport: AutomationTransport = {
   get: (id) => invokeIpc('automation_get', { id }),
   create: (projectId, name) => invokeIpc('automation_create', { projectId, name }),
   applyOps: (id, baseRevision, ops) => invokeIpc('automation_apply_ops', { id, baseRevision, ops }),
+  previewOps: (id, baseRevision, ops) =>
+    invokeIpc('automation_preview_ops', { id, baseRevision, ops }),
+  setLayout: (id, layout) => invokeIpc('automation_set_layout', { id, layout }),
   remove: (id) => invokeIpc('automation_delete', { id }),
   setEnabled: (id, enabled) => invokeIpc('automation_set_enabled', { id, enabled }),
   approve: (id, revision) => invokeIpc('automation_approve', { id, revision }),
@@ -125,6 +131,9 @@ export const webAutomationTransport: AutomationTransport = {
   create: (projectId, name) => postJsonOnce(AUTOMATIONS, { project_id: projectId, name }),
   applyOps: (id, baseRevision, ops) =>
     postJsonOnce(`${AUTOMATIONS}/${seg(id)}/ops`, { base_revision: baseRevision, ops }),
+  previewOps: (id, baseRevision, ops) =>
+    postJsonOnce(`${AUTOMATIONS}/${seg(id)}/ops/preview`, { base_revision: baseRevision, ops }),
+  setLayout: (id, layout) => postJsonOnce(`${AUTOMATIONS}/${seg(id)}/layout`, { layout }),
   remove: (id) => deleteJson(`${AUTOMATIONS}/${seg(id)}`),
   setEnabled: (id, enabled) => postJsonOnce(`${AUTOMATIONS}/${seg(id)}/enabled`, { enabled }),
   approve: (id, revision) => postJsonOnce(`${AUTOMATIONS}/${seg(id)}/approve`, { revision }),
@@ -205,6 +214,30 @@ export function applyAutomationOps(
   ops: AutomationOp[]
 ): Promise<IpcResult<ApplyOpsResult>> {
   return parsed('apply_ops', transport().applyOps(id, baseRevision, ops), parseApplyOpsResult)
+}
+
+/**
+ * Dry run of {@link applyAutomationOps}: the would-be graph, issues and run
+ * policy, at `baseRevision`. Nothing is saved and no change is announced.
+ */
+export function previewAutomationOps(
+  id: AutomationId,
+  baseRevision: number,
+  ops: AutomationOp[]
+): Promise<IpcResult<AutomationDetail>> {
+  return parsed('preview_ops', transport().previewOps(id, baseRevision, ops), parseAutomationDetail)
+}
+
+/**
+ * Saves canvas node positions. Not an edit: the revision and the approval
+ * stay, and the host drops keys that are not `trigger` or a node. Positions
+ * are not logged.
+ */
+export function setAutomationLayout(
+  id: AutomationId,
+  layout: AutomationLayout
+): Promise<IpcResult<Automation>> {
+  return parsed('set_layout', transport().setLayout(id, layout), (data) => parseAutomation(data))
 }
 
 export async function deleteAutomation(id: AutomationId): Promise<IpcResult<void>> {

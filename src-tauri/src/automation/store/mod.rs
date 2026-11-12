@@ -15,7 +15,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::de::DeserializeOwned;
 
 use super::graph;
-use super::model::{wire_name, Automation, AutomationId, Issue, LastRun, Schedule};
+use super::model::{wire_name, Automation, AutomationId, Issue, LastRun, Layout, Schedule};
 use super::schedule::{compute_next_run, ScheduleError};
 
 pub use runs::{ParkEnd, SettleOutcome};
@@ -112,6 +112,8 @@ INSERT INTO automation_step_v4 (run_id, node_id, iteration, status, output_json,
 DROP TABLE automation_step;
 ALTER TABLE automation_step_v4 RENAME TO automation_step;
 CREATE INDEX idx_step_waiting ON automation_step(wait_until) WHERE status = 'waiting';
+"#, r#"
+ALTER TABLE automation ADD COLUMN layout_json TEXT NOT NULL DEFAULT '{}';
 "#];
 
 #[derive(Debug)]
@@ -229,8 +231,8 @@ impl AutomationStore {
             "INSERT INTO automation (id, project_id, name, revision, approved_revision, enabled,
                 trigger_json, graph_json, isolation, next_run_at, consecutive_errors,
                 schedule_error_count, unseen_failures, last_run_id, last_run_status,
-                last_run_finished_at, created_at, updated_at, deleted_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                last_run_finished_at, created_at, updated_at, deleted_at, layout_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 row.id.as_str(),
                 row.project_id,
@@ -251,6 +253,7 @@ impl AutomationStore {
                 row.created_at,
                 row.updated_at,
                 row.deleted_at,
+                serde_json::to_string(&row.layout)?,
             ],
         )?;
         Ok(row)
@@ -285,7 +288,10 @@ impl AutomationStore {
 
     /// Persists the authored fields of `automation` if the stored revision is
     /// still `base_revision`. Counters and run bookkeeping are left alone so a
-    /// concurrent settle is never overwritten.
+    /// concurrent settle is never overwritten. The layout is not authored
+    /// here: the stored one is kept, pruned to the new graph's nodes, so a
+    /// removed node's position goes with it and a concurrent `set_layout`
+    /// is never overwritten.
     pub fn save(
         &self,
         automation: &Automation,
@@ -300,12 +306,13 @@ impl AutomationStore {
         next.revision = automation.revision;
         next.trigger = automation.trigger.clone();
         next.graph = automation.graph.clone();
+        next.layout.retain_nodes(&next.graph);
         next.isolation = automation.isolation;
         next.updated_at = now_ms;
         next.next_run_at = armed_next_run(&next, now_ms);
         let changed = db.execute(
             "UPDATE automation SET name = ?1, revision = ?2, trigger_json = ?3, graph_json = ?4,
-                isolation = ?5, next_run_at = ?6, updated_at = ?7
+                isolation = ?5, next_run_at = ?6, updated_at = ?7, layout_json = ?10
              WHERE id = ?8 AND revision = ?9 AND deleted_at IS NULL",
             params![
                 next.name,
@@ -317,6 +324,7 @@ impl AutomationStore {
                 now_ms,
                 next.id.as_str(),
                 to_i64(base_revision),
+                serde_json::to_string(&next.layout)?,
             ],
         )?;
         if changed == 0 {
@@ -325,6 +333,22 @@ impl AutomationStore {
             });
         }
         Ok(next)
+    }
+
+    /// Replaces the stored layout with `layout` pruned to the stored graph's
+    /// nodes. Writes only `layout_json`: the revision, approval, schedule
+    /// slot and `updated_at` stay as they are, so it can never overwrite an
+    /// authored field a concurrent `save` is writing.
+    pub fn set_layout(&self, id: &AutomationId, mut layout: Layout) -> StoreResult<Automation> {
+        let db = self.conn()?;
+        let mut current = get_live(&db, id)?.ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+        layout.retain_nodes(&current.graph);
+        db.execute(
+            "UPDATE automation SET layout_json = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+            params![serde_json::to_string(&layout)?, id.as_str()],
+        )?;
+        current.layout = layout;
+        Ok(current)
     }
 
     pub fn soft_delete(&self, id: &AutomationId, now_ms: i64) -> StoreResult<bool> {
@@ -562,6 +586,7 @@ fn read_automation(row: &Row<'_>) -> rusqlite::Result<StoreResult<Automation>> {
     let created_at: i64 = row.get("created_at")?;
     let updated_at: i64 = row.get("updated_at")?;
     let deleted_at: Option<i64> = row.get("deleted_at")?;
+    let layout: String = row.get("layout_json")?;
     Ok((|| {
         let last_run = match (last_run_id, last_run_status, last_run_finished_at) {
             (Some(run_id), Some(status), Some(finished_at)) => Some(LastRun {
@@ -580,6 +605,7 @@ fn read_automation(row: &Row<'_>) -> rusqlite::Result<StoreResult<Automation>> {
             enabled,
             trigger: serde_json::from_str(&trigger)?,
             graph: serde_json::from_str(&graph)?,
+            layout: serde_json::from_str(&layout)?,
             isolation: from_wire(isolation)?,
             next_run_at,
             consecutive_errors,
