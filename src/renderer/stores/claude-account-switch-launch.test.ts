@@ -25,8 +25,7 @@ vi.mock('@/lib/acp-history-persistence', async (orig) => ({
 vi.mock('@/lib/acp-mcp-persistence', async (orig) => ({
   ...(await orig<typeof import('@/lib/acp-mcp-persistence')>()),
   loadMcpServers: vi.fn(async () => []),
-  saveMcpServers: vi.fn(async () => {}),
-  syncMcpRegistryToProjectBestEffort: vi.fn(async () => {})
+  saveMcpServers: vi.fn(async () => {})
 }))
 vi.mock('@/stores/workspace-store', () => ({
   getAllLeafPanes: () => [],

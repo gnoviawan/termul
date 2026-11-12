@@ -16,10 +16,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 pub use client::RmcpClient;
-pub use registry::{
-    desktop_store_servers, parse_registry, project_file_servers, McpServerEntry,
-    ProjectMcpServers, DESKTOP_STORE_KEY,
-};
+pub use registry::{parse_registry, store_servers, McpServerEntry, ProjectMcpServers};
 pub use tools::{
     Listing, Lookup, McpTools, OnListingChanged, ServerStatus, ServerTools, LISTING_DEADLINE,
 };

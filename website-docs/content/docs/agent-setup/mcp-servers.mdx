@@ -3,8 +3,6 @@ title: MCP servers
 description: Give your agents extra tools by adding MCP servers, such as an issue tracker, a database or a docs search.
 ---
 
-import { Tab, Tabs } from 'fumadocs-ui/components/tabs'
-
 An MCP server is a small program or web service that gives an agent extra tools, for example "list open issues" or "query the database". MCP stands for Model Context Protocol. You add a server once in Troupe, and Troupe offers it to every new agent chat.
 
 ## Add an MCP server
@@ -150,22 +148,17 @@ Servers whose publisher lists a logo show it next to their name. A server with n
 3. Read the review. It shows the exact command and arguments, or the URL, that Troupe will save, with each environment variable and header. Click **Approve** to install, or **Cancel** to save nothing.
 4. Troupe adds the server to your list, turned on, and checks that it responds. If the server asks you to sign in, click **Sign in** to open its sign-in page in your browser.
 
-A server you installed shows **Installed** in the catalog. **Install** stays off for servers that aren't installable, and on a connection that can only view. In the browser version, open a project first, because each project has its own list.
+A server you installed shows **Installed** in the catalog. **Install** stays off for servers that aren't installable, and on a connection that can only view.
 
 If the review waits too long, or the server's details change before you approve, Troupe saves nothing and offers **Start over**.
 
 <Callout type="warn">Troupe saves the values you enter, API keys included, as plain text with the server's settings.</Callout>
 
-## Global and per-project servers
+## One list for every project
 
-<Tabs items={['Desktop app', 'Browser version']}>
-  <Tab value="Desktop app">
-    The list in Settings is one list for the whole app. Every project uses the same servers.
-  </Tab>
-  <Tab value="Browser version">
-    Each project has its own list. Settings shows the list of the project that is open. Troupe saves it in the project folder, in `.termul/mcp-servers.json`.
-  </Tab>
-</Tabs>
+The list in Settings is one list for the whole app or server. Every project uses the same servers, including projects you add later.
+
+<Callout>On a server that kept one list per project before, Troupe merges those lists into the one list the first time the new version starts. Projects you add after that, and old project files they bring, are not merged. A server that is in two lists is kept once, with the settings from the first project, in the order Troupe lists projects. Settings that differ in the later copy are dropped. If two different servers have the same name, the second one gets a number, such as `GitHub-2`. The old `.termul/mcp-servers.json` files stay in the project folders, but Troupe no longer reads them.</Callout>
 
 ## Choose servers for a new chat
 

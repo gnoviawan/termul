@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useProjectStore } from '@/stores/project-store'
 
 const { toastError, toastWarning } = vi.hoisted(() => ({
   toastError: vi.fn(),
@@ -57,8 +56,7 @@ vi.mock('@/lib/acp-mcp-persistence', async (orig) => {
   return {
     ...actual,
     loadMcpServers: vi.fn(async () => []),
-    saveMcpServers: vi.fn(async () => {}),
-    syncMcpRegistryToProjectBestEffort: vi.fn(async () => {})
+    saveMcpServers: vi.fn(async () => {})
   }
 })
 
@@ -1302,72 +1300,8 @@ describe('acp-store', () => {
       expect.arrayContaining([
         expect.objectContaining({ id: 'm2' }),
         expect.objectContaining({ id: 'm3' })
-      ]),
-      expect.any(String)
-    )
-  })
-
-  it('syncMcpRegistryToProjectFile mirrors the current registry to the project file (CAP-7)', async () => {
-    const persistence = await import('@/lib/acp-mcp-persistence')
-    vi.mocked(persistence.syncMcpRegistryToProjectBestEffort).mockClear()
-    useAcpStore.setState({
-      mcpServers: [
-        { id: 'm1', type: 'stdio', name: 'fs', command: 'npx', enabled: true },
-        { id: 'm2', type: 'http', name: 'api', url: 'https://x.test/mcp', enabled: true }
-      ],
-      mcpServersLoaded: true
-    })
-    await useAcpStore.getState().syncMcpRegistryToProjectFile('proj-sync')
-    expect(vi.mocked(persistence.syncMcpRegistryToProjectBestEffort)).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(persistence.syncMcpRegistryToProjectBestEffort)).toHaveBeenCalledWith(
-      'proj-sync',
-      expect.arrayContaining([
-        expect.objectContaining({ id: 'm1' }),
-        expect.objectContaining({ id: 'm2' })
       ])
     )
-  })
-
-  it('syncMcpRegistryToProjectFile requested before the registry loaded mirrors once it loads', async () => {
-    const persistence = await import('@/lib/acp-mcp-persistence')
-    vi.mocked(persistence.syncMcpRegistryToProjectBestEffort).mockClear()
-    vi.mocked(persistence.loadMcpServers).mockResolvedValueOnce([
-      { id: 'm9', type: 'stdio', name: 'late', command: 'node', enabled: true }
-    ])
-    useAcpStore.setState({ mcpServers: [], mcpServersLoaded: false })
-
-    await useAcpStore.getState().syncMcpRegistryToProjectFile('proj-late')
-    // Not loaded yet: nothing is mirrored (an empty list would clobber the file).
-    expect(vi.mocked(persistence.syncMcpRegistryToProjectBestEffort)).not.toHaveBeenCalled()
-
-    await useAcpStore.getState().loadMcpServers()
-    expect(vi.mocked(persistence.syncMcpRegistryToProjectBestEffort)).toHaveBeenCalledTimes(1)
-    // The pending mirror keeps the project it named, not the active one.
-    expect(vi.mocked(persistence.syncMcpRegistryToProjectBestEffort)).toHaveBeenCalledWith(
-      'proj-late',
-      [expect.objectContaining({ id: 'm9' })]
-    )
-  })
-
-  it('registry load and save address the host file through the active project id', async () => {
-    const persistence = await import('@/lib/acp-mcp-persistence')
-    vi.mocked(persistence.loadMcpServers).mockClear()
-    vi.mocked(persistence.saveMcpServers).mockClear()
-    const previousProjectId = useProjectStore.getState().activeProjectId
-    useProjectStore.setState({ activeProjectId: 'proj-active' })
-    try {
-      await useAcpStore.getState().loadMcpServers()
-      expect(vi.mocked(persistence.loadMcpServers)).toHaveBeenCalledWith('proj-active')
-      await useAcpStore
-        .getState()
-        .saveMcpServer({ id: 'm1', type: 'stdio', name: 'fs', command: 'npx' })
-      expect(vi.mocked(persistence.saveMcpServers)).toHaveBeenCalledWith(
-        [expect.objectContaining({ id: 'm1' })],
-        'proj-active'
-      )
-    } finally {
-      useProjectStore.setState({ activeProjectId: previousProjectId })
-    }
   })
 
   it('OAuth connect/status/disconnect pass the named project and the server URL to the facade', async () => {

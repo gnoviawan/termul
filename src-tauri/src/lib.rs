@@ -1780,11 +1780,9 @@ pub fn run() {
                 let registry = Arc::clone(&project_registry);
                 Arc::new(move |project_id| registry.canonical_root(project_id))
             };
-            // `mcp_tool` nodes call the desktop's one MCP server list, kept in
-            // the web store; the project file is only its mirror.
-            let mcp_servers = automation::mcp::desktop_store_servers(
+            // `mcp_tool` nodes call the host's one MCP server list.
+            let mcp_servers = automation::mcp::store_servers(
                 handle.state::<remote::SharedLiveData>().store.clone(),
-                project_roots.clone(),
             );
             match automation::service::AutomationService::open(
                 &app_data_dir,
@@ -2281,7 +2279,6 @@ pub fn run() {
             commands::remote_server_status,
             commands::project_registry_import,
             commands::remote_sync_chat_history,
-            commands::remote_sync_mcp_registry,
             // Desktop ACP renderer-history storage
             commands::acp_history_list,
             commands::acp_history_get,
