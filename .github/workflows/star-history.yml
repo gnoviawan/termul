@@ -29,7 +29,7 @@ jobs:
         uses: star-history/star-history@04301c64f801e6fcfde8a1d0da021825ec6100af
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          repo: gnoviawan/termul
+          repo: gnoviawan/troupe
           output: img/star-history.svg
 
       - name: Commit Star History SVG

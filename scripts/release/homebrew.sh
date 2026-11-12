@@ -199,10 +199,10 @@ cask "$token" do
   sha256 arm:   "$arm_sha256",
          intel: "$intel_sha256"
 
-  url "https://github.com/gnoviawan/termul/releases/download/v#{version}/${name// /.}_#{version}_#{arch}.dmg"
+  url "https://github.com/gnoviawan/troupe/releases/download/v#{version}/${name// /.}_#{version}_#{arch}.dmg"
   name "$name"
   desc "Terminal-native workspace and CLI agent manager"
-  homepage "https://github.com/gnoviawan/termul"
+  homepage "https://github.com/gnoviawan/troupe"
 
   auto_updates true
 
