@@ -113,3 +113,27 @@ async fn an_unknown_session_or_a_malformed_payload_is_refused() {
     assert_eq!(host.relay.chat_reads().get("no-such-session"), None);
     assert_eq!(host.relay.chat_reads().get(SESSION), None);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_deleted_chat_loses_its_marker_on_both_delete_paths() {
+    let host = Host::new(|_, _| {});
+    emit_events(&host, 6);
+    let mut reader = host.connect();
+    reader.authenticate().await;
+
+    mark(&mut reader, "m1", SESSION, 5).await;
+    assert_eq!(
+        host.relay.chat_reads().get(SESSION).map(|mark| mark.seq),
+        Some(5)
+    );
+    host.relay.forget_chat_activity(SESSION);
+    assert_eq!(host.relay.chat_reads().get(SESSION), None);
+
+    mark(&mut reader, "m2", SESSION, 4).await;
+    assert_eq!(
+        host.relay.chat_reads().get(SESSION).map(|mark| mark.seq),
+        Some(4)
+    );
+    host.relay.forget_session(SESSION).await;
+    assert_eq!(host.relay.chat_reads().get(SESSION), None);
+}

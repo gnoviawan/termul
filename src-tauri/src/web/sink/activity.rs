@@ -59,8 +59,10 @@ impl WsRelaySink {
         }
     }
 
-    /// The session was deleted: drop its record and tell the watchers.
+    /// The session was deleted: drop its record and read marker, and tell the
+    /// watchers.
     pub(super) fn forget_activity(&self, sid: &str) {
+        self.chat_reads.forget(sid);
         if self.chat_activity.forget(sid) {
             tracing::info!(
                 session = %crate::logging::redact_session_id(sid),
