@@ -17,6 +17,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { type CanvasNodeId, drawableEdges, edgeKey, placeNodes } from '../layout'
 import type { CardData } from '../nodes/NodeCard'
 import {
+  ADD_STUB_REACH,
   CARD,
   HANDLE_LABEL_WIDTH,
   HANDLE_SIZE,
@@ -225,10 +226,18 @@ export function reuseUnchanged<T extends CardNode | PortEdge>(prev: T[], next: T
   return same ? prev : out
 }
 
+/** How far past its right edge a card draws: an `error` label beside its handle, or a "+" on an open output. */
+function rightReach(data: CardData): number {
+  const ports = OUTPUT_PORTS[data.kind === TRIGGER ? TRIGGER : data.node.spec.kind]
+  const labelled = ports.some((port) => PORT_PRESENTATION[port].label === 'handle')
+  return Math.max(labelled ? HANDLE_LABEL_WIDTH : 0, data.open.length > 0 ? ADD_STUB_REACH : 0)
+}
+
 /**
  * The viewport that centres `card` in the part of a `width` x `height` canvas
- * left of `rightInset`, or null when the card (and the config slots an agent
- * or MCP tool card hangs below it) is already fully there.
+ * left of `rightInset`, or null when the card is already fully there: with
+ * the config slots an agent or MCP tool card hangs below it, and what it
+ * draws right of itself, so a new step's "+" is never under the inspector.
  */
 export function panToShow(
   card: Pick<CardNode, 'position' | 'data'>,
@@ -244,14 +253,25 @@ export function panToShow(
   if (
     left >= 0 &&
     top >= 0 &&
-    left + CARD.width * zoom <= free &&
+    left + (CARD.width + rightReach(card.data)) * zoom <= free &&
     top + tall * zoom <= size.height
   ) {
     return null
   }
+  return centreOn(card, zoom, size)
+}
+
+/** The viewport at `zoom` that centres `card`, slots included, in the canvas left of `rightInset`. */
+export function centreOn(
+  card: Pick<CardNode, 'position' | 'data'>,
+  zoom: number,
+  size: { width: number; height: number; rightInset: number }
+): Viewport {
+  const tall =
+    CARD.height + (card.data.kind === 'step' && hasSlots(card.data.node.spec) ? SLOT_DEPTH : 0)
   return {
     zoom,
-    x: free / 2 - (card.position.x + CARD.width / 2) * zoom,
+    x: (size.width - size.rightInset) / 2 - (card.position.x + CARD.width / 2) * zoom,
     y: size.height / 2 - (card.position.y + tall / 2) * zoom
   }
 }

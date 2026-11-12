@@ -36,6 +36,7 @@ import { FlowToolbar, type Tool } from './FlowToolbar'
 import { type ConnectFrom, EdgeHoverContext, type FlowEdit, FlowEditContext } from './flow-edit'
 import {
   type CardNode,
+  centreOn,
   contentBounds,
   type PortEdge,
   panToShow,
@@ -101,9 +102,19 @@ function ReadableStart({ phone }: { phone: boolean }): null {
   return null
 }
 
-/** Centres and selects the card an issue points at. */
-function FocusCard({ focus }: { focus: { id: string; nonce: number } | null }): null {
+/**
+ * Selects the card an issue, a new step or a step list row points at, and
+ * centres it in the canvas the floating inspector leaves free.
+ */
+function FocusCard({
+  focus,
+  rightInset
+}: {
+  focus: { id: string; nonce: number } | null
+  rightInset: number
+}): null {
   const flow = useReactFlow<CardNode, PortEdge>()
+  const store = useStoreApi<CardNode, PortEdge>()
   // A step just added reaches React Flow a render later: wait for its card.
   const present = useStore((s) => (focus ? s.nodeLookup.has(focus.id) : false))
   const done = useRef<number | null>(null)
@@ -113,12 +124,12 @@ function FocusCard({ focus }: { focus: { id: string; nonce: number } | null }): 
     if (!node) return
     done.current = focus.nonce
     flow.setNodes((nodes) => nodes.map((n) => ({ ...n, selected: n.id === focus.id })))
-    void flow.setCenter(
-      node.position.x + (node.width ?? 0) / 2,
-      node.position.y + (node.height ?? 0) / 2,
-      { zoom: Math.max(flow.getZoom(), 0.9), duration: 200 }
+    const { width, height } = store.getState()
+    void flow.setViewport(
+      centreOn(node, Math.max(flow.getZoom(), 0.9), { width, height, rightInset }),
+      { duration: 200 }
     )
-  }, [flow, focus, present])
+  }, [flow, store, focus, present, rightInset])
   return null
 }
 
@@ -596,7 +607,7 @@ function Flow({
             )}
             <ReadableStart phone={phone} />
             <OpenOn id={openOn} rightInset={rightInset} />
-            <FocusCard focus={focus} />
+            <FocusCard focus={focus} rightInset={rightInset} />
             <KeepInView id={inspect?.id ?? null} rightInset={rightInset} />
           </ReactFlow>
         </div>

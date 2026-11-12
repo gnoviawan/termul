@@ -1,15 +1,15 @@
-import type { AutomationNode, NodeId, NodeSpec } from '@shared/types/automation.types'
+import type { AutomationNode, NodeId, NodeSpec, Port } from '@shared/types/automation.types'
 import { describe, expect, it } from 'vitest'
 import { CARD, SLOT_DEPTH } from '../ports'
 import { panToShow } from './flow-graph'
 
-const step = (spec: NodeSpec, x: number, y: number) => ({
+const step = (spec: NodeSpec, x: number, y: number, open: Port[] = []) => ({
   position: { x, y },
   data: {
     kind: 'step' as const,
     node: { id: 'a' as NodeId, label: 'A', spec } satisfies AutomationNode,
     issues: 0,
-    open: []
+    open
   }
 })
 const agent: NodeSpec = {
@@ -47,6 +47,17 @@ describe('panToShow', () => {
       zoom: 1,
       x: (800 - 356) / 2 - (10 + CARD.width / 2),
       y: 200 - (y + (CARD.height + SLOT_DEPTH) / 2)
+    })
+  })
+
+  it('pans a new step whose "+" would sit under the inspector clear of it', () => {
+    // The card ends 10 px left of the inspector; its "+" would reach under it.
+    const x = 800 - 356 - CARD.width - 10
+    expect(panToShow(step(wait, x, 10), view, size)).toBeNull()
+    expect(panToShow(step(wait, x, 10, ['out']), view, size)).toEqual({
+      zoom: 1,
+      x: (800 - 356) / 2 - (x + CARD.width / 2),
+      y: 200 - (10 + CARD.height / 2)
     })
   })
 })
