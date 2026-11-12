@@ -37,6 +37,11 @@ fn err(reply: &WsReply) -> (String, String) {
     (err.code.clone(), err.message.clone())
 }
 
+fn canonical_str(path: &(impl AsRef<Path> + ?Sized)) -> String {
+    let canonical = path.as_ref().canonicalize().unwrap();
+    crate::path_validation::strip_verbatim_prefix(canonical.to_str().unwrap()).into_owned()
+}
+
 fn registry_with_default(id: &str, root: &Path) -> Arc<ProjectRegistry> {
     let registry = ProjectRegistry::with_roots_for_test(&[(id, root)]);
     assert!(registry.set_default_project(id));
@@ -136,10 +141,7 @@ fn resolve_list_sessions_cwd_uses_the_project_folder_not_a_client_path() {
         Some(worktree.to_str().unwrap()),
     )
     .expect("a folder inside the project is the active folder");
-    assert_eq!(
-        inside.as_deref(),
-        Some(worktree.canonicalize().unwrap().to_str().unwrap())
-    );
+    assert_eq!(inside.as_deref(), Some(canonical_str(&worktree).as_str()));
 
     let desktop =
         resolve_list_sessions_cwd(Carrier::Ipc, &registry, None, Some("/tmp/not-a-project"))
@@ -187,10 +189,7 @@ fn resolve_list_sessions_cwd_without_project_id_accepts_any_registered_project()
         Some(inside_b.to_str().unwrap()),
     )
     .expect("a cwd inside a non-default registered project is allowed");
-    assert_eq!(
-        resolved.as_deref(),
-        Some(inside_b.canonicalize().unwrap().to_str().unwrap())
-    );
+    assert_eq!(resolved.as_deref(), Some(canonical_str(&inside_b).as_str()));
 }
 
 /// `..` (including doubled slashes and a climb through a subfolder) must not
