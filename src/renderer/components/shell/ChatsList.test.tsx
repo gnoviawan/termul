@@ -163,7 +163,7 @@ describe('ChatsList scope and order', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Import chats' }))
 
-    expect(screen.getByRole('dialog', { name: 'Import chats' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Import chats from Claude' })).toBeInTheDocument()
     await waitFor(() =>
       expect(listImportableSessions).toHaveBeenCalledWith(
         'cfg',

@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import type { SessionInfo } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
 import { useAcpStore } from '@/stores/acp-store'
+import type { ImportSessionOutcome } from '@/stores/acp-store/types'
 import { CLAUDE_AGENT_CONFIG_ID } from '@/stores/claude-account-switch'
 
 export type ImportChatsPhase =
@@ -12,11 +13,37 @@ export type ImportChatsPhase =
   | { kind: 'unavailable' }
   | { kind: 'error'; message: string }
 
+/** Counts of the last import run that left chats behind (failed or stopped). */
+export interface ImportRunSummary {
+  imported: number
+  failed: number
+  skipped: number
+}
+
+/**
+ * The sentence a failed import shows. The host's message carries internal
+ * codes (`ACP_IMPORT_INCOMPLETE: …`) that stay in the log, never in the UI.
+ */
+export function importFailureText(message: string | undefined): string {
+  const raw = message ?? ''
+  if (raw.includes('ACP_IMPORT_INCOMPLETE')) return "Part of this chat's history could not be read."
+  if (/timed out|timeout|no answer within/i.test(raw)) return 'The agent took too long to respond.'
+  return 'This chat could not be imported.'
+}
+
+/** "2 imported, 1 failed, 3 skipped": the imported count always, the rest when non-zero. */
+export function formatImportSummary({ imported, failed, skipped }: ImportRunSummary): string {
+  const parts = [`${imported} imported`]
+  if (failed > 0) parts.push(`${failed} failed`)
+  if (skipped > 0) parts.push(`${skipped} skipped`)
+  return parts.join(', ')
+}
+
 interface UseImportChatsOptions {
   open: boolean
   cwd: string
   projectId: string
-  /** Called once an import run finished with every chat imported. */
+  /** Called once an import run finished with every chosen chat imported. */
   onDone: () => void
 }
 
@@ -30,8 +57,20 @@ export interface ImportChats {
   selectAll: () => void
   clearSelection: () => void
   importing: boolean
+  /** A stop was asked for: the chat in flight finishes, no other starts. */
+  stopping: boolean
+  requestStop: () => void
   progress: number
-  failure: string | null
+  /** Set after a run that failed or was stopped; cleared by the next run. */
+  summary: ImportRunSummary | null
+  /** Chats of the run in progress; empty when idle. */
+  runIds: readonly string[]
+  /** How each chat of the run in progress ended so far. */
+  rowStatus: ReadonlyMap<string, 'done' | 'failed'>
+  /** The chat being imported right now. */
+  inFlightId: string | null
+  /** User-facing reason per chat that failed in the last run. */
+  rowErrors: ReadonlyMap<string, string>
   importSelected: () => Promise<void>
   retry: () => void
 }
@@ -69,8 +108,14 @@ export function useImportChats({
   const [phase, setPhase] = useState<ImportChatsPhase>({ kind: 'loading' })
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [importing, setImporting] = useState(false)
+  const [stopping, setStopping] = useState(false)
+  const stopRef = useRef(false)
   const [progress, setProgress] = useState(0)
-  const [failure, setFailure] = useState<string | null>(null)
+  const [summary, setSummary] = useState<ImportRunSummary | null>(null)
+  const [rowErrors, setRowErrors] = useState<ReadonlyMap<string, string>>(new Map())
+  // The chats of the run in progress, in import order, and how each ended.
+  const [runIds, setRunIds] = useState<readonly string[]>([])
+  const [rowStatus, setRowStatus] = useState<ReadonlyMap<string, 'done' | 'failed'>>(new Map())
   const [reloadTick, setReloadTick] = useState(0)
   // A listing started for an older config, cwd or open state must not land.
   const listingRef = useRef(0)
@@ -112,7 +157,8 @@ export function useImportChats({
       listingRef.current += 1
       return
     }
-    setFailure(null)
+    setSummary(null)
+    setRowErrors(new Map())
     void reload(true)
   }, [open, reload, reloadTick])
 
@@ -131,41 +177,105 @@ export function useImportChats({
 
   const clearSelection = useCallback(() => setSelected(new Set()), [])
 
+  const requestStop = useCallback(() => {
+    stopRef.current = true
+    setStopping(true)
+  }, [])
+
   const importSelected = useCallback(async (): Promise<void> => {
     if (phase.kind !== 'ready' || importing) return
     const chosen = phase.sessions.filter((s) => selected.has(s.sessionId))
     if (chosen.length === 0) return
     setImporting(true)
+    stopRef.current = false
+    setStopping(false)
     setProgress(0)
-    setFailure(null)
+    setSummary(null)
+    setRowErrors(new Map())
+    setRunIds(chosen.map((s) => s.sessionId))
+    setRowStatus(new Map())
     const listing = listingRef.current
+    const finished = new Map<string, ImportSessionOutcome>()
+    let thrown = false
     try {
       const outcomes = await importAgentSessions({
         agentId: phase.agentId,
         cwd,
         projectId,
         sessions: chosen,
-        onProgress: setProgress
+        onProgress: (done, outcome) => {
+          finished.set(outcome.sessionId, outcome)
+          setProgress(done)
+          setRowStatus((prev) =>
+            new Map(prev).set(outcome.sessionId, outcome.status === 'failed' ? 'failed' : 'done')
+          )
+        },
+        shouldStop: () => stopRef.current
       })
+      for (const outcome of outcomes) finished.set(outcome.sessionId, outcome)
+    } catch (error) {
+      // The run itself failed, not one chat: the raw error goes to the log and
+      // every chat without an outcome counts as failed.
+      thrown = true
+      void logFrontendError({
+        level: 'warn',
+        source: 'ImportChatsDialog.import',
+        message: `Import run failed: ${error instanceof Error ? error.message : String(error)}`
+      })
+    }
+    try {
+      const outcomes = [...finished.values()]
       const imported = outcomes.filter((o) => o.status === 'imported').length
       const failed = outcomes.filter((o) => o.status === 'failed')
+      const unfinished = chosen.filter((s) => !finished.has(s.sessionId))
       if (imported > 0)
         toast.success(imported === 1 ? 'Imported 1 chat' : `Imported ${imported} chats`)
+      for (const outcome of failed) {
+        // The raw host message (with its internal code) goes to the log only.
+        void logFrontendError({
+          level: 'warn',
+          source: 'ImportChatsDialog.import',
+          message: `Importing agent session ${outcome.sessionId} failed: ${outcome.message ?? 'no message'}`
+        })
+      }
       // The user moved on (another working copy or agent) while this ran: a
       // refresh now would replace the newer listing with the old one's.
       if (listing !== listingRef.current) return
-      if (failed.length === 0) {
+      if (failed.length === 0 && unfinished.length === 0) {
         onDone()
         return
       }
-      setFailure(
-        `${failed.length === 1 ? '1 chat' : `${failed.length} chats`} could not be imported. ${failed[0]?.message ?? ''}`.trim()
+      const errors = new Map(failed.map((o) => [o.sessionId, importFailureText(o.message)]))
+      if (thrown) for (const s of unfinished) errors.set(s.sessionId, importFailureText(undefined))
+      setSummary({
+        imported,
+        failed: errors.size,
+        skipped: thrown ? 0 : unfinished.length
+      })
+      setRowErrors(errors)
+      // Chats that came in leave the list now; the refresh confirms it.
+      setPhase((prev) =>
+        prev.kind === 'ready'
+          ? {
+              ...prev,
+              sessions: prev.sessions.filter((s) => {
+                const outcome = finished.get(s.sessionId)
+                return !outcome || outcome.status === 'failed'
+              })
+            }
+          : prev
       )
       await reload(false)
     } finally {
       setImporting(false)
+      setStopping(false)
+      setRunIds([])
+      setRowStatus(new Map())
+      stopRef.current = false
     }
   }, [phase, importing, selected, importAgentSessions, cwd, projectId, onDone, reload])
+
+  const inFlightId = importing ? (runIds[progress] ?? null) : null
 
   return {
     configs,
@@ -177,8 +287,14 @@ export function useImportChats({
     selectAll,
     clearSelection,
     importing,
+    stopping,
+    requestStop,
     progress,
-    failure,
+    summary,
+    rowErrors,
+    runIds,
+    rowStatus,
+    inFlightId,
     importSelected,
     retry: () => setReloadTick((tick) => tick + 1)
   }

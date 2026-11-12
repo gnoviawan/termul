@@ -303,7 +303,7 @@ describe('importAgentSessions', () => {
       .mockRejectedValueOnce(new Error('agent exploded'))
     const loadSessionIndex = vi.fn(async () => {})
     useAcpStore.setState({ loadSessionIndex })
-    const progress: number[] = []
+    const progress: [number, string][] = []
 
     const outcomes = await useAcpStore.getState().importAgentSessions({
       agentId: 'agent-1',
@@ -314,7 +314,7 @@ describe('importAgentSessions', () => {
         { sessionId: 'b', cwd: '/work', title: 'B' },
         { sessionId: 'c', cwd: '/work', title: 'C' }
       ],
-      onProgress: (done) => progress.push(done)
+      onProgress: (done, outcome) => progress.push([done, outcome.status])
     })
 
     expect(outcomes).toEqual([
@@ -322,7 +322,11 @@ describe('importAgentSessions', () => {
       { sessionId: 'b', status: 'duplicate' },
       { sessionId: 'c', status: 'failed', message: 'agent exploded' }
     ])
-    expect(progress).toEqual([1, 2, 3])
+    expect(progress).toEqual([
+      [1, 'imported'],
+      [2, 'duplicate'],
+      [3, 'failed']
+    ])
     expect(importOne).toHaveBeenNthCalledWith(1, {
       agentId: 'agent-1',
       sessionId: 'a',
@@ -340,5 +344,31 @@ describe('importAgentSessions', () => {
       'text',
       expect.any(Function)
     )
+  })
+
+  it('finishes the session in flight and starts no other once asked to stop', async () => {
+    let stop = false
+    const importOne = vi.spyOn(acpApi, 'importAgentSession').mockImplementation(async () => {
+      stop = true
+      return {} as never
+    })
+    const loadSessionIndex = vi.fn(async () => {})
+    useAcpStore.setState({ loadSessionIndex })
+
+    const outcomes = await useAcpStore.getState().importAgentSessions({
+      agentId: 'agent-1',
+      cwd: '/work',
+      projectId: 'p1',
+      sessions: [
+        { sessionId: 'a', cwd: '/work', title: 'A' },
+        { sessionId: 'b', cwd: '/work', title: 'B' },
+        { sessionId: 'c', cwd: '/work', title: 'C' }
+      ],
+      shouldStop: () => stop
+    })
+
+    expect(outcomes).toEqual([{ sessionId: 'a', status: 'imported' }])
+    expect(importOne).toHaveBeenCalledTimes(1)
+    expect(loadSessionIndex).toHaveBeenCalledTimes(1)
   })
 })

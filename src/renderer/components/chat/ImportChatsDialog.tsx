@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from 'react'
-import { useId, useRef } from 'react'
-import { Check } from '@/components/icons'
+import { useEffect, useId, useRef, useState } from 'react'
+import { AlertCircle, Check, Minus } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -20,10 +20,11 @@ import {
   SelectValue
 } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
+import { useIsMobile } from '@/hooks/use-mobile'
 import type { SessionInfo } from '@/lib/acp-api'
-import { formatChatCreatedTime } from '@/lib/relative-time'
+import { formatChatCreatedTime, formatChatFullTime } from '@/lib/relative-time'
 import { cn } from '@/lib/utils'
-import { type ImportChats, useImportChats } from './use-import-chats'
+import { formatImportSummary, type ImportChats, useImportChats } from './use-import-chats'
 
 interface ImportChatsDialogProps {
   open: boolean
@@ -33,60 +34,146 @@ interface ImportChatsDialogProps {
   projectId: string
 }
 
-function sessionTitle(session: SessionInfo): string {
-  return session.title?.trim() || 'Untitled chat'
+function sessionTitle(session: SessionInfo): string | null {
+  return session.title?.trim() || null
+}
+
+type CheckState = 'off' | 'mixed' | 'on'
+
+/** The drawn box of a checkbox; the control that owns the state carries its role. */
+function CheckboxMark({ state }: { state: CheckState }): React.JSX.Element {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        'flex size-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors duration-150 ease-out',
+        state === 'off'
+          ? 'border-foreground/30 bg-transparent'
+          : 'border-transparent bg-primary-fill text-primary-foreground'
+      )}
+    >
+      {state === 'on' && <Check size={12} strokeWidth={2.5} />}
+      {state === 'mixed' && <Minus size={12} strokeWidth={2.5} />}
+    </span>
+  )
+}
+
+/** Where a row stands in the import run in progress. */
+type RowRun = 'idle' | 'outside' | 'queued' | 'in-flight' | 'done' | 'failed'
+
+function rowRun(chats: ImportChats, sessionId: string): RowRun {
+  if (!chats.importing) return 'idle'
+  if (sessionId === chats.inFlightId) return 'in-flight'
+  const status = chats.rowStatus.get(sessionId)
+  if (status) return status
+  return chats.runIds.includes(sessionId) ? 'queued' : 'outside'
+}
+
+/** The left slot of a row: its checkbox, or the run state of its chat. */
+function RowMark({ run, selected }: { run: RowRun; selected: boolean }): React.JSX.Element {
+  // A fixed size-4 slot, so the title never shifts as the mark changes.
+  if (run === 'in-flight')
+    return (
+      <span className="flex size-4 shrink-0 items-center justify-center">
+        <Spinner size={14} decorative />
+      </span>
+    )
+  if (run === 'done')
+    return (
+      <span className="flex size-4 shrink-0 items-center justify-center text-success">
+        <Check size={16} strokeWidth={2} aria-label="Imported" />
+      </span>
+    )
+  return <CheckboxMark state={selected ? 'on' : 'off'} />
 }
 
 function SessionOption({
   session,
   selected,
-  disabled,
+  run,
   tabbable,
+  error,
   onToggle,
+  onFocus,
   onKeyDown
 }: {
   session: SessionInfo
   selected: boolean
-  disabled: boolean
+  run: RowRun
   tabbable: boolean
+  error: string | undefined
   onToggle: () => void
+  onFocus: () => void
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
 }): React.JSX.Element {
-  const updated = session.updatedAt ? Date.parse(session.updatedAt) : Number.NaN
-  const time = formatChatCreatedTime(Number.isFinite(updated) ? updated : undefined)
+  const parsed = session.updatedAt ? Date.parse(session.updatedAt) : Number.NaN
+  const updated = Number.isFinite(parsed) ? parsed : undefined
+  const title = sessionTitle(session)
+  // An untitled row has only its time to tell it apart: show the full one.
+  const time = title ? formatChatCreatedTime(updated) : formatChatFullTime(updated)
+  const errorId = useId()
+  const disabled = run !== 'idle'
   return (
     <div
       role="option"
       aria-selected={selected}
       aria-disabled={disabled || undefined}
+      aria-describedby={error ? errorId : undefined}
       tabIndex={tabbable ? 0 : -1}
       data-import-option
       onClick={disabled ? undefined : onToggle}
+      onFocus={onFocus}
       onKeyDown={onKeyDown}
       className={cn(
-        'flex min-h-9 cursor-default items-center gap-3 rounded-lg px-3 py-2 text-xs outline-hidden transition-colors duration-150 ease-out pointer-coarse:min-h-11',
+        'flex min-h-9 cursor-default items-center gap-3 rounded-lg px-3 py-2 text-xs outline-hidden transition-[background-color,opacity] duration-150 ease-out pointer-coarse:min-h-11',
         FOCUS_RING_CLASS,
-        selected
-          ? 'bg-foreground/[0.03] ring-1 ring-inset ring-foreground/[0.12]'
-          : 'hover:bg-foreground/[0.02]',
-        disabled && 'opacity-60'
+        error
+          ? 'bg-destructive/[0.06]'
+          : selected
+            ? 'bg-foreground/[0.03]'
+            : 'hover:bg-foreground/[0.02]',
+        run === 'outside' && 'opacity-50'
       )}
     >
-      <span className="min-w-0 flex-1 truncate font-medium text-foreground">
-        {sessionTitle(session)}
+      <RowMark run={run} selected={selected} />
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span
+          className={cn(
+            'truncate font-medium',
+            title ? 'text-foreground' : 'text-muted-foreground'
+          )}
+        >
+          {title ?? 'Untitled chat'}
+        </span>
+        {error && (
+          <span id={errorId} className="flex items-center gap-1 text-2xs text-destructive">
+            <AlertCircle size={12} aria-hidden className="shrink-0" />
+            {error}
+          </span>
+        )}
       </span>
-      {time && <span className="shrink-0 tabular-nums text-2xs text-muted-foreground">{time}</span>}
-      <span className="flex size-4 shrink-0 justify-center text-foreground">
-        {selected && <Check size={15} />}
-      </span>
+      {time && (
+        <span
+          className={cn(
+            'shrink-0 tabular-nums text-2xs text-muted-foreground',
+            // With a reason under the title, the time stays on the title's line.
+            error && 'self-start pt-px'
+          )}
+        >
+          {time}
+        </span>
+      )}
     </div>
   )
 }
 
 function SessionList({ chats }: { chats: ImportChats }): React.JSX.Element | null {
   const listRef = useRef<HTMLDivElement>(null)
+  // Roving tab stop: Tab enters the list on the last focused row.
+  const [active, setActive] = useState(0)
   if (chats.phase.kind !== 'ready') return null
   const { sessions } = chats.phase
+  const tabStop = Math.min(active, sessions.length - 1)
 
   const onOptionKeyDown = (event: KeyboardEvent<HTMLDivElement>, sessionId: string): void => {
     if (event.key === ' ' || event.key === 'Enter') {
@@ -94,13 +181,23 @@ function SessionList({ chats }: { chats: ImportChats }): React.JSX.Element | nul
       if (!chats.importing) chats.toggle(sessionId)
       return
     }
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
-    event.preventDefault()
     const options = Array.from(
       listRef.current?.querySelectorAll<HTMLElement>('[data-import-option]') ?? []
     )
     const index = options.indexOf(event.currentTarget)
-    options[index + (event.key === 'ArrowDown' ? 1 : -1)]?.focus()
+    const target =
+      event.key === 'ArrowDown'
+        ? index + 1
+        : event.key === 'ArrowUp'
+          ? index - 1
+          : event.key === 'Home'
+            ? 0
+            : event.key === 'End'
+              ? options.length - 1
+              : null
+    if (target === null) return
+    event.preventDefault()
+    options[target]?.focus()
   }
 
   return (
@@ -116,9 +213,11 @@ function SessionList({ chats }: { chats: ImportChats }): React.JSX.Element | nul
           key={session.sessionId}
           session={session}
           selected={chats.selected.has(session.sessionId)}
-          disabled={chats.importing}
-          tabbable={index === 0}
+          run={rowRun(chats, session.sessionId)}
+          tabbable={index === tabStop}
+          error={chats.rowErrors.get(session.sessionId)}
           onToggle={() => chats.toggle(session.sessionId)}
+          onFocus={() => setActive(index)}
           onKeyDown={(event) => onOptionKeyDown(event, session.sessionId)}
         />
       ))}
@@ -126,7 +225,49 @@ function SessionList({ chats }: { chats: ImportChats }): React.JSX.Element | nul
   )
 }
 
-function Body({ chats }: { chats: ImportChats }): React.JSX.Element {
+function SelectAll({
+  chats,
+  total,
+  agentName
+}: {
+  chats: ImportChats
+  total: number
+  agentName: string
+}): React.JSX.Element {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const count = chats.selected.size
+  const state: CheckState = count === 0 ? 'off' : count === total ? 'on' : 'mixed'
+  useEffect(() => {
+    if (inputRef.current) inputRef.current.indeterminate = state === 'mixed'
+  }, [state])
+  return (
+    <div className="flex items-center justify-between gap-3 pr-3">
+      <label
+        className={cn(
+          'flex min-h-8 min-w-0 cursor-default items-center gap-3 rounded-lg px-3 text-xs font-medium text-foreground pointer-coarse:min-h-11',
+          'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-focus-ring',
+          chats.importing && 'opacity-50'
+        )}
+      >
+        <input
+          ref={inputRef}
+          type="checkbox"
+          className="sr-only"
+          checked={state === 'on'}
+          disabled={chats.importing}
+          onChange={state === 'on' ? chats.clearSelection : chats.selectAll}
+        />
+        <CheckboxMark state={state} />
+        <span className="truncate">All {agentName} chats</span>
+      </label>
+      <span className="shrink-0 tabular-nums text-2xs text-muted-foreground">
+        {total} in this folder
+      </span>
+    </div>
+  )
+}
+
+function Body({ chats, agentName }: { chats: ImportChats; agentName: string }): React.JSX.Element {
   const { phase } = chats
   if (phase.kind === 'loading') {
     return (
@@ -169,25 +310,30 @@ function Body({ chats }: { chats: ImportChats }): React.JSX.Element {
       </p>
     )
   }
-  const all = chats.selected.size === phase.sessions.length
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span className="tabular-nums">
-          {chats.selected.size} of {phase.sessions.length} selected
-        </span>
-        <Button
-          variant="link"
-          size="xs"
-          disabled={chats.importing}
-          onClick={all ? chats.clearSelection : chats.selectAll}
-        >
-          {all ? 'Clear selection' : 'Select all'}
-        </Button>
-      </div>
+    <div className="flex flex-col gap-1">
+      <SelectAll chats={chats} total={phase.sessions.length} agentName={agentName} />
       <SessionList chats={chats} />
     </div>
   )
+}
+
+function footerStatus(chats: ImportChats, count: number): string | null {
+  if (chats.stopping) return 'Stopping after this chat…'
+  if (chats.importing) {
+    // The chat in flight is the one counted: the first reads "1 of N".
+    const total = chats.runIds.length
+    return `Importing ${Math.min(chats.progress + 1, total)} of ${total}…`
+  }
+  if (chats.summary) return formatImportSummary(chats.summary)
+  if (chats.phase.kind === 'ready' && chats.phase.sessions.length > 0) return `${count} selected`
+  return null
+}
+
+function importLabel(count: number): string {
+  if (count === 1) return 'Import 1 chat'
+  if (count > 1) return `Import ${count} chats`
+  return 'Import'
 }
 
 /**
@@ -204,17 +350,34 @@ export function ImportChatsDialog({
 }: ImportChatsDialogProps): React.JSX.Element {
   const chats = useImportChats({ open, cwd, projectId, onDone: () => onOpenChange(false) })
   const agentSelectId = useId()
-  const { phase, selected, importing, progress } = chats
+  const { phase, selected, importing, stopping, summary } = chats
   const count = selected.size
+  const configName = chats.configs.find((c) => c.id === chats.configId)?.name
+  const agentName = configName ?? 'the agent'
+  const isMobile = useIsMobile()
+  const buttonSize = isMobile ? 'touch' : 'sm'
+  const buttonClass = isMobile ? 'flex-1' : undefined
+
+  // While importing, every way out of the dialog (Esc, outside click, the
+  // close button) stops the run instead of hiding it.
+  const onDialogOpenChange = (next: boolean): void => {
+    if (!next && importing) {
+      chats.requestStop()
+      return
+    }
+    onOpenChange(next)
+  }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => (importing ? undefined : onOpenChange(next))}>
+    <Dialog open={open} onOpenChange={onDialogOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Import chats</DialogTitle>
+          <DialogTitle>
+            {configName ? `Import chats from ${configName}` : 'Import chats'}
+          </DialogTitle>
           <DialogDescription>
-            Bring chats you had with the agent outside Troupe into your history. You can continue
-            them afterwards.
+            Bring in chats from {agentName} sessions you ran outside Troupe. You can continue them
+            here afterwards.
           </DialogDescription>
         </DialogHeader>
 
@@ -247,37 +410,45 @@ export function ImportChatsDialog({
             Configure an agent first. Import reads the chats of a configured agent.
           </p>
         ) : (
-          <Body chats={chats} />
+          <Body chats={chats} agentName={agentName} />
         )}
 
-        {chats.failure && (
-          <p role="alert" className="text-xs text-destructive">
-            {chats.failure}
+        <DialogFooter className="flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between sm:space-x-0">
+          <p role="status" className="min-w-0 text-xs tabular-nums text-muted-foreground">
+            {footerStatus(chats, count)}
           </p>
-        )}
-
-        <DialogFooter className="gap-2 sm:gap-0">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={importing}
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            size="sm"
-            disabled={importing || phase.kind !== 'ready' || count === 0}
-            onClick={() => void chats.importSelected()}
-          >
-            {importing
-              ? `Importing ${progress} of ${count}…`
-              : count === 1
-                ? 'Import 1 chat'
-                : count > 1
-                  ? `Import ${count} chats`
-                  : 'Import'}
-          </Button>
+          <div className="flex items-center gap-2 sm:shrink-0">
+            {importing ? (
+              <Button
+                variant="outline"
+                size={buttonSize}
+                className={buttonClass}
+                disabled={stopping}
+                onClick={chats.requestStop}
+              >
+                {stopping ? 'Stopping…' : 'Stop import'}
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="outline"
+                  size={buttonSize}
+                  className={buttonClass}
+                  onClick={() => onOpenChange(false)}
+                >
+                  {summary ? 'Close' : 'Cancel'}
+                </Button>
+                <Button
+                  size={buttonSize}
+                  className={buttonClass}
+                  disabled={phase.kind !== 'ready' || count === 0}
+                  onClick={() => void chats.importSelected()}
+                >
+                  {summary && summary.failed > 0 && count > 0 ? 'Try again' : importLabel(count)}
+                </Button>
+              </>
+            )}
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -832,15 +832,19 @@ export interface AcpState {
   ) => Promise<ImportableSessions>
   /**
    * Import `sessions` one by one through the host, then refresh the chat
-   * history index. One session's failure never stops the rest.
+   * history index. One session's failure never stops the rest; `shouldStop`
+   * returning true does: the session in flight finishes and the rest are not
+   * started (they get no outcome).
    */
   importAgentSessions: (input: {
     agentId: AgentId
     cwd: string
     projectId: string
     sessions: SessionInfo[]
-    /** Called after each session finished, with the number done so far. */
-    onProgress?: (done: number) => void
+    /** Called after each session finished, with the number done so far and its outcome. */
+    onProgress?: (done: number, outcome: ImportSessionOutcome) => void
+    /** Asked before each session; true leaves the remaining sessions unstarted. */
+    shouldStop?: () => boolean
   }) => Promise<ImportSessionOutcome[]>
   /** Generate a commit message in a hidden, non-persisted one-shot ACP session. */
   generateCommitMessage: (cwd: string, stagedDiff: string) => Promise<GeneratedCommitMessage>

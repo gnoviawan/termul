@@ -109,9 +109,13 @@ export const createImportSlice: StateCreator<AcpState, [], [], ImportSliceState>
     return { status: 'ready', agentId, sessions }
   },
 
-  importAgentSessions: async ({ agentId, cwd, projectId, sessions, onProgress }) => {
+  importAgentSessions: async ({ agentId, cwd, projectId, sessions, onProgress, shouldStop }) => {
     const outcomes: ImportSessionOutcome[] = []
     for (const info of sessions) {
+      // The host has no way to cancel a running import: a stop lets the
+      // session in flight finish and starts no other.
+      if (shouldStop?.()) break
+      let outcome: ImportSessionOutcome
       try {
         const updatedAt = info.updatedAt ? Date.parse(info.updatedAt) : Number.NaN
         // The host loads the session on the agent, so an expired login is
@@ -127,26 +131,26 @@ export const createImportSlice: StateCreator<AcpState, [], [], ImportSliceState>
             projectId: projectId || undefined
           })
         )
-        outcomes.push({ sessionId: info.sessionId, status: 'imported' })
+        outcome = { sessionId: info.sessionId, status: 'imported' }
       } catch (error) {
-        if (error instanceof AcpTransportError && error.code === 'duplicate') {
-          outcomes.push({ sessionId: info.sessionId, status: 'duplicate' })
-        } else {
-          outcomes.push({
-            sessionId: info.sessionId,
-            status: 'failed',
-            message: error instanceof Error ? error.message : String(error)
-          })
-        }
+        outcome =
+          error instanceof AcpTransportError && error.code === 'duplicate'
+            ? { sessionId: info.sessionId, status: 'duplicate' }
+            : {
+                sessionId: info.sessionId,
+                status: 'failed',
+                message: error instanceof Error ? error.message : String(error)
+              }
       }
-      onProgress?.(outcomes.length)
+      outcomes.push(outcome)
+      onProgress?.(outcomes.length, outcome)
     }
     const imported = outcomes.filter((o) => o.status === 'imported').length
     const failed = outcomes.filter((o) => o.status === 'failed').length
     void logFrontendError({
       level: failed > 0 ? 'warn' : 'info',
       source: 'acp.importSessions.import',
-      message: `Imported ${imported} of ${sessions.length} agent session(s); ${failed} failed`
+      message: `Imported ${imported} of ${sessions.length} agent session(s); ${failed} failed${outcomes.length < sessions.length ? `; stopped, ${sessions.length - outcomes.length} not started` : ''}`
     })
     // Desktop gets no `chat_history` watch delta: reread the index so the
     // imported chats show up.
