@@ -198,9 +198,15 @@ pub(super) async fn handle_close_session(
 /// Folder `list_sessions` asks the agent to list.
 ///
 /// Desktop IPC (`Carrier::Ipc`) keeps the client cwd. A remote `/ws` client
-/// cannot pick an arbitrary folder: the host uses the active project's path,
-/// and a supplied cwd is accepted only when it belongs to that project
-/// (the project root or a worktree/subfolder inside it).
+/// (including a view-only peer; `list_sessions` is a read) cannot pick an
+/// arbitrary folder. A supplied cwd is canonicalized (it must exist; `..`
+/// and symlinks cannot walk out) and is then checked with a component-wise
+/// `Path::starts_with` against a similarly canonicalized project root.
+/// Verbatim `\\?\` prefixes are stripped on both sides first so a Windows
+/// prefix mismatch cannot pass or fail the check by itself. With `projectId`,
+/// the cwd must sit inside that project. Without `projectId`, a cwd inside
+/// any registered project is accepted. If cwd is omitted, the host uses the
+/// named project or the host default.
 pub(super) fn resolve_list_sessions_cwd(
     carrier: crate::web::capabilities::Carrier,
     registry: &crate::web::project_registry::ProjectRegistry,
@@ -222,10 +228,11 @@ pub(super) fn resolve_list_sessions_cwd(
     }
 
     if let Some(cwd) = cwd {
-        if registry.find_by_path(cwd).is_none() {
+        let resolved = canonicalize_list_cwd(cwd)?;
+        if !cwd_is_inside_any_registered_root(registry, &resolved) {
             return Err("list_sessions cwd must be a registered project folder".to_string());
         }
-        return Ok(Some(cwd.to_string()));
+        return Ok(Some(listing_path_string(&resolved)));
     }
 
     let default_id = registry
@@ -247,10 +254,46 @@ fn listing_cwd_for_project(
     let Some(cwd) = client_cwd else {
         return Ok(Some(project_cwd.to_string()));
     };
-    match registry.find_by_path(cwd) {
-        Some(id) if id == project_id => Ok(Some(cwd.to_string())),
-        _ => Err("list_sessions cwd must be the active project folder".to_string()),
+    let resolved = canonicalize_list_cwd(cwd)?;
+    let root = registry
+        .canonical_root(project_id)
+        .ok_or_else(|| "list_sessions cwd must be the active project folder".to_string())?;
+    if !cwd_is_inside_root(&resolved, &root) {
+        return Err("list_sessions cwd must be the active project folder".to_string());
     }
+    Ok(Some(listing_path_string(&resolved)))
+}
+
+fn cwd_is_inside_any_registered_root(
+    registry: &crate::web::project_registry::ProjectRegistry,
+    resolved: &std::path::Path,
+) -> bool {
+    registry.snapshot().projects.iter().any(|project| {
+        registry
+            .canonical_root(&project.id)
+            .is_some_and(|root| cwd_is_inside_root(resolved, &root))
+    })
+}
+
+/// Component-wise containment after both sides are canonicalized and any
+/// Windows verbatim prefix is stripped. Do not compare raw strings: a
+/// prefix check on `"<root>\\..\\.."` would incorrectly succeed.
+fn cwd_is_inside_root(resolved: &std::path::Path, root: &std::path::Path) -> bool {
+    listing_path_buf(resolved).starts_with(listing_path_buf(root))
+}
+
+fn canonicalize_list_cwd(cwd: &str) -> Result<std::path::PathBuf, String> {
+    std::fs::canonicalize(cwd).map_err(|_| {
+        "list_sessions cwd must be an existing folder inside a registered project".to_string()
+    })
+}
+
+fn listing_path_buf(path: &std::path::Path) -> std::path::PathBuf {
+    std::path::PathBuf::from(listing_path_string(path))
+}
+
+fn listing_path_string(path: &std::path::Path) -> String {
+    crate::path_validation::strip_verbatim_prefix(&path.to_string_lossy()).into_owned()
 }
 
 /// `list_sessions` → `AcpManager::list_sessions` with a host-resolved cwd
