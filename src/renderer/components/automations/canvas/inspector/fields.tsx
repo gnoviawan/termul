@@ -82,20 +82,36 @@ export function useFieldText(value: string, commit: Commit) {
     setText(value)
     setError(null)
   }
+  const save = (): void => {
+    if (text === value) {
+      setError(null)
+      return
+    }
+    const refused = commit(text)
+    setError(refused)
+    // A refused edit keeps the text to fix; a taken one shows the value as stored.
+    if (refused === null) setText(value)
+  }
   return {
     text,
     setText,
     error,
-    save: () => {
-      if (text === value) return setError(null)
-      const refused = commit(text)
-      setError(refused)
-      // A refused edit keeps the text to fix; a taken one shows the value as stored.
-      if (refused === null) setText(value)
-    },
-    revert: () => {
-      setText(value)
-      setError(null)
+    /** Shows `message` under the field and keeps the text. */
+    fail: setError,
+    save,
+    /**
+     * Enter saves (unless `enterSaves` says otherwise); Escape reverts an
+     * unsaved edit and keeps the key, so it does not also close the sheet.
+     */
+    onKeyDown: (event: React.KeyboardEvent, enterSaves = true): void => {
+      if (event.key === 'Enter' && enterSaves) {
+        event.preventDefault()
+        save()
+      } else if (event.key === 'Escape' && (text !== value || error !== null)) {
+        event.preventDefault()
+        setText(value)
+        setError(null)
+      }
     }
   }
 }
@@ -138,10 +154,7 @@ export function TextField({
         {...describedBy(id, shown, help)}
         onChange={(event) => field.setText(event.target.value)}
         onBlur={field.save}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') field.save()
-          else if (event.key === 'Escape') field.revert()
-        }}
+        onKeyDown={(event) => field.onKeyDown(event)}
       />
     </Field>
   )
@@ -183,7 +196,7 @@ export function TemplateField({
   const caretAfter = useRef<number | null>(null)
   const matches = hole ? matchSuggestions(scope, hole.query) : []
   const open = matches.length > 0
-  const shown = field.error ?? templateError(value) ?? error
+  const shown = field.error ?? templateError(field.text) ?? error
   const listId = `${id}-references`
 
   useLayoutEffect(() => {
@@ -242,11 +255,7 @@ export function TemplateField({
         }
         return
       }
-      if (event.key === 'Escape') field.revert()
-      else if (event.key === 'Enter' && (!multiline || event.metaKey || event.ctrlKey)) {
-        event.preventDefault()
-        field.save()
-      }
+      field.onKeyDown(event, !multiline || event.metaKey || event.ctrlKey)
     }
   } as const
 
@@ -361,6 +370,14 @@ function unitOf(ms: number): Unit {
 
 const msOf = (unit: Unit) => UNITS.find((entry) => entry.value === unit)?.ms ?? 1000
 
+/** `text` in `unit` as whole milliseconds, or why it is not a duration. */
+function toMs(text: string, unit: Unit): number | string {
+  const n = Number(text.trim())
+  if (text.trim() === '' || !Number.isFinite(n) || n < 0) return 'Enter a number'
+  const ms = Math.round(n * msOf(unit))
+  return Number.isSafeInteger(ms) ? ms : 'That is too long'
+}
+
 /** A duration stored in milliseconds, edited as a number and a unit. */
 export function DurationField({
   id,
@@ -368,7 +385,8 @@ export function DurationField({
   value,
   commit,
   error,
-  help
+  help,
+  onDraft
 }: {
   id: string
   label: string
@@ -376,6 +394,8 @@ export function DurationField({
   commit: (ms: number) => boolean
   error?: string | null
   help?: string
+  /** Hears the duration as it is typed, before it is saved; null while it is no duration. */
+  onDraft?: (ms: number | null) => void
 }): React.JSX.Element {
   const [unit, setUnit] = useState<Unit>(() => unitOf(value))
   const [shownValue, setShownValue] = useState(value)
@@ -384,17 +404,17 @@ export function DurationField({
     // The unit just picked stays while it still counts the value in whole numbers.
     if (value % msOf(unit) !== 0) setUnit(unitOf(value))
   }
-  const toMs = (text: string, inUnit: Unit): number | null => {
-    const n = Number(text.trim())
-    if (text.trim() === '' || !Number.isFinite(n) || n < 0) return null
-    return Math.round(n * msOf(inUnit))
-  }
   const field = useFieldText(String(value / msOf(unit)), (text) => {
     const ms = toMs(text, unit)
-    if (ms === null) return 'Enter a number'
+    if (typeof ms === 'string') return ms
     return commit(ms) ? null : SAVING_MESSAGE
   })
   const shown = field.error ?? error
+  useEffect(() => {
+    if (!onDraft) return
+    const ms = toMs(field.text, unit)
+    onDraft(typeof ms === 'number' ? ms : null)
+  }, [onDraft, field.text, unit])
   return (
     <Field id={id} label={label} error={shown} help={help}>
       <div className="flex gap-2">
@@ -406,17 +426,16 @@ export function DurationField({
           {...describedBy(id, shown, help)}
           onChange={(event) => field.setText(event.target.value)}
           onBlur={field.save}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') field.save()
-            else if (event.key === 'Escape') field.revert()
-          }}
+          onKeyDown={(event) => field.onKeyDown(event)}
         />
         <Select
           value={unit}
           onValueChange={(next) => {
-            setUnit(next as Unit)
             const ms = toMs(field.text, next as Unit)
-            if (ms !== null && ms !== value) commit(ms)
+            // A refused change keeps the unit and the typed number, and says why.
+            if (typeof ms === 'string') field.fail(ms)
+            else if (ms !== value && !commit(ms)) field.fail(SAVING_MESSAGE)
+            else setUnit(next as Unit)
           }}
         >
           <SelectTrigger aria-label={`${label} unit`} className={cn(FIELD_HEIGHT, 'w-28')}>

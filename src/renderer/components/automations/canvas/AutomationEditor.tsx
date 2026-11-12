@@ -18,7 +18,7 @@ import { addGesture, movePatch, removeGesture } from './draft/gestures'
 import { SAVING_MESSAGE, useDraft } from './draft/use-draft'
 import { AutomationFlow } from './flow/AutomationFlow'
 import type { AddRequest, FlowEdit } from './flow/flow-edit'
-import { NodeInspector } from './inspector/NodeInspector'
+import { INSPECTOR_INSET, NodeInspector } from './inspector/NodeInspector'
 import { TriggerInspector } from './inspector/TriggerInspector'
 import { AddNodeMenu } from './palette/AddNodeMenu'
 import { chainPort, NODE_KINDS, newNode } from './palette/node-kinds'
@@ -55,9 +55,6 @@ function describeOp(op: AutomationOp, label: (id: string) => string): string {
       return 'Change the isolation'
   }
 }
-
-/** Width of the floating inspector plus its gap from the canvas edge. */
-const INSPECTOR_INSET = 356
 
 /** The phone header has room only for the count beside the state pill at 390 px. */
 function changesLabel(count: number, phone: boolean): string {
@@ -178,6 +175,7 @@ export function AutomationEditor({
       <TriggerInspector
         trigger={trigger}
         issues={draft.issues.filter((issue) => issue.node_id === null)}
+        refusal={phone ? editor.refusal : null}
         phone={phone}
         locked={editor.saving}
         onChange={(next) => apply([{ op: 'set_trigger', trigger: next }])}
@@ -190,16 +188,19 @@ export function AutomationEditor({
         node={inspectedNode}
         graph={graph}
         issues={draft.issues.filter((issue) => issue.node_id === inspectedNode.id)}
+        refusal={phone ? editor.refusal : null}
         phone={phone}
         locked={editor.saving}
         onChange={(change) => apply([{ op: 'update_node', id: inspectedNode.id, ...change }])}
         onDelete={() => {
           const { ops, layout } = removeGesture(graph, draft.layout, [inspectedNode.id], [])
-          apply(ops, layout)
+          if (apply(ops, layout)) setInspected(null)
         }}
         onClose={closeInspector}
       />
     ) : null
+
+  const rightInset = inspector && !phone ? INSPECTOR_INSET : 0
 
   const approve = async (): Promise<void> => {
     setApproving(true)
@@ -329,13 +330,14 @@ export function AutomationEditor({
           edit={edit}
           focus={focus}
           inspect={{ id: inspected, onChange: setInspected }}
-          rightInset={inspector && !phone ? INSPECTOR_INSET : 0}
+          rightInset={rightInset}
         />
         {!phone && inspector}
         {draft.conflict && (
           <ConflictBanner
             by={draft.conflict.by}
             dropped={draft.conflict.dropped.map((op) => describeOp(op, labels))}
+            rightInset={rightInset}
             onDismiss={editor.dismissConflict}
           />
         )}
@@ -401,16 +403,20 @@ export function AutomationEditor({
 function ConflictBanner({
   by,
   dropped,
+  rightInset,
   onDismiss
 }: {
   by: string | null
   dropped: string[]
+  /** Room the floating inspector takes at the right; the banner stays left of it. */
+  rightInset: number
   onDismiss: () => void
 }): React.JSX.Element {
   return (
     <div
       role="status"
       className="absolute inset-x-3 top-3 z-20 mx-auto flex max-w-xl items-start gap-3 rounded-xl border border-border bg-popover px-4 py-3 text-sm shadow-lg"
+      style={rightInset > 0 ? { right: 12 + rightInset } : undefined}
     >
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <p className="font-medium text-warning">

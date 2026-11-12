@@ -9,6 +9,9 @@ import type { Graph, NodeId } from '@shared/types/automation.types'
 import { NODE_KIND_PRESENTATION } from '../../automation-format'
 import { stepOrder } from '../layout'
 
+/** `template::is_segment`: one dotted part of a reference path. */
+const SEGMENT = /^[A-Za-z0-9_-]+$/
+
 export type TemplateSuggestion = {
   /** The reference inside the braces, e.g. `nodes.fetch.output`. */
   path: string
@@ -91,7 +94,8 @@ export function templateScope(graph: Graph, id: NodeId): TemplateSuggestion[] {
     suggestions.push({ path: `nodes.${node.id}.output`, label: node.label, detail: kind })
     const schema = node.spec.kind === 'agent' ? node.spec.output_schema : null
     if (schema?.type === 'object') {
-      for (const field of Object.keys(schema.properties ?? {})) {
+      // A property whose name the host cannot write as a path segment is left out.
+      for (const field of Object.keys(schema.properties ?? {}).filter((f) => SEGMENT.test(f))) {
         suggestions.push({
           path: `nodes.${node.id}.output.${field}`,
           label: node.label,
@@ -103,7 +107,6 @@ export function templateScope(graph: Graph, id: NodeId): TemplateSuggestion[] {
   return suggestions
 }
 
-const SEGMENT = /^[A-Za-z0-9_-]+$/
 const NODE_ID = /^[a-z][a-z0-9_]{0,31}$/
 
 /** `template::parse_reference`: why a hole's path is refused, or null. */
@@ -154,14 +157,19 @@ export function openHole(text: string, caret: number): { start: number; query: s
   return /^[A-Za-z0-9_.-]*$/.test(query) ? { start, query } : null
 }
 
-/** `text` with the hole at `start` filled with `path`, and the caret after it. */
+/**
+ * `text` with the hole at `start` filled with `path`, and the caret after it.
+ * When the caret sits inside a hole that is already closed, the rest of its
+ * path and its `}}` are replaced too, so editing a reference never leaves the
+ * old tail behind.
+ */
 export function fillHole(
   text: string,
   caret: number,
   start: number,
   path: string
 ): { text: string; caret: number } {
-  const closing = /^\s*\}\}/.exec(text.slice(caret))
+  const closing = /^[A-Za-z0-9_.\-\s]*\}\}/.exec(text.slice(caret))
   const inserted = `{{ ${path} }}`
   return {
     text: text.slice(0, start) + inserted + text.slice(caret + (closing?.[0].length ?? 0)),

@@ -16,6 +16,12 @@ import { TextField } from './fields'
 import { type FormProps, NODE_FORMS } from './node-forms'
 import { templateScope } from './template-scope'
 
+/** The floating panel's width and its gap from the canvas edges. */
+const PANEL = { width: 344, gap: 12 } as const
+
+/** What the floating inspector covers at the canvas's right edge. */
+export const INSPECTOR_INSET = PANEL.width + PANEL.gap
+
 /**
  * The inspector's frame: on desktop and in the browser a panel floating at
  * the canvas's right edge, on the phone a sheet under the canvas. Header
@@ -29,6 +35,7 @@ export function InspectorPanel({
   kind,
   id,
   issues,
+  refusal = null,
   onDelete,
   onClose,
   children
@@ -39,6 +46,8 @@ export function InspectorPanel({
   kind: string
   id: string
   issues: readonly Issue[]
+  /** Why the host refuses the pending edits; the phone sheet shows it in place of the dock. */
+  refusal?: string | null
   onDelete?: () => void
   onClose: () => void
   children: React.ReactNode
@@ -53,8 +62,9 @@ export function InspectorPanel({
         'z-20 flex flex-col overflow-hidden border-border bg-card shadow-panel',
         phone
           ? 'max-h-[60%] shrink-0 rounded-t-2xl border-t'
-          : 'absolute top-3 right-3 max-h-[calc(100%-1.5rem)] w-[344px] rounded-xl border'
+          : 'absolute max-h-[calc(100%-1.5rem)] rounded-xl border'
       )}
+      style={phone ? undefined : { top: PANEL.gap, right: PANEL.gap, width: PANEL.width }}
     >
       {phone && (
         <span aria-hidden="true" className="mx-auto mt-2 h-1 w-9 rounded-full bg-field-border" />
@@ -99,6 +109,12 @@ export function InspectorPanel({
         aria-label="Issues on this step"
         className="flex max-h-40 shrink-0 flex-col gap-1.5 overflow-y-auto border-t border-border px-4 pt-3 pb-3.5"
       >
+        {refusal && (
+          <p className="flex gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            <AlertCircle size={14} className="mt-px shrink-0" />
+            <span className="min-w-0 break-words">The host refuses these edits: {refusal}</span>
+          </p>
+        )}
         <div className="flex items-center justify-between text-xs">
           <span className="font-medium text-muted-foreground">Issues on this step</span>
           <span className="tabular-nums text-muted-foreground">{issues.length}</span>
@@ -132,6 +148,7 @@ export function NodeInspector({
   node,
   graph,
   issues,
+  refusal,
   phone,
   locked,
   onChange,
@@ -142,6 +159,7 @@ export function NodeInspector({
   /** The draft graph: templates may reference the steps that run before this one. */
   graph: Graph
   issues: readonly Issue[]
+  refusal: string | null
   phone: boolean
   /** Save is running; edits wait for it. */
   locked: boolean
@@ -162,6 +180,7 @@ export function NodeInspector({
       kind={label}
       id={node.id}
       issues={issues}
+      refusal={refusal}
       onDelete={locked ? undefined : onDelete}
       onClose={onClose}
     >

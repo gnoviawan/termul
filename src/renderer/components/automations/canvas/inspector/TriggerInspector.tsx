@@ -117,6 +117,56 @@ function CronFields({
   )
 }
 
+function EveryFields({
+  schedule,
+  commit
+}: {
+  schedule: Extract<Schedule, { kind: 'every' }>
+  commit: (schedule: Schedule) => boolean
+}): React.JSX.Element {
+  const [typed, setTyped] = useState<number | null>(schedule.every_ms)
+  return (
+    <>
+      <DurationField
+        id="inspect-trigger-every"
+        label="Every"
+        value={schedule.every_ms}
+        onDraft={setTyped}
+        commit={(every_ms) => commit({ ...schedule, every_ms })}
+      />
+      <NextRuns schedule={{ ...schedule, every_ms: typed ?? schedule.every_ms }} />
+    </>
+  )
+}
+
+function AtFields({
+  schedule,
+  commit
+}: {
+  schedule: Extract<Schedule, { kind: 'at' }>
+  commit: (schedule: Schedule) => boolean
+}): React.JSX.Element {
+  const [typed, setTyped] = useState(localInput(schedule.at))
+  const at = new Date(typed).getTime()
+  return (
+    <>
+      <TextField
+        id="inspect-trigger-at"
+        label="Run at"
+        type="datetime-local"
+        value={localInput(schedule.at)}
+        onText={setTyped}
+        commit={(text) => {
+          const next = new Date(text).getTime()
+          if (Number.isNaN(next)) return 'Enter a date and time'
+          return commit({ kind: 'at', at: next }) ? null : SAVING_MESSAGE
+        }}
+      />
+      <NextRuns schedule={{ kind: 'at', at: Number.isNaN(at) ? schedule.at : at }} />
+    </>
+  )
+}
+
 const RUNS = [
   { value: 'manual', label: 'When you run it' },
   { value: 'schedule', label: 'On a schedule' }
@@ -132,6 +182,7 @@ const SCHEDULE_KINDS = [
 export function TriggerInspector({
   trigger,
   issues,
+  refusal,
   phone,
   locked,
   onChange,
@@ -140,6 +191,7 @@ export function TriggerInspector({
   trigger: Trigger
   /** Issues on no step: the schedule, the trigger's edge. */
   issues: readonly Issue[]
+  refusal: string | null
   phone: boolean
   locked: boolean
   /** False when the draft did not take the edit. */
@@ -158,6 +210,7 @@ export function TriggerInspector({
       kind={schedule ? 'Schedule' : 'Manual'}
       id="trigger"
       issues={issues}
+      refusal={refusal}
       onClose={onClose}
     >
       <fieldset disabled={locked} className="flex min-w-0 flex-col gap-3">
@@ -184,33 +237,8 @@ export function TriggerInspector({
           />
         )}
         {schedule?.kind === 'cron' && <CronFields schedule={schedule} commit={commit} />}
-        {schedule?.kind === 'every' && (
-          <>
-            <DurationField
-              id="inspect-trigger-every"
-              label="Every"
-              value={schedule.every_ms}
-              commit={(every_ms) => commit({ ...schedule, every_ms })}
-            />
-            <NextRuns schedule={schedule} />
-          </>
-        )}
-        {schedule?.kind === 'at' && (
-          <>
-            <TextField
-              id="inspect-trigger-at"
-              label="Run at"
-              type="datetime-local"
-              value={localInput(schedule.at)}
-              commit={(text) => {
-                const at = new Date(text).getTime()
-                if (Number.isNaN(at)) return 'Enter a date and time'
-                return commit({ kind: 'at', at }) ? null : SAVING_MESSAGE
-              }}
-            />
-            <NextRuns schedule={schedule} />
-          </>
-        )}
+        {schedule?.kind === 'every' && <EveryFields schedule={schedule} commit={commit} />}
+        {schedule?.kind === 'at' && <AtFields schedule={schedule} commit={commit} />}
       </fieldset>
     </InspectorPanel>
   )

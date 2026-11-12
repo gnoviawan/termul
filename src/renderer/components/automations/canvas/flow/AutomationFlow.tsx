@@ -34,7 +34,14 @@ import { CardNodeView } from './CardNodeView'
 import { ConnectBanner } from './ConnectBanner'
 import { FlowToolbar, type Tool } from './FlowToolbar'
 import { type ConnectFrom, EdgeHoverContext, type FlowEdit, FlowEditContext } from './flow-edit'
-import { type CardNode, contentBounds, type PortEdge, reuseUnchanged, toFlow } from './flow-graph'
+import {
+  type CardNode,
+  contentBounds,
+  type PortEdge,
+  panToShow,
+  reuseUnchanged,
+  toFlow
+} from './flow-graph'
 import { PortEdgeView } from './PortEdgeView'
 import './flow.css'
 
@@ -126,26 +133,8 @@ function KeepInView({ id, rightInset }: { id: string | null; rightInset: number 
   useEffect(() => {
     const node = id ? flow.getNode(id) : undefined
     if (!node || width === 0 || height === 0) return
-    const { x, y, zoom } = flow.getViewport()
-    const left = node.position.x * zoom + x
-    const top = node.position.y * zoom + y
-    const free = width - rightInset
-    if (
-      left >= 0 &&
-      top >= 0 &&
-      left + CARD.width * zoom <= free &&
-      top + CARD.height * zoom <= height
-    ) {
-      return
-    }
-    void flow.setViewport(
-      {
-        zoom,
-        x: free / 2 - (node.position.x + CARD.width / 2) * zoom,
-        y: height / 2 - (node.position.y + CARD.height / 2) * zoom
-      },
-      { duration: 200 }
-    )
+    const next = panToShow(node, flow.getViewport(), { width, height, rightInset })
+    if (next) void flow.setViewport(next, { duration: 200 })
   }, [flow, id, width, height, rightInset])
   return null
 }

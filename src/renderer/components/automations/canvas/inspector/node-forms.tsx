@@ -348,28 +348,15 @@ function NamedTemplates({
           key={index}
           className="flex flex-col gap-1.5 rounded-lg border border-border p-2"
         >
-          <div className="flex items-center gap-1.5">
-            <NameInput
-              id={`${id}-${index}-name`}
-              label={`${noun} ${index + 1} name`}
-              value={item.name}
-              error={errors[index]}
-              commit={(name) => replace(index, { ...item, name })}
-            />
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Remove ${noun.toLowerCase()} ${item.name || index + 1}`}
-              onClick={() => commit(items.filter((_, i) => i !== index))}
-            >
-              <X size={14} />
-            </Button>
-          </div>
-          {errors[index] && (
-            <p id={`${id}-${index}-name-error`} className="text-xs text-destructive">
-              {errors[index]}
-            </p>
-          )}
+          <NameRow
+            id={`${id}-${index}-name`}
+            label={`${noun} ${index + 1} name`}
+            removeLabel={`Remove ${noun.toLowerCase()} ${item.name || index + 1}`}
+            value={item.name}
+            error={errors[index]}
+            commit={(name) => replace(index, { ...item, name })}
+            onRemove={() => commit(items.filter((_, i) => i !== index))}
+          />
           <TemplateField
             id={`${id}-${index}-value`}
             label={`${noun} ${index + 1} value`}
@@ -394,34 +381,49 @@ function NamedTemplates({
   )
 }
 
-function NameInput({
+/** A row's name field and its remove button; the field's own refusal wins over the list's check. */
+function NameRow({
   id,
   label,
+  removeLabel,
   value,
   error,
-  commit
+  commit,
+  onRemove
 }: {
   id: string
   label: string
+  removeLabel: string
   value: string
   error: string | null
   commit: (name: string) => boolean
+  onRemove: () => void
 }): React.JSX.Element {
   const field = useFieldText(value, taking(commit))
+  const shown = field.error ?? error
   return (
-    <Input
-      id={id}
-      aria-label={label}
-      placeholder="Name"
-      value={field.text}
-      className="h-9 min-w-0 flex-1 font-mono pointer-coarse:h-11"
-      {...describedBy(id, error)}
-      onChange={(event) => field.setText(event.target.value)}
-      onBlur={field.save}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') field.save()
-        else if (event.key === 'Escape') field.revert()
-      }}
-    />
+    <>
+      <div className="flex items-center gap-1.5">
+        <Input
+          id={id}
+          aria-label={label}
+          placeholder="Name"
+          value={field.text}
+          className="h-9 min-w-0 flex-1 font-mono pointer-coarse:h-11"
+          {...describedBy(id, shown)}
+          onChange={(event) => field.setText(event.target.value)}
+          onBlur={field.save}
+          onKeyDown={(event) => field.onKeyDown(event)}
+        />
+        <Button variant="ghost" size="icon-sm" aria-label={removeLabel} onClick={onRemove}>
+          <X size={14} />
+        </Button>
+      </div>
+      {shown && (
+        <p id={`${id}-error`} className="text-xs text-destructive">
+          {shown}
+        </p>
+      )}
+    </>
   )
 }

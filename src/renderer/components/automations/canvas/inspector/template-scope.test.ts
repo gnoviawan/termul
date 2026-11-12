@@ -58,13 +58,22 @@ describe('templateScope', () => {
       agent_id: 'claude-code',
       model: null,
       prompt: '',
-      output_schema: { type: 'object', properties: { label: { type: 'string' } } },
+      output_schema: {
+        type: 'object',
+        properties: {
+          label: { type: 'string' },
+          'bad key': { type: 'string' },
+          'a.b': { type: 'string' }
+        }
+      },
       timeout_ms: 1000,
       max_attempts: 1,
       tools: []
     })
     const graph: Graph = { nodes: [agent, node('next')], edges: [edge('classify', 'next')] }
-    expect(paths(graph, 'next')).toContain('nodes.classify.output.label')
+    const offered = paths(graph, 'next').filter((path) => path.startsWith('nodes.classify'))
+    // `bad key` and `a.b` are not one path segment, so the host could not read them.
+    expect(offered).toEqual(['nodes.classify.output', 'nodes.classify.output.label'])
   })
 })
 
@@ -98,6 +107,16 @@ describe('openHole and fillHole', () => {
     expect(fillHole('Hi {{ nodes.fe }}!', 14, 3, 'nodes.fetch.output')).toEqual({
       text: 'Hi {{ nodes.fetch.output }}!',
       caret: 27
+    })
+  })
+
+  it('inside a closed hole, a pick replaces the whole reference through its }}', () => {
+    const text = 'Hi {{ nodes.fetch.output.title }}!'
+    const caret = 'Hi {{ nodes.f'.length
+    expect(openHole(text, caret)).toEqual({ start: 3, query: 'nodes.f' })
+    expect(fillHole(text, caret, 3, 'nodes.each.item')).toEqual({
+      text: 'Hi {{ nodes.each.item }}!',
+      caret: 'Hi {{ nodes.each.item }}'.length
     })
   })
 })

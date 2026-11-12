@@ -5,9 +5,10 @@ import type {
   NodeId,
   NodeSpec
 } from '@shared/types/automation.types'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { detailWith } from '@/lib/test-utils/automation-fixtures'
+import { installOverlayBackHandler, useOverlayStackStore } from '@/stores/overlay-stack-store'
 
 const api = vi.hoisted(() => ({
   applyAutomationOps: vi.fn(),
@@ -450,7 +451,174 @@ describe('NodeInspector', () => {
   })
 })
 
+const SAVING = 'Saving. Try that again once it finishes.'
+
+/** Leaves one pending edit (a label) and starts a Save that never answers. */
+function hangSave(panel: HTMLElement): void {
+  enter(within(panel).getByLabelText('Label'), 'Renamed')
+  api.applyAutomationOps.mockReturnValue(new Promise(() => {}))
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+}
+
+describe('NodeInspector review fixes', () => {
+  let detach: (() => void) | null = null
+  afterEach(() => {
+    detach?.()
+    detach = null
+    useOverlayStackStore.setState({ stack: [], mobileShell: false })
+  })
+
+  it('on the phone, Escape first reverts an unsaved field, and only a second Escape closes the sheet', async () => {
+    useOverlayStackStore.setState({ stack: [], mobileShell: true })
+    detach = installOverlayBackHandler({ schedule: () => {} })
+    open(true)
+    const url = within(inspect('fetch', 'Fetch')).getByLabelText('URL')
+    fireEvent.change(url, { target: { value: 'https://api.example.com/typo' } })
+
+    fireEvent.keyDown(url, { key: 'Escape' })
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(url).toHaveValue('https://api.example.com/items')
+    expect(screen.getByTestId('automation-inspector')).toBeVisible()
+
+    fireEvent.keyDown(url, { key: 'Escape' })
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(screen.queryByTestId('automation-inspector')).toBeNull()
+    expect(status()).toBe('No unsaved changes')
+  })
+
+  it('a unit change the draft refuses keeps the unit and the number, and says why', () => {
+    open()
+    const panel = inspect('pause', 'Pause')
+    hangSave(panel)
+    const unit = within(panel).getByRole('combobox', { name: 'Wait for unit' })
+
+    choose(panel, 'Wait for unit', 'hours')
+
+    expect(unit).toHaveTextContent('minutes')
+    expect(within(panel).getByLabelText('Wait for')).toHaveValue('1')
+    expect(within(panel).getByText(SAVING)).toBeVisible()
+  })
+
+  it('a duration too large for the host is refused inline and never commits', () => {
+    open()
+    const panel = inspect('pause', 'Pause')
+    const duration = within(panel).getByLabelText('Wait for')
+
+    enter(duration, '1e300')
+    expect(within(panel).getByText('That is too long')).toBeVisible()
+    choose(panel, 'Wait for unit', 'days')
+    expect(within(panel).getByRole('combobox', { name: 'Wait for unit' })).toHaveTextContent(
+      'minutes'
+    )
+    expect(status()).toBe('No unsaved changes')
+  })
+
+  it('a refused header name shows its error on the name field', () => {
+    open()
+    const panel = inspect('fetch', 'Fetch')
+    fireEvent.click(within(panel).getByRole('button', { name: 'Add header' }))
+    enter(within(panel).getByLabelText('Header 1 name'), 'Accept')
+    hangSave(panel)
+
+    const name = within(panel).getByLabelText('Header 1 name')
+    enter(name, 'Authorization')
+
+    expect(name).toHaveValue('Authorization')
+    expect(name).toHaveAttribute('aria-invalid', 'true')
+    expect(within(panel).getByText(SAVING)).toBeVisible()
+  })
+
+  it('checks the template being typed, before it is saved', () => {
+    open()
+    const message = within(inspect('stop', 'Stop')).getByLabelText('Message')
+    fireEvent.change(message, { target: { value: 'Failed: {{ fetch.output }}' } })
+    expect(
+      screen.getByText('{{ fetch.output }}: root must be trigger, nodes or secrets')
+    ).toBeVisible()
+    expect(status()).toBe('No unsaved changes')
+  })
+
+  it('on the phone, the sheet shows why the host refuses the pending edits', async () => {
+    api.previewAutomationOps.mockResolvedValue({
+      success: false,
+      error: 'ops: unknown variant',
+      code: 'invalid_input'
+    })
+    open(true)
+    const panel = inspect('stop', 'Stop')
+    enter(within(panel).getByLabelText('Message'), 'Halt')
+
+    expect(
+      await within(panel).findByText('The host refuses these edits: ops: unknown variant')
+    ).toBeVisible()
+  })
+
+  it('deleting from the inspector closes it for good: undo brings the step back, not the panel', () => {
+    open()
+    fireEvent.click(within(inspect('stop', 'Stop')).getByRole('button', { name: 'Delete step' }))
+    undo()
+    expect(document.querySelector('.react-flow__node[data-id="stop"]')).not.toBeNull()
+    expect(screen.queryByTestId('automation-inspector')).toBeNull()
+  })
+
+  it('keeps the conflict banner left of the floating inspector', async () => {
+    open()
+    const panel = inspect('fetch', 'Fetch')
+    enter(within(panel).getByLabelText('Label'), 'Fetch all')
+    api.applyAutomationOps.mockResolvedValue({
+      success: false,
+      error: 'conflict',
+      code: 'revision_conflict'
+    })
+    api.getAutomation.mockResolvedValue(ok(detailWith({ ...detail.automation, revision: 8 })))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    const banner = (await screen.findByText(/while you edited/)).closest('[role="status"]')
+    expect(banner).toHaveStyle({ right: '368px' })
+    expect(screen.getByTestId('automation-inspector')).toBeVisible()
+  })
+})
+
 describe('TriggerInspector', () => {
+  it('previews the interval being typed, before it is saved', async () => {
+    open()
+    const panel = inspect('trigger', 'Manual', 'Trigger')
+    choose(panel, 'Runs', 'On a schedule')
+    choose(panel, 'Schedule', 'Every interval')
+    await waitFor(() =>
+      expect(api.previewSchedule).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kind: 'every', every_ms: 3_600_000 })
+      )
+    )
+
+    fireEvent.change(within(panel).getByLabelText('Every'), { target: { value: '2' } })
+
+    await waitFor(() =>
+      expect(api.previewSchedule).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kind: 'every', every_ms: 7_200_000 })
+      )
+    )
+    expect(status()).toBe('Draft · 2 unsaved changes')
+  })
+
+  it('previews the one-off time being typed, before it is saved', async () => {
+    open()
+    const panel = inspect('trigger', 'Manual', 'Trigger')
+    choose(panel, 'Runs', 'On a schedule')
+    choose(panel, 'Schedule', 'Once')
+    fireEvent.change(within(panel).getByLabelText('Run at'), {
+      target: { value: '2030-01-02T03:04' }
+    })
+
+    await waitFor(() =>
+      expect(api.previewSchedule).toHaveBeenLastCalledWith({
+        kind: 'at',
+        at: new Date('2030-01-02T03:04').getTime()
+      })
+    )
+    expect(status()).toBe('Draft · 2 unsaved changes')
+  })
+
   it('switching to a schedule is one set_trigger, previews its next runs, and undo restores manual', async () => {
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
     const runs = [Date.UTC(2030, 0, 7, 9), Date.UTC(2030, 0, 8, 9)]
