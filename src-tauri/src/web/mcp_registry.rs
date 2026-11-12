@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use tracing::{info, warn};
 
 use crate::web::project_registry::ProjectRegistry;
-use crate::web::store::{unix_ms, StoreError, WebStore};
+use crate::web::store::{unix_ms, StoreError, WebStore, STORE_VALUE_MAX_BYTES};
 
 /// Host store key of the MCP server list.
 pub const STORE_KEY: &str = "shared/lww/acp/mcp-servers";
@@ -30,6 +30,11 @@ pub const ALIASES_KEY: &str = "shared/lww/acp/mcp-server-aliases";
 
 /// `_version` of the renderer's stored-value envelope.
 const STORED_VALUE_VERSION: u64 = 1;
+
+/// Most bytes the serialized alias map may take, envelope included: the
+/// per-value cap of client writes. Aliases past it are left out, so the
+/// alias write cannot fail on size and block the list import.
+const MAX_ALIASES_BYTES: usize = STORE_VALUE_MAX_BYTES;
 
 /// A legacy project file larger than this is skipped.
 const MAX_LEGACY_FILE_BYTES: usize = 1024 * 1024;
@@ -77,7 +82,8 @@ pub fn import_registered_project_files(
 /// automation reads ids. The alias map is replaced before the list is
 /// inserted, on every attempt: the list's insert commits the import, so a
 /// failed write leaves no list, the next start imports again, and the map
-/// that stays is the one merged with the list that is stored. Missing files
+/// that stays is the one merged with the list that is stored. Aliases past
+/// [`MAX_ALIASES_BYTES`] are left out with a warning. Missing files
 /// are skipped silently, unreadable or malformed ones with a warning. A
 /// rerun with the list stored writes nothing.
 pub fn import_project_files(
@@ -98,7 +104,14 @@ pub fn import_project_files(
         }
     }
     let servers = merged.entries.len();
-    let aliases = merged.kept_aliases();
+    let (aliases, omitted) = bounded(merged.kept_aliases(), MAX_ALIASES_BYTES);
+    if omitted > 0 {
+        warn!(
+            omitted,
+            max_bytes = MAX_ALIASES_BYTES,
+            "left out MCP server aliases past the alias map size limit"
+        );
+    }
     let alias_count = aliases.len();
     let stale_aliases = store.peek(ALIASES_KEY)?.is_some();
     if alias_count > 0 || stale_aliases {
@@ -123,6 +136,33 @@ pub fn import_project_files(
         files,
         aliases: alias_count,
     })
+}
+
+/// `aliases`, in order, while the stored envelope of the ones kept fits in
+/// `max_bytes`; and how many were left out.
+fn bounded<'a>(
+    aliases: BTreeMap<&'a str, &'a str>,
+    max_bytes: usize,
+) -> (BTreeMap<&'a str, &'a str>, usize) {
+    let json_len = |text: &str| serde_json::to_string(text).map_or(usize::MAX, |json| json.len());
+    let envelope = json!({ "_version": STORED_VALUE_VERSION, "data": {} }).to_string();
+    let mut size = envelope.len();
+    let mut kept = BTreeMap::new();
+    let mut omitted = 0;
+    for (alias, target) in aliases {
+        // `"alias":"target"`, plus a comma after the first pair.
+        let pair = json_len(alias)
+            .saturating_add(json_len(target))
+            .saturating_add(1 + usize::from(!kept.is_empty()));
+        match size.checked_add(pair).filter(|total| *total <= max_bytes) {
+            Some(total) => {
+                size = total;
+                kept.insert(alias, target);
+            }
+            None => omitted += 1,
+        }
+    }
+    (kept, omitted)
 }
 
 fn read_legacy_file(path: &Path) -> Option<Vec<Value>> {

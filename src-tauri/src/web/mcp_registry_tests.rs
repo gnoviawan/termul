@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 
 use super::{
-    import_project_files, import_registered_project_files, legacy_project_file, Import,
-    ALIASES_KEY, STORE_KEY,
+    bounded, import_project_files, import_registered_project_files, legacy_project_file, Import,
+    ALIASES_KEY, MAX_ALIASES_BYTES, STORE_KEY,
 };
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::store::{Precondition, StorePolicy, WebStore};
@@ -486,4 +486,57 @@ fn an_alias_and_its_target_are_trimmed_as_automation_reads_ids() {
     let mut servers = parse_registry(&list);
     attach_aliases(&mut servers, &list, &host.aliases().unwrap());
     assert_eq!(find_server(&servers, "files-b").unwrap().server_id, "files");
+}
+
+#[test]
+fn the_alias_map_is_bounded_so_the_list_is_still_imported() {
+    let host = Host::new();
+    // One kept entry with a long id, and dropped copies of it that each
+    // store that id again as their alias target.
+    let long_id = "k".repeat(60 * 1024);
+    let a = host.project(
+        "a",
+        Some(&file_of(
+            json!([{ "id": long_id, "name": "Files", "command": "one" }]),
+        )),
+    );
+    let copies: Vec<Value> = (0..12)
+        .map(|n| json!({ "id": format!("copy-{n:02}"), "name": "Files", "command": "one" }))
+        .collect();
+    let b = host.project("b", Some(&file_of(Value::Array(copies))));
+
+    let Import::Imported {
+        servers, aliases, ..
+    } = import_project_files(&host.store, &[a, b]).unwrap()
+    else {
+        panic!("the list was not imported");
+    };
+
+    assert_eq!(servers, 1);
+    assert!(aliases > 0 && aliases < 12, "kept {aliases} aliases");
+    assert_eq!(host.stored().unwrap()["data"][0]["id"], json!(long_id));
+    let stored = host.aliases().unwrap();
+    assert!(stored.to_string().len() <= MAX_ALIASES_BYTES);
+    let map = stored["data"].as_object().unwrap();
+    assert_eq!(map.len(), aliases);
+    assert!(map.values().all(|target| target == &json!(long_id)));
+    // The first ones in order are kept.
+    assert!(map.contains_key("copy-00"));
+}
+
+#[test]
+fn bounded_keeps_aliases_in_order_while_the_envelope_fits() {
+    let all = || std::collections::BTreeMap::from([("a", "1"), ("b", "2"), ("c", "3")]);
+    let size = |pairs: Value| envelope(pairs).to_string().len();
+    let two = size(json!({ "a": "1", "b": "2" }));
+
+    assert_eq!(bounded(all(), two + 100).1, 0);
+    let (kept, omitted) = bounded(all(), two);
+    assert_eq!(
+        kept,
+        std::collections::BTreeMap::from([("a", "1"), ("b", "2")])
+    );
+    assert_eq!(omitted, 1);
+    assert_eq!(bounded(all(), two - 1).0.len(), 1);
+    assert_eq!(bounded(all(), size(json!({})) - 1).0.len(), 0);
 }
