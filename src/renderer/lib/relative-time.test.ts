@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   formatChatCreatedTime,
   formatChatFullTime,
+  formatChatShortTime,
   formatRelativeTime,
   formatRelativeTimeFromMs,
   startOfToday,
@@ -206,5 +207,41 @@ describe('formatChatFullTime', () => {
   it('shows nothing for a missing or non-finite time', () => {
     expect(formatChatFullTime(undefined, now)).toBe('')
     expect(formatChatFullTime(Number.NaN, now)).toBe('')
+  })
+})
+
+describe('formatChatShortTime', () => {
+  const now = new Date(2026, 9, 30, 16, 0).getTime()
+
+  it('counts minutes, then hours, within today', () => {
+    expect(formatChatShortTime(now - 20_000, now)).toBe('Just now')
+    expect(formatChatShortTime(now - 9 * MINUTE, now)).toBe('9m ago')
+    expect(formatChatShortTime(new Date(2026, 9, 30, 12, 30).getTime(), now)).toBe('3h ago')
+    expect(formatChatShortTime(new Date(2026, 9, 30, 0, 0).getTime(), now)).toBe('16h ago')
+  })
+
+  it('names yesterday without a clock time', () => {
+    expect(formatChatShortTime(new Date(2026, 9, 29, 14, 10).getTime(), now)).toBe('Yesterday')
+    expect(formatChatShortTime(new Date(2026, 9, 29, 0, 0).getTime(), now)).toBe('Yesterday')
+  })
+
+  it('shows a short date before yesterday, never a clock time', () => {
+    const older = new Date(2026, 9, 28, 23, 59).getTime()
+    expect(formatChatShortTime(older, now)).toBe(
+      new Date(older).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    )
+  })
+
+  it.runIf(enUsDefaultLocale)('adds the year only when it differs', () => {
+    expect(
+      formatChatShortTime(new Date(2026, 10, 8, 9, 0).getTime(), new Date(2026, 10, 12).getTime())
+    ).toBe('Nov 8')
+    expect(formatChatShortTime(new Date(2025, 11, 31, 12, 0).getTime(), now)).toBe('Dec 31, 2025')
+  })
+
+  it('shows nothing for a missing or non-finite time', () => {
+    expect(formatChatShortTime(undefined, now)).toBe('')
+    expect(formatChatShortTime(0, now)).toBe('')
+    expect(formatChatShortTime(Number.NaN, now)).toBe('')
   })
 })

@@ -22,7 +22,7 @@ import {
 import { Spinner } from '@/components/ui/spinner'
 import { useIsMobile } from '@/hooks/use-mobile'
 import type { SessionInfo } from '@/lib/acp-api'
-import { formatChatCreatedTime, formatChatFullTime } from '@/lib/relative-time'
+import { formatChatFullTime, formatChatShortTime } from '@/lib/relative-time'
 import { cn } from '@/lib/utils'
 import { formatImportSummary, type ImportChats, useImportChats } from './use-import-chats'
 
@@ -81,7 +81,7 @@ function RowMark({ run, selected }: { run: RowRun; selected: boolean }): React.J
   if (run === 'done')
     return (
       <span className="flex size-4 shrink-0 items-center justify-center text-success">
-        <Check size={16} strokeWidth={2} aria-label="Imported" />
+        <Check size={14} strokeWidth={2} aria-label="Imported" />
       </span>
     )
   return <CheckboxMark state={selected ? 'on' : 'off'} />
@@ -109,8 +109,9 @@ function SessionOption({
   const parsed = session.updatedAt ? Date.parse(session.updatedAt) : Number.NaN
   const updated = Number.isFinite(parsed) ? parsed : undefined
   const title = sessionTitle(session)
-  // An untitled row has only its time to tell it apart: show the full one.
-  const time = title ? formatChatCreatedTime(updated) : formatChatFullTime(updated)
+  // A titled row keeps a short time so the title has room; an untitled row
+  // has only its time to tell it apart, so it shows the full one.
+  const time = title ? formatChatShortTime(updated) : formatChatFullTime(updated)
   const errorId = useId()
   const disabled = run !== 'idle'
   return (
@@ -125,8 +126,13 @@ function SessionOption({
       onFocus={onFocus}
       onKeyDown={onKeyDown}
       className={cn(
-        'flex min-h-9 cursor-default items-center gap-3 rounded-lg px-3 py-2 text-xs outline-hidden transition-[background-color,opacity] duration-150 ease-out pointer-coarse:min-h-11',
+        // Grid: mark, title and time share the first line; a failure reason
+        // spans the title and time columns below, so the time takes no width
+        // from it and the mark stays level with the title.
+        'grid min-h-9 cursor-default grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 rounded-lg px-3 py-2 text-xs outline-hidden transition-[background-color,opacity] duration-150 ease-out pointer-coarse:min-h-11',
+        // Inset so the scrolling list never clips the ring's sides.
         FOCUS_RING_CLASS,
+        'ring-inset',
         error
           ? 'bg-destructive/[0.06]'
           : selected
@@ -136,31 +142,25 @@ function SessionOption({
       )}
     >
       <RowMark run={run} selected={selected} />
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span
-          className={cn(
-            'truncate font-medium',
-            title ? 'text-foreground' : 'text-muted-foreground'
-          )}
-        >
-          {title ?? 'Untitled chat'}
-        </span>
-        {error && (
-          <span id={errorId} className="flex items-center gap-1 text-2xs text-destructive">
-            <AlertCircle size={12} aria-hidden className="shrink-0" />
-            {error}
-          </span>
+      <span
+        className={cn(
+          'col-start-2 truncate font-medium',
+          !time && 'col-span-2',
+          title ? 'text-foreground' : 'text-muted-foreground'
         )}
+      >
+        {title ?? 'Untitled chat'}
       </span>
       {time && (
+        <span className="col-start-3 tabular-nums text-2xs text-muted-foreground">{time}</span>
+      )}
+      {error && (
         <span
-          className={cn(
-            'shrink-0 tabular-nums text-2xs text-muted-foreground',
-            // With a reason under the title, the time stays on the title's line.
-            error && 'self-start pt-px'
-          )}
+          id={errorId}
+          className="col-span-2 col-start-2 flex items-center gap-1 text-xs text-destructive"
         >
-          {time}
+          <AlertCircle size={12} aria-hidden className="shrink-0" />
+          {error}
         </span>
       )}
     </div>
@@ -206,7 +206,7 @@ function SessionList({ chats }: { chats: ImportChats }): React.JSX.Element | nul
       role="listbox"
       aria-multiselectable="true"
       aria-label="Chats to import"
-      className="flex max-h-72 flex-col gap-0.5 overflow-y-auto"
+      className="flex max-h-72 flex-col gap-0.5 overflow-y-auto p-1"
     >
       {sessions.map((session, index) => (
         <SessionOption
@@ -241,11 +241,11 @@ function SelectAll({
     if (inputRef.current) inputRef.current.indeterminate = state === 'mixed'
   }, [state])
   return (
-    <div className="flex items-center justify-between gap-3 pr-3">
+    <div className="flex items-center justify-between gap-3 border-b border-border p-1 pr-4">
       <label
         className={cn(
           'flex min-h-8 min-w-0 cursor-default items-center gap-3 rounded-lg px-3 text-xs font-medium text-foreground pointer-coarse:min-h-11',
-          'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-focus-ring',
+          'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-inset has-[:focus-visible]:ring-focus-ring',
           chats.importing && 'opacity-50'
         )}
       >
@@ -311,7 +311,7 @@ function Body({ chats, agentName }: { chats: ImportChats; agentName: string }): 
     )
   }
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col overflow-hidden rounded-xl border border-border">
       <SelectAll chats={chats} total={phase.sessions.length} agentName={agentName} />
       <SessionList chats={chats} />
     </div>
@@ -414,7 +414,11 @@ export function ImportChatsDialog({
         )}
 
         <DialogFooter className="flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between sm:space-x-0">
-          <p role="status" className="min-w-0 text-xs tabular-nums text-muted-foreground">
+          <p
+            role="status"
+            className="flex min-w-0 items-center gap-2 text-xs tabular-nums text-muted-foreground"
+          >
+            {importing && <Spinner size={12} decorative />}
             {footerStatus(chats, count)}
           </p>
           <div className="flex items-center gap-2 sm:shrink-0">

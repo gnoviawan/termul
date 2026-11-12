@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { SessionInfo } from '@/lib/acp-api'
 import { type ImportableSessions, useAcpStore } from '@/stores/acp-store'
 import type { ImportSessionOutcome } from '@/stores/acp-store/types'
@@ -91,6 +91,41 @@ describe('ImportChatsDialog', () => {
       screen.getByRole('heading', { name: 'Import chats from Claude Code' })
     ).toBeInTheDocument()
     expect(screen.getByText('3 in this folder')).toBeInTheDocument()
+  })
+
+  it('gives a titled chat a short time without a clock', async () => {
+    // Midday, so "9 minutes ago" is still today.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 10, 12, 12, 0))
+    onTestFinished(() => {
+      vi.useRealTimers()
+    })
+    const yesterday = new Date()
+    yesterday.setDate(yesterday.getDate() - 1)
+    yesterday.setHours(14, 10, 0, 0)
+    seed({
+      status: 'ready',
+      agentId: 'agent-1',
+      sessions: [
+        {
+          sessionId: 'recent',
+          cwd: '/work',
+          title: 'Recent chat',
+          updatedAt: new Date(Date.now() - 9 * 60_000 - 5_000).toISOString()
+        },
+        {
+          sessionId: 'older',
+          cwd: '/work',
+          title: 'Older chat',
+          updatedAt: yesterday.toISOString()
+        }
+      ]
+    })
+    renderDialog()
+
+    const [recent, older] = await screen.findAllByRole('option')
+    expect(recent).toHaveTextContent(/^Recent chat9m ago$/)
+    expect(older).toHaveTextContent(/^Older chatYesterday$/)
   })
 
   it('names an untitled chat by its full time, never by its id', async () => {

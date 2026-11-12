@@ -109,3 +109,27 @@ export function formatChatFullTime(ms: number | undefined, now: number = Date.no
   )
   return `${date}, ${clock}`
 }
+
+/**
+ * Format when a titled chat was last active, short enough to leave its title
+ * room on a phone: "Just now", "9m ago", "3h ago" for today, "Yesterday", then
+ * a short date ("Nov 8", with the year when it is not this year). A missing,
+ * zero or non-finite timestamp yields an empty string.
+ */
+export function formatChatShortTime(ms: number | undefined, now: number = Date.now()): string {
+  if (ms === undefined || !Number.isFinite(ms) || ms <= 0) return ''
+  if (ms >= startOfToday(now)) {
+    const minutes = Math.max(0, Math.floor((now - ms) / 60_000))
+    if (minutes < 1) return 'Just now'
+    if (minutes < 60) return `${minutes}m ago`
+    return `${Math.floor(minutes / 60)}h ago`
+  }
+  if (ms >= startOfYesterday(now)) return 'Yesterday'
+  const date = new Date(ms)
+  return date.toLocaleDateString(
+    undefined,
+    date.getFullYear() === new Date(now).getFullYear()
+      ? { month: 'short', day: 'numeric' }
+      : { year: 'numeric', month: 'short', day: 'numeric' }
+  )
+}
