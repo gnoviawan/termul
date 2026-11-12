@@ -6,7 +6,8 @@ use serde_json::{json, Value};
 use super::graph::validate;
 use super::model::{
     ApplyOpsResult, Automation, Edge, EdgeSource, Isolation, LastRun, NamedTemplate, NodeId,
-    NodeSpec, Op, Port, Run, RunPolicy, RunStatus, RunTrigger, Step, StepStatus, Template, Trigger,
+    NodeSpec, Op, Parked, Port, Run, RunPolicy, RunStatus, RunTrigger, Step, StepStatus, Template,
+    Trigger,
 };
 use super::policy::run_policy;
 use super::suggest::{Cadence, Suggestion};
@@ -64,6 +65,7 @@ fn build_fixture() -> WireFixture {
                     { "name": "index", "value": "{{nodes.each.index}}" }] } },
                 { "id": "join", "label": "Join", "spec": { "kind": "merge", "mode": "any" } },
                 { "id": "pause", "label": "Pause", "spec": { "kind": "wait", "duration_ms": 3_600_000 } },
+                { "id": "gate", "label": "Ship it?", "spec": { "kind": "approval", "message": "Ship {{nodes.body.output.item}}?", "timeout_ms": 86_400_000 } },
                 { "id": "stop", "label": "Stop", "spec": { "kind": "fail", "message": "{{trigger.kind}}" } }
             ],
             "edges": [
@@ -72,7 +74,9 @@ fn build_fixture() -> WireFixture {
                 { "from": "each", "port": "out", "to": "join" },
                 { "from": "each", "port": "error", "to": "join" },
                 { "from": "join", "port": "out", "to": "pause" },
-                { "from": "pause", "port": "out", "to": "stop" }
+                { "from": "pause", "port": "out", "to": "gate" },
+                { "from": "gate", "port": "out", "to": "stop" },
+                { "from": "gate", "port": "error", "to": "stop" }
             ]
         }))
         .unwrap(),
@@ -85,6 +89,7 @@ fn build_fixture() -> WireFixture {
         summary: None,
         conversation_id: None,
         worktree_id: Some("wt-1".into()),
+        parked: None,
     };
     let running = Run {
         id: "run-2".to_string().into(),
@@ -93,7 +98,21 @@ fn build_fixture() -> WireFixture {
         finished_at: None,
         stop_reason: None,
         worktree_id: None,
+        parked: Some(Parked {
+            node_id: node_id("pause"),
+            iteration: None,
+            until: 1_773_050_461_000,
+        }),
         ..run.clone()
+    };
+    let awaiting_approval = Run {
+        id: "run-3".to_string().into(),
+        parked: Some(Parked {
+            node_id: node_id("gate"),
+            iteration: Some(1),
+            until: 1_773_133_261_000,
+        }),
+        ..running.clone()
     };
     let steps = vec![
         Step {
@@ -151,6 +170,28 @@ fn build_fixture() -> WireFixture {
             iteration: None,
             wait_until: Some(1_773_050_461_000),
         },
+        Step {
+            run_id: awaiting_approval.id.clone(),
+            node_id: node_id("gate"),
+            status: StepStatus::Waiting,
+            output: Some(json!({ "message": "Ship b?" })),
+            error: None,
+            started_at: Some(1_773_046_861_000),
+            finished_at: None,
+            iteration: Some(1),
+            wait_until: Some(1_773_133_261_000),
+        },
+        Step {
+            run_id: run.id.clone(),
+            node_id: node_id("gate"),
+            status: StepStatus::Failed,
+            output: Some(json!({ "message": "Ship a?", "decision": "rejected", "decided_at": 1_773_046_900_000_i64 })),
+            error: Some("rejected".into()),
+            started_at: Some(1_773_046_861_000),
+            finished_at: Some(1_773_046_900_000),
+            iteration: Some(0),
+            wait_until: Some(1_773_133_261_000),
+        },
     ];
     let with_tools = super::test_support::apply(
         &automation,
@@ -184,7 +225,7 @@ fn build_fixture() -> WireFixture {
             { "op": "rename", "name": "Digest" },
             { "op": "set_isolation", "isolation": "worktree_per_run" }
         ])),
-        runs: vec![run, running],
+        runs: vec![run, running, awaiting_approval],
         steps,
         suggestion: Suggestion {
             fingerprint: "3f1c9a0d5b7e2468".to_string(),

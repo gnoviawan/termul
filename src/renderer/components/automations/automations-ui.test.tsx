@@ -315,7 +315,7 @@ describe('AutomationDetail', () => {
 describe('AutomationRunDetail', () => {
   it('lists every node in graph order with its step status, duration, output and error', async () => {
     api.getAutomationRunSteps.mockResolvedValue(ok(fixtureSteps))
-    render(<AutomationRunDetail run={runWith()} />)
+    render(<AutomationRunDetail run={runWith()} onChanged={() => {}} />)
 
     const steps = within(screen.getByRole('list', { name: 'Steps' }))
     await waitFor(() => expect(steps.getByText('Succeeded')).toBeInTheDocument())
@@ -339,7 +339,7 @@ describe('AutomationRunDetail', () => {
       api.getAutomationRunSteps.mockImplementation(
         () => new Promise((resolve) => setTimeout(() => resolve(ok(fixtureSteps)), 3000))
       )
-      render(<AutomationRunDetail run={runWith({ status: 'running' })} />)
+      render(<AutomationRunDetail run={runWith({ status: 'running' })} onChanged={() => {}} />)
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(3100)
@@ -403,7 +403,7 @@ describe('AutomationRunDetail with a loop and a wait', () => {
         step('pause', 1, 'waiting', { wait_until: WAIT_UNTIL })
       ])
     )
-    render(<AutomationRunDetail run={run} />)
+    render(<AutomationRunDetail run={run} onChanged={() => {}} />)
 
     const steps = within(screen.getByRole('list', { name: 'Steps' }))
     await waitFor(() => expect(steps.getByText('Running')).toBeInTheDocument())
@@ -496,7 +496,7 @@ describe('write controls on a server that refuses remote writes', () => {
   it.each(SURFACES)('AutomationRunDetail on %s', (_, admitted) => {
     writes.admitted = admitted
     api.getAutomationRunSteps.mockReturnValue(new Promise(() => {}))
-    render(<AutomationRunDetail run={runWith({ status: 'running' })} />)
+    render(<AutomationRunDetail run={runWith({ status: 'running' })} onChanged={() => {}} />)
 
     const cancel = screen.getByRole('button', { name: 'Cancel run' })
     expectGate(cancel, admitted)

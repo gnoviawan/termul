@@ -53,6 +53,15 @@ const runGraph: Unbranded<Graph> = {
     },
     { id: 'join', label: 'Join', spec: { kind: 'merge', mode: 'any' } },
     { id: 'pause', label: 'Pause', spec: { kind: 'wait', duration_ms: 3600000 } },
+    {
+      id: 'gate',
+      label: 'Ship it?',
+      spec: {
+        kind: 'approval',
+        message: 'Ship {{nodes.body.output.item}}?',
+        timeout_ms: 86400000
+      }
+    },
     { id: 'stop', label: 'Stop', spec: { kind: 'fail', message: '{{trigger.kind}}' } }
   ],
   edges: [
@@ -61,7 +70,9 @@ const runGraph: Unbranded<Graph> = {
     { from: 'each', port: 'out', to: 'join' },
     { from: 'each', port: 'error', to: 'join' },
     { from: 'join', port: 'out', to: 'pause' },
-    { from: 'pause', port: 'out', to: 'stop' }
+    { from: 'pause', port: 'out', to: 'gate' },
+    { from: 'gate', port: 'out', to: 'stop' },
+    { from: 'gate', port: 'error', to: 'stop' }
   ]
 }
 
@@ -381,7 +392,8 @@ const typed: Unbranded<WireFixture> = {
       stop_reason: 'node post failed',
       summary: null,
       conversation_id: null,
-      worktree_id: 'wt-1'
+      worktree_id: 'wt-1',
+      parked: null
     },
     {
       id: 'run-2',
@@ -396,7 +408,24 @@ const typed: Unbranded<WireFixture> = {
       stop_reason: null,
       summary: null,
       conversation_id: null,
-      worktree_id: null
+      worktree_id: null,
+      parked: { node_id: 'pause', iteration: null, until: 1773050461000 }
+    },
+    {
+      id: 'run-3',
+      automation_id: 'auto-1',
+      revision: 1,
+      graph: runGraph,
+      trigger: 'catch_up',
+      scheduled_for: 1773046800000,
+      status: 'running',
+      started_at: 1773046800100,
+      finished_at: null,
+      stop_reason: null,
+      summary: null,
+      conversation_id: null,
+      worktree_id: null,
+      parked: { node_id: 'gate', iteration: 1, until: 1773133261000 }
     }
   ],
   steps: [
@@ -460,6 +489,28 @@ const typed: Unbranded<WireFixture> = {
       started_at: 1773046861000,
       finished_at: null,
       wait_until: 1773050461000
+    },
+    {
+      run_id: 'run-3',
+      node_id: 'gate',
+      iteration: 1,
+      status: 'waiting',
+      output: { message: 'Ship b?' },
+      error: null,
+      started_at: 1773046861000,
+      finished_at: null,
+      wait_until: 1773133261000
+    },
+    {
+      run_id: 'run-1',
+      node_id: 'gate',
+      iteration: 0,
+      status: 'failed',
+      output: { message: 'Ship a?', decision: 'rejected', decided_at: 1773046900000 },
+      error: 'rejected',
+      started_at: 1773046861000,
+      finished_at: 1773046900000,
+      wait_until: 1773133261000
     }
   ],
   run_policy: {

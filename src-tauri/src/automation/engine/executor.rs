@@ -2,8 +2,8 @@
 //! edges fired (a `merge` in `all` mode: when every one did); `out` (or
 //! `true`/`false`) edges fire on success and `error` edges on failure. A
 //! failure with no `error` edge, a `fail` node or a cancel stops the walk,
-//! and every node not run is recorded `skipped`. A `wait` parks the run: the
-//! walk ends there and records nothing more.
+//! and every node not run is recorded `skipped`. A `wait` or `approval` parks
+//! the run: the walk ends there and records nothing more.
 //!
 //! Every walk starts from the run's step rows, so a resumed run replays the
 //! steps that already finished instead of running them again.
@@ -54,8 +54,8 @@ impl Outcome {
     }
 }
 
-/// How a walk ends: the run settles, or it parks on a `wait` and resumes
-/// once `wait_until` passes.
+/// How a walk ends: the run settles, or it parks on a `wait` or `approval`
+/// and resumes once the park ends.
 pub(super) enum WalkResult {
     Settled(Outcome),
     Parked { wait_until: i64 },
@@ -230,7 +230,8 @@ impl<'a> Walk<'a> {
 
     /// Records `node` skipped; a skipped for_each skips its body too.
     fn skip(&self, node: &Node, iteration: Option<u32>) {
-        self.record(self.row(&node.id, iteration, StepStatus::Skipped));
+        // A lost skipped row costs only history: a resume skips the node again.
+        let _ = self.record(self.row(&node.id, iteration, StepStatus::Skipped));
         if node.spec.kind() == NodeKind::ForEach {
             self.skip_body(&node.id);
         }
@@ -240,7 +241,7 @@ impl<'a> Walk<'a> {
     /// no iteration.
     pub(super) fn skip_body(&self, loop_id: &NodeId) {
         for node in self.body(loop_id) {
-            self.record(self.row(&node.id, None, StepStatus::Skipped));
+            let _ = self.record(self.row(&node.id, None, StepStatus::Skipped));
         }
     }
 
@@ -260,7 +261,7 @@ impl<'a> Walk<'a> {
         let started_at = self.scope.engine.now_ms();
         let mut row = self.row(id, iteration, StepStatus::Running);
         row.started_at = Some(started_at);
-        self.record(row);
+        let _ = self.record(row);
         log::info!(
             "[Automation] run {} step {id}{} ({:?}) started",
             self.scope.run.id,
@@ -290,7 +291,14 @@ impl<'a> Walk<'a> {
         row.output = output;
         row.error = error;
         row.started_at = Some(started_at);
-        self.record(row);
+        // A result that is not stored would make a resume run the node again,
+        // so the walk stops here rather than reach a later park.
+        // A cancel stays a cancel: the run settles `cancelled` either way.
+        if let Err(error) = self.record(row) {
+            if !matches!(result, Err(NodeError::Cancelled)) {
+                return Err(NodeError::Halt(format!("{id}: step_not_recorded: {error}")));
+            }
+        }
         log::info!(
             "[Automation] run {} step {id}{} {}",
             self.scope.run.id,
@@ -315,14 +323,16 @@ impl<'a> Walk<'a> {
         }
     }
 
-    pub(super) fn record(&self, step: Step) {
+    pub(super) fn record(&self, step: Step) -> Result<(), String> {
         if let Err(error) = self.scope.engine.store.upsert_step(&step) {
             log::error!(
                 "[Automation] run {} step {} not recorded: {error}",
                 self.scope.run.id,
                 step.node_id
             );
+            return Err(error.to_string());
         }
+        Ok(())
     }
 }
 

@@ -2110,6 +2110,7 @@ pub fn run() {
             commands::automation_approve,
             commands::automation_run_now,
             commands::automation_cancel_run,
+            commands::automation_decide_approval,
             commands::automation_list_runs,
             commands::automation_run_steps,
             commands::automation_mark_seen,

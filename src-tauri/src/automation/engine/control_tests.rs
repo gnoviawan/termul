@@ -15,7 +15,7 @@ use crate::automation::store::AutomationStore;
 use crate::automation::test_support::{test_engine_on, MemoryVault, TestEngine};
 
 /// Every step row as `(node, iteration, status, error)`, in write order.
-fn rows(
+pub(super) fn rows(
     store: &AutomationStore,
     id: &RunId,
 ) -> Vec<(String, Option<u32>, StepStatus, Option<String>)> {
@@ -27,7 +27,7 @@ fn rows(
         .collect()
 }
 
-fn row(
+pub(super) fn row(
     node: &str,
     iteration: Option<u32>,
     status: StepStatus,
@@ -35,7 +35,7 @@ fn row(
     (node.to_string(), iteration, status, None)
 }
 
-fn post(f: &Fixture, body: &str) -> Value {
+pub(super) fn post(f: &Fixture, body: &str) -> Value {
     json!({ "kind": "http", "method": "POST", "url": url("/collect", &f.http),
             "body": body, "allowed_hosts": ["api.test"] })
 }
@@ -342,7 +342,11 @@ fn paused_graph(f: &Fixture) -> Value {
 }
 
 /// Waits until the run has a `waiting` step and its task has let go of it.
-async fn parked(te: &TestEngine, a: &Automation, id: &RunId) -> (String, Option<u32>, i64) {
+pub(super) async fn parked(
+    te: &TestEngine,
+    a: &Automation,
+    id: &RunId,
+) -> (String, Option<u32>, i64) {
     for _ in 0..1500 {
         let waiting = te
             .store

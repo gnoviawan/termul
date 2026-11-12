@@ -70,7 +70,8 @@ pub fn run_policy(
             | NodeSpec::Fail { .. }
             | NodeSpec::ForEach { .. }
             | NodeSpec::Merge { .. }
-            | NodeSpec::Wait { .. } => {}
+            | NodeSpec::Wait { .. }
+            | NodeSpec::Approval { .. } => {}
         }
     }
     RunPolicy {

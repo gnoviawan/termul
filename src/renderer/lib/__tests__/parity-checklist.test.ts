@@ -3004,6 +3004,13 @@ describe('Automation parity (facade)', () => {
       route: 'RUNS}/${seg(runId)}/cancel`'
     },
     {
+      fn: 'decideAutomationApproval',
+      method: 'decideApproval',
+      command: 'automation_decide_approval',
+      http: '"/api/automation-runs/{run_id}/approval"',
+      route: 'RUNS}/${seg(runId)}/approval`'
+    },
+    {
       fn: 'listAutomationRuns',
       method: 'listRuns',
       command: 'automation_list_runs',

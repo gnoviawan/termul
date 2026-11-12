@@ -20,6 +20,7 @@ import type {
   AutomationStep,
   AutomationSuggestion,
   KnownAgent,
+  NodeId,
   RunId,
   Schedule
 } from '@shared/types/automation.types'
@@ -31,6 +32,7 @@ import {
   parseAutomationChange,
   parseAutomationDetail,
   parseAutomationList,
+  parseDecided,
   parseRun,
   parseRunList,
   parseSchedulePreview,
@@ -65,6 +67,7 @@ export interface AutomationTransport {
   approve(id: AutomationId, revision: number): Reply
   runNow(id: AutomationId): Reply
   cancelRun(runId: RunId): Reply
+  decideApproval(runId: RunId, nodeId: NodeId, approved: boolean): Reply
   listRuns(id: AutomationId, limit: number): Reply
   runSteps(runId: RunId): Reply
   markSeen(id: AutomationId): Reply
@@ -89,6 +92,8 @@ export const desktopAutomationTransport: AutomationTransport = {
   approve: (id, revision) => invokeIpc('automation_approve', { id, revision }),
   runNow: (id) => invokeIpc('automation_run_now', { id }),
   cancelRun: (runId) => invokeIpc('automation_cancel_run', { runId }),
+  decideApproval: (runId, nodeId, approved) =>
+    invokeIpc('automation_decide_approval', { runId, nodeId, approved }),
   listRuns: (id, limit) => invokeIpc('automation_list_runs', { id, limit }),
   runSteps: (runId) => invokeIpc('automation_run_steps', { runId }),
   markSeen: (id) => invokeIpc('automation_mark_seen', { id }),
@@ -125,6 +130,8 @@ export const webAutomationTransport: AutomationTransport = {
   approve: (id, revision) => postJsonOnce(`${AUTOMATIONS}/${seg(id)}/approve`, { revision }),
   runNow: (id) => postJsonOnce(`${AUTOMATIONS}/${seg(id)}/run`, {}),
   cancelRun: (runId) => postJsonOnce(`${RUNS}/${seg(runId)}/cancel`, {}),
+  decideApproval: (runId, nodeId, approved) =>
+    postJsonOnce(`${RUNS}/${seg(runId)}/approval`, { node_id: nodeId, approved }),
   listRuns: (id, limit) => getJson(`${AUTOMATIONS}/${seg(id)}/runs?limit=${limit}`),
   runSteps: (runId) => getJson(`${RUNS}/${seg(runId)}/steps`),
   markSeen: (id) => postJsonOnce(`${AUTOMATIONS}/${seg(id)}/seen`, {}),
@@ -227,6 +234,30 @@ export async function runAutomationNow(id: AutomationId): Promise<IpcResult<Auto
 
 export function cancelAutomationRun(runId: RunId): Promise<IpcResult<void>> {
   return unit('cancel_run', transport().cancelRun(runId))
+}
+
+/**
+ * Approve or reject the approval node `nodeId` a run is parked on. `false`
+ * means the run had already moved on (decided elsewhere, timed out or
+ * cancelled), so there was nothing to decide.
+ */
+export async function decideAutomationApproval(
+  runId: RunId,
+  nodeId: NodeId,
+  approved: boolean
+): Promise<IpcResult<boolean>> {
+  const result = await parsed(
+    'decide_approval',
+    transport().decideApproval(runId, nodeId, approved),
+    parseDecided
+  )
+  if (result.success) {
+    log(
+      'info',
+      `decided approval run=${runId} node=${nodeId} approved=${approved} applied=${result.data}`
+    )
+  }
+  return result
 }
 
 export function listAutomationRuns(

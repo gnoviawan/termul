@@ -9,6 +9,8 @@ import type {
   AgentPolicy,
   AgentTool,
   ApplyOpsResult,
+  ApprovalDecision,
+  ApprovalStepOutput,
   Automation,
   AutomationChanged,
   AutomationDetail,
@@ -27,6 +29,7 @@ import type {
   McpToolPolicy,
   NodeId,
   NodeSpec,
+  Parked,
   RunId,
   RunPolicy,
   RunStatus,
@@ -83,6 +86,7 @@ function oneOf<T extends string>(value: unknown, path: string, allowed: readonly
 
 const RUN_STATUSES = ['running', 'succeeded', 'failed', 'cancelled', 'skipped'] as const
 const STEP_STATUSES = ['running', 'succeeded', 'failed', 'skipped', 'waiting'] as const
+const APPROVAL_DECISIONS = ['approved', 'rejected', 'timed_out'] as const
 const RUN_TRIGGERS = ['scheduled', 'catch_up', 'manual'] as const
 const PORTS = ['out', 'error', 'true', 'false', 'item'] as const
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const
@@ -187,8 +191,17 @@ function nodeSpec(v: unknown, p: string): NodeSpec {
       return { kind: 'merge', mode: oneOf(o.mode, `${p}.mode`, MERGE_MODES) }
     case 'wait':
       return { kind: 'wait', duration_ms: num(o.duration_ms, `${p}.duration_ms`) }
+    case 'approval':
+      return {
+        kind: 'approval',
+        message: str(o.message, `${p}.message`),
+        timeout_ms: num(o.timeout_ms, `${p}.timeout_ms`)
+      }
     default:
-      return fail(`${p}.kind`, 'http|agent|transform|condition|fail|for_each|merge|wait|mcp_tool')
+      return fail(
+        `${p}.kind`,
+        'http|agent|transform|condition|fail|for_each|merge|wait|approval|mcp_tool'
+      )
   }
 }
 
@@ -328,6 +341,15 @@ export function parseApplyOpsResult(v: unknown): ApplyOpsResult {
   }
 }
 
+function parked(v: unknown, p: string): Parked {
+  const o = obj(v, p)
+  return {
+    node_id: nodeId(o.node_id, `${p}.node_id`),
+    iteration: nullable(o.iteration, `${p}.iteration`, num),
+    until: num(o.until, `${p}.until`)
+  }
+}
+
 export function parseRun(v: unknown, p = 'run'): AutomationRun {
   const o = obj(v, p)
   return {
@@ -343,7 +365,8 @@ export function parseRun(v: unknown, p = 'run'): AutomationRun {
     stop_reason: nullable(o.stop_reason, `${p}.stop_reason`, str),
     summary: nullable(o.summary, `${p}.summary`, str),
     conversation_id: nullable(o.conversation_id, `${p}.conversation_id`, str),
-    worktree_id: nullable(o.worktree_id, `${p}.worktree_id`, str)
+    worktree_id: nullable(o.worktree_id, `${p}.worktree_id`, str),
+    parked: nullable(o.parked, `${p}.parked`, parked)
   }
 }
 
@@ -368,6 +391,31 @@ function step(v: unknown, p: string): AutomationStep {
 
 export function parseStepList(v: unknown): AutomationStep[] {
   return arr(v, 'steps', step)
+}
+
+/**
+ * An approval step's output, or `null` when it has another shape. Step output
+ * is free-form per node kind, so a mismatch hides the approval detail rather
+ * than failing the whole step list.
+ */
+export function parseApprovalOutput(v: unknown): ApprovalStepOutput | null {
+  try {
+    const o = obj(v, 'output')
+    const message = str(o.message, 'output.message')
+    if (o.decision === undefined) return { message }
+    return {
+      message,
+      decision: oneOf<ApprovalDecision>(o.decision, 'output.decision', APPROVAL_DECISIONS),
+      decided_at: num(o.decided_at, 'output.decided_at')
+    }
+  } catch (err) {
+    if (err instanceof WireShapeError) return null
+    throw err
+  }
+}
+
+export function parseDecided(v: unknown): boolean {
+  return bool(v, 'decided')
 }
 
 export interface SchedulePreview {

@@ -1,7 +1,9 @@
 import type {
   AgentTool,
+  ApprovalDecision,
   Automation,
   AutomationNode,
+  AutomationRun,
   NodeKind,
   NodeSpec,
   RunStatus,
@@ -14,6 +16,7 @@ import {
   GitBranch,
   GitMerge,
   Globe,
+  Hand,
   Hourglass,
   Repeat,
   Wrench,
@@ -55,7 +58,36 @@ export const NODE_KIND_PRESENTATION: Record<NodeKind, { label: string; Icon: typ
   for_each: { label: 'For each', Icon: Repeat },
   merge: { label: 'Merge', Icon: GitMerge },
   wait: { label: 'Wait', Icon: Hourglass },
+  approval: { label: 'Approval', Icon: Hand },
   mcp_tool: { label: 'MCP tool', Icon: Wrench }
+}
+
+export const DECISION_PRESENTATION: Record<ApprovalDecision, { label: string; className: string }> =
+  {
+    approved: { label: 'Approved', className: 'text-success' },
+    rejected: { label: 'Rejected', className: 'text-destructive' },
+    timed_out: { label: 'Timed out', className: 'text-destructive' }
+  }
+
+const WAITING_FOR_APPROVAL = { label: 'Waiting for approval', className: 'text-warning' }
+
+export interface ParkedApproval {
+  node: AutomationNode
+  iteration: number | null
+  until: number
+}
+
+/** The approval node a run is parked on, from the run's own graph; null for a wait or no park. */
+export function parkedApproval(run: AutomationRun): ParkedApproval | null {
+  if (run.parked === null) return null
+  const { node_id, iteration, until } = run.parked
+  const node = run.graph.nodes.find((candidate) => candidate.id === node_id)
+  return node?.spec.kind === 'approval' ? { node, iteration, until } : null
+}
+
+/** A run parked on an approval reads as waiting for it; its status stays `running`. */
+export function runStatusPresentation(run: AutomationRun): { label: string; className: string } {
+  return parkedApproval(run) ? WAITING_FOR_APPROVAL : STATUS_PRESENTATION[run.status]
 }
 
 const DATE_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
@@ -134,6 +166,8 @@ export function nodeKeyDetail(spec: NodeSpec): string {
       return spec.mode === 'all' ? 'When every branch ran' : 'When any branch ran'
     case 'wait':
       return `Wait ${formatDuration(spec.duration_ms)}`
+    case 'approval':
+      return spec.message
     case 'mcp_tool':
       return spec.tool
   }

@@ -684,6 +684,59 @@ fn for_each_and_wait_bounds() {
     );
 }
 
+fn with_gate(timeout_ms: u64, message: &str) -> Automation {
+    apply(
+        &sample_automation(),
+        json!([
+            { "op": "add_node", "node": { "id": "gate", "label": "Post it?", "spec": {
+                "kind": "approval", "message": message, "timeout_ms": timeout_ms } } },
+            { "op": "disconnect", "edge": { "from": "shape", "port": "out", "to": "post" } },
+            { "op": "connect", "edge": { "from": "shape", "port": "out", "to": "gate" } },
+            { "op": "connect", "edge": { "from": "gate", "port": "out", "to": "post" } },
+            { "op": "connect", "edge": { "from": "gate", "port": "error", "to": "alert" } }
+        ]),
+    )
+}
+
+#[test]
+fn approval_nodes_route_out_and_error_within_timeout_bounds() {
+    let message = "Post {{nodes.shape.output.text}}?";
+    for ok in [60_000, 604_800_000] {
+        assert_eq!(codes(&with_gate(ok, message)), vec![], "{ok}");
+    }
+    for out_of_range in [59_999, 604_800_001] {
+        assert_eq!(
+            codes(&with_gate(out_of_range, message)),
+            vec![at(IssueCode::ApprovalTimeoutOutOfRange, "gate")],
+            "{out_of_range}"
+        );
+    }
+    let true_port = apply(
+        &with_gate(60_000, message),
+        json!([{ "op": "connect", "edge": { "from": "gate", "port": "true", "to": "alert" } }]),
+    );
+    assert_eq!(codes(&true_port), vec![at(IssueCode::IllegalPort, "gate")]);
+    assert_eq!(
+        codes(&with_gate(60_000, "Key {{secrets.API_KEY}}")),
+        vec![at(IssueCode::SecretNotAllowed, "gate")]
+    );
+}
+
+#[test]
+fn an_approval_may_sit_inside_a_loop_body_and_read_the_item() {
+    let a = apply(
+        &loop_automation(),
+        json!([
+            { "op": "add_node", "node": { "id": "gate", "label": "", "spec": { "kind": "approval",
+                "message": "Post {{nodes.each.item}}?", "timeout_ms": 60000 } } },
+            { "op": "disconnect", "edge": { "from": "each", "port": "item", "to": "post" } },
+            { "op": "connect", "edge": { "from": "each", "port": "item", "to": "gate" } },
+            { "op": "connect", "edge": { "from": "gate", "port": "out", "to": "post" } }
+        ]),
+    );
+    assert_eq!(codes(&a), vec![]);
+}
+
 #[test]
 fn a_body_node_with_an_edge_from_outside_the_body_is_not_closed() {
     let from_before = apply(

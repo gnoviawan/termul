@@ -18,7 +18,7 @@ use super::graph;
 use super::model::{wire_name, Automation, AutomationId, Issue, LastRun, Schedule};
 use super::schedule::{compute_next_run, ScheduleError};
 
-pub use runs::{ParkedRun, SettleOutcome};
+pub use runs::{ParkEnd, SettleOutcome};
 
 pub const DB_FILE_NAME: &str = "automations.sqlite";
 
@@ -203,6 +203,22 @@ impl AutomationStore {
 
     fn conn(&self) -> StoreResult<MutexGuard<'_, Connection>> {
         self.db.lock().map_err(|_| StoreError::Poisoned)
+    }
+
+    /// Makes every write of `node_id`'s step as `status` fail, the way a full
+    /// disk would.
+    #[cfg(test)]
+    pub(crate) fn fail_step_writes(&self, node_id: &str, status: &str) {
+        let when = format!("NEW.node_id = '{node_id}' AND NEW.status = '{status}'");
+        self.conn()
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TRIGGER fail_insert_{node_id} BEFORE INSERT ON automation_step
+                 WHEN {when} BEGIN SELECT RAISE(ABORT, 'disk full'); END;
+                 CREATE TRIGGER fail_update_{node_id} BEFORE UPDATE ON automation_step
+                 WHEN {when} BEGIN SELECT RAISE(ABORT, 'disk full'); END;"
+            ))
+            .unwrap();
     }
 
     pub fn create(&self, automation: &Automation, now_ms: i64) -> StoreResult<Automation> {
