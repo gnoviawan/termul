@@ -67,9 +67,9 @@ function card(nodeId: string): HTMLElement {
 const edgeCount = () => document.querySelectorAll('.react-flow__edge').length
 const status = () => screen.getByTestId('draft-status').textContent
 
-function open(phone = false) {
+function open(phone = false, shown = detail) {
   const onChanged = vi.fn()
-  render(<AutomationEditor detail={detail} phone={phone} onClose={vi.fn()} onChanged={onChanged} />)
+  render(<AutomationEditor detail={shown} phone={phone} onClose={vi.fn()} onChanged={onChanged} />)
   return { onChanged }
 }
 
@@ -131,6 +131,29 @@ describe('AutomationEditor', () => {
     expect(screen.queryByText('Tap a node to connect')).toBeNull()
     expect(edgeCount()).toBe(3)
     expect(status()).toBe('1 unsaved')
+  })
+
+  it('on the phone, shows Approve while clean and only Discard and Save while dirty', () => {
+    open(
+      true,
+      detailWith({ revision: 7, approved_revision: 6, graph: { nodes, edges }, layout: {} })
+    )
+    const button = (name: string) => screen.queryByRole('button', { name })
+
+    expect(button('Approve')).not.toBeNull()
+    expect([button('Discard'), button('Save'), button('Approve and arm')]).toEqual([
+      null,
+      null,
+      null
+    ])
+
+    fireEvent.click(handle('check', 'true'))
+    fireEvent.click(within(card('shape')).getByText('Shape'))
+
+    expect(status()).toBe('1 unsaved')
+    expect(button('Discard')).not.toBeNull()
+    expect(button('Save')).not.toBeNull()
+    expect(button('Approve')).toBeNull()
   })
 
   it('cancels a tap-to-connect from the banner', () => {

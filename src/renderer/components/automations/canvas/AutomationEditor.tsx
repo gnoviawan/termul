@@ -170,7 +170,7 @@ export function AutomationEditor({
       title={dirty ? 'Save first' : draft.issues.length > 0 ? 'Fix the issues first' : undefined}
       onClick={() => void approve()}
     >
-      {approving ? 'Approving…' : automation.enabled ? 'Approve and arm' : 'Approve'}
+      {approving ? 'Approving…' : automation.enabled && !phone ? 'Approve and arm' : 'Approve'}
     </Button>
   )
 
@@ -226,16 +226,21 @@ export function AutomationEditor({
             </span>
           </span>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="pointer-coarse:h-11"
-          disabled={!dirty || editor.saving}
-          onClick={editor.discard}
-        >
-          Discard
-        </Button>
-        {saveButton}
+        {/* At 390 px the phone has room for one action group: edits, or approval. */}
+        {(!phone || dirty) && (
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="pointer-coarse:h-11"
+              disabled={!dirty || editor.saving}
+              onClick={editor.discard}
+            >
+              Discard
+            </Button>
+            {saveButton}
+          </>
+        )}
         {(!phone || !dirty) && approveButton}
       </header>
 
