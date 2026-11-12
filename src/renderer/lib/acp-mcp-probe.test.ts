@@ -56,6 +56,26 @@ describe('acp-mcp-probe', () => {
     expect(result.tools).toEqual([{ name: 'read_file', description: 'read a file' }])
   })
 
+  it("keeps a tool's object inputSchema and turns any other inputSchema into null", async () => {
+    const schema = { type: 'object', properties: { path: { type: 'string' } } }
+    vi.mocked(invoke).mockResolvedValue({
+      status: 'connected',
+      tools: [
+        { name: 'read_file', inputSchema: schema },
+        { name: 'odd', inputSchema: ['not', 'a', 'schema'] },
+        { name: 'text', inputSchema: 'object' },
+        { name: 'bare' }
+      ]
+    })
+    const result = await probeMcpServer(stdioServer)
+    expect(result.tools).toStrictEqual([
+      { name: 'read_file', inputSchema: schema },
+      { name: 'odd', inputSchema: null },
+      { name: 'text', inputSchema: null },
+      { name: 'bare' }
+    ])
+  })
+
   it('passes through a disconnected outcome without throwing (Tauri)', async () => {
     vi.mocked(invoke).mockResolvedValue({
       status: 'disconnected',

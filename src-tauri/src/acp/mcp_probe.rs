@@ -135,6 +135,10 @@ pub struct McpToolInfo {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The tool's `inputSchema`, so an automation step can offer its
+    /// arguments as fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, schemars::JsonSchema)]
@@ -658,6 +662,14 @@ async fn check_oauth_required(url: &str, headers: &[McpNameValuePair]) -> Option
     }
     None
 }
+fn tool_info(tool: rmcp::model::Tool) -> McpToolInfo {
+    McpToolInfo {
+        name: tool.name.to_string(),
+        description: tool.description.map(|cow| cow.to_string()),
+        input_schema: Some(serde_json::Value::Object((*tool.input_schema).clone())),
+    }
+}
+
 /// Drive an initialized rmcp client service: list all tools (paginated), then
 /// cancel (tear down the connection — the probe is one-shot). Maps the rmcp
 /// `Tool` model to the trimmed `McpToolInfo` the UI surfaces.
@@ -670,13 +682,7 @@ async fn drive_running(connection: McpConnection) -> ProbeResult {
             return ProbeResult::disconnected(format!("tools/list failed: {error}"));
         }
     };
-    let mapped = tools
-        .into_iter()
-        .map(|tool| McpToolInfo {
-            name: tool.name.to_string(),
-            description: tool.description.map(|cow| cow.to_string()),
-        })
-        .collect();
+    let mapped = tools.into_iter().map(tool_info).collect();
     // Tear down the connection (one-shot probe — no persistent hold).
     let _ = running.cancel().await;
     ProbeResult::connected(mapped)

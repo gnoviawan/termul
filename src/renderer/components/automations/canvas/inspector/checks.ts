@@ -8,8 +8,14 @@ import type { NamedTemplate } from '@shared/types/automation.types'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-/** `FOR_EACH_MAX_ITERATIONS`, `WAIT_MAX_MS`, `APPROVAL_{MIN,MAX}_TIMEOUT_MS` in `model.rs`. */
+/**
+ * `FOR_EACH_MAX_ITERATIONS`, `WAIT_MAX_MS`, `APPROVAL_{MIN,MAX}_TIMEOUT_MS`,
+ * `AGENT_MAX_TIMEOUT_MS`, `AGENT_MAX_ATTEMPTS` and `MCP_MAX_TIMEOUT_MS` in `model.rs`.
+ */
 export const LIMITS = {
+  agentMaxTimeoutMs: 900_000,
+  agentMaxAttempts: 3,
+  mcpMaxTimeoutMs: 300_000,
   forEachMaxIterations: 100,
   waitMaxMs: 7 * DAY_MS,
   approvalMinMs: 60_000,
@@ -31,6 +37,15 @@ export function maxIterationsError(n: number): string | null {
   return n < 1 || n > LIMITS.forEachMaxIterations
     ? `Between 1 and ${LIMITS.forEachMaxIterations}`
     : null
+}
+
+/** `timeout_ms` must be 1..=`maxMs`; the field counts seconds. */
+export function timeoutError(ms: number, maxMs: number): string | null {
+  return ms < 1 || ms > maxMs ? `Between 1 and ${maxMs / 1000} seconds` : null
+}
+
+export function maxAttemptsError(n: number): string | null {
+  return n < 1 || n > LIMITS.agentMaxAttempts ? `Between 1 and ${LIMITS.agentMaxAttempts}` : null
 }
 
 export function requiredError(text: string): string | null {

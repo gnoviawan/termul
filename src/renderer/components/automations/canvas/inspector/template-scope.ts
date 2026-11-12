@@ -53,7 +53,7 @@ export function ancestors(graph: Graph, id: NodeId): Set<string> {
 }
 
 /** `graph::loop_bodies`: each for_each's `item` targets and everything they reach. */
-function loopBodies(graph: Graph): Map<string, Set<string>> {
+export function loopBodies(graph: Graph): Map<string, Set<string>> {
   const adjacency = children(graph)
   const ids = new Set<string>(graph.nodes.map((node) => node.id))
   const bodies = new Map<string, Set<string>>()

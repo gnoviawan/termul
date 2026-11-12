@@ -5,6 +5,7 @@
 //! engine; every wire view carries the server id, name, transport and tool
 //! schemas only.
 
+mod arguments;
 mod client;
 mod registry;
 mod tools;
@@ -15,6 +16,7 @@ use futures::future::BoxFuture;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+pub use arguments::{is_literal, literal_argument, Literal};
 pub use client::RmcpClient;
 pub use registry::{parse_registry, store_servers, McpServerEntry, ProjectMcpServers};
 pub use tools::{
@@ -85,6 +87,8 @@ pub trait McpClient: Send + Sync {
     ) -> BoxFuture<'a, Result<CallOutcome, McpFailure>>;
 }
 
+#[cfg(test)]
+mod arguments_tests;
 #[cfg(test)]
 mod client_tests;
 #[cfg(test)]

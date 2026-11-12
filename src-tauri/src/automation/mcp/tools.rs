@@ -2,6 +2,7 @@
 //! and runs. [`McpTools::lookup`] never blocks: a missing or stale listing
 //! answers from what it has and lists the server again in the background.
 //! [`McpTools::refresh`] lists every server now, for the capabilities answer.
+//! [`McpTools::input_schema`] lists a server now when none is kept, for a run.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -10,6 +11,7 @@ use std::time::Duration;
 use futures::future::join_all;
 use parking_lot::Mutex;
 use serde::Serialize;
+use serde_json::Value;
 
 use super::{
     McpClient, McpFailure, McpServerConfig, McpServerEntry, ProjectMcpServers, ToolSchema,
@@ -229,6 +231,47 @@ impl McpTools {
             }
         }
         lookup
+    }
+
+    /// The input schema of `tool` in the listing kept for `server`'s current
+    /// config, else from listing `server` now within [`LISTING_DEADLINE`] and
+    /// keeping the result. `None` when that listing fails or lacks `tool`.
+    /// Concurrent callers each list: only background lookups share one.
+    pub async fn input_schema(
+        &self,
+        project_id: &str,
+        server: &McpServerEntry,
+        tool: &str,
+    ) -> Option<Value> {
+        if let Some(schema) = self.kept_input_schema(project_id, server, tool) {
+            return Some(schema);
+        }
+        let Listing::Ready { tools, .. } = self.list(project_id, server).await else {
+            return None;
+        };
+        tools
+            .into_iter()
+            .find(|t| t.name == tool)
+            .map(|t| t.input_schema)
+    }
+
+    fn kept_input_schema(
+        &self,
+        project_id: &str,
+        server: &McpServerEntry,
+        tool: &str,
+    ) -> Option<Value> {
+        let key = (project_id.to_string(), server.server_id.clone());
+        let identity = identity(&server.config);
+        let state = self.state.lock();
+        let entry = state.entries.get(&key).filter(|e| e.identity == identity)?;
+        let Listing::Ready { tools, .. } = &entry.listing else {
+            return None;
+        };
+        tools
+            .iter()
+            .find(|t| t.name == tool)
+            .map(|t| t.input_schema.clone())
     }
 
     /// Lists every enabled server of the project concurrently, each within

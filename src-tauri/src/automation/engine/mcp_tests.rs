@@ -152,6 +152,120 @@ async fn structured_content_is_the_output_and_arguments_keep_their_json_type() {
     );
 }
 
+/// `label(draft: boolean, title: string)`.
+fn label_tool() -> crate::automation::mcp::ToolSchema {
+    tool(
+        "label",
+        json!({ "type": "object",
+                "properties": { "draft": { "type": "boolean" }, "title": { "type": "string" } } }),
+        None,
+    )
+}
+
+fn label_call(draft: &str) -> Value {
+    call_node(
+        "label",
+        json!([{ "name": "draft", "value": draft }, { "name": "title", "value": "true" }]),
+        5_000,
+    )
+}
+
+fn sent_arguments(fake: &FakeMcp) -> Vec<Value> {
+    fake.calls
+        .lock()
+        .iter()
+        .map(|call| Value::Object(call.arguments.clone()))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_literal_argument_takes_the_type_its_kept_input_schema_declares() {
+    let f = fixture();
+    f.fake.lists("files", Ok(vec![label_tool()]));
+    f.te.engine.mcp().refresh("p1").await;
+    let a = manual(&f.te, graph(label_call("true"), json!([]), json!([])));
+    let run = run_to_end(&f.te, &a).await;
+    assert_eq!(run.status, RunStatus::Succeeded);
+    assert_eq!(
+        f.fake.list_count(),
+        1,
+        "the kept listing answers; no second listing"
+    );
+    assert_eq!(
+        sent_arguments(&f.fake),
+        vec![json!({ "draft": true, "title": "true" })]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_literal_argument_with_no_kept_listing_is_typed_after_one_listing() {
+    let f = fixture();
+    f.fake.lists("files", Ok(vec![label_tool()]));
+    let a = manual(&f.te, graph(label_call("true"), json!([]), json!([])));
+    let run = run_to_end(&f.te, &a).await;
+    assert_eq!(run.status, RunStatus::Succeeded);
+    assert_eq!(f.fake.list_count(), 1);
+    assert_eq!(
+        sent_arguments(&f.fake),
+        vec![json!({ "draft": true, "title": "true" })]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn arguments_that_all_have_holes_never_list_the_server() {
+    let f = fixture();
+    f.fake.lists("files", Ok(vec![label_tool()]));
+    let a = manual(
+        &f.te,
+        graph(
+            call_node(
+                "label",
+                json!([{ "name": "draft", "value": "{{nodes.seed.output}}" }]),
+                5_000,
+            ),
+            json!([]),
+            json!([]),
+        ),
+    );
+    let run = run_to_end(&f.te, &a).await;
+    assert_eq!(run.status, RunStatus::Succeeded);
+    assert_eq!(f.fake.list_count(), 0);
+    assert_eq!(
+        sent_arguments(&f.fake),
+        vec![json!({ "draft": { "n": 1_000 } })]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_listing_sends_literal_arguments_as_text_and_the_step_still_runs() {
+    let f = fixture();
+    f.fake.lists("files", Ok(vec![label_tool()]));
+    *f.fake.list_failure.lock() = Some(McpFailure::Unavailable("down".into()));
+    let a = manual(&f.te, graph(label_call("true"), json!([]), json!([])));
+    let run = run_to_end(&f.te, &a).await;
+    assert_eq!(run.status, RunStatus::Succeeded);
+    assert_eq!(f.fake.list_count(), 1);
+    assert_eq!(
+        sent_arguments(&f.fake),
+        vec![json!({ "draft": "true", "title": "true" })]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_literal_that_fits_no_declared_type_fails_the_step_before_the_call() {
+    let f = fixture();
+    f.fake.lists("files", Ok(vec![label_tool()]));
+    f.te.engine.mcp().refresh("p1").await;
+    let a = manual(&f.te, graph(label_call("maybe"), json!([]), json!([])));
+    let run = run_to_end(&f.te, &a).await;
+    assert_eq!(run.status, RunStatus::Failed);
+    assert_eq!(
+        step(&f.te, &run, "call"),
+        failed("mcp_argument_invalid: argument draft is not a valid boolean")
+    );
+    assert_eq!(sent_arguments(&f.fake), Vec::<Value>::new());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_declared_output_schema_requires_matching_structured_content() {
     let f = fixture();
