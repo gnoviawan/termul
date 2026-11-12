@@ -408,3 +408,82 @@ fn the_aliases_survive_a_rerun_and_a_reopen() {
         Some(envelope(json!({ "2": "1" })))
     );
 }
+
+#[test]
+fn an_alias_map_a_failed_import_left_is_replaced_by_the_one_merged_with_the_stored_list() {
+    let host = Host::new();
+    // An earlier attempt stored its aliases, then failed to store the list.
+    host.store
+        .insert_if_absent(ALIASES_KEY, envelope(json!({ "3": "1", "2": "9" })), 1)
+        .unwrap();
+    let a = host.project(
+        "a",
+        Some(&file_of(
+            json!([{ "id": "1", "name": "Files", "command": "one" }]),
+        )),
+    );
+    let b = host.project(
+        "b",
+        Some(&file_of(
+            json!([{ "id": "2", "name": "Files", "command": "one" }]),
+        )),
+    );
+
+    assert_eq!(
+        import_project_files(&host.store, &[a.clone(), b]).unwrap(),
+        Import::Imported {
+            servers: 1,
+            files: 2,
+            aliases: 1
+        }
+    );
+    assert_eq!(host.aliases(), Some(envelope(json!({ "2": "1" }))));
+
+    // With no alias left to record, the stale map is emptied, not kept.
+    let fresh = Host::new();
+    fresh
+        .store
+        .insert_if_absent(ALIASES_KEY, envelope(json!({ "2": "1" })), 1)
+        .unwrap();
+    let only = fresh.project(
+        "a",
+        Some(&file_of(
+            json!([{ "id": "1", "name": "Files", "command": "one" }]),
+        )),
+    );
+    import_project_files(&fresh.store, &[only]).unwrap();
+    assert_eq!(fresh.aliases(), Some(envelope(json!({}))));
+}
+
+#[test]
+fn an_alias_and_its_target_are_trimmed_as_automation_reads_ids() {
+    use crate::automation::mcp::{attach_aliases, find_server, parse_registry};
+
+    let host = Host::new();
+    let a = host.project(
+        "a",
+        Some(&file_of(
+            json!([{ "id": " files ", "name": "Files", "command": "one" }]),
+        )),
+    );
+    let b = host.project(
+        "b",
+        Some(&file_of(
+            json!([{ "id": " files-b ", "name": "Files", "command": "one" }]),
+        )),
+    );
+    import_project_files(&host.store, &[a, b]).unwrap();
+
+    assert_eq!(
+        host.aliases(),
+        Some(envelope(json!({ "files-b": "files" })))
+    );
+    let list = host.stored().unwrap();
+    assert_eq!(
+        list["data"][0]["id"], " files ",
+        "the list keeps its values"
+    );
+    let mut servers = parse_registry(&list);
+    attach_aliases(&mut servers, &list, &host.aliases().unwrap());
+    assert_eq!(find_server(&servers, "files-b").unwrap().server_id, "files");
+}

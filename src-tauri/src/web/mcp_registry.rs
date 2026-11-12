@@ -73,10 +73,13 @@ pub fn import_registered_project_files(
 /// taken, or with a taken name and the same launch, is a duplicate and is
 /// dropped; a taken name with a different launch is kept under the first
 /// free `<name>-<n>`. The id of an entry dropped for its name and launch is
-/// stored under [`ALIASES_KEY`] as an alias of the kept entry, before the
-/// list, so a failed write leaves no list and the next start imports again.
-/// Missing files are skipped silently, unreadable or malformed ones with a
-/// warning. Writes at most once: a rerun finds the list.
+/// stored under [`ALIASES_KEY`] as an alias of the kept entry, trimmed as
+/// automation reads ids. The alias map is replaced before the list is
+/// inserted, on every attempt: the list's insert commits the import, so a
+/// failed write leaves no list, the next start imports again, and the map
+/// that stays is the one merged with the list that is stored. Missing files
+/// are skipped silently, unreadable or malformed ones with a warning. A
+/// rerun with the list stored writes nothing.
 pub fn import_project_files(
     store: &WebStore,
     project_roots: &[PathBuf],
@@ -97,11 +100,13 @@ pub fn import_project_files(
     let servers = merged.entries.len();
     let aliases = merged.kept_aliases();
     let alias_count = aliases.len();
-    if alias_count > 0 {
-        let value = json!({ "_version": STORED_VALUE_VERSION, "data": aliases });
-        if !store.insert_if_absent(ALIASES_KEY, value, unix_ms())? {
-            warn!("kept the MCP server aliases already in the store");
+    let stale_aliases = store.peek(ALIASES_KEY)?.is_some();
+    if alias_count > 0 || stale_aliases {
+        if stale_aliases {
+            warn!("replacing the MCP server aliases an import that stored no list left");
         }
+        let value = json!({ "_version": STORED_VALUE_VERSION, "data": aliases });
+        store.replace_as_host(ALIASES_KEY, value, unix_ms())?;
     }
     let value = json!({ "_version": STORED_VALUE_VERSION, "data": merged.entries });
     if !store.insert_if_absent(STORE_KEY, value, unix_ms())? {
@@ -154,7 +159,7 @@ struct Merged {
     /// The name each kept entry arrived with, its launch, and its id.
     launches: Vec<(String, Value, String)>,
     /// The id of each entry dropped for a kept entry's name and launch, to
-    /// the kept entry's id.
+    /// the kept entry's id, both trimmed.
     aliases: BTreeMap<String, String>,
 }
 
@@ -172,7 +177,10 @@ impl Merged {
             .iter()
             .find(|(kept, kept_launch, _)| *kept == name && *kept_launch == launch)
         {
-            self.aliases.entry(id).or_insert_with(|| kept_id.clone());
+            // Trimmed, as `automation::mcp::parse_registry` reads stored ids.
+            self.aliases
+                .entry(id.trim().to_string())
+                .or_insert_with(|| kept_id.trim().to_string());
             return;
         }
         let taken: HashSet<&str> = self
@@ -191,9 +199,10 @@ impl Merged {
 
     /// The aliases, less any id a later kept entry has: that id names it.
     fn kept_aliases(&self) -> BTreeMap<&str, &str> {
+        let kept: HashSet<&str> = self.ids.iter().map(|id| id.trim()).collect();
         self.aliases
             .iter()
-            .filter(|(alias, _)| !self.ids.contains(*alias))
+            .filter(|(alias, _)| !kept.contains(alias.as_str()))
             .map(|(alias, kept)| (alias.as_str(), kept.as_str()))
             .collect()
     }

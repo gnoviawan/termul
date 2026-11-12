@@ -123,6 +123,7 @@ fn an_alias_attaches_only_to_an_enabled_entry_and_never_shadows_an_id() {
     let mut entries = parse_registry(&stored_list());
     attach_aliases(
         &mut entries,
+        &stored_list(),
         &json!({ "_version": 1, "data": {
             "old-files": "srv-1",
             "older-files": "srv-1",
@@ -148,11 +149,31 @@ fn an_alias_attaches_only_to_an_enabled_entry_and_never_shadows_an_id() {
     assert!(find_server(&entries, "old-gone").is_none());
 
     let mut bare = parse_registry(&stored_list());
-    attach_aliases(&mut bare, &json!({ "old-files": "srv-1" }));
+    attach_aliases(&mut bare, &stored_list(), &json!({ "old-files": "srv-1" }));
     assert_eq!(find_server(&bare, "old-files").unwrap().server_id, "srv-1");
     let mut wrong = parse_registry(&stored_list());
-    attach_aliases(&mut wrong, &json!(["old-files"]));
+    attach_aliases(&mut wrong, &stored_list(), &json!(["old-files"]));
     assert!(find_server(&wrong, "old-files").is_none());
+}
+
+#[test]
+fn an_alias_never_takes_over_the_id_of_a_disabled_or_unparsed_stored_entry() {
+    let list = stored_list();
+    let mut entries = parse_registry(&list);
+    attach_aliases(
+        &mut entries,
+        &json!({ "_version": 1, "data": list }),
+        &json!({ "srv-2": "srv-1", "srv-4": "srv-1", "old-files": "srv-1" }),
+    );
+    assert_eq!(
+        aliases_of(&entries),
+        vec![("srv-1", vec!["old-files"]), ("srv-3", vec![])]
+    );
+    assert!(
+        find_server(&entries, "srv-2").is_none(),
+        "a disabled server's id runs nothing"
+    );
+    assert!(find_server(&entries, "srv-4").is_none());
 }
 
 #[test]

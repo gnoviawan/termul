@@ -24,9 +24,9 @@ pub const LISTING_DEADLINE: Duration = Duration::from_secs(10);
 /// A listing older than this is still answered and listed again.
 pub const STALE_AFTER_MS: i64 = 60_000;
 
-/// Called with `(project_id, id)` for a server's id and each of its aliases
-/// when its listing changed.
-pub type OnListingChanged = Arc<dyn Fn(&str, &str) + Send + Sync>;
+/// Called once with `(project_id, ids)` when a server's listing changed;
+/// `ids` is the server's id followed by its aliases.
+pub type OnListingChanged = Arc<dyn Fn(&str, &[String]) + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Listing {
@@ -348,10 +348,11 @@ impl McpTools {
             changed
         };
         if changed {
-            (self.on_change)(project_id, &server.server_id);
-            for alias in &server.aliases {
-                (self.on_change)(project_id, alias);
-            }
+            let ids: Vec<String> = std::iter::once(&server.server_id)
+                .chain(&server.aliases)
+                .cloned()
+                .collect();
+            (self.on_change)(project_id, &ids);
         }
     }
 }

@@ -2,7 +2,7 @@
 //! web store (see `web::mcp_registry`), the same for every project, with the
 //! ids the one-time import dropped as aliases of the server it kept.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -98,8 +98,9 @@ fn registry_items(value: &Value) -> Option<&Vec<Value>> {
 /// Gives each entry the ids that `aliases` (`{ droppedId: keptId }`, bare or
 /// in the `{ _version, data }` envelope) maps to its id. An alias of an id
 /// that is not in `entries` (a deleted or disabled server) is not attached,
-/// and neither is one that is itself an entry's id: that id names its entry.
-pub fn attach_aliases(entries: &mut [McpServerEntry], aliases: &Value) {
+/// and neither is one that an item of the stored `list` has as its id,
+/// enabled or not: that id names its own entry, or nothing while disabled.
+pub fn attach_aliases(entries: &mut [McpServerEntry], list: &Value, aliases: &Value) {
     let map = match aliases {
         Value::Object(map) => match map.get("data") {
             Some(Value::Object(data)) => data,
@@ -112,6 +113,12 @@ pub fn attach_aliases(entries: &mut [McpServerEntry], aliases: &Value) {
             return;
         }
     };
+    let stored_ids: HashSet<&str> = registry_items(list)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id")?.as_str())
+        .map(str::trim)
+        .collect();
     let index: HashMap<String, usize> = entries
         .iter()
         .enumerate()
@@ -119,7 +126,7 @@ pub fn attach_aliases(entries: &mut [McpServerEntry], aliases: &Value) {
         .collect();
     for (alias, kept) in map {
         let Some(kept) = kept.as_str() else { continue };
-        if index.contains_key(alias) {
+        if stored_ids.contains(alias.as_str()) {
             continue;
         }
         if let Some(&i) = index.get(kept) {
@@ -133,8 +140,11 @@ pub fn attach_aliases(entries: &mut [McpServerEntry], aliases: &Value) {
 /// cannot be read yields no servers; unreadable aliases yield none.
 pub fn store_servers(store: Arc<WebStore>) -> ProjectMcpServers {
     Arc::new(move |_project_id| {
-        let mut entries = match store.peek(STORE_KEY) {
-            Ok(Some(value)) => parse_registry(&value),
+        let (list, mut entries) = match store.peek(STORE_KEY) {
+            Ok(Some(value)) => {
+                let entries = parse_registry(&value);
+                (value, entries)
+            }
             Ok(None) => return Vec::new(),
             Err(error) => {
                 log::warn!("[Automation] MCP servers unreadable from the store: {error}");
@@ -142,7 +152,7 @@ pub fn store_servers(store: Arc<WebStore>) -> ProjectMcpServers {
             }
         };
         match store.peek(ALIASES_KEY) {
-            Ok(Some(aliases)) => attach_aliases(&mut entries, &aliases),
+            Ok(Some(aliases)) => attach_aliases(&mut entries, &list, &aliases),
             Ok(None) => {}
             Err(error) => {
                 log::warn!("[Automation] MCP server aliases unreadable from the store: {error}");

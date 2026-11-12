@@ -261,3 +261,39 @@ async fn a_node_naming_an_alias_is_checked_against_its_server_and_told_when_it_l
         }]
     );
 }
+
+#[tokio::test]
+async fn an_automation_naming_a_server_by_id_and_alias_is_told_once_per_listing() {
+    let fake = FakeMcp::new();
+    fake.lists("files", Ok(vec![search_tool()]));
+    let service = service(fake.clone());
+    let created = service.create("p1", "Both").unwrap();
+    let a = service
+        .apply_ops(
+            &created.id,
+            1,
+            &ops(json!([
+                { "op": "add_node", "node": { "id": "by_id", "label": "By id", "spec": {
+                    "kind": "mcp_tool", "server_id": "srv-1", "tool": "search", "arguments": query() } } },
+                { "op": "add_node", "node": { "id": "by_alias", "label": "By alias", "spec": {
+                    "kind": "mcp_tool", "server_id": "srv-old", "tool": "search", "arguments": query() } } },
+                { "op": "connect", "edge": { "from": "trigger", "port": "out", "to": "by_id" } },
+                { "op": "connect", "edge": { "from": "by_id", "port": "out", "to": "by_alias" } }
+            ])),
+        )
+        .unwrap()
+        .automation;
+    let mut changes = service.subscribe();
+    assert_eq!(settled(&service, &a).await, vec![]);
+    let change = tokio::time::timeout(Duration::from_secs(1), changes.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(change.automation_id, Some(a.id.clone()));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        changes.try_recv().is_err(),
+        "the id and its alias share one announcement"
+    );
+    assert_eq!(fake.list_count(), 1);
+}
