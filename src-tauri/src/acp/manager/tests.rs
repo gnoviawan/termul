@@ -408,6 +408,45 @@ fn acp_err_wire_string_tags_auth_required_only() {
     assert_eq!(acp_err_wire_string(other), "Internal error");
 }
 
+/// The wire string reaches the client that sent the command, so the raw
+/// JSON-RPC `data` that `Display` appends (here a bearer token) never rides
+/// along, for the auth, not-found, provider and untagged arms alike.
+#[test]
+fn acp_err_wire_string_drops_the_error_data() {
+    let data = serde_json::json!({"headers": {"authorization": "Bearer sk-test"}});
+    let auth = agent_client_protocol::Error::auth_required().data(data.clone());
+    assert_eq!(
+        acp_err_wire_string(auth),
+        format!("{ACP_AUTH_REQUIRED_PREFIX}: Authentication required")
+    );
+    let not_found = agent_client_protocol::Error::resource_not_found(None).data(data.clone());
+    let wire = acp_err_wire_string(not_found);
+    assert!(wire.starts_with(ACP_RESOURCE_NOT_FOUND_PREFIX), "{wire}");
+    assert!(!wire.contains("sk-test"), "{wire}");
+    let untagged = agent_client_protocol::Error::internal_error().data(data.clone());
+    assert_eq!(acp_err_wire_string(untagged), "Internal error");
+    let provider = agent_client_protocol::Error::new(-32603, "rate limited").data(
+        serde_json::json!({"status": 429, "headers": {"authorization": "Bearer sk-test"}}),
+    );
+    let wire = acp_err_wire_string(provider);
+    assert!(wire.ends_with(": rate limited"), "{wire}");
+    assert!(!wire.contains("sk-test"), "{wire}");
+}
+
+/// A load/resume failure reaches the client through `run_session_reopen` with
+/// no secret from the error data.
+#[tokio::test]
+async fn session_reopen_failure_keeps_no_secret_from_the_error_data() {
+    let state = Mutex::new(DriverState::new());
+    let error = agent_client_protocol::Error::new(-32603, "Internal error")
+        .data(serde_json::json!({"authorization": "Bearer sk-test"}));
+    let outcome = run_session_reopen("session/load", "sess-leak", "/work", &state, async {
+        Err::<LoadSessionResponse, _>(error)
+    })
+    .await;
+    assert_eq!(outcome.unwrap_err(), "Internal error");
+}
+
 /// Story 7: an agent `AuthRequired` failure on `session/load` carries the
 /// prefix through `run_session_reopen` (the WS layer maps it to
 /// `agent_auth_required`; the desktop renderer prefix-matches the string).
@@ -439,7 +478,7 @@ async fn session_reopen_resource_not_found_is_prefixed() {
     .await;
     assert_eq!(
         outcome.unwrap_err(),
-        "ACP_RESOURCE_NOT_FOUND: Resource not found: {\n  \"uri\": \"sess-gone\"\n}"
+        "ACP_RESOURCE_NOT_FOUND: Resource not found"
     );
 }
 
