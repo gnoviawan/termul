@@ -29,6 +29,8 @@ on:
       - 'src/renderer/components/chat/**'
       - 'src/renderer/components/automations/**'
       - 'src-tauri/src/automation/**'
+      - 'src/shared/types/automation.types.ts'
+      - 'src/renderer/lib/automation-*'
       - 'src-tauri/src/server_main.rs'
       - 'src-tauri/build.rs'
       - 'canvas/figcraft.pin'

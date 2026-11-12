@@ -332,7 +332,7 @@ describe('AutomationDetail', () => {
 })
 
 const runProps = {
-  automation: { trigger: { kind: 'manual' as const }, layout: {} },
+  automation: { layout: {} },
   phone: false,
   onClose: () => {},
   onChanged: () => {}
@@ -350,7 +350,7 @@ describe('AutomationRunDetail', () => {
 
     await waitFor(() => expect(stepRows()[1]).toBe('Fetch items, HTTP, Succeeded, 800 ms'))
     expect(stepRows()).toEqual([
-      'Manual, Trigger, Succeeded',
+      'Scheduled, Trigger, Succeeded',
       'Fetch items, HTTP, Succeeded, 800 ms',
       'Extract, Agent, Not reached',
       'Fetch failed, Fail, Skipped',
@@ -441,7 +441,7 @@ describe('AutomationRunDetail with a loop and a wait', () => {
 
     await waitFor(() => expect(stepRows()[1]).toBe('Each item, For each, 2 iterations, Running'))
     expect(stepRows()).toEqual([
-      'Manual, Trigger, Succeeded',
+      'Scheduled, Trigger, Succeeded',
       'Each item, For each, 2 iterations, Running',
       'Send, Transform, iteration 2, ran in 2 of 2 iterations, Succeeded, 500 ms',
       'Pause, Wait, iteration 2, ran in 2 of 2 iterations, Waiting',

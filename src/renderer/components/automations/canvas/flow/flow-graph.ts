@@ -14,6 +14,7 @@ import {
   type Viewport
 } from '@xyflow/react'
 import { logFrontendError } from '@/lib/log-api'
+import type { FiredBy } from '../../automation-format'
 import { type CanvasNodeId, drawableEdges, edgeKey, placeNodes } from '../layout'
 import type { CardData } from '../nodes/NodeCard'
 import {
@@ -36,6 +37,8 @@ export type PortEdge = Edge<{ port: Port; run?: EdgeRun }, 'port'>
 
 /** A run drawn over its graph: each card's status and how each edge took part. */
 export type RunMarks = {
+  /** What started the run; the trigger card says this instead of the automation's trigger. */
+  fired: FiredBy
   cards: ReadonlyMap<string, CardRun>
   edges: ReadonlyMap<string, EdgeRun>
 }
@@ -156,7 +159,8 @@ export function toFlow(
         trigger,
         issues: counts.get(TRIGGER) ?? 0,
         open: open(TRIGGER, OUTPUT_PORTS.trigger),
-        run: run?.cards.get(TRIGGER)
+        run: run?.cards.get(TRIGGER),
+        fired: run?.fired
       }
     ],
     ...graph.nodes.map((node): [CanvasNodeId, CardData] => [
@@ -261,7 +265,11 @@ export function panToShow(
   return centreOn(card, zoom, size)
 }
 
-/** The viewport at `zoom` that centres `card`, slots included, in the canvas left of `rightInset`. */
+/**
+ * The viewport that centres `card` in the canvas left of `rightInset`, with
+ * what it draws right of itself (`rightReach`) and its slots. When that does
+ * not fit across the free area at `zoom`, it zooms out until it does.
+ */
 export function centreOn(
   card: Pick<CardNode, 'position' | 'data'>,
   zoom: number,
@@ -269,9 +277,12 @@ export function centreOn(
 ): Viewport {
   const tall =
     CARD.height + (card.data.kind === 'step' && hasSlots(card.data.node.spec) ? SLOT_DEPTH : 0)
+  const wide = CARD.width + rightReach(card.data)
+  const free = size.width - size.rightInset
+  const fit = free > 0 ? Math.min(zoom, free / wide) : zoom
   return {
-    zoom,
-    x: (size.width - size.rightInset) / 2 - (card.position.x + CARD.width / 2) * zoom,
-    y: size.height / 2 - (card.position.y + tall / 2) * zoom
+    zoom: fit,
+    x: free / 2 - (card.position.x + wide / 2) * fit,
+    y: size.height / 2 - (card.position.y + tall / 2) * fit
   }
 }

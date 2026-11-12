@@ -88,7 +88,7 @@ const renderRun = (run: AutomationRun, onChanged = vi.fn()) => {
   render(
     <AutomationRunDetail
       run={run}
-      automation={{ trigger: { kind: 'manual' }, layout: {} }}
+      automation={{ layout: {} }}
       phone={false}
       onClose={() => {}}
       onChanged={onChanged}
@@ -130,7 +130,7 @@ describe('a run parked on an approval', () => {
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Cancel run' })).toBeEnabled()
     expect(stepRows()).toEqual([
-      'Manual, Trigger, Succeeded',
+      'Scheduled, Trigger, Succeeded',
       'Ship it?, Approval, Waiting',
       'Notify, Transform, Not reached'
     ])

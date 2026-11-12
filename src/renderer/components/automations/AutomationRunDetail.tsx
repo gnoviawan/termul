@@ -21,22 +21,23 @@ import {
   NODE_KIND_PRESENTATION,
   type ParkedApproval,
   parkedApproval,
-  runStatusPresentation
+  runStatusPresentation,
+  TRIGGER_LABEL
 } from './automation-format'
 import { AutomationFlow } from './canvas/flow/AutomationFlow'
 import { INSPECTOR_INSET } from './canvas/inspector/NodeInspector'
 import { stepOrder } from './canvas/layout'
 import { TRIGGER } from './canvas/ports'
-import { RunInspector, TRIGGER_LABEL } from './canvas/run/RunInspector'
+import { RunInspector } from './canvas/run/RunInspector'
 import { openingStep, type RunOverlay, runOverlay, type StepView } from './canvas/run/run-overlay'
 import { STEP_VIEW, StepGlyph } from './canvas/run/step-view'
 import { useRunSteps } from './use-automations'
 
-/** Until the automation loads, the trigger card says only that the run started. */
-const NO_AUTOMATION: Pick<Automation, 'trigger' | 'layout'> = {
-  trigger: { kind: 'manual' },
-  layout: {}
-}
+/**
+ * The trigger card names what started the run (`RunMarks.fired`), so the
+ * automation's trigger settings, which may have changed since, are not drawn.
+ */
+const RUN_TRIGGER: Automation['trigger'] = { kind: 'manual' }
 
 const parkKey = (approval: ParkedApproval | null): string | null =>
   approval && `${approval.node.id}:${approval.iteration ?? ''}`
@@ -56,8 +57,8 @@ export function AutomationRunDetail({
   onChanged
 }: {
   run: AutomationRun
-  /** Where the cards sit and what the trigger card says; null while it loads. */
-  automation: Pick<Automation, 'trigger' | 'layout'> | null
+  /** Where the cards sit; null while it loads. */
+  automation: Pick<Automation, 'layout'> | null
   phone: boolean
   onClose: () => void
   onChanged: () => void
@@ -89,8 +90,11 @@ export function AutomationRunDetail({
       }
     }
   }
-  const { trigger, layout } = automation ?? NO_AUTOMATION
-  const shown = useMemo(() => ({ graph: run.graph, trigger, layout }), [run.graph, trigger, layout])
+  const layout = automation?.layout
+  const shown = useMemo(
+    () => ({ graph: run.graph, trigger: RUN_TRIGGER, layout: layout ?? {} }),
+    [run.graph, layout]
+  )
   const status = runStatusPresentation(run)
   const cancel = async (): Promise<void> => {
     setCancelling(true)
@@ -101,6 +105,12 @@ export function AutomationRunDetail({
     setPicks((prev) => ({ ...prev, [loopId]: iteration }))
 
   const order = useMemo(() => stepOrder(run.graph), [run.graph])
+  // Run mode from the first render, steps or not: until they load (or if they fail) the
+  // cards carry no status, but the canvas still owns its gestures and names the trigger.
+  const marks = useMemo(
+    () => (steps === null ? { fired: overlay.fired, cards: new Map(), edges: new Map() } : overlay),
+    [steps, overlay]
+  )
   const node = run.graph.nodes.find((candidate) => candidate.id === inspected) ?? null
   const loopOfNode = node && overlay.loopOf.get(node.id)
   // Outside a loop the decide card always shows; inside one, in the iteration that waits.
@@ -157,8 +167,11 @@ export function AutomationRunDetail({
       </p>
     ),
     error && (
-      <p key="error" className="text-destructive">
+      <p key="error" className="flex flex-wrap items-center gap-x-2 text-destructive">
         Could not load the steps: {error}
+        <Button variant="outline" size="xs" className="pointer-coarse:h-11" onClick={reload}>
+          Try again
+        </Button>
       </p>
     )
   ].filter(Boolean)
@@ -209,7 +222,7 @@ export function AutomationRunDetail({
         <AutomationFlow
           automation={shown}
           phone={phone}
-          run={steps === null ? undefined : overlay}
+          run={marks}
           focus={focus}
           openOn={steps === null ? null : openingStep(overlay, order)}
           inspect={{ id: inspected, onChange: setInspected }}
@@ -224,7 +237,6 @@ export function AutomationRunDetail({
       ) : (
         <StepList
           nodes={order}
-          trigger={trigger}
           steps={steps}
           overlay={overlay}
           inspected={inspected}
@@ -252,7 +264,6 @@ function approvalMessage(approval: ParkedApproval, steps: AutomationStep[] | nul
  */
 function StepList({
   nodes,
-  trigger,
   steps,
   overlay,
   inspected,
@@ -260,7 +271,6 @@ function StepList({
   onInspect
 }: {
   nodes: readonly AutomationNode[]
-  trigger: Automation['trigger']
   steps: AutomationStep[] | null
   overlay: RunOverlay
   inspected: string | null
@@ -294,7 +304,7 @@ function StepList({
           className="flex min-h-0 flex-col overflow-y-auto px-2 pb-2"
         >
           <StepRow
-            title={trigger.kind === 'manual' ? 'Manual' : 'Schedule'}
+            title={TRIGGER_LABEL[overlay.fired.by]}
             kind="Trigger"
             status={overlay.cards.get(TRIGGER)?.status ?? 'succeeded'}
             loading={false}

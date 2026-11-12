@@ -2,6 +2,8 @@ import type { AutomationNode, NodeSpec, Port, Trigger } from '@shared/types/auto
 import { AlertCircle, Clock, Zap } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import {
+  type FiredBy,
+  firedPresentation,
   formatDuration,
   NODE_KIND_PRESENTATION,
   nodeKeyDetail,
@@ -24,7 +26,15 @@ import { STEP_VIEW, StepGlyph } from '../run/step-view'
  * with no edge yet; `run` is the step's status when the canvas shows a run.
  */
 export type CardData =
-  | { kind: typeof TRIGGER; trigger: Trigger; issues: number; open: Port[]; run?: CardRun }
+  | {
+      kind: typeof TRIGGER
+      trigger: Trigger
+      issues: number
+      open: Port[]
+      run?: CardRun
+      /** On a run: what started it, shown in place of the trigger's settings. */
+      fired?: FiredBy
+    }
   | {
       kind: 'step'
       node: AutomationNode
@@ -88,6 +98,17 @@ function present(data: CardData): {
   ports: readonly Port[]
   slots: Slot[]
 } {
+  if (data.kind === TRIGGER && data.fired) {
+    const fired = firedPresentation(data.fired)
+    return {
+      Icon: fired.Icon,
+      title: fired.title,
+      subtitle: fired.detail,
+      problem: false,
+      ports: OUTPUT_PORTS.trigger,
+      slots: []
+    }
+  }
   if (data.kind === TRIGGER) {
     const manual = data.trigger.kind === 'manual'
     return {

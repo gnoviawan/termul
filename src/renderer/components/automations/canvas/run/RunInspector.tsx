@@ -1,11 +1,6 @@
-import type {
-  AutomationNode,
-  AutomationRun,
-  AutomationStep,
-  RunTrigger
-} from '@shared/types/automation.types'
+import type { AutomationNode, AutomationRun, AutomationStep } from '@shared/types/automation.types'
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, Clock, Copy, Zap } from '@/components/icons'
+import { ChevronDown, ChevronRight, Copy } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { parseApprovalOutput } from '@/lib/automation-wire'
@@ -13,19 +8,15 @@ import { copyTextWithToast } from '@/lib/copy-text'
 import { cn } from '@/lib/utils'
 import {
   DECISION_PRESENTATION,
+  firedPresentation,
   formatDateTime,
   formatDuration,
-  NODE_KIND_PRESENTATION
+  NODE_KIND_PRESENTATION,
+  TRIGGER_LABEL
 } from '../../automation-format'
 import { InspectorPanel } from '../inspector/NodeInspector'
 import type { LoopRun, RunOverlay, StepView } from './run-overlay'
 import { STEP_VIEW, StepGlyph } from './step-view'
-
-export const TRIGGER_LABEL: Record<RunTrigger, string> = {
-  scheduled: 'Scheduled',
-  catch_up: 'Catch-up',
-  manual: 'Manual'
-}
 
 const CLOCK = new Intl.DateTimeFormat(undefined, {
   hour: 'numeric',
@@ -73,12 +64,12 @@ export function RunInspector({
   onClose: () => void
 }): React.JSX.Element {
   if (node === null) {
-    const manual = run.trigger === 'manual'
+    const fired = firedPresentation({ by: run.trigger, at: run.scheduled_for })
     return (
       <InspectorPanel
         phone={phone}
-        Icon={manual ? Zap : Clock}
-        title={manual ? 'Manual' : 'Schedule'}
+        Icon={fired.Icon}
+        title={fired.title}
         kind="Trigger"
         id="trigger"
         status={<StatusBadge status={overlay.cards.get('trigger')?.status ?? 'succeeded'} />}

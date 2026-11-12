@@ -1,6 +1,6 @@
 import type { AutomationNode, NodeId, NodeSpec, Port } from '@shared/types/automation.types'
 import { describe, expect, it } from 'vitest'
-import { CARD, SLOT_DEPTH } from '../ports'
+import { ADD_STUB_REACH, CARD, HANDLE_LABEL_WIDTH, SLOT_DEPTH } from '../ports'
 import { panToShow } from './flow-graph'
 
 const step = (spec: NodeSpec, x: number, y: number, open: Port[] = []) => ({
@@ -45,7 +45,8 @@ describe('panToShow', () => {
     expect(panToShow(step(wait, 10, y), view, size)).toBeNull()
     expect(panToShow(step(agent, 10, y), view, size)).toEqual({
       zoom: 1,
-      x: (800 - 356) / 2 - (10 + CARD.width / 2),
+      // Centred with the `error` label beside its handle.
+      x: (800 - 356) / 2 - (10 + (CARD.width + HANDLE_LABEL_WIDTH) / 2),
       y: 200 - (y + (CARD.height + SLOT_DEPTH) / 2)
     })
   })
@@ -54,10 +55,26 @@ describe('panToShow', () => {
     // The card ends 10 px left of the inspector; its "+" would reach under it.
     const x = 800 - 356 - CARD.width - 10
     expect(panToShow(step(wait, x, 10), view, size)).toBeNull()
-    expect(panToShow(step(wait, x, 10, ['out']), view, size)).toEqual({
+    const moved = panToShow(step(wait, x, 10, ['out']), view, size)
+    expect(moved).toEqual({
       zoom: 1,
-      x: (800 - 356) / 2 - (x + CARD.width / 2),
+      x: (800 - 356) / 2 - (x + (CARD.width + ADD_STUB_REACH) / 2),
       y: 200 - (10 + CARD.height / 2)
     })
+    // The "+" now ends inside the free area.
+    const end = (x + CARD.width + ADD_STUB_REACH) * (moved?.zoom ?? 0) + (moved?.x ?? 0)
+    expect(end).toBeLessThanOrEqual(800 - 356)
+  })
+
+  it('zooms out when a card and its "+" are wider than the free area', () => {
+    // 220 px left free: a 192 px card plus its 45 px "+" does not fit at zoom 1.
+    const narrow = { width: 576, height: 400, rightInset: 356 }
+    const moved = panToShow(step(wait, 300, 10, ['out']), view, narrow)
+    const zoom = 220 / (CARD.width + ADD_STUB_REACH)
+    expect(moved?.zoom).toBeCloseTo(zoom)
+    const start = 300 * zoom + (moved?.x ?? 0)
+    const end = (300 + CARD.width + ADD_STUB_REACH) * zoom + (moved?.x ?? 0)
+    expect(start).toBeCloseTo(0)
+    expect(end).toBeCloseTo(220)
   })
 })

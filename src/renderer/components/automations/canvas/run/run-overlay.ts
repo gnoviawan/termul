@@ -13,6 +13,7 @@ import type {
   Port,
   StepStatus
 } from '@shared/types/automation.types'
+import type { FiredBy } from '../../automation-format'
 import { loopBodies } from '../inspector/template-scope'
 import { type CanvasNodeId, drawableEdges, edgeKey } from '../layout'
 import { TRIGGER } from '../ports'
@@ -35,6 +36,7 @@ export type LoopRun = {
 }
 
 export type RunOverlay = {
+  fired: FiredBy
   cards: Map<CanvasNodeId, CardRun>
   /** Keyed like the canvas edges, `from:port->to`. An edge with no entry has not been decided. */
   edges: Map<string, EdgeRun>
@@ -85,7 +87,7 @@ function iterationView(rows: AutomationStep[], latestOfRunningLoop: boolean): St
 }
 
 export function runOverlay(
-  run: Pick<AutomationRun, 'graph' | 'status'>,
+  run: Pick<AutomationRun, 'graph' | 'status' | 'trigger' | 'scheduled_for'>,
   steps: readonly AutomationStep[],
   picks: Readonly<Record<string, number>>
 ): RunOverlay {
@@ -158,7 +160,7 @@ export function runOverlay(
     )
   }
 
-  return { cards, edges, loops, loopOf, rows }
+  return { fired: { by: run.trigger, at: run.scheduled_for }, cards, edges, loops, loopOf, rows }
 }
 
 /**

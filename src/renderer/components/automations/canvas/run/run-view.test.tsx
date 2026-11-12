@@ -39,6 +39,7 @@ vi.mock('../nodes/NodeCard', async (importOriginal) => {
 })
 
 import { AutomationRunDetail } from '../../AutomationRunDetail'
+import { formatDateTime } from '../../automation-format'
 import { stepOrder } from '../layout'
 import { openingStep, runOverlay } from './run-overlay'
 
@@ -150,6 +151,7 @@ const failedRun: AutomationStep[] = [
 const running = runWith({
   id: RUN,
   graph,
+  trigger: 'manual',
   status: 'running',
   finished_at: null,
   stop_reason: null,
@@ -158,6 +160,7 @@ const running = runWith({
 const failed = runWith({
   id: RUN,
   graph,
+  trigger: 'manual',
   status: 'failed',
   finished_at: T0 + 2_000,
   stop_reason: 'each: iteration 2: classify: template: nodes.each.item.kind is missing',
@@ -186,7 +189,7 @@ function renderRun(run: AutomationRun, { phone = false, onChanged = vi.fn() } = 
     <div style={{ height: 800 }}>
       <AutomationRunDetail
         run={run}
-        automation={{ trigger: { kind: 'manual' }, layout: {} }}
+        automation={{ layout: {} }}
         phone={phone}
         onClose={() => {}}
         onChanged={onChanged}
@@ -460,5 +463,37 @@ describe('the step a run opens on', () => {
         midRun.map((row) => (row.status === 'running' ? { ...row, status: 'succeeded' } : row))
       )
     ).toBeNull()
+  })
+})
+
+describe('the run view before its steps load', () => {
+  it('names what started the run, not the automation trigger', async () => {
+    api.getAutomationRunSteps.mockResolvedValue(ok(midRun))
+    renderRun({ ...running, trigger: 'scheduled', scheduled_for: T0 })
+    await waitFor(() => expect(cardStatus('fetch')).toBe('Succeeded'))
+
+    expect(within(card('trigger')).getByText('Scheduled')).toBeInTheDocument()
+    expect(within(card('trigger')).getByText(`Due ${formatDateTime(T0)}`)).toBeInTheDocument()
+    expect(steps().getAllByRole('button')[0]).toHaveAccessibleName('Scheduled, Trigger, Succeeded')
+  })
+
+  it('says when the steps fail to load, retries, and keeps phone gestures on the canvas', async () => {
+    api.getAutomationRunSteps.mockResolvedValueOnce({
+      success: false,
+      error: 'host offline',
+      code: 'NETWORK'
+    })
+    api.getAutomationRunSteps.mockResolvedValue(ok(midRun))
+    renderRun(running, { phone: true })
+
+    expect(await screen.findByText(/Could not load the steps: host offline/)).toBeInTheDocument()
+    // The run view owns the pane: one finger pans the canvas instead of scrolling the page.
+    expect(document.querySelector('.react-flow')).not.toHaveClass('automation-flow-touch')
+    expect(within(card('trigger')).getByText('Manual')).toBeInTheDocument()
+    expect(cardStatus('fetch')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(cardStatus('fetch')).toBe('Succeeded'))
+    expect(screen.queryByText(/Could not load the steps/)).toBeNull()
   })
 })

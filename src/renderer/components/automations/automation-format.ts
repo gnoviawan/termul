@@ -7,12 +7,14 @@ import type {
   NodeKind,
   NodeSpec,
   RunStatus,
+  RunTrigger,
   StepStatus,
   Trigger
 } from '@shared/types/automation.types'
 import {
   Bot,
   Braces,
+  Clock,
   GitBranch,
   GitMerge,
   Globe,
@@ -20,7 +22,8 @@ import {
   Hourglass,
   Repeat,
   Wrench,
-  XCircle
+  XCircle,
+  Zap
 } from '@/components/icons'
 
 /** What the list and the header show; needs-approval wins because it asks the user to act. */
@@ -191,4 +194,24 @@ export function agentToolsLabel(tools: AgentTool[]): string {
   return tools.length === 0
     ? 'no tools'
     : `tools: ${tools.map((tool) => AGENT_TOOL_LABELS[tool]).join(', ')}`
+}
+
+/** What started a run; a run keeps no copy of the trigger's settings, only this and when it was due. */
+export type FiredBy = { by: RunTrigger; at: number }
+
+export const TRIGGER_LABEL: Record<RunTrigger, string> = {
+  scheduled: 'Scheduled',
+  catch_up: 'Catch-up',
+  manual: 'Manual'
+}
+
+/** How a run's trigger card and step row read: what started it, and when it was due. */
+export function firedPresentation({ by, at }: FiredBy): {
+  Icon: typeof Zap
+  title: string
+  detail: string
+} {
+  return by === 'manual'
+    ? { Icon: Zap, title: TRIGGER_LABEL.manual, detail: 'Started by hand' }
+    : { Icon: Clock, title: TRIGGER_LABEL[by], detail: `Due ${formatDateTime(at)}` }
 }
