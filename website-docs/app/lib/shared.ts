@@ -7,6 +7,6 @@ export const docsContentRoute = '/llms.mdx'
 
 export const gitConfig = {
   user: 'gnoviawan',
-  repo: 'termul',
+  repo: 'troupe',
   branch: 'dev'
 }

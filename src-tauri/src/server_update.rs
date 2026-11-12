@@ -64,13 +64,13 @@ impl UpdateChannel {
     pub fn manifest_url(self) -> &'static str {
         match self {
             Self::Stable => {
-                "https://github.com/gnoviawan/termul/releases/latest/download/latest-stable.json"
+                "https://github.com/gnoviawan/troupe/releases/latest/download/latest-stable.json"
             }
             Self::Insider => {
-                "https://github.com/gnoviawan/termul/releases/download/insider/latest-insider.json"
+                "https://github.com/gnoviawan/troupe/releases/download/insider/latest-insider.json"
             }
             Self::Nightly => {
-                "https://github.com/gnoviawan/termul/releases/download/nightly/latest-nightly.json"
+                "https://github.com/gnoviawan/troupe/releases/download/nightly/latest-nightly.json"
             }
         }
     }

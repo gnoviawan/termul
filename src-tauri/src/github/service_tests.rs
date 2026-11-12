@@ -234,7 +234,7 @@ fn low_quota_serves_cached_reads_even_on_refresh() {
 
 #[test]
 fn upstream_slot_of_a_non_fork_is_no_upstream() {
-    let project = Project::new(Some("https://github.com/gnoviawan/termul.git"));
+    let project = Project::new(Some("https://github.com/gnoviawan/troupe.git"));
     let (service, _) = service(standard);
     let error = service
         .list_items(&list_request(

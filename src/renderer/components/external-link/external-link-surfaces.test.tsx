@@ -29,7 +29,7 @@ vi.mock('@/stores/acp-store', () => ({
 
 const URL_ = 'https://example.com/docs'
 const MCP_URL = 'https://mcp.example.com/consent?state=abc'
-const RELEASE_URL = 'https://github.com/gnoviawan/termul/releases/tag/v0.4.60'
+const RELEASE_URL = 'https://github.com/gnoviawan/troupe/releases/tag/v0.4.60'
 
 let spy: ExternalOpenSpy
 beforeEach(() => {

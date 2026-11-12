@@ -1,4 +1,4 @@
-export const GITHUB_REPO_URL = 'https://github.com/gnoviawan/termul';
+export const GITHUB_REPO_URL = 'https://github.com/gnoviawan/troupe';
 export const LATEST_RELEASE_URL = `${GITHUB_REPO_URL}/releases/latest`;
 export const DOCS_URL = `${GITHUB_REPO_URL}/tree/dev/docs`;
 export const ISSUES_URL = `${GITHUB_REPO_URL}/issues`;

@@ -6,7 +6,7 @@ import { isTauriContext } from './tauri-runtime'
 const STORE_FILE = 'whats-new.json'
 const LAST_SEEN_VERSION_KEY = 'whatsNew.lastSeenVersion'
 
-const GITHUB_RELEASE_BY_TAG_URL = 'https://api.github.com/repos/gnoviawan/termul/releases/tags'
+const GITHUB_RELEASE_BY_TAG_URL = 'https://api.github.com/repos/gnoviawan/troupe/releases/tags'
 const RELEASE_FETCH_TIMEOUT_MS = 8000
 
 /**

@@ -9,7 +9,7 @@ Only added or modified code. Never report issues in unchanged code.
 
 ## Repo context
 
-The repo is termul (gnoviawan/termul), a Tauri v2 desktop terminal app.
+The repo is troupe (gnoviawan/troupe), a Tauri v2 desktop terminal app.
 
 - Frontend: React + TypeScript under `src/`. Package manager is bun.
 - Backend: Rust under `src-tauri/`. Tauri commands, IPC, and
