@@ -212,6 +212,17 @@ export function BrowserAppPolicy(): React.JSX.Element {
             }}
           />
           <SwitchRow
+            id={BROWSER_ANCHORS.appSitePrompt}
+            controlId="browser-site-prompt"
+            label="Ask before opening new sites"
+            description="Off: agents open public sites and devices on your local network without asking. Sign-ins, payments, uploads and downloads follow their own rules."
+            checked={policy.askBeforeOpeningSites}
+            disabled={locked}
+            onToggle={(enabled) => {
+              void edit({ op: 'set_ask_before_opening_sites', enabled }).then(settle)
+            }}
+          />
+          <SwitchRow
             id={BROWSER_ANCHORS.appPasswordPrompt}
             controlId="browser-password-prompt"
             label="Ask before an agent submits a password"

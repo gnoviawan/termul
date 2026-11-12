@@ -71,6 +71,10 @@ pub struct PageData {
     /// One page of an element's or the document's text (`read_text`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Links of the page to local files the host did not follow; their
+    /// targets are page-chosen.
+    #[serde(rename = "fileLinks", skip_serializing_if = "Option::is_none")]
+    pub file_links: Option<Vec<Value>>,
     /// True when any field above was cut to its cap, or the snapshot
     /// helper cut a text block or name to its limit.
     pub truncated: bool,
@@ -89,6 +93,7 @@ impl PageData {
             console: None,
             network: None,
             text: None,
+            file_links: None,
             truncated: url_cut || title_cut,
         }
     }
@@ -105,6 +110,7 @@ impl PageData {
             || self.console.is_some()
             || self.network.is_some()
             || self.text.is_some()
+            || self.file_links.is_some()
     }
 }
 

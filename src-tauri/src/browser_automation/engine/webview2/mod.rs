@@ -12,6 +12,7 @@ mod downloads;
 pub mod events;
 pub mod input;
 mod external_protocol;
+mod frames;
 pub mod observe;
 
 use std::sync::Arc;

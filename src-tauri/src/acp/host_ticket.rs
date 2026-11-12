@@ -28,7 +28,7 @@ use tokio::sync::oneshot;
 
 use crate::browser_automation::core::ports::{
     ActionClass, ConsentOption, PermissionRequest, PortFuture, TabProfile, TicketId, TicketOutcome,
-    TicketRequest,
+    TicketRequest, TicketTarget,
 };
 use crate::web::sink::WsRelaySink;
 use crate::web::EventSink;
@@ -120,8 +120,14 @@ fn is_sensitive(action: ActionClass) -> bool {
     action.is_preapprovable()
 }
 
-fn option_name(option: ConsentOption, action: ActionClass) -> &'static str {
-    match (option, is_sensitive(action)) {
+/// Sensitive actions, and files outside the project, are allowed one
+/// action at a time.
+fn is_one_at_a_time(ticket: &TicketRequest) -> bool {
+    is_sensitive(ticket.action) || matches!(ticket.origin, TicketTarget::File(_))
+}
+
+fn option_name(option: ConsentOption, one_at_a_time: bool) -> &'static str {
+    match (option, one_at_a_time) {
         (ConsentOption::AllowSession, false) => "Allow for this session",
         (ConsentOption::AllowSession, true) => "Allow once",
         (ConsentOption::AllowProject, false) => "Always allow for this project",
@@ -130,15 +136,97 @@ fn option_name(option: ConsentOption, action: ActionClass) -> &'static str {
     }
 }
 
-fn option_scope(option: ConsentOption, action: ActionClass) -> Option<&'static str> {
-    match (option, is_sensitive(action)) {
+fn option_scope(option: ConsentOption, one_at_a_time: bool) -> Option<&'static str> {
+    match (option, one_at_a_time) {
         (ConsentOption::AllowSession, true) => Some("once"),
         _ => option.scope(),
     }
 }
 
+/// Whether `c` could reorder, hide or split what an approver reads: C0/C1
+/// controls; bidi embeddings, overrides, isolates and marks; zero-width and
+/// other invisible characters (joiners, word joiner and invisible
+/// operators, byte-order mark, soft hyphen, combining grapheme joiner,
+/// Hangul and Khmer fillers, Mongolian vowel separator and free variation
+/// selectors); line and paragraph separators; variation selectors; tag
+/// characters; and interlinear annotation marks.
+fn is_deceptive(c: char) -> bool {
+    matches!(
+        c,
+        '\u{202A}'..='\u{202E}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{200E}'
+            | '\u{200F}'
+            | '\u{061C}'
+            | '\u{200B}'..='\u{200D}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{FEFF}'
+            | '\u{00AD}'
+            | '\u{034F}'
+            | '\u{115F}'
+            | '\u{1160}'
+            | '\u{17B4}'
+            | '\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{3164}'
+            | '\u{FFA0}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{E0100}'..='\u{E01EF}'
+            | '\u{E0000}'..='\u{E007F}'
+            | '\u{FFF9}'..='\u{FFFB}'
+    ) || c.is_control()
+}
+
+/// A file name or path as an approver reads it. Every character
+/// [`is_deceptive`] names is shown as `⟨U+XXXX⟩` (U+27E8 and U+27E9 around
+/// its code point, uppercase hex, at least four digits), and every literal
+/// `⟨` in the text is doubled. Read left to right, `⟨⟨` is always a literal
+/// bracket and a single `⟨` always opens an escape, so the rendering can be
+/// undone: two different inputs never render the same. Backslashes are
+/// kept as they are, so a Windows path reads normally. This is not
+/// `mcp_catalog::consent::escape_for_display`, which doubles every
+/// backslash and would make every Windows path hard to read.
+pub(crate) fn display_safe(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if is_deceptive(c) {
+            out.push_str(&format!("\u{27E8}U+{:04X}\u{27E9}", u32::from(c)));
+        } else if c == '\u{27E8}' {
+            out.push_str("\u{27E8}\u{27E8}");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// A file ticket's file name, taken from the raw path by the host (never
+/// split out of the escaped path by a client) and made safe to read.
+fn shown_file_name(ticket: &TicketRequest) -> Option<String> {
+    let TicketTarget::File(path) = &ticket.origin else {
+        return None;
+    };
+    let name = std::path::Path::new(path)
+        .file_name()
+        .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned());
+    Some(display_safe(&name))
+}
+
+/// The target as shown: a file's path made safe to read, an origin as is.
+fn shown_target(ticket: &TicketRequest) -> String {
+    match &ticket.origin {
+        TicketTarget::File(path) => display_safe(path),
+        TicketTarget::Web(origin) => origin.as_str().to_string(),
+    }
+}
+
 fn ticket_title(ticket: &TicketRequest) -> String {
     let origin = ticket.origin.as_str();
+    if let TicketTarget::File(_) = &ticket.origin {
+        return format!("Open the file {} in the agent browser", shown_target(ticket));
+    }
     match ticket.action {
         ActionClass::Navigate | ActionClass::LocalNetwork => {
             format!("Open {origin} in the agent browser")
@@ -146,7 +234,11 @@ fn ticket_title(ticket: &TicketRequest) -> String {
         ActionClass::PasswordSubmit => format!("Submit a password on {origin}"),
         ActionClass::PaymentSubmit => format!("Submit payment details on {origin}"),
         ActionClass::Upload => match &ticket.file {
-            Some(file) => format!("Upload {} ({} bytes) to {origin}", file.name, file.bytes),
+            Some(file) => format!(
+                "Upload {} ({} bytes) to {origin}",
+                display_safe(&file.name),
+                file.bytes
+            ),
             None => format!("Upload a file to {origin}"),
         },
         ActionClass::Download => format!("Download a file from {origin}"),
@@ -189,16 +281,17 @@ fn display_url(url: &str) -> String {
 }
 
 fn request_payload(ticket: &TicketRequest) -> Value {
+    let one_at_a_time = is_one_at_a_time(ticket);
     let options: Vec<Value> = ticket
         .options
         .iter()
         .map(|&option| {
             let mut entry = json!({
                 "optionId": option_key(option),
-                "name": option_name(option, ticket.action),
+                "name": option_name(option, one_at_a_time),
                 "kind": option.acp_kind(),
             });
-            if let Some(scope) = option_scope(option, ticket.action) {
+            if let Some(scope) = option_scope(option, one_at_a_time) {
                 entry["_meta"] = json!({ "termul": { "scope": scope } });
             }
             entry
@@ -217,12 +310,17 @@ fn request_payload(ticket: &TicketRequest) -> Value {
         "_meta": { "termul": {
             "origin_kind": "browser",
             "browser": {
-                "origin": ticket.origin.as_str(),
+                "origin": shown_target(ticket),
+                "targetKind": ticket.origin.kind(),
+                "fileName": shown_file_name(ticket),
                 "targetUrl": display_url(&ticket.target_url),
                 "targetUrlBytes": ticket.target_url.len(),
                 "action": action_id(ticket.action),
                 "element": ticket.element,
-                "file": ticket.file.as_ref().map(|f| json!({ "name": f.name, "bytes": f.bytes })),
+                "file": ticket
+                    .file
+                    .as_ref()
+                    .map(|f| json!({ "name": display_safe(&f.name), "bytes": f.bytes })),
                 "profile": profile_id(ticket.profile),
                 "projectId": ticket.project_id,
             },

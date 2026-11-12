@@ -287,6 +287,13 @@ async fn the_command_and_the_route_return_identical_bodies_for_the_same_operatio
         (
             Step::App {
                 revision: 5,
+                op: json!({"op": "set_ask_before_opening_sites", "enabled": true}),
+            },
+            admin(),
+        ),
+        (
+            Step::App {
+                revision: 6,
                 op: json!({"op": "clear_global_profile"}),
             },
             admin(),
@@ -301,7 +308,7 @@ async fn the_command_and_the_route_return_identical_bodies_for_the_same_operatio
         successes += usize::from(from_command["success"] == true);
     }
     assert_eq!(
-        successes, 14,
+        successes, 15,
         "the scripted sequence mixes successes and refusals"
     );
     assert_eq!(

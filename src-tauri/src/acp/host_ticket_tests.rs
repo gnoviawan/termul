@@ -42,7 +42,7 @@ fn ticket(session: &str, url: &str) -> TicketRequest {
         id: TicketId::mint(),
         session_id: session.into(),
         project_id: "p1".into(),
-        origin: CanonicalOrigin::parse(url).unwrap(),
+        origin: CanonicalOrigin::parse(url).unwrap().into(),
         target_url: url.into(),
         action: ActionClass::Navigate,
         element: Some("Docs link".into()),
@@ -278,6 +278,168 @@ async fn an_upload_ticket_names_the_file_by_base_name_and_size() {
         payload["_meta"]["termul"]["browser"]["file"],
         json!({ "name": "report.pdf", "bytes": 9 })
     );
+    waiting.abort();
+}
+
+#[tokio::test]
+async fn a_file_ticket_names_the_file_and_offers_only_allow_once_or_deny() {
+    let (recorder, tickets) = tickets(Duration::ZERO);
+    let request = TicketRequest {
+        origin: TicketTarget::File("C:\\notes\\a.html".into()),
+        target_url: "file:///C:/notes/a.html".into(),
+        options: &ConsentOption::ONCE_OR_DENY,
+        ..ticket("s1", "https://unused.example")
+    };
+    let waiting = tokio::spawn({
+        let tickets = tickets.clone();
+        async move { tickets.request(request, Duration::from_secs(5)).await }
+    });
+    raised(&tickets, &recorder).await;
+    let payload = recorder.0.lock()[0].2.clone();
+    assert_eq!(payload["toolCall"]["title"], "Open the file C:\\notes\\a.html in the agent browser");
+    let browser = &payload["_meta"]["termul"]["browser"];
+    assert_eq!(browser["targetKind"], "file");
+    let expected_name = std::path::Path::new("C:\\notes\\a.html")
+        .file_name()
+        .map_or("C:\\notes\\a.html".to_string(), |n| n.to_string_lossy().into_owned());
+    assert_eq!(browser["fileName"], expected_name.as_str());
+    assert_eq!(browser["origin"], "C:\\notes\\a.html");
+    assert_eq!(browser["targetUrl"], "file:///C:/notes/a.html");
+    assert_eq!(
+        payload["options"],
+        json!([
+            { "optionId": "allow_session", "name": "Allow once", "kind": "allow_once",
+              "_meta": { "termul": { "scope": "once" } } },
+            { "optionId": "deny", "name": "Deny", "kind": "reject_once" },
+        ])
+    );
+    waiting.abort();
+}
+
+/// How a hidden character reads in a prompt.
+fn shown(c: char) -> String {
+    format!("\u{27E8}U+{:04X}\u{27E9}", u32::from(c))
+}
+
+#[test]
+fn file_names_lose_the_characters_that_could_disguise_them() {
+    // A right-to-left override shows `invoice\u{202E}lmth.exe` as
+    // "invoiceexe.html".
+    assert_eq!(display_safe("invoice\u{202E}lmth.exe"), "invoice\u{27E8}U+202E\u{27E9}lmth.exe");
+    assert_eq!(
+        display_safe("a\u{2066}b\u{0007}c\u{009B}d\ne"),
+        format!("a{}b{}c{}d{}e", shown('\u{2066}'), shown('\u{0007}'), shown('\u{009B}'), shown('\n'))
+    );
+    assert_eq!(
+        display_safe("C:\\Users\\me\\caf\u{e9} notes.html"),
+        "C:\\Users\\me\\caf\u{e9} notes.html",
+        "backslashes and ordinary letters stay as they are"
+    );
+    for hidden in ['\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}', '\u{180E}', '\u{2028}', '\u{2029}'] {
+        assert_eq!(display_safe(&format!("a{hidden}b")), format!("a{}b", shown(hidden)));
+    }
+    assert_ne!(display_safe("ab"), display_safe("a\u{200B}b"), "different names never read the same");
+}
+
+#[test]
+fn every_invisible_character_is_shown_as_an_escape() {
+    for hidden in [
+        '\u{00AD}', '\u{034F}', '\u{061C}', '\u{115F}', '\u{1160}', '\u{17B4}', '\u{17B5}', '\u{180B}',
+        '\u{180F}', '\u{2061}', '\u{2064}', '\u{3164}', '\u{FFA0}', '\u{FE00}', '\u{FE0F}', '\u{E0100}',
+        '\u{E01EF}', '\u{E0000}', '\u{E0041}', '\u{E007F}', '\u{FFF9}', '\u{FFFB}', '\u{0000}', '\u{007F}',
+        '\u{202A}', '\u{202E}', '\u{2069}', '\u{200E}',
+    ] {
+        assert_eq!(display_safe(&format!("a{hidden}b")), format!("a{}b", shown(hidden)), "{:04X}", u32::from(hidden));
+    }
+    assert_eq!(shown('\u{E0100}'), "\u{27E8}U+E0100\u{27E9}", "five digits stay five");
+    assert_eq!(shown('\u{0007}'), "\u{27E8}U+0007\u{27E9}", "at least four digits");
+}
+
+/// Text that already looks like an escape must not read like one.
+#[test]
+fn a_literal_bracket_is_doubled_so_no_two_names_read_the_same() {
+    let literal = display_safe("invoice\u{27E8}U+202E\u{27E9}lmth.exe");
+    let hidden = display_safe("invoice\u{202E}lmth.exe");
+    assert_eq!(literal, "invoice\u{27E8}\u{27E8}U+202E\u{27E9}lmth.exe");
+    assert_ne!(literal, hidden);
+    assert_eq!(
+        display_safe("C:\\Users\\u{202E}\\notes.html"),
+        "C:\\Users\\u{202E}\\notes.html",
+        "a backslash escape typed into a name is plain text and stays as it is"
+    );
+    let inputs = [
+        "a\u{202E}b",
+        "a\u{27E8}U+202E\u{27E9}b",
+        "a\u{27E8}\u{202E}b",
+        "a\u{27E8}\u{27E8}U+202E\u{27E9}b",
+        "a\\u{202E}b",
+        "ab",
+    ];
+    let mut seen = std::collections::HashSet::new();
+    for input in inputs {
+        assert!(seen.insert(display_safe(input)), "{input:?} reads like another name");
+    }
+}
+
+#[tokio::test]
+async fn a_file_ticket_shows_its_path_and_upload_name_without_bidi_controls() {
+    let (recorder, tickets) = tickets(Duration::ZERO);
+    let request = TicketRequest {
+        origin: TicketTarget::File("/notes/invoice\u{202E}lmth.exe".into()),
+        target_url: "file:///notes/invoice%E2%80%AElmth.exe".into(),
+        options: &ConsentOption::ONCE_OR_DENY,
+        ..ticket("s1", "https://unused.example")
+    };
+    let waiting = tokio::spawn({
+        let tickets = tickets.clone();
+        async move { tickets.request(request, Duration::from_secs(5)).await }
+    });
+    raised(&tickets, &recorder).await;
+    let payload = recorder.0.lock()[0].2.clone();
+    assert_eq!(payload["_meta"]["termul"]["browser"]["origin"], "/notes/invoice\u{27E8}U+202E\u{27E9}lmth.exe");
+    assert_eq!(
+        payload["_meta"]["termul"]["browser"]["fileName"],
+        "invoice\u{27E8}U+202E\u{27E9}lmth.exe",
+        "the host names the file; no client splits the escaped path"
+    );
+    assert_eq!(
+        payload["toolCall"]["title"],
+        "Open the file /notes/invoice\u{27E8}U+202E\u{27E9}lmth.exe in the agent browser"
+    );
+    waiting.abort();
+}
+
+#[tokio::test]
+async fn an_upload_ticket_shows_its_file_name_without_bidi_controls() {
+    let (recorder, tickets) = tickets(Duration::ZERO);
+    let request = TicketRequest {
+        action: ActionClass::Upload,
+        file: Some(TicketFile {
+            name: "report\u{202E}fdp.exe".into(),
+            bytes: 9,
+        }),
+        ..ticket("s1", "https://files.example/upload")
+    };
+    let waiting = tokio::spawn({
+        let tickets = tickets.clone();
+        async move { tickets.request(request, Duration::from_secs(5)).await }
+    });
+    raised(&tickets, &recorder).await;
+    let payload = recorder.0.lock()[0].2.clone();
+    assert_eq!(payload["_meta"]["termul"]["browser"]["file"]["name"], "report\u{27E8}U+202E\u{27E9}fdp.exe");
+    waiting.abort();
+}
+
+#[tokio::test]
+async fn a_site_ticket_says_it_targets_the_web() {
+    let (recorder, tickets) = tickets(Duration::ZERO);
+    let waiting = tokio::spawn({
+        let tickets = tickets.clone();
+        async move { tickets.request(ticket("s1", "https://docs.example"), Duration::from_secs(5)).await }
+    });
+    raised(&tickets, &recorder).await;
+    let payload = recorder.0.lock()[0].2.clone();
+    assert_eq!(payload["_meta"]["termul"]["browser"]["targetKind"], "web");
     waiting.abort();
 }
 

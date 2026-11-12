@@ -143,6 +143,12 @@ impl DownloadSize {
 /// synchronously on the UI thread. Implementations must not block.
 pub trait NavPolicy: Send + Sync {
     fn decide(&self, tab: &str, url: &Url) -> NavVerdict;
+    /// A child frame or embedded object of the tab is about to load `url`,
+    /// on engines whose navigation hook sees only the main frame. A frame
+    /// may load a `file://` URL only on the session's exact grant.
+    fn decide_frame(&self, _tab: &str, _url: &Url) -> NavVerdict {
+        NavVerdict::Allow
+    }
     /// Whether the tab's downloads go through [`NavPolicy::download_starting`].
     /// Tabs that answer false keep the engine's own download handling.
     fn holds_downloads(&self, _tab: &str) -> bool {
@@ -234,6 +240,13 @@ impl TabEvents {
             verdict,
         });
         verdict == NavVerdict::Allow
+    }
+
+    /// Run the frame policy for a child frame's navigation. Returns whether
+    /// it may proceed. Frames publish no tab event.
+    #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code, reason = "WebKit hooks see frame navigations"))]
+    pub fn frame_starting(&self, url: &Url) -> bool {
+        self.policy.decide_frame(&self.label, url) == NavVerdict::Allow
     }
 
     /// A new-document commit, attributed to the latest started hop.

@@ -136,6 +136,10 @@ pub struct AppPolicy {
     /// Prompt before an agent submits a password. Off by default: agents
     /// sign in like the user would.
     pub ask_before_password_submit: bool,
+    /// Prompt before an agent opens a site that is not loopback or
+    /// allow-listed. Off by default: public and local-network sites open
+    /// without a prompt, but stay unvouched for sensitive actions.
+    pub ask_before_opening_sites: bool,
     /// Pre-approvals honoured on global-profile tabs ("all projects").
     pub preapprovals: Vec<Preapproval>,
 }
@@ -147,6 +151,7 @@ impl Default for AppPolicy {
             read_only: false,
             global_profile_enabled: true,
             ask_before_password_submit: false,
+            ask_before_opening_sites: false,
             preapprovals: Vec::new(),
         }
     }
@@ -165,6 +170,7 @@ pub enum ProjectPolicyOp {
 pub enum AppPolicyOp {
     SetGlobalProfile(bool),
     SetAskBeforePasswordSubmit(bool),
+    SetAskBeforeOpeningSites(bool),
     AddPreapproval(AppPreapproval),
     RemovePreapproval(Preapproval),
 }
@@ -264,6 +270,11 @@ impl AppPolicy {
             AppPolicyOp::SetAskBeforePasswordSubmit(ask) => {
                 let changed = self.ask_before_password_submit != ask;
                 self.ask_before_password_submit = ask;
+                Ok(changed)
+            }
+            AppPolicyOp::SetAskBeforeOpeningSites(ask) => {
+                let changed = self.ask_before_opening_sites != ask;
+                self.ask_before_opening_sites = ask;
                 Ok(changed)
             }
             AppPolicyOp::AddPreapproval(AppPreapproval(item)) => {

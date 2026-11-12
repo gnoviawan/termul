@@ -68,7 +68,7 @@ fn raise(rig: &Rig) -> (String, tokio::task::JoinHandle<TicketOutcome>) {
         id: id.clone(),
         session_id: SESSION.into(),
         project_id: "p1".into(),
-        origin: CanonicalOrigin::parse("https://docs.example.com").unwrap(),
+        origin: CanonicalOrigin::parse("https://docs.example.com").unwrap().into(),
         target_url: "https://docs.example.com/start".into(),
         action: ActionClass::Navigate,
         element: None,

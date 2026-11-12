@@ -129,6 +129,11 @@ pub struct TabRecord {
     pub dialogs: TabDialogs,
     /// Popup outcomes not yet reported to the agent.
     pub popups: Vec<PopupNote>,
+    /// File links the host did not follow, not yet reported.
+    pub file_links: Vec<super::link_hops::FileLinkNote>,
+    /// A cancelled file link is being checked; any other file link the page
+    /// starts meanwhile is dropped (and logged), not queued.
+    pub file_link_busy: bool,
     pub observed: super::observe::Observations,
 }
 
@@ -157,6 +162,8 @@ impl TabRecord {
             popup_of: None,
             dialogs: TabDialogs::default(),
             popups: Vec::new(),
+            file_links: Vec::new(),
+            file_link_busy: false,
             observed: super::observe::Observations::default(),
         }
     }
@@ -224,6 +231,8 @@ impl TabRecord {
         self.url = url.to_string();
         if kind == CommitKind::NewDocument {
             self.epoch += 1;
+            // Notes about the last document's links are about a page gone.
+            self.file_links.clear();
         }
         let outcome = NavOutcome::Committed { epoch: self.epoch };
         self.finish_where(&outcome, |w| match nav_id {

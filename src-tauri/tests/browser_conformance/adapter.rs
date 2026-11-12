@@ -52,6 +52,7 @@ fn action_budget(action: &str) -> Duration {
         "drag" => ACTION_DRAG,
         "check" | "uncheck" => ACTION_TOGGLE,
         "list_tabs" | "close_tab" | "switch_tab" => ACTION_INSTANT,
+        "screenshot" => ACTION_SCREENSHOT,
         _ => ACTION_EVAL,
     }
 }
@@ -298,6 +299,26 @@ impl Engine {
             host::TicketOutcome::Answered(host::ConsentOption::AllowSession)
         });
         self.tickets.answers.lock().unwrap().insert(session.to_string(), answer);
+    }
+
+    /// A fake file outside the project folder.
+    pub fn outside_file(&self) -> PathBuf {
+        self.project.outside_file.clone()
+    }
+
+    /// `rel` inside the project folder.
+    pub fn project_file(&self, rel: &str) -> PathBuf {
+        self.project.root.path().join(rel)
+    }
+
+    /// Write a page into the project folder; returns its path.
+    pub fn write_project_page(&self, rel: &str, html: &str) -> PathBuf {
+        let path = self.project_file(rel);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).expect("page dir");
+        }
+        std::fs::write(&path, html).expect("project page");
+        path
     }
 
     /// Whether the outside-the-project symlink could be created here.

@@ -14,6 +14,8 @@ mod events;
 mod frames;
 mod observe;
 mod input_actions;
+mod link_hops;
+pub(crate) mod local_files;
 mod page_events;
 pub mod ports;
 mod profile;
@@ -54,7 +56,7 @@ use super::{BrowserCall, BrowserHost, HostFuture, TabCreateError};
 use crate::acp::events as acp_events;
 use crate::browser_tab_manager::{BrowserBounds, BrowserTabManager};
 use crate::web::EventSink;
-use authz::HopVerdict;
+use authz::{DenyReason, HopVerdict};
 use consent::ConsentGate;
 use events::TabProjection;
 use reply::PageData;
@@ -193,7 +195,7 @@ impl DesktopBrowserHost {
             });
         }
         if let FirstLoad::ViaBlank(url) = first {
-            if let Err(message) = self.surface.navigate(label, url) {
+            if let Err(message) = self.load_page(label, url).await {
                 self.registry
                     .lock()
                     .fail_create(label, "the tab could not load its page");
@@ -254,10 +256,24 @@ impl NavPolicy for HopPolicy {
             return NavVerdict::Deny;
         }
         let allowed = self.surface.allows_navigation(tab, url)
-            && self.host.upgrade().is_some_and(|host| host.agent_hop_allowed(tab, url));
+            && self.host.upgrade().is_some_and(|host| host.agent_hop_allowed(tab, url, false));
         if allowed {
             NavVerdict::Allow
         } else {
+            NavVerdict::Deny
+        }
+    }
+
+    fn decide_frame(&self, tab: &str, url: &Url) -> NavVerdict {
+        let allowed = url.scheme() != "file"
+            || self.host.upgrade().is_some_and(|host| host.agent_hop_allowed(tab, url, true));
+        if allowed {
+            NavVerdict::Allow
+        } else {
+            log::info!(
+                "[browser-agent] frame blocked tab={}",
+                events::label_prefix(tab)
+            );
             NavVerdict::Deny
         }
     }
@@ -288,8 +304,10 @@ impl NavPolicy for HopPolicy {
 
 impl DesktopBrowserHost {
     /// Agent authorization for one hop. A user tab has none to pass; a
-    /// label the registry no longer knows passes nothing.
-    fn agent_hop_allowed(&self, tab_id: &str, url: &Url) -> bool {
+    /// label the registry no longer knows passes nothing. `frame` says the
+    /// engine knows the hop is a child frame's; WebKit hooks see frames
+    /// as hops too, without saying so.
+    fn agent_hop_allowed(&self, tab_id: &str, url: &Url, frame: bool) -> bool {
         let owner = self
             .registry
             .lock()
@@ -312,9 +330,17 @@ impl DesktopBrowserHost {
             return false;
         }
         match self.gate.check_hop(&session_id, url) {
-            HopVerdict::Allow => true,
+            HopVerdict::Allow => {
+                if self.gate.opened_unasked(&session_id, url) {
+                    log::debug!("[browser-agent] navigation hop allowed without a prompt tab={tab}");
+                }
+                true
+            }
             HopVerdict::Deny(reason) => {
                 log::info!("[browser-agent] navigation hop cancelled tab={tab} reason={}", reason.as_str());
+                if reason == DenyReason::FileNotGranted && !frame {
+                    self.file_link_cancelled(tab_id, &session_id, url);
+                }
                 false
             }
             HopVerdict::Ungranted(..) => {

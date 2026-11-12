@@ -24,9 +24,11 @@
 import { useEffect } from 'react'
 import {
   browserConsentFileLine,
+  browserConsentFileName,
   browserConsentOptionLabel,
   browserConsentProfileLabel,
   browserConsentSummary,
+  browserConsentTargetLabel,
   browserConsentTargetLine,
   browserConsentTitle,
   browserConsentTitleId,
@@ -89,14 +91,29 @@ export function BrowserConsentCard({ consent }: BrowserConsentCardProps): React.
         </span>
         <div className="min-w-0 flex-1">
           <h2 id={titleId} className="text-xs font-semibold leading-5 text-foreground">
-            {browserConsentTitle(consent.action)}
+            {browserConsentTitle(consent.action, consent.targetKind)}
           </h2>
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
             {browserConsentSummary(agentName, consent)} You'll watch it work in a visible tab.
           </p>
           <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-2xs leading-relaxed">
-            <dt className="text-muted-foreground">Site</dt>
-            <dd className="truncate font-medium text-foreground">{consent.origin}</dd>
+            <dt className="text-muted-foreground">
+              {browserConsentTargetLabel(consent.targetKind)}
+            </dt>
+            {consent.targetKind === 'file' ? (
+              // A path never loses its end to truncation: the file name
+              // stands on its own line and the full path wraps.
+              <dd className="min-w-0 text-foreground">
+                <span className="block break-all font-medium">
+                  {browserConsentFileName(consent)}
+                </span>
+                <span className="block break-all font-mono text-muted-foreground">
+                  {consent.origin}
+                </span>
+              </dd>
+            ) : (
+              <dd className="truncate font-medium text-foreground">{consent.origin}</dd>
+            )}
             <dt className="text-muted-foreground">Address</dt>
             <dd className="break-all font-mono text-muted-foreground">
               {browserConsentTargetLine(consent)}
@@ -141,7 +158,9 @@ export function BrowserConsentCard({ consent }: BrowserConsentCardProps): React.
             ) : (
               <ShieldCheck size={14} className="shrink-0" aria-hidden="true" />
             )}
-            <span className="truncate">{browserConsentOptionLabel(optionId, consent.action)}</span>
+            <span className="truncate">
+              {browserConsentOptionLabel(optionId, consent.action, consent.targetKind)}
+            </span>
           </Button>
         ))}
       </fieldset>

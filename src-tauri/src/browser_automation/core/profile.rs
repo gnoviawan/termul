@@ -210,7 +210,10 @@ impl AgentProfileControl for HostProfileControl {
 
     fn policy_changed(&self) {
         if let Some(host) = self.0.upgrade() {
-            super::spawn(async move { host.reconcile_profiles().await });
+            super::spawn(async move {
+                host.gate.refresh_policies(|session| (host.project_of)(session)).await;
+                host.reconcile_profiles().await;
+            });
         }
     }
 }

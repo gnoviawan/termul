@@ -53,6 +53,24 @@ fn webview2_variable_with_only_debug_switches_is_removed() {
 }
 
 #[test]
+fn webview2_file_access_switches_are_stripped_and_other_switches_kept() {
+    assert_eq!(
+        plan_for(&[(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--allow-file-access-from-files --lang=en /ALLOW-FILE-ACCESS -disable-web-security --disable-gpu"
+        )]),
+        vec![EnvScrub::Replace(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--lang=en --disable-gpu".to_string()
+        )]
+    );
+    assert_eq!(
+        plan_for(&[("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-web-security")]),
+        vec![EnvScrub::Remove("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")]
+    );
+}
+
+#[test]
 fn webview2_variable_without_debug_switches_is_untouched() {
     assert_eq!(
         plan_for(&[(
@@ -179,6 +197,28 @@ fn opt_in_drops_the_bind_address_switch_and_keeps_the_rest() {
         )]
     );
     assert!(result.engine_debug_kept);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn the_opt_in_never_keeps_file_access_switches() {
+    let result = plan_in(
+        &[
+            (
+                "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                "--remote-debugging-port=9222 --allow-file-access-from-files --disable-web-security",
+            ),
+            (OPT_IN, "1"),
+        ],
+        true,
+    );
+    assert_eq!(
+        result.actions,
+        vec![EnvScrub::Replace(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--remote-debugging-port=9222".to_string()
+        )]
+    );
 }
 
 #[cfg(debug_assertions)]

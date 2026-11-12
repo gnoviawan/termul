@@ -2,13 +2,14 @@
 //! (`pushState`, fragments, same-document history steps) through
 //! `SourceChanged`, which reports whether a new document came with them;
 //! external-app launches on every tab; script dialogs, file choosers, the
-//! console, requests and out-of-process frame sessions on agent tabs.
+//! console, requests, out-of-process frame sessions and the frame guard
+//! on agent tabs.
 
 use tauri::webview::PlatformWebview;
 use webview2_com::{take_pwstr, SourceChangedEventHandler};
 use windows_core::{BOOL, PWSTR};
 
-use super::{dialogs, downloads, external_protocol, observe};
+use super::{dialogs, downloads, external_protocol, frames, observe};
 use crate::browser_automation::engine::events::{TabEvents, TabRole};
 
 /// Confirm the controller has a live `ICoreWebView2` and register the
@@ -23,7 +24,9 @@ pub fn attach(platform: &PlatformWebview, events: TabEvents) -> bool {
     if !external_protocol::attach(&core, &events) {
         log::warn!("[browser-tab] WebView2 runtime has no external-launch hook; the navigation hook alone denies them");
     }
-    if events.role() == TabRole::Agent && !(dialogs::attach(&core, &events) && observe::attach(&core, &events)) {
+    if events.role() == TabRole::Agent
+        && !(dialogs::attach(&core, &events) && observe::attach(&core, &events) && frames::attach(&core, &events))
+    {
         return false;
     }
     if events.holds_downloads() && !downloads::attach(&core, &events) {

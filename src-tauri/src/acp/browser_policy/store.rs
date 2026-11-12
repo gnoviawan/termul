@@ -60,6 +60,8 @@ struct AppFile {
     #[serde(default)]
     ask_before_password_submit: bool,
     #[serde(default)]
+    ask_before_opening_sites: bool,
+    #[serde(default)]
     preapprovals: Vec<PreapprovalFile>,
 }
 
@@ -168,6 +170,7 @@ impl AppFile {
             read_only,
             global_profile_enabled: self.global_profile_enabled,
             ask_before_password_submit: self.ask_before_password_submit,
+            ask_before_opening_sites: self.ask_before_opening_sites,
             preapprovals: preapproval_entries(&self.preapprovals, app_preapproval),
         }
     }
@@ -178,6 +181,7 @@ impl AppFile {
             revision: policy.revision,
             global_profile_enabled: policy.global_profile_enabled,
             ask_before_password_submit: policy.ask_before_password_submit,
+            ask_before_opening_sites: policy.ask_before_opening_sites,
             preapprovals: preapproval_files(&policy.preapprovals),
         }
     }
@@ -189,7 +193,7 @@ trait PolicyDoc: Default + Send + 'static {
 
     fn from_file(file: Self::File, read_only: bool) -> Self;
     /// What an unparseable file reads as: read-only, and never wider than
-    /// the defaults (no global profile, password submits prompt).
+    /// the defaults (no global profile, password submits and new sites prompt).
     fn fail_closed() -> Self;
     fn to_bytes(&self) -> serde_json::Result<Vec<u8>>;
     fn read_only(&self) -> bool;
@@ -241,6 +245,7 @@ impl PolicyDoc for AppPolicy {
             read_only: true,
             global_profile_enabled: false,
             ask_before_password_submit: true,
+            ask_before_opening_sites: true,
             ..Self::default()
         }
     }

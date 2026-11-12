@@ -410,6 +410,15 @@ impl<E: BrowserEngine> BrowserEngine for WithNativeInput<E> {
     ) -> EngineFuture<'a, ()> {
         self.inner.set_input_files(tab, frame, path, files)
     }
+
+    fn load_file<'a>(
+        &'a self,
+        tab: &'a str,
+        url: &'a tauri::Url,
+        read_access: &'a std::path::Path,
+    ) -> EngineFuture<'a, ()> {
+        self.inner.load_file(tab, url, read_access)
+    }
 }
 
 #[cfg(test)]
