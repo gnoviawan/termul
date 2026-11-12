@@ -37,6 +37,8 @@ describe('requestTimeoutMs', () => {
     for (const type of ['create_session', 'load_session', 'resume_session'] as const) {
       expect(requestTimeoutMs(type)).toBeGreaterThan(60_000) // server session cap + grace
     }
+    // The import replays (60 s) and then closes the agent session (30 s).
+    expect(requestTimeoutMs('import_agent_session')).toBeGreaterThanOrEqual(120_000)
   })
 
   it('bounds the auth handshake request by the handshake timeout', () => {

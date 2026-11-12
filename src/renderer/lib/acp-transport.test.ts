@@ -394,6 +394,38 @@ class FakeWebSocket {
       })
       return
     }
+    if (req.type === 'import_agent_session') {
+      const payload = req.payload as { sessionId: string; agentId: string; cwd: string }
+      if (payload.sessionId === 'already-known') {
+        this.emitReply({
+          id: req.id,
+          ok: false,
+          err: { code: 'duplicate', message: 'this session is already in the chat history' }
+        })
+        return
+      }
+      this.emitReply({
+        id: req.id,
+        ok: true,
+        payload: {
+          storageKey: 'imported-key',
+          sessionId: payload.sessionId,
+          stableAgentNamespace: 'config:test',
+          runtimeAgentId: payload.agentId,
+          cwd: payload.cwd,
+          title: 'Imported',
+          createdAt: 1,
+          lastActivityAt: 1,
+          status: 'closed',
+          messageCount: 4,
+          toolCount: 0,
+          lastSeq: 7,
+          discovered: false,
+          resumeEligible: true
+        }
+      })
+      return
+    }
     if (req.type === 'respond_permission') {
       // Story 1.7 T8.3: by default reject as not_implemented; tests set
       // `respondPermissionErr` to exercise the stale/duplicate → AcpTransportError mapping.
@@ -2282,6 +2314,49 @@ describe('WsAcpTransport', () => {
       title: 'Agent title',
       status: 'active'
     })
+    transport.dispose()
+  })
+
+  it('importAgentSession sends import_agent_session and returns the imported summary', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    const summary = await transport.importAgentSession({
+      sessionId: 'cli-1',
+      agentId: 'agent-1',
+      cwd: '/work',
+      title: 'From the CLI',
+      updatedAt: 42,
+      projectId: 'p1'
+    })
+
+    expect(summary).toMatchObject({ sessionId: 'cli-1', discovered: false, messageCount: 4 })
+    const frame = sock.sent
+      .map((raw) => JSON.parse(raw) as { type: string; payload: Record<string, unknown> })
+      .find((f) => f.type === 'import_agent_session')
+    expect(frame?.payload).toEqual({
+      sessionId: 'cli-1',
+      agentId: 'agent-1',
+      cwd: '/work',
+      title: 'From the CLI',
+      updatedAt: 42,
+      projectId: 'p1'
+    })
+    transport.dispose()
+  })
+
+  it('importAgentSession rejects with the duplicate code for a chat already in the history', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await expect(
+      transport.importAgentSession({ sessionId: 'already-known', agentId: 'a', cwd: '/work' })
+    ).rejects.toMatchObject({ name: 'AcpTransportError', code: 'duplicate' })
     transport.dispose()
   })
 

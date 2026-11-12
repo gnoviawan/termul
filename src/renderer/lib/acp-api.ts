@@ -1335,9 +1335,10 @@ export async function acpPromoteSession(agentId: AgentId, sessionId: SessionId):
 export async function acpListSessions(
   agentId: AgentId,
   cwd?: string,
-  cursor?: string
+  cursor?: string,
+  projectId?: string
 ): Promise<ListSessionsResponse> {
-  return getAcpTransport().listSessions(agentId, cwd, cursor)
+  return getAcpTransport().listSessions(agentId, cwd, cursor, projectId)
 }
 
 export async function acpRegisterDiscoveredSession(input: {
@@ -1352,6 +1353,34 @@ export async function acpRegisterDiscoveredSession(input: {
     'register_discovered_session',
     `${input.agentId}|${input.sessionId}|${input.cwd}|${input.projectId ?? ''}`,
     (call) => getAcpTransport().registerDiscoveredSession(input, call)
+  )
+  return run.result
+}
+
+/**
+ * Import a session another client created (such as a Claude Code chat) into
+ * the durable chat history. The host captures the history the agent replays
+ * and closes the agent session; open the chat afterwards to resume it.
+ * Rejects with an `AcpTransportError` of code `duplicate` when the session is
+ * already in the history.
+ */
+export async function acpImportAgentSession(input: {
+  sessionId: SessionId
+  agentId: AgentId
+  cwd: string
+  title?: string | null
+  updatedAt?: number
+  projectId?: string
+}): Promise<import('@shared/types/web-protocol.types').PersistedSessionSummary> {
+  const run = await ledgered(
+    'import_agent_session',
+    JSON.stringify([
+      input.agentId.trim(),
+      input.sessionId.trim(),
+      input.cwd.trim(),
+      input.projectId?.trim() ?? ''
+    ]),
+    (call) => getAcpTransport().importAgentSession(input, call)
   )
   return run.result
 }
@@ -1584,6 +1613,7 @@ export const acpApi = {
   disposeEphemeralSession: acpDisposeEphemeralSession,
   promoteSession: acpPromoteSession,
   listSessions: acpListSessions,
+  importAgentSession: acpImportAgentSession,
   sendPrompt: acpSendPrompt,
   sendPromptBlocks: acpSendPromptBlocks,
   cancelPrompt: acpCancelPrompt,

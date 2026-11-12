@@ -129,6 +129,10 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
         "register_discovered_session",
         CommandClass::command(Replay::Payload),
     ),
+    (
+        "import_agent_session",
+        CommandClass::command(Replay::Payload),
+    ),
     ("spawn_agent", CommandClass::create()),
     ("list_claude_accounts", CommandClass::read()),
     ("list_claude_usage", CommandClass::read()),
@@ -237,7 +241,9 @@ fn identifying_fields(request_type: &str) -> &'static [&'static str] {
         "load_session" | "resume_session" => &["agentId", "sessionId", "cwd"],
         "close_session" | "dispose_ephemeral_session" | "promote_session"
         | "delete_agent_session" => &["agentId", "sessionId"],
-        "register_discovered_session" => &["agentId", "sessionId", "cwd", "projectId"],
+        "register_discovered_session" | "import_agent_session" => {
+            &["agentId", "sessionId", "cwd", "projectId"]
+        }
         "record_agent_switch" => &["sessionId", "fromConfigId", "toConfigId", "newSessionId"],
         "respond_permission" => &["agentId", "requestId", "optionId"],
         "answer_question" => &["agentId", "questionId"],

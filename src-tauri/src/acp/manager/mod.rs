@@ -71,6 +71,8 @@ mod close;
 mod exit;
 pub(crate) use gates::{ApiKey, AuthCredential, ConfigOptionValue, GatewayAuthInput};
 mod history;
+mod import_session_history;
+mod import_steps;
 mod native_subagents;
 mod project_binding;
 mod reopen;
@@ -214,6 +216,9 @@ enum AcpCommand {
         /// attaches that list plus the host plan server. An empty vec still
         /// attaches the plan server — a reload with no project servers.
         mcp_servers: Option<Vec<McpServer>>,
+        /// Record the replayed history as durable records of the session
+        /// instead of dropping it (see `import_session_history`).
+        import_history: bool,
         reply: oneshot::Sender<Result<SessionReopenOutcome, String>>,
     },
     ResumeSession {
@@ -1207,6 +1212,26 @@ impl AcpManager {
         additional_directories: Vec<String>,
         mcp_servers: Option<Vec<McpServer>>,
     ) -> Result<SessionReopenOutcome, String> {
+        self.load_session_with(
+            agent_id,
+            session_id,
+            cwd,
+            additional_directories,
+            mcp_servers,
+            false,
+        )
+        .await
+    }
+
+    async fn load_session_with(
+        &self,
+        agent_id: &AgentId,
+        session_id: SessionId,
+        cwd: String,
+        additional_directories: Vec<String>,
+        mcp_servers: Option<Vec<McpServer>>,
+        import_history: bool,
+    ) -> Result<SessionReopenOutcome, String> {
         self.reject_session_owned_by_other_mid_turn(agent_id, &session_id)
             .await?;
         let caps = self.capabilities(agent_id)?;
@@ -1223,6 +1248,7 @@ impl AcpManager {
             cwd,
             additional_directories: directories,
             mcp_servers,
+            import_history,
             reply,
         })
         .await;
