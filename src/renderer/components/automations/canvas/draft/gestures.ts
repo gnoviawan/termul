@@ -1,10 +1,12 @@
 import type {
   AutomationLayout,
+  AutomationNode,
   AutomationOp,
   Edge,
   Graph,
   NodeId,
-  NodePosition
+  NodePosition,
+  Port
 } from '@shared/types/automation.types'
 import { placeNodes } from '../layout'
 import { sameEdge } from './apply-op'
@@ -60,4 +62,39 @@ export function removeGesture(
     ops,
     layout: { ...freezePatch(graph, layout), ...Object.fromEntries(nodes.map((id) => [id, null])) }
   }
+}
+
+/** Where a new step goes and what it hangs off. */
+export type AddPlacement = {
+  at: NodePosition
+  /** Chain the new step after this port. */
+  from?: { from: Edge['from']; port: Edge['port'] }
+  /** Split this edge around the new step. */
+  split?: Edge
+}
+
+/**
+ * Adding `node` at `at`: after `from` when given, or into the middle of
+ * `split` (the source keeps its port, the new step continues on its chain
+ * port). The other cards stay where they are drawn.
+ */
+export function addGesture(
+  graph: Graph,
+  layout: AutomationLayout,
+  node: AutomationNode,
+  chain: Port | null,
+  placement: AddPlacement
+): { ops: AutomationOp[]; layout: LayoutPatch } {
+  const ops: AutomationOp[] = [{ op: 'add_node', node }]
+  const { from, split } = placement
+  if (split) {
+    ops.push(
+      { op: 'disconnect', edge: split },
+      { op: 'connect', edge: { from: split.from, port: split.port, to: node.id } }
+    )
+    if (chain) ops.push({ op: 'connect', edge: { from: node.id, port: chain, to: split.to } })
+  } else if (from) {
+    ops.push({ op: 'connect', edge: { from: from.from, port: from.port, to: node.id } })
+  }
+  return { ops, layout: { ...freezePatch(graph, layout), [node.id]: placement.at } }
 }

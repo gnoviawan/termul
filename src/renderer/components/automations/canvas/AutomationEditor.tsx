@@ -1,4 +1,10 @@
-import type { AutomationDetail, AutomationOp, Edge, Issue } from '@shared/types/automation.types'
+import type {
+  AutomationDetail,
+  AutomationOp,
+  Edge,
+  Issue,
+  NodeKind
+} from '@shared/types/automation.types'
 import { useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
@@ -8,10 +14,14 @@ import { approveAutomation } from '@/lib/automation-api'
 import { cn } from '@/lib/utils'
 import { automationState, STATE_PRESENTATION } from '../automation-format'
 import type { ConnectRefusal } from './draft/apply-op'
-import { movePatch, removeGesture } from './draft/gestures'
+import { addGesture, movePatch, removeGesture } from './draft/gestures'
 import { useDraft } from './draft/use-draft'
 import { AutomationFlow } from './flow/AutomationFlow'
-import type { FlowEdit } from './flow/flow-edit'
+import type { AddRequest, FlowEdit } from './flow/flow-edit'
+import { AddNodeMenu } from './palette/AddNodeMenu'
+import { chainPort, NODE_KINDS, newNode } from './palette/node-kinds'
+
+const NO_CHAIN = (Object.keys(NODE_KINDS) as NodeKind[]).filter((kind) => chainPort(kind) === null)
 
 const REFUSALS: Record<ConnectRefusal, string> = {
   illegal_port: 'That step has no such port.',
@@ -43,8 +53,10 @@ function describeOp(op: AutomationOp, label: (id: string) => string): string {
   }
 }
 
-function changesLabel(count: number): string {
+/** The phone header has room only for the count beside the state pill at 390 px. */
+function changesLabel(count: number, phone: boolean): string {
   if (count === 0) return 'No unsaved changes'
+  if (phone) return `${count} unsaved`
   return `Draft · ${count} unsaved ${count === 1 ? 'change' : 'changes'}`
 }
 
@@ -68,6 +80,8 @@ export function AutomationEditor({
   const { draft } = editor
   const [confirmClose, setConfirmClose] = useState(false)
   const [approving, setApproving] = useState(false)
+  const [adding, setAdding] = useState<AddRequest | null>(null)
+  const requests = useRef(0)
   const [focus, setFocus] = useState<{ id: string; nonce: number } | null>(null)
   const automation = draft.base
   const count = draft.pending.length
@@ -88,6 +102,14 @@ export function AutomationEditor({
     [graph, trigger, draft.layout]
   )
 
+  const add = (kind: NodeKind, placement: Omit<AddRequest, 'screen'>): void => {
+    const node = newNode(kind, graph)
+    const { ops, layout } = addGesture(graph, draft.layout, node, chainPort(kind), placement)
+    const rejection = editor.apply(ops, layout)
+    if (rejection) toast.error(`Could not add the step: ${rejection.code}`)
+    else setFocus({ id: node.id, nonce: Date.now() })
+  }
+
   const edit: FlowEdit = {
     connect: (edge) => {
       const rejection = editor.apply([{ op: 'connect', edge }])
@@ -101,6 +123,14 @@ export function AutomationEditor({
     remove: (nodes, edges) => {
       const { ops, layout } = removeGesture(graph, draft.layout, nodes, edges)
       if (ops.length > 0) editor.apply(ops, layout)
+    },
+    requestAdd: (request) => {
+      requests.current += 1
+      setAdding(request)
+    },
+    drop: (kind, at) => {
+      setAdding(null)
+      add(kind, { at })
     },
     undo: editor.undo,
     redo: editor.redo,
@@ -153,9 +183,10 @@ export function AutomationEditor({
       tabIndex={-1}
       className="flex h-full min-h-0 flex-col bg-background outline-none"
       onPointerDownCapture={(event) => {
-        if (!event.currentTarget.contains(document.activeElement)) {
-          event.currentTarget.focus({ preventScroll: true })
-        }
+        const root = event.currentTarget
+        // React bubbles events from portals (the add menu) here too; those keep their own focus.
+        if (!root.contains(event.target as Node)) return
+        if (!root.contains(document.activeElement)) root.focus({ preventScroll: true })
       }}
       onKeyDown={(event) => {
         const target = event.target as HTMLElement
@@ -191,7 +222,7 @@ export function AutomationEditor({
               {state.label}
             </span>
             <span className="truncate text-xs text-muted-foreground" data-testid="draft-status">
-              {changesLabel(count)}
+              {changesLabel(count, phone)}
             </span>
           </span>
         </div>
@@ -224,6 +255,22 @@ export function AutomationEditor({
           />
         )}
       </div>
+
+      <AddNodeMenu
+        // One menu per request: a menu still closing cannot dismiss the next one.
+        key={
+          adding ? `${adding.screen.x}:${adding.screen.y}:${adding.at.x}:${adding.at.y}` : 'closed'
+        }
+        anchor={adding?.screen ?? null}
+        phone={phone}
+        // A step in the middle of an edge has to pass the run on.
+        exclude={adding?.split ? NO_CHAIN : []}
+        onPick={(kind) => {
+          if (adding) add(kind, adding)
+          setAdding(null)
+        }}
+        onClose={() => setAdding(null)}
+      />
 
       <IssuesDock
         issues={draft.issues}

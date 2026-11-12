@@ -130,7 +130,7 @@ describe('AutomationEditor', () => {
 
     expect(screen.queryByText('Tap a node to connect')).toBeNull()
     expect(edgeCount()).toBe(3)
-    expect(status()).toBe('Draft · 1 unsaved change')
+    expect(status()).toBe('1 unsaved')
   })
 
   it('cancels a tap-to-connect from the banner', () => {
@@ -272,5 +272,102 @@ describe('AutomationEditor', () => {
     fireEvent.keyDown(editor, { key: 'z', ctrlKey: true })
     expect(edgeCount()).toBe(2)
     expect(status()).toBe('Draft · 1 unsaved change')
+  })
+
+  it('adds a step from the toolbar menu at the centre, unconnected', () => {
+    open()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a step' }))
+    const menu = screen.getByRole('dialog', { name: 'Add a step' })
+    expect(
+      within(menu)
+        .getAllByRole('button')
+        .map((b) => b.textContent)
+    ).toEqual([
+      'HTTP',
+      'Agent',
+      'MCP tool',
+      'Condition',
+      'For each',
+      'Merge',
+      'Wait',
+      'Fail',
+      'Approval',
+      'Transform'
+    ])
+    fireEvent.change(within(menu).getByRole('textbox', { name: 'Search steps' }), {
+      target: { value: 'wai' }
+    })
+    // A real click starts with a pointerdown, which bubbles out of the menu's portal.
+    fireEvent.pointerDown(within(menu).getByRole('button', { name: 'Wait' }))
+    fireEvent.click(within(menu).getByRole('button', { name: 'Wait' }))
+
+    expect(within(card('wait')).getByText('Wait')).toBeInTheDocument()
+    expect(edgeCount()).toBe(2)
+    expect(status()).toBe('Draft · 1 unsaved change')
+  })
+
+  it('chains a new step from the dangling + of an open output', () => {
+    open()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a step after Check (true)' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Transform' }))
+
+    expect(card('transform')).toBeInTheDocument()
+    expect(
+      document.querySelector('[data-testid="edge-label-check:true->transform"]')
+    ).not.toBeNull()
+    // `check:true` is taken now, so its "+" is gone.
+    expect(screen.queryByRole('button', { name: 'Add a step after Check (true)' })).toBeNull()
+  })
+
+  it('inserts a step into the middle of an edge', async () => {
+    api.applyAutomationOps.mockResolvedValue(ok({ automation: detail.automation, issues: [] }))
+    open()
+    fireEvent.click(
+      document.querySelector('.react-flow__edge[data-id="fetch:out->check"]') as Element
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Insert a step here' }))
+    const menu = screen.getByRole('dialog', { name: 'Add a step' })
+    // A step in an edge's middle passes the run on; Fail cannot.
+    expect(within(menu).queryByRole('button', { name: 'Fail' })).toBeNull()
+    fireEvent.click(within(menu).getByRole('button', { name: 'Wait' }))
+
+    expect(document.querySelector('.react-flow__edge[data-id="fetch:out->check"]')).toBeNull()
+    expect(document.querySelector('.react-flow__edge[data-id="fetch:out->wait"]')).not.toBeNull()
+    expect(document.querySelector('.react-flow__edge[data-id="wait:out->check"]')).not.toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(api.applyAutomationOps).toHaveBeenCalled())
+    expect(api.applyAutomationOps.mock.calls[0][2]).toEqual([
+      {
+        op: 'add_node',
+        node: { id: 'wait', label: 'Wait', spec: { kind: 'wait', duration_ms: 60_000 } }
+      },
+      { op: 'disconnect', edge: { from: 'fetch', port: 'out', to: 'check' } },
+      { op: 'connect', edge: { from: 'fetch', port: 'out', to: 'wait' } },
+      { op: 'connect', edge: { from: 'wait', port: 'out', to: 'check' } }
+    ])
+  })
+
+  it('takes a step dragged in from the menu and dropped on the canvas', () => {
+    open()
+    const data = { getData: () => 'merge', types: ['application/x-troupe-node-kind'] }
+    fireEvent.drop(screen.getByRole('group', { name: 'Automation canvas' }), {
+      dataTransfer: data,
+      clientX: 200,
+      clientY: 200
+    })
+    expect(within(card('merge')).getByText('Merge')).toBeInTheDocument()
+  })
+
+  it('on the phone, a tap on blank canvas while connecting offers a new step there', () => {
+    open(true)
+    fireEvent.click(handle('check', 'false'))
+    fireEvent.click(document.querySelector('.react-flow__pane') as Element)
+
+    const sheet = screen.getByRole('dialog', { name: 'Add a step' })
+    fireEvent.click(within(sheet).getByRole('button', { name: 'HTTP' }))
+
+    expect(card('http')).toBeInTheDocument()
+    expect(document.querySelector('[data-testid="edge-label-check:false->http"]')).not.toBeNull()
   })
 })

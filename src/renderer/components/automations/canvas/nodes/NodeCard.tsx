@@ -17,10 +17,10 @@ import {
   TRIGGER
 } from '../ports'
 
-/** `issues` counts the validation issues on this card. */
+/** `issues` counts the validation issues on this card; `open` lists outputs with no edge yet. */
 export type CardData =
-  | { kind: typeof TRIGGER; trigger: Trigger; issues: number }
-  | { kind: 'step'; node: AutomationNode; issues: number }
+  | { kind: typeof TRIGGER; trigger: Trigger; issues: number; open: Port[] }
+  | { kind: 'step'; node: AutomationNode; issues: number; open: Port[] }
 
 type Slot = { label: string; value: string }
 

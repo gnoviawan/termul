@@ -3,6 +3,7 @@ import {
   Hand,
   Maximize2,
   MousePointer2,
+  Plus,
   Redo2,
   Trash2,
   Undo2,
@@ -18,7 +19,7 @@ export type Tool = 'select' | 'pan'
 type Control = {
   label: string
   Icon: typeof ZoomIn
-  run: () => void
+  run: (event: React.MouseEvent<HTMLButtonElement>) => void
   disabled?: boolean
   pressed?: boolean
 }
@@ -34,7 +35,8 @@ export function FlowToolbar({
   onTool,
   canDelete,
   onDelete,
-  onFit
+  onFit,
+  onAdd
 }: {
   phone: boolean
   edit: FlowEdit | undefined
@@ -43,6 +45,8 @@ export function FlowToolbar({
   canDelete: boolean
   onDelete: () => void
   onFit: () => void
+  /** Opens the add menu at the given viewport point. */
+  onAdd: (screen: { x: number; y: number }) => void
 }): React.JSX.Element {
   const flow = useReactFlow()
   const view: Control[] = [
@@ -50,11 +54,20 @@ export function FlowToolbar({
     { label: 'Zoom in', Icon: ZoomIn, run: () => void flow.zoomIn({ duration: 150 }) },
     { label: 'Zoom out', Icon: ZoomOut, run: () => void flow.zoomOut({ duration: 150 }) }
   ]
+  const add: Control = {
+    label: 'Add a step',
+    Icon: Plus,
+    run: (event) => {
+      const box = event.currentTarget.getBoundingClientRect()
+      onAdd({ x: box.left, y: box.top })
+    }
+  }
   const groups: Control[][] = edit
     ? [
         phone
-          ? []
+          ? [add]
           : [
+              add,
               {
                 label: 'Select',
                 Icon: MousePointer2,
@@ -98,7 +111,7 @@ export function FlowToolbar({
                 aria-pressed={pressed}
                 title={label}
                 disabled={disabled}
-                onClick={run}
+                onClick={(event) => run(event)}
               >
                 <Icon size={16} />
               </Button>

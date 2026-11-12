@@ -1,8 +1,9 @@
 import { Handle, type NodeProps, Position } from '@xyflow/react'
 import { memo } from 'react'
+import { Plus } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { NodeCard } from '../nodes/NodeCard'
-import { INPUT_PORT_Y, OUTPUT_PORTS, outputPortY, PORT_PRESENTATION, TRIGGER } from '../ports'
+import { CARD, INPUT_PORT_Y, OUTPUT_PORTS, outputPortY, PORT_PRESENTATION, TRIGGER } from '../ports'
 import { useFlowEdit } from './flow-edit'
 import type { CardNode } from './flow-graph'
 
@@ -15,7 +16,7 @@ export const CardNodeView = memo(function CardNodeView({
   data,
   selected
 }: NodeProps<CardNode>): React.JSX.Element {
-  const { editing, connecting, canTake } = useFlowEdit()
+  const { editing, connecting, canTake, addFrom } = useFlowEdit()
   const ports = OUTPUT_PORTS[data.kind === TRIGGER ? TRIGGER : data.node.spec.kind]
   const fill = selected ? 'bg-muted' : 'bg-card'
   const source = connecting?.from === id
@@ -51,6 +52,32 @@ export const CardNodeView = memo(function CardNodeView({
           style={{ top: outputPortY(index, ports.length) }}
         />
       ))}
+      {editing &&
+        data.open.map((port) => {
+          const index = ports.indexOf(port)
+          return (
+            <span
+              key={`add-${port}`}
+              className="nodrag nopan absolute flex -translate-y-1/2 items-center"
+              style={{ left: CARD.width + 5, top: outputPortY(index, ports.length) }}
+            >
+              <span aria-hidden="true" className="h-px w-3 bg-field-border" />
+              <button
+                type="button"
+                aria-label={`Add a step after ${data.kind === TRIGGER ? 'the trigger' : data.node.label}${port === 'out' ? '' : ` (${port})`}`}
+                title="Add a step"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  const box = event.currentTarget.getBoundingClientRect()
+                  addFrom(id as Parameters<typeof addFrom>[0], port, { x: box.right, y: box.top })
+                }}
+                className="grid size-[18px] place-items-center rounded-full border border-field-border bg-card text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:outline-none pointer-coarse:size-7"
+              >
+                <Plus size={12} />
+              </button>
+            </span>
+          )
+        })}
     </NodeCard>
   )
 })

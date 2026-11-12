@@ -1,4 +1,12 @@
-import type { Automation, Edge, Issue, NodeId } from '@shared/types/automation.types'
+import type {
+  Automation,
+  Edge,
+  Issue,
+  NodeId,
+  NodeKind,
+  NodePosition,
+  Port
+} from '@shared/types/automation.types'
 import {
   applyEdgeChanges,
   applyNodeChanges,
@@ -17,10 +25,11 @@ import {
   useStoreApi,
   type Viewport
 } from '@xyflow/react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { refuseConnect } from '../draft/apply-op'
-import { TRIGGER } from '../ports'
+import { NODE_KIND_MIME } from '../palette/AddNodeMenu'
+import { CARD, INPUT_PORT_Y, SLOT_DEPTH, TRIGGER } from '../ports'
 import { CardNodeView } from './CardNodeView'
 import { ConnectBanner } from './ConnectBanner'
 import { FlowToolbar, type Tool } from './FlowToolbar'
@@ -87,17 +96,21 @@ function ReadableStart({ phone }: { phone: boolean }): null {
 /** Centres and selects the card an issue points at. */
 function FocusCard({ focus }: { focus: { id: string; nonce: number } | null }): null {
   const flow = useReactFlow<CardNode, PortEdge>()
+  // A step just added reaches React Flow a render later: wait for its card.
+  const present = useStore((s) => (focus ? s.nodeLookup.has(focus.id) : false))
+  const done = useRef<number | null>(null)
   useEffect(() => {
-    if (!focus) return
+    if (!focus || !present || done.current === focus.nonce) return
     const node = flow.getNode(focus.id)
     if (!node) return
+    done.current = focus.nonce
     flow.setNodes((nodes) => nodes.map((n) => ({ ...n, selected: n.id === focus.id })))
     void flow.setCenter(
       node.position.x + (node.width ?? 0) / 2,
       node.position.y + (node.height ?? 0) / 2,
       { zoom: Math.max(flow.getZoom(), 0.9), duration: 200 }
     )
-  }, [flow, focus])
+  }, [flow, focus, present])
   return null
 }
 
@@ -107,6 +120,31 @@ function edgeOf(connection: Connection): Edge {
     port: connection.sourceHandle as Edge['port'],
     to: connection.target as NodeId
   }
+}
+
+/** Gap between a step and the one chained after it. */
+const CHAIN_GAP = 80
+
+function clientPoint(event: MouseEvent | TouchEvent | React.MouseEvent): { x: number; y: number } {
+  if ('changedTouches' in event && event.changedTouches.length > 0) {
+    const touch = event.changedTouches[0]
+    return { x: touch.clientX, y: touch.clientY }
+  }
+  const mouse = event as MouseEvent
+  return { x: mouse.clientX, y: mouse.clientY }
+}
+
+/** `at`, moved down past any card it would cover (slots included), so a new step lands in the clear. */
+function freeSpot(at: NodePosition, cards: readonly CardNode[]): NodePosition {
+  const covers = (y: number) =>
+    cards.some(
+      (card) =>
+        Math.abs(card.position.x - at.x) < CARD.width + 16 &&
+        Math.abs(card.position.y - y) < CARD.height + SLOT_DEPTH
+    )
+  let y = at.y
+  while (covers(y)) y += CARD.height + SLOT_DEPTH
+  return { x: at.x, y }
 }
 
 function isTextField(target: EventTarget | null): boolean {
@@ -148,6 +186,53 @@ function Flow({ automation, phone, issues, edit, focus = null }: FlowProps): Rea
   }
   const store = useStoreApi<CardNode, PortEdge>()
   const flow = useReactFlow<CardNode, PortEdge>()
+  // The editor hands a new `edit` every render; cards read it through this ref so they stay memoized.
+  const editRef = useRef(edit)
+  editRef.current = edit
+  const [hoveredEdge, setHoveredEdge] = useState<string | null>(null)
+  const unhover = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const hoverEdge = useCallback((id: string | null): void => {
+    if (unhover.current) clearTimeout(unhover.current)
+    // The "+" sits in an HTML layer over the edge: leaving the path for it must not hide it.
+    if (id === null) unhover.current = setTimeout(() => setHoveredEdge(null), 200)
+    else setHoveredEdge(id)
+  }, [])
+
+  /** A new step dropped at `point` (viewport), its input port under the pointer. */
+  const pointToCard = (point: { x: number; y: number }): NodePosition => {
+    const at = flow.screenToFlowPosition(point)
+    return { x: Math.round(at.x), y: Math.round(at.y - INPUT_PORT_Y) }
+  }
+  const addFrom = useCallback(
+    (from: Edge['from'], port: Port, screen: { x: number; y: number }): void => {
+      const source = flow.getNode(from)
+      if (!editRef.current || !source) return
+      editRef.current.requestAdd({
+        at: freeSpot(
+          { x: source.position.x + CARD.width + CHAIN_GAP, y: source.position.y },
+          flow.getNodes()
+        ),
+        from: { from, port },
+        screen
+      })
+    },
+    [flow]
+  )
+  const addAtCentre = (screen: { x: number; y: number }): void => {
+    const box = store.getState().domNode?.getBoundingClientRect()
+    if (!edit || !box) return
+    const centre = flow.screenToFlowPosition({
+      x: box.x + box.width / 2,
+      y: box.y + box.height / 2
+    })
+    edit.requestAdd({
+      at: freeSpot(
+        { x: Math.round(centre.x - CARD.width / 2), y: Math.round(centre.y - CARD.height / 2) },
+        flow.getNodes()
+      ),
+      screen
+    })
+  }
 
   const onNodesChange: OnNodesChange<CardNode> = (changes) => {
     // View mode: only selection and measurement may change a card, never its existence or
@@ -225,9 +310,14 @@ function Flow({ automation, phone, issues, edit, focus = null }: FlowProps): Rea
           from: connecting.from,
           port: connecting.port,
           to: to as NodeId
-        }) === null
+        }) === null,
+      addFrom,
+      insertOn: (edge: Edge, at: NodePosition, screen: { x: number; y: number }) =>
+        editRef.current?.requestAdd({ at, split: edge, screen }),
+      hoveredEdge,
+      hoverEdge
     }),
-    [live, connecting, connectGraph]
+    [live, connecting, connectGraph, addFrom, hoveredEdge, hoverEdge]
   )
   const labelOf = (id: string): string =>
     id === TRIGGER ? 'Trigger' : (graph.nodes.find((node) => node.id === id)?.label ?? id)
@@ -246,6 +336,29 @@ function Flow({ automation, phone, issues, edit, focus = null }: FlowProps): Rea
           phone && !editing
             ? (event) => {
                 if (event.touches.length < 2) event.stopPropagation()
+              }
+            : undefined
+        }
+        onDragOver={
+          editing
+            ? (event) => {
+                if (!event.dataTransfer.types.includes(NODE_KIND_MIME)) return
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'copy'
+              }
+            : undefined
+        }
+        onDrop={
+          editing
+            ? (event) => {
+                const kind = event.dataTransfer.getData(NODE_KIND_MIME) as NodeKind
+                if (!kind || !edit) return
+                event.preventDefault()
+                const at = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY })
+                edit.drop(kind, {
+                  x: Math.round(at.x - CARD.width / 2),
+                  y: Math.round(at.y - CARD.height / 2)
+                })
               }
             : undefined
         }
@@ -293,10 +406,31 @@ function Flow({ automation, phone, issues, edit, focus = null }: FlowProps): Rea
               })
             }
           }}
-          onConnectEnd={(_, state) => {
+          onConnectEnd={(event, state) => {
             startConnecting(null)
             if (!edit || state.isValid || !state.fromNode || !state.fromHandle?.id) return
-            if (state.toNode && state.toNode.id !== state.fromNode.id) {
+            if (!state.toNode) {
+              const point = clientPoint(event)
+              const from = {
+                from: state.fromNode.id as Edge['from'],
+                port: state.fromHandle.id as Port
+              }
+              // React Flow only snaps to a port; a drop on a card's body still means that card.
+              const onCard = document
+                .elementFromPoint(point.x, point.y)
+                ?.closest('.react-flow__node')
+                ?.getAttribute('data-id')
+              if (onCard) {
+                if (onCard === from.from) return
+                const edge: Edge = { ...from, to: onCard as NodeId }
+                const refusal = refuseConnect(graph, edge)
+                if (refusal) edit.refused(refusal)
+                else edit.connect(edge)
+                return
+              }
+              // Dropped on blank canvas: pick a new step to put there, already connected.
+              edit.requestAdd({ at: pointToCard(point), from, screen: point })
+            } else if (state.toNode.id !== state.fromNode.id) {
               const refusal = refuseConnect(graph, {
                 from: state.fromNode.id as Edge['from'],
                 port: state.fromHandle.id as Edge['port'],
@@ -320,7 +454,9 @@ function Flow({ automation, phone, issues, edit, focus = null }: FlowProps): Rea
           onClickConnectEnd={(event) => {
             const target = (event.target as Element | null)?.closest?.('.react-flow__node')
             const to = target?.getAttribute('data-id')
-            if (to && connectingRef.current && to !== connectingRef.current.from) {
+            // A tap on blank canvas ends here first; `onPaneClick` takes it from there.
+            if (!to) return
+            if (connectingRef.current && to !== connectingRef.current.from) {
               const refusal = refuseConnect(graph, {
                 from: connectingRef.current.from,
                 port: connectingRef.current.port,
@@ -336,9 +472,20 @@ function Flow({ automation, phone, issues, edit, focus = null }: FlowProps): Rea
             if ((event.target as Element).closest('.react-flow__handle')) return
             if (connectingRef.current) finishConnecting(node.id)
           }}
-          onPaneClick={() => {
-            if (connectingRef.current) cancelConnecting()
+          onPaneClick={(event) => {
+            const from = connectingRef.current
+            if (!from) return
+            cancelConnecting()
+            // A tap on blank canvas while connecting offers a new step there, like a drop.
+            const point = clientPoint(event)
+            edit?.requestAdd({
+              at: pointToCard(point),
+              from: { from: from.from, port: from.port },
+              screen: point
+            })
           }}
+          onEdgeMouseEnter={editing ? (_, edge) => hoverEdge(edge.id) : undefined}
+          onEdgeMouseLeave={editing ? () => hoverEdge(null) : undefined}
           selectionOnDrag={editing && !phone && tool === 'select'}
           panOnDrag={editing && !phone && tool === 'select' ? [1, 2] : true}
           panOnScroll={editing && !phone}
@@ -401,6 +548,7 @@ function Flow({ automation, phone, issues, edit, focus = null }: FlowProps): Rea
           )
           void flow.setViewport(view, { duration: 200 })
         }}
+        onAdd={addAtCentre}
       />
     </FlowEditContext.Provider>
   )

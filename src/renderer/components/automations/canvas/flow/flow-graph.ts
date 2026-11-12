@@ -107,11 +107,28 @@ export function toFlow(
   const { graph, trigger, layout } = automation
   const positions = placeNodes(graph, layout)
   const counts = issueCounts(issues)
+  const used = new Set(graph.edges.map((edge) => `${edge.from}:${edge.port}`))
+  // Outputs with nothing behind them get a dangling "+" while editing; `error` is optional.
+  const open = (id: CanvasNodeId, ports: readonly Port[]): Port[] =>
+    editing ? ports.filter((port) => port !== 'error' && !used.has(`${id}:${port}`)) : []
   const cards: [CanvasNodeId, CardData][] = [
-    [TRIGGER, { kind: TRIGGER, trigger, issues: counts.get(TRIGGER) ?? 0 }],
+    [
+      TRIGGER,
+      {
+        kind: TRIGGER,
+        trigger,
+        issues: counts.get(TRIGGER) ?? 0,
+        open: open(TRIGGER, OUTPUT_PORTS.trigger)
+      }
+    ],
     ...graph.nodes.map((node): [CanvasNodeId, CardData] => [
       node.id,
-      { kind: 'step', node, issues: counts.get(node.id) ?? 0 }
+      {
+        kind: 'step',
+        node,
+        issues: counts.get(node.id) ?? 0,
+        open: open(node.id, OUTPUT_PORTS[node.spec.kind])
+      }
     ])
   ]
   const nodes = cards.map(
