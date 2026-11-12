@@ -53,19 +53,17 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 fn is_runnable(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
-    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path)
-            .ok()
-            .is_some_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+        path.is_file()
+            && std::fs::metadata(path)
+                .ok()
+                .is_some_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
     }
     #[cfg(not(unix))]
     {
-        true
+        path.is_file()
     }
 }
 
