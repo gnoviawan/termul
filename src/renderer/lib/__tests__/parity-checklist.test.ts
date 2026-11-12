@@ -2970,6 +2970,20 @@ describe('Automation parity (facade)', () => {
       route: '/ops`'
     },
     {
+      fn: 'previewAutomationOps',
+      method: 'previewOps',
+      command: 'automation_preview_ops',
+      http: '"/api/automations/{id}/ops/preview"',
+      route: '/ops/preview`'
+    },
+    {
+      fn: 'setAutomationLayout',
+      method: 'setLayout',
+      command: 'automation_set_layout',
+      http: '"/api/automations/{id}/layout"',
+      route: '/layout`'
+    },
+    {
       fn: 'deleteAutomation',
       method: 'remove',
       command: 'automation_delete',

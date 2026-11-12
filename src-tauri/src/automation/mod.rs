@@ -32,6 +32,8 @@ mod schema_tests;
 #[cfg(test)]
 mod secrets_tests;
 #[cfg(test)]
+mod service_layout_tests;
+#[cfg(test)]
 mod service_mcp_tests;
 #[cfg(test)]
 mod service_tests;

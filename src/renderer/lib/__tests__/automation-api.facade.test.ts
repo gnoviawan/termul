@@ -33,10 +33,12 @@ import {
   markAutomationSeen,
   matchAutomationSuggestion,
   onAutomationChanged,
+  previewAutomationOps,
   previewSchedule,
   publishAutomationChange,
   runAutomationNow,
   setAutomationEnabled,
+  setAutomationLayout,
   setAutomationSecret
 } from '../automation-api'
 
@@ -94,6 +96,26 @@ const CASES: Case[] = [
     method: 'POST',
     path: '/api/automations/auto-1/ops',
     body: { base_revision: 3, ops: [{ op: 'rename', name: 'X' }] }
+  },
+  {
+    name: 'previewAutomationOps',
+    call: () => previewAutomationOps(ID, 3, [{ op: 'rename', name: 'X' }]),
+    reply: detail,
+    command: 'automation_preview_ops',
+    args: { id: ID, baseRevision: 3, ops: [{ op: 'rename', name: 'X' }] },
+    method: 'POST',
+    path: '/api/automations/auto-1/ops/preview',
+    body: { base_revision: 3, ops: [{ op: 'rename', name: 'X' }] }
+  },
+  {
+    name: 'setAutomationLayout',
+    call: () => setAutomationLayout(ID, { trigger: { x: 1, y: 2 } }),
+    reply: wire.automation,
+    command: 'automation_set_layout',
+    args: { id: ID, layout: { trigger: { x: 1, y: 2 } } },
+    method: 'POST',
+    path: '/api/automations/auto-1/layout',
+    body: { layout: { trigger: { x: 1, y: 2 } } }
   },
   {
     name: 'deleteAutomation',

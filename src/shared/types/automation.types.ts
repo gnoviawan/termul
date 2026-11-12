@@ -92,6 +92,11 @@ export type Edge = { from: NodeId | 'trigger'; port: Port; to: NodeId }
 
 export type Graph = { nodes: AutomationNode[]; edges: Edge[] }
 
+export type NodePosition = { x: number; y: number }
+
+/** Keys are node ids plus `'trigger'`. Not part of the revision: saving one never changes `revision` or the approval. */
+export type AutomationLayout = Partial<Record<NodeId | 'trigger', NodePosition>>
+
 export type RunStatus = 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped'
 
 export type LastRun = { run_id: RunId; status: RunStatus; finished_at: number }
@@ -105,6 +110,7 @@ export type Automation = {
   enabled: boolean
   trigger: Trigger
   graph: Graph
+  layout: AutomationLayout
   isolation: Isolation
   next_run_at: number | null
   consecutive_errors: number

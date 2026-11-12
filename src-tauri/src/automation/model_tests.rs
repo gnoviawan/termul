@@ -5,9 +5,9 @@ use serde_json::{json, Value};
 
 use super::graph::validate;
 use super::model::{
-    ApplyOpsResult, Automation, Edge, EdgeSource, Isolation, LastRun, NamedTemplate, NodeId,
-    NodeSpec, Op, Parked, Port, Run, RunPolicy, RunStatus, RunTrigger, Step, StepStatus, Template,
-    Trigger,
+    ApplyOpsResult, Automation, Edge, EdgeSource, Isolation, LastRun, Layout, NamedTemplate,
+    NodeId, NodePosition, NodeSpec, Op, Parked, Port, Run, RunPolicy, RunStatus, RunTrigger, Step,
+    StepStatus, Template, Trigger,
 };
 use super::policy::run_policy;
 use super::suggest::{Cadence, Suggestion};
@@ -38,6 +38,16 @@ fn build_fixture() -> WireFixture {
     automation.next_run_at = Some(1_773_046_800_000);
     automation.consecutive_errors = 1;
     automation.unseen_failures = 2;
+    automation.layout = Layout(
+        [
+            ("trigger", NodePosition { x: 0.0, y: 40.0 }),
+            ("fetch", NodePosition { x: 240.0, y: 40.5 }),
+            ("extract", NodePosition { x: 480.0, y: -16.0 }),
+        ]
+        .into_iter()
+        .map(|(key, at)| (key.to_string(), at))
+        .collect(),
+    );
     automation.last_run = Some(LastRun {
         run_id: "run-1".to_string().into(),
         status: RunStatus::Failed,

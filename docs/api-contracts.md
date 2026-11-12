@@ -173,6 +173,8 @@ Tauri commands take camelCase arguments and run only from the `main` webview. Ot
 | `automation_get` | `GET /api/automations/{id}` | `id` | `AutomationDetail` (`{automation, issues, policy}`) |
 | `automation_create` | `POST /api/automations` | `projectId`, `name` | `Automation` |
 | `automation_apply_ops` | `POST /api/automations/{id}/ops` | `id`, `baseRevision`, `ops` | `ApplyOpsResult` (`{automation, issues}`) |
+| `automation_preview_ops` | `POST /api/automations/{id}/ops/preview` | `id`, `baseRevision`, `ops` | `AutomationDetail`. A dry run of `automation_apply_ops` that saves and announces nothing. The automation is what a save would store: the next revision, so an approval of `baseRevision` no longer arms it and `next_run_at` is null. A stale `baseRevision` is the same `revision_conflict`. |
+| `automation_set_layout` | `POST /api/automations/{id}/layout` | `id`, `layout` | `Automation`. Saves canvas node positions (`{ [nodeId or "trigger"]: {x, y} }`) without a new revision, so an approval stands. A NaN or infinite coordinate under any key is `invalid_input` and nothing is saved. Otherwise keys that are not `trigger` or a node are dropped, and removing a node drops its position. |
 | `automation_delete` | `DELETE /api/automations/{id}` | `id` | `null` |
 | `automation_set_enabled` | `POST /api/automations/{id}/enabled` | `id`, `enabled` | `Automation` |
 | `automation_approve` | `POST /api/automations/{id}/approve` | `id`, `revision` | `Automation` |
@@ -190,7 +192,7 @@ Tauri commands take camelCase arguments and run only from the `main` webview. Ot
 
 Secret values go in and never come back out. The host stores them in the OS keychain. A host whose keychain does not answer at startup, such as `troupe-server` on headless Linux, stores them instead in `automation-secrets.json` in its data directory: an owner-only (`0600`) JSON object keyed like the keychain entries, `automation:<project_id>:<NAME>`. A host that already has that file keeps using it. The log names the backend once at startup and never carries a value.
 
-The `/api/automation` prefix is bearer-gated. A host without a token gate serves only loopback peers. Every `POST`, `PUT` and `DELETE` except `preview-schedule` passes the remote-write guard: the desktop shared-live host refuses them, and `troupe-server` admits a non-loopback peer only with `--allow-remote-writes`.
+The `/api/automation` prefix is bearer-gated. A host without a token gate serves only loopback peers. Every `POST`, `PUT` and `DELETE` except `preview-schedule` and `ops/preview` passes the remote-write guard: the desktop shared-live host refuses them, and `troupe-server` admits a non-loopback peer only with `--allow-remote-writes`.
 
 A failure carries the service's code. On HTTP it also sets the status:
 
