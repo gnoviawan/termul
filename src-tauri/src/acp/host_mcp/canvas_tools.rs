@@ -59,6 +59,11 @@ const EXPORT_PATH_UPSTREAM: &str = "(absolute path recommended)";
 const EXPORT_PATH_TERMUL: &str =
     "(a path relative to the project; Troupe writes only inside the project and may replace a file there)";
 
+/// Troupe's canvas holds one document, so the multi-document `document`
+/// argument is neither advertised nor forwarded: an agent that copies
+/// `inspect_document`'s `name` into it would get "no open document".
+const DOCUMENT_ARGUMENT: &str = "document";
+
 /// figcraft's tools as rmcp definitions, each description prefixed with
 /// [`DESCRIPTION_TAG`]. figcraft marks `export` read-only, but with a `path`
 /// Troupe writes (and may replace) a project file, so it is advertised as
@@ -70,6 +75,12 @@ pub fn tools() -> Vec<Tool> {
         .into_iter()
         .map(|mut definition| {
             let export = definition["name"] == "export";
+            if let Some(properties) = definition
+                .pointer_mut("/inputSchema/properties")
+                .and_then(Value::as_object_mut)
+            {
+                properties.remove(DOCUMENT_ARGUMENT);
+            }
             if let Some(Value::String(description)) = definition.get_mut("description") {
                 if export {
                     *description = description.replace(EXPORT_PATH_UPSTREAM, EXPORT_PATH_TERMUL);
@@ -101,7 +112,14 @@ pub fn tools() -> Vec<Tool> {
 
 /// Run one figcraft tool against the session's canvas. Every failure is a
 /// tool error the agent reads, as in figcraft's own server.
-pub async fn call_tool(config: ChildConfig, name: String, arguments: Value) -> CallToolResult {
+pub async fn call_tool(
+    config: ChildConfig,
+    name: String,
+    mut arguments: Value,
+) -> CallToolResult {
+    if let Some(arguments) = arguments.as_object_mut() {
+        arguments.remove(DOCUMENT_ARGUMENT);
+    }
     let ran = tokio::task::spawn_blocking(move || {
         let mut bridge = Bridge::new(config).with_tool(&name);
         figcraft_mcp::call_tool(&mut bridge, &name, &arguments).to_value()
