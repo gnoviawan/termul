@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import type { ToolCall } from '@/lib/acp-api'
+import type { BackgroundCommand, ToolCall } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { formatSubagentElapsed, type SubagentStatus, subagentDurationMs } from './subagent-strip'
 
@@ -100,4 +100,21 @@ export function SubagentSpanElapsed({
   }
   if (start === undefined || end === undefined) return null
   return <span className={cn(TIME_CLASS, className)}>{formatSubagentElapsed(end - start)}</span>
+}
+
+/** A background command's elapsed time: ticking while it runs, its total once ended. */
+export function BackgroundCommandElapsed({
+  command,
+  className
+}: {
+  command: BackgroundCommand
+  className?: string
+}): React.JSX.Element {
+  const current = useNow(command.state === 'running')
+  const end = command.state === 'ended' ? command.endedAtMs : current
+  return (
+    <span className={cn(TIME_CLASS, className)}>
+      {formatSubagentElapsed(end - command.startedAtMs)}
+    </span>
+  )
 }

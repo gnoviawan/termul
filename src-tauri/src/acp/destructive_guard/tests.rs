@@ -1,5 +1,6 @@
 use super::*;
 use crate::acp::config::AgentId;
+use std::path::PathBuf;
 
 fn agent(id: &str) -> AgentId {
     AgentId(id.to_string())
@@ -215,17 +216,22 @@ async fn a_session_in_a_nested_linked_worktree_does_not_block_the_enclosing_tree
     {
         return; // git unavailable
     }
-    let repo = std::fs::canonicalize(&repo).unwrap();
-    let nested = repo.join(".termul/worktrees/wt");
+    // Plain path for git worktree add; canonicalize after (#1724).
+    let repo_for_git = PathBuf::from(
+        crate::path_validation::git_path(&std::fs::canonicalize(&repo).unwrap().to_string_lossy())
+            .as_ref(),
+    );
+    let nested = repo_for_git.join(".termul/worktrees/wt");
     std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
     assert!(
         GitTracker::run_git_command(
-            repo.to_str().unwrap(),
+            repo_for_git.to_str().unwrap(),
             &["worktree", "add", "-q", "-b", "wt", nested.to_str().unwrap()],
         )
         .is_some_and(|out| out.status.success()),
         "git worktree add"
     );
+    let repo = std::fs::canonicalize(&repo_for_git).unwrap();
     let nested = std::fs::canonicalize(&nested).unwrap();
 
     // Busy only inside the nested linked worktree.

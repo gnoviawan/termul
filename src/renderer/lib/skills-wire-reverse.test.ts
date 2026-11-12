@@ -331,6 +331,19 @@ describe('wireBlocksToDisplay with conversation envelopes', () => {
     ])
   })
 
+  it('restores the pill of a chat whose folded transcript was partial', () => {
+    const display = `see ${conversationToken('Fix bug', 'chain')} `
+    expect(wireOf(display, 'partial')).toBe(
+      'see (conversation: Fix bug, transcript partial: earlier history unavailable [termul-chat:chain]) '
+    )
+    expect(
+      wireBlocksToDisplay([
+        { type: 'text', text: wireOf(display, 'partial') },
+        { type: 'text', text: conversationEnvelope('chain', 'Fix bug', 'User: later turn') }
+      ])
+    ).toEqual([{ type: 'text', text: display }])
+  })
+
   it('keeps a file marker inside a chat title as title text', () => {
     const link = { type: 'resource_link', uri: 'file:///w/auth.ts', name: 'auth.ts' }
     const display = `see ${conversationToken('Fix (auth.ts) crash', 's1')} and `

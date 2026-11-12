@@ -184,6 +184,47 @@ describe('background agents and reload', () => {
     )
   })
 
+  it('blocks a switch and leaves the reload to its confirm while a command runs in the background', () => {
+    const watch = {
+      toolCallId: 'exec-1',
+      title: 'Watch CI',
+      command: 'gh pr checks --watch',
+      startedAtMs: 1_000
+    }
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        s1: {
+          ...session('s1'),
+          backgroundCommands: {
+            agentId: 'agent-1',
+            revision: 1,
+            commands: [{ ...watch, state: 'running' as const }]
+          }
+        }
+      }
+    }))
+    expect(blocked()).toBeNull()
+    expect(switchBlockedReason(useAcpStore.getState(), 's1')).toBe(
+      'commands are still running in the background — switching would stop them'
+    )
+
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        s1: {
+          ...session('s1'),
+          backgroundCommands: {
+            agentId: 'agent-1',
+            revision: 2,
+            commands: [{ ...watch, state: 'ended' as const, endedAtMs: 2_000 }]
+          }
+        }
+      }
+    }))
+    expect(switchBlockedReason(useAcpStore.getState(), 's1')).toBeNull()
+  })
+
   it('reloads a held-turn chat as a plain busy reply once its background agents ended', () => {
     useAcpStore.setState((s) => ({
       sessions: { ...s.sessions, s1: session('s1', { busy: true }) },

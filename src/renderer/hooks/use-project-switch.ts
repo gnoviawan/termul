@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { logFrontendError } from '@/lib/log-api'
 import { releaseFocusNotOfProject } from '@/lib/release-stale-focus'
+import { liveSessionIdOf } from '@/lib/session-chain'
 import { useAcpStore } from '@/stores/acp-store'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -33,15 +34,21 @@ function requestMostRecentChat(projectId: string): string | null {
   ) {
     return null
   }
+  const projectChats = useAcpStore
+    .getState()
+    .sessionIndex.filter((entry) => entry.projectId === projectId && !entry.discovered)
   let latest: { id: string; lastActivityAt: number } | null = null
-  for (const entry of useAcpStore.getState().sessionIndex) {
-    if (entry.projectId !== projectId || entry.discovered) continue
+  for (const entry of projectChats) {
     if (!latest || entry.lastActivityAt > latest.lastActivityAt) latest = entry
   }
   if (!latest) return null
-  lifetime.retainProjectChats(projectId, [latest.id])
-  lifetime.requestFocus(projectId, latest.id)
-  return latest.id
+  // The raw index still lists a switch chain's absorbed sources; retain and
+  // focus the terminal (live) session of whatever the newest entry continues,
+  // never a discovered mirror or another project's session.
+  const liveId = liveSessionIdOf(projectChats, latest.id)
+  lifetime.retainProjectChats(projectId, [liveId])
+  lifetime.requestFocus(projectId, liveId)
+  return liveId
 }
 
 /**

@@ -220,7 +220,10 @@ pub async fn serve(
         target: "termul::web::setup",
         "setup-mode server listening on http://{addr}"
     );
-    if !assets::dist_web_ready() {
+    // Only warn when NEITHER the on-disk `dist-web/` (dev) NOR the embedded
+    // bundle (release binary) can serve the UI — a shipped binary embeds the UI
+    // even though the compile-time `dist-web/` path does not exist on disk.
+    if !assets::web_ui_available() {
         tracing::warn!(
             "dist-web/index.html not found at {:?} — run `bun run build:web` before browsing; \
              /health + /setup/* still work, static routes will 404",

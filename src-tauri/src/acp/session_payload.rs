@@ -113,6 +113,13 @@ pub struct SessionPayloadMetadata {
     /// Host-recorded model (CAP-3), mirrors the session index entry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    /// The previous session id this session continues from after an in-chat
+    /// agent switch (the `agent_switch` marker's `newSessionId` target side).
+    /// Mirrors the session index entry so an install can keep the fold's
+    /// chain edge on the index projection. Additive: absent on unswitched
+    /// chats and older hosts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continued_from: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
 }
@@ -323,6 +330,7 @@ pub fn materialize_session_payload(
         worktree_branch: metadata.worktree_branch.clone(),
         model_id: metadata.model_id.clone(),
         model_name: metadata.model_name.clone(),
+        continued_from: metadata.continued_from.clone(),
     };
     MaterializedSessionPayload {
         metadata: payload_metadata,

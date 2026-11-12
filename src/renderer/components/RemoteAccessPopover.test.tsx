@@ -125,6 +125,19 @@ describe('RemoteAccessPopover', () => {
     expect(screen.queryByTestId('qr')).toBeNull()
   })
 
+  it('wraps a long unbroken error path inside the popover instead of overflowing', async () => {
+    const longPath =
+      "failed to read web auth token file 'C:\\Users\\User\\AppData\\Roaming\\com.termul-manager.app\\web-auth-token'"
+    startMock.mockResolvedValueOnce({ success: false, error: longPath })
+    renderPopover()
+
+    const toggle = await openPopover()
+    await fireEvent.click(toggle)
+
+    const message = await screen.findByText(longPath)
+    expect(message).toHaveClass('min-w-0', '[overflow-wrap:anywhere]')
+  })
+
   it('starts remote access with no bind-mode arg on toggle on and mirrors the MCP servers', async () => {
     startMock.mockResolvedValueOnce({ success: true, data: RUNNING })
     renderPopover()

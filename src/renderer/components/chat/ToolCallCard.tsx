@@ -11,6 +11,7 @@ import {
   FileText,
   FolderInput,
   Globe,
+  LoaderCircle,
   Search,
   Shuffle,
   TerminalSquare,
@@ -25,12 +26,15 @@ import { resolveDiffLanguage } from '@/lib/diff-highlight'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
+import { useToolCallReveal } from '@/stores/tool-call-reveal-store'
 import { MediaBlocks } from './ChatMessage'
 import { CHAT_ROW_ICON, CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
 import { DiffPreview } from './DiffPreview'
 import { EditDiffBlock } from './EditDiffBlock'
 import { HighlightedCode } from './highlighted-code'
+import { useSubagentSurface } from './subagent-surface-context'
+import { BackgroundCommandElapsed } from './subagent-time'
 import { type ToolIconName, toolIconName } from './tool-call-format'
 import {
   describeToolCall,
@@ -40,6 +44,7 @@ import {
   readableOutput,
   toolCallPath
 } from './tool-call-summary'
+import { useBackgroundCommand } from './use-background-command'
 
 type ToolIconComponent = React.ComponentType<{ size?: number | string; className?: string }>
 
@@ -148,6 +153,9 @@ export function renderContentItem(
   return null
 }
 
+/** Long enough for the turn and work run around a revealed card to expand. */
+const REVEAL_SCROLL_DELAY_MS = 250
+
 /** Human-friendly elapsed time for a settled tool call. */
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`
@@ -241,6 +249,24 @@ function ToolCallCardComponent({
 
   const startedAt = typeof toolCall.timestamp === 'number' ? toolCall.timestamp : null
   const durationMs = endedAt != null && startedAt != null ? endedAt - startedAt : null
+  // The tool call finished or its turn ended, but its command still runs.
+  const background = useBackgroundCommand(toolCall.toolCallId)
+  const inBackground = background?.state === 'running' ? background : null
+
+  // The status pill's Background row shows this card: open it and scroll to it
+  // once the turn and work run around it have expanded.
+  const rowRef = useRef<HTMLDivElement>(null)
+  const { sessionId } = useSubagentSurface()
+  const revealNonce = useToolCallReveal(sessionId, (id) => id === toolCall.toolCallId)
+  useEffect(() => {
+    if (revealNonce === null) return
+    if (hasDetail) setOpen(true)
+    const timer = setTimeout(
+      () => rowRef.current?.scrollIntoView?.({ block: 'center' }),
+      REVEAL_SCROLL_DELAY_MS
+    )
+    return () => clearTimeout(timer)
+  }, [revealNonce, hasDetail])
 
   const { verb, primary, detail, diffStat } = describeToolCall(toolCall)
   const language = readLanguage(toolCall)
@@ -299,7 +325,19 @@ function ToolCallCardComponent({
   // inside the disclosure <button> is invalid HTML, so they stay at the row
   // level. Visual order (icon, label, meta/diffStat, duration, alert,
   // chevron, open-file) is preserved by the flex container below.
-  const rowSummary = (
+  const rowSummary = inBackground ? (
+    <>
+      <LoaderCircle
+        size={13}
+        className="shrink-0 animate-spin text-warning motion-reduce:animate-none"
+        aria-hidden="true"
+      />
+      <span className="min-w-0 flex-1 truncate" title={inBackground.command ?? label}>
+        <span className="text-muted-foreground">Running in background </span>
+        <span className="font-medium text-foreground">{inBackground.command ?? primary}</span>
+      </span>
+    </>
+  ) : (
     <>
       <Icon
         size={13}
@@ -354,8 +392,10 @@ function ToolCallCardComponent({
         </div>
       ) : null}
       <div
-        aria-busy={running || undefined}
+        ref={rowRef}
+        aria-busy={running || inBackground !== null || undefined}
         data-status={status}
+        data-background={inBackground ? 'running' : undefined}
         className="group/tool relative w-full overflow-hidden"
       >
         <div>
@@ -378,10 +418,14 @@ function ToolCallCardComponent({
                 {rowSummary}
               </div>
             )}
-            {durationMs != null && (
-              <span className="min-w-[4.5ch] shrink-0 text-right text-2xs tabular-nums text-muted-foreground">
-                {formatDuration(durationMs)}
-              </span>
+            {background ? (
+              <BackgroundCommandElapsed command={background} className="min-w-[4.5ch] text-2xs" />
+            ) : (
+              durationMs != null && (
+                <span className="min-w-[4.5ch] shrink-0 text-right text-2xs tabular-nums text-muted-foreground">
+                  {formatDuration(durationMs)}
+                </span>
+              )
             )}
             {failed && <AlertCircle size={12} className="shrink-0 text-destructive" />}
             {hasDetail && (

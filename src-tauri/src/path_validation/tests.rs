@@ -205,3 +205,93 @@ fn plain_windows_client_path_drops_a_verbatim_prefix_in_any_slash_style() {
         r"\\srv\share\p\a.figcraft"
     );
 }
+
+#[test]
+fn test_windows_git_path_strips_drive_and_unc_verbatim_for_git_exe() {
+    // Mirrors the Windows CI failure in #1724: canonicalize + worktree add.
+    assert_eq!(
+        windows_git_path(r"\\?\C:\Users\runneradmin\AppData\Local\Temp\.tmpABC\main").as_ref(),
+        r"C:\Users\runneradmin\AppData\Local\Temp\.tmpABC\main"
+    );
+    assert_eq!(
+        windows_git_path(r"\\?\UNC\server\share\repo").as_ref(),
+        r"\\server\share\repo"
+    );
+    assert_eq!(
+        windows_git_path("/home/user/project").as_ref(),
+        "/home/user/project"
+    );
+    assert_eq!(windows_git_path("chat/abc").as_ref(), "chat/abc");
+}
+
+#[test]
+fn test_windows_git_path_keeps_verbatim_forms_without_a_plain_equivalent() {
+    // Stripping these would leave a relative path git resolves against the
+    // process cwd.
+    let volume = r"\\?\Volume{0b1c2d3e-0000-0000-0000-000000000000}\repo";
+    assert_eq!(windows_git_path(volume).as_ref(), volume);
+    assert_eq!(windows_git_path(r"\\?\foo").as_ref(), r"\\?\foo");
+}
+
+#[test]
+fn test_windows_git_path_keeps_verbatim_when_plain_form_names_another_folder() {
+    // A verbatim path is literal; the plain form is normalized by Windows, so
+    // stripping these would point git at a different location.
+    for unsafe_path in [
+        r"\\?\C:\repo/other",
+        r"\\?\C:\repo\..\other",
+        r"\\?\C:\repo\.\sub",
+        r"\\?\C:\repo\.",
+        r"\\?\C:\repo.\sub",
+        r"\\?\C:\repo \sub",
+        r"\\?\C:\repo\sub.",
+        r"\\?\C:\repo\\sub",
+        r"\\?\C:\repo\nul",
+        r"\\?\C:\repo\COM1.txt",
+        r"\\?\C:\repo\COM¹",
+        r"\\?\C:\repo\com².txt",
+        r"\\?\C:\repo\LPT³",
+        r"\\?\C:\repo\lpt¹.log",
+        r"\\?\C:repo",
+        r"\\?\UNC\server\share\..\other",
+        r"\\?\UNC\server\share/repo",
+        r"\\?\UNC\",
+    ] {
+        assert_eq!(
+            windows_git_path(unsafe_path).as_ref(),
+            unsafe_path,
+            "{unsafe_path}"
+        );
+    }
+}
+
+#[test]
+fn test_windows_git_path_still_strips_safe_verbatim_forms() {
+    for (verbatim, plain) in [
+        (r"\\?\C:\", r"C:\"),
+        (r"\\?\C:\repo\", r"C:\repo\"),
+        (r"\\?\D:\a b\.hidden\x.y", r"D:\a b\.hidden\x.y"),
+        (r"\\?\C:\repo\console\com10", r"C:\repo\console\com10"),
+        (r"\\?\UNC\server\share\repo\sub", r"\\server\share\repo\sub"),
+    ] {
+        assert_eq!(windows_git_path(verbatim).as_ref(), plain, "{verbatim}");
+    }
+}
+
+#[cfg(not(windows))]
+#[test]
+fn test_git_path_keeps_literal_posix_backslash_names() {
+    // On POSIX `\\?\foo` is a legal file name, not a verbatim prefix.
+    assert_eq!(git_path(r"\\?\foo").as_ref(), r"\\?\foo");
+    assert_eq!(git_path(r"\\?\C:\x").as_ref(), r"\\?\C:\x");
+    assert_eq!(
+        git_path("/home/user/project").as_ref(),
+        "/home/user/project"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn test_git_path_strips_verbatim_on_windows() {
+    assert_eq!(git_path(r"\\?\C:\repo").as_ref(), r"C:\repo");
+}

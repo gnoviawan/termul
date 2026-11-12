@@ -39,9 +39,12 @@ pub(super) struct GitOutput {
 }
 
 /// Run a git command and return its exit code and output without judging success.
+///
+/// `cwd` goes through [`crate::path_validation::git_path`] so a Windows
+/// verbatim (`\\?\…`) path never reaches `git.exe` (see #1724). `args` are
+/// passed as-is; callers normalize path operands (see `WorktreeManager::create`).
 pub(super) fn run_git_output(args: &[&str], cwd: Option<&str>) -> Result<GitOutput, WorktreeError> {
     let git = which_git()?;
-
     let mut cmd = quiet_command(&git);
     // `-c` must precede the subcommand. Pinning `color.ui=false` keeps a user
     // `color.ui=always` config from ANSI-wrapping the `fatal:`/`error:` line
@@ -49,7 +52,7 @@ pub(super) fn run_git_output(args: &[&str], cwd: Option<&str>) -> Result<GitOutp
     cmd.arg("-c").arg("color.ui=false");
     cmd.args(args);
     if let Some(dir) = cwd {
-        cmd.current_dir(dir);
+        cmd.current_dir(crate::path_validation::git_path(dir).as_ref());
     }
 
     let output = cmd.output().map_err(|e| {
@@ -119,7 +122,7 @@ pub(super) fn run_git_streaming(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     if let Some(dir) = cwd {
-        cmd.current_dir(dir);
+        cmd.current_dir(crate::path_validation::git_path(dir).as_ref());
     }
 
     let mut child = cmd.spawn().map_err(|e| {

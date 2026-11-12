@@ -17,6 +17,7 @@ import {
   savedModelValues
 } from '@/stores/acp-store/composer-options'
 import { sessionTurnBusy, waitForTurnClear } from '@/stores/prompt-queue-orchestration'
+import { runningBackgroundCommands } from '../background-commands'
 import { runningBackgroundSubagents } from '../subagent-strip'
 
 const EMPTY_CONFIGS: readonly StoredAgentConfig[] = []
@@ -85,9 +86,10 @@ export function useCurrentAgentConfigId(sessionId: string): string | null {
   })
 }
 
-function hasBackgroundSubagents(state: AcpState, sessionId: string): boolean {
+function hasBackgroundWork(state: AcpState, sessionId: string): boolean {
   return (
-    runningBackgroundSubagents(state.toolCalls?.[sessionId], state.messages?.[sessionId]).length > 0
+    runningBackgroundSubagents(state.toolCalls?.[sessionId], state.messages?.[sessionId]).length >
+      0 || runningBackgroundCommands(state.sessions?.[sessionId]) > 0
   )
 }
 
@@ -95,11 +97,11 @@ function hasBackgroundSubagents(state: AcpState, sessionId: string): boolean {
  * The switch gate as the selector shows it. `blocked` mirrors the raw fields
  * the store's `switchBlockedReason` reads: an active or open turn, a replay,
  * a launching chat, queued prompts, a pending permission or question, a
- * pending browser sign-in, and running background subagents. `turnBusy` is
- * the one state that cancel-then-switch can clear: a live turn with nothing
- * else blocking. Cancelling a turn while prompts stay queued would let the
- * next prompt start at once, and background subagents outlive the cancel, so
- * either way the arm would fail after the user already cancelled.
+ * pending browser sign-in, and running background subagents or commands.
+ * `turnBusy` is the one state that cancel-then-switch can clear: a live turn
+ * with nothing else blocking. Cancelling a turn while prompts stay queued
+ * would let the next prompt start at once, and background work outlives the
+ * cancel, so either way the arm would fail after the user already cancelled.
  */
 export function useSwitchGate(sessionId: string): { blocked: boolean; turnBusy: boolean } {
   const blocked = useAcpStore((s) => {
@@ -113,7 +115,7 @@ export function useSwitchGate(sessionId: string): { blocked: boolean; turnBusy: 
     }
     if (Object.values(s.pendingQuestions ?? {}).some((q) => q.sessionId === sessionId)) return true
     if (session.agentId && s.pendingSignIn?.[session.agentId]) return true
-    return hasBackgroundSubagents(s, sessionId)
+    return hasBackgroundWork(s, sessionId)
   })
   const turnBusy = useAcpStore((s) => {
     const session = s.sessions?.[sessionId]
@@ -127,7 +129,7 @@ export function useSwitchGate(sessionId: string): { blocked: boolean; turnBusy: 
     }
     if (s.launchingSessionIds?.[sessionId] || session.replaying) return false
     if (session.agentId && s.pendingSignIn?.[session.agentId]) return false
-    return !hasBackgroundSubagents(s, sessionId)
+    return !hasBackgroundWork(s, sessionId)
   })
   return { blocked, turnBusy }
 }

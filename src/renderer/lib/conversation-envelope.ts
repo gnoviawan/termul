@@ -41,11 +41,12 @@ export function stripConversationEnvelopes(text: string): string {
 // restore never matches typed text or a same-title chat. The tempered title
 // stops a typed `(conversation: ` earlier on the line from swallowing a label.
 const LABEL_RE =
-  /\(conversation: ((?:(?!\(conversation: )[^\n])+?)(, transcript (?:unavailable|omitted: context limit))? \[termul-chat:([^\]\s]+)\]\)/g
+  /\(conversation: ((?:(?!\(conversation: )[^\n])+?)(, transcript (?:unavailable|omitted: context limit|partial: earlier history unavailable))? \[termul-chat:([^\]\s]+)\]\)/g
 
 const TRANSCRIPT_GAP_NOTES = {
   unavailable: ', transcript unavailable',
-  omitted: ', transcript omitted: context limit'
+  omitted: ', transcript omitted: context limit',
+  partial: ', transcript partial: earlier history unavailable'
 } as const
 
 /** Why a mentioned chat's transcript is not in the send. */

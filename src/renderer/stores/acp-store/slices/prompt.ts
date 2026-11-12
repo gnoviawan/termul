@@ -5,6 +5,7 @@
 import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
 import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
+import { newerBackgroundCommands } from '@/components/chat/background-commands'
 import {
   alignSessionModelProjection,
   isUsableConfigOption,
@@ -68,6 +69,7 @@ import {
   waitForReadvertisedOptions,
   writeAgentOptionsCache
 } from '../helpers'
+import { latestHostReport, recordHostReport } from '../host-session-reports'
 import { useAcpStore } from '../index'
 import { forgetAnswering, noteAnswering } from '../pending-permission-sync'
 import { withoutRejectedRateLimit } from '../rate-limit'
@@ -98,38 +100,6 @@ import {
   recheckPendingPrompt
 } from './prompt-reconcile'
 import { clampLiveToolCallFields, flushCoalescedSync } from './transcript'
-
-/**
- * The newest `agent_working` report per session and agent. A reopen reads the
- * agent listing over a round trip; a report from the adopted owner that
- * arrives meanwhile is newer and wins. Keyed by agent too, so a late report of
- * a former owner never hides the current owner's.
- */
-const latestAgentWorking = new Map<string, { working: boolean; seq: number }>()
-let agentWorkingSeq = 0
-
-const agentWorkingKey = (sessionId: SessionId, agentId: AgentId): string =>
-  `${sessionId}\u0000${agentId}`
-
-/** The sequence number of the newest `agent_working` report seen so far. */
-export function agentWorkingReportSeq(): number {
-  return agentWorkingSeq
-}
-
-export function latestAgentWorkingReport(
-  sessionId: SessionId,
-  agentId: AgentId
-): { working: boolean; seq: number } | undefined {
-  return latestAgentWorking.get(agentWorkingKey(sessionId, agentId))
-}
-
-/** Forget a deleted chat's reports. */
-export function forgetAgentWorkingReports(sessionId: SessionId): void {
-  const prefix = `${sessionId}\u0000`
-  for (const key of latestAgentWorking.keys()) {
-    if (key.startsWith(prefix)) latestAgentWorking.delete(key)
-  }
-}
 
 /** Send the next queued prompt after the current turn closes. */
 export function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
@@ -846,6 +816,7 @@ type PromptSliceState = Pick<
   | '_onElicitationRequest'
   | '_onPromptComplete'
   | '_onAgentWorking'
+  | '_onBackgroundCommands'
 >
 
 /** The host's stable `already_resolved` reply: the approval/question ticket was
@@ -1427,11 +1398,7 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   },
 
   _onAgentWorking: (e) => {
-    agentWorkingSeq += 1
-    latestAgentWorking.set(agentWorkingKey(e.sessionId, e.agentId), {
-      working: e.working,
-      seq: agentWorkingSeq
-    })
+    recordHostReport(e.sessionId, e.agentId, 'working', e.working)
     // Only the agent the chat runs on speaks for it: a stopped process can
     // still report after the chat moved to a new one.
     const session = get().sessions[e.sessionId]
@@ -1449,6 +1416,27 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     })
     // A message sent meanwhile waited in the queue; it goes out now.
     if (!e.working) flushNextQueuedPrompt(set, e.sessionId)
+  },
+
+  _onBackgroundCommands: (e) => {
+    // One agent's lists can arrive out of order: one older than a list it
+    // already sent is stale wherever the chat stands.
+    const reported = latestHostReport(e.sessionId, e.agentId, 'backgroundCommands')
+    if (reported && e.revision <= reported.value.revision) return
+    const list = { revision: e.revision, commands: e.commands }
+    recordHostReport(e.sessionId, e.agentId, 'backgroundCommands', list)
+    // Only the agent the chat runs on speaks for it, like `_onAgentWorking`.
+    if (get().sessions[e.sessionId]?.agentId !== e.agentId) return
+    set((s) => {
+      const current = s.sessions[e.sessionId]
+      if (!current) return {}
+      const backgroundCommands = newerBackgroundCommands(current.backgroundCommands, {
+        agentId: e.agentId,
+        ...list
+      })
+      if (backgroundCommands === current.backgroundCommands) return {}
+      return { sessions: { ...s.sessions, [e.sessionId]: { ...current, backgroundCommands } } }
+    })
   },
 
   _onPromptComplete: (e, eventSeq) => {

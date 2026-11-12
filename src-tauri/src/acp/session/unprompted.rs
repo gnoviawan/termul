@@ -82,7 +82,7 @@ enum Effect {
 
 /// Whether a subagent produced the update: its child traffic rerouted to the
 /// chat (`claudeCode.parentToolUseId`) or its dispatch card (`termul/subagent`).
-fn is_subagent_update(update: &SessionUpdate) -> bool {
+pub(super) fn is_subagent_update(update: &SessionUpdate) -> bool {
     let meta: Option<&Meta> = match update {
         SessionUpdate::AgentMessageChunk(chunk) | SessionUpdate::AgentThoughtChunk(chunk) => {
             chunk.meta.as_ref()

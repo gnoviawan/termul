@@ -24,6 +24,7 @@ pub fn is_durable_event(type_: &str) -> bool {
             | "browser_ticket_closed"
             | "browser_stop_changed"
             | "agent_working"
+            | "background_commands"
             | "auth_required"
             | "agent_spawned"
             | "agent_disconnected"

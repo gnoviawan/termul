@@ -107,6 +107,18 @@ export interface SessionIndexEntry {
    * multi-switch.
    */
   agents?: string[]
+  /**
+   * Switch-chain edge (spec-in-chat-agent-switch): the previous session id
+   * this session continues from — the `agent_switch` marker's
+   * `newSessionId` target, stamped by the host at `record_agent_switch`.
+   * Additive: absent on pre-feature sessions and on a chain's first
+   * session. The durable markers stay authoritative; this is the O(1)
+   * index lookup the history fold uses to collapse a chain into one row.
+   * The renderer also stamps it optimistically at switch time and heals it
+   * when a source payload's markers are installed, so chains recorded
+   * before the host stamped the field still fold.
+   */
+  continuedFrom?: string
 }
 
 /** The failure behind a failed turn's terminator, as the host recorded it. */
@@ -375,7 +387,8 @@ export function toPersistedSessionSummaries(
     worktreePath: entry.worktreePath,
     worktreeBranch: entry.worktreeBranch,
     modelId: entry.modelId,
-    modelName: entry.modelName
+    modelName: entry.modelName,
+    continuedFrom: entry.continuedFrom
   }))
 }
 
@@ -558,7 +571,8 @@ export function fromPersistedSessionSummary(entry: PersistedSessionSummary): Ses
     worktreePath: entry.worktreePath,
     worktreeBranch: entry.worktreeBranch,
     modelId: entry.modelId,
-    modelName: entry.modelName
+    modelName: entry.modelName,
+    continuedFrom: entry.continuedFrom
   }
 }
 

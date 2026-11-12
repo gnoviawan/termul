@@ -24,6 +24,7 @@ import type {
 } from '@shared/types/subagent'
 import {
   type AgentCapabilities,
+  type BackgroundCommandList,
   isProviderErrorCode,
   type ProviderErrorCode
 } from '@shared/types/web-protocol.types'
@@ -156,7 +157,11 @@ export interface SessionReopenOutcome {
 // WS wire contract — shared modules cannot import renderer code, so the
 // declaration moved there for `WsAgentSummary`; imported at the top of this
 // file). Re-exported here so existing `@/lib/acp-api` imports keep working.
-export type { AgentCapabilities } from '@shared/types/web-protocol.types'
+export type {
+  AgentCapabilities,
+  BackgroundCommand,
+  BackgroundCommandList
+} from '@shared/types/web-protocol.types'
 
 /** A tool call. ACP schema, camelCase on the wire. */
 export type ToolKind =
@@ -714,6 +719,11 @@ export interface AgentWorkingEvent {
   sessionId: SessionId
   working: boolean
 }
+/** The commands the agent left running in a session now (the whole list). */
+export interface BackgroundCommandsEvent extends BackgroundCommandList {
+  agentId: AgentId
+  sessionId: SessionId
+}
 export interface SessionClosedEvent {
   agentId: AgentId
   sessionId: SessionId
@@ -814,6 +824,7 @@ export const ACP_EVENTS = {
   agentSwitch: 'acp:agent_switch',
   usageUpdate: 'acp:usage_update',
   agentWorking: 'acp:agent_working',
+  backgroundCommands: 'acp:background_commands',
   browserOpenRequest: 'acp:browser_open_request',
   agentSignInRequest: 'acp:agent_sign_in_request',
   agentSignInResolved: 'acp:agent_sign_in_resolved',

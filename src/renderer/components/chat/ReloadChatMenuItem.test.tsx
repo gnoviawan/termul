@@ -76,7 +76,8 @@ describe('ReloadChatMenuItem', () => {
     expect(reloadMock).not.toHaveBeenCalled()
     expect(useReloadConfirmStore.getState().request).toEqual({
       sessionId: 's1',
-      backgroundAgents: 1
+      backgroundAgents: 1,
+      backgroundCommands: 0
     })
   })
 

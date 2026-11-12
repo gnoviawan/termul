@@ -15,6 +15,7 @@ import type { SelectionContext } from '@/lib/composer/selection-context'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
+import { useToolCallRevealStore } from '@/stores/tool-call-reveal-store'
 import { AgentSwitchSeparator } from './AgentSwitchSeparator'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
@@ -117,6 +118,23 @@ function VirtualizedTimeline({
     overscan: 6,
     getItemKey: (i) => groupedItems[i]?.key ?? i
   })
+
+  // A Background row in the status pill asks to show its card: bring the row
+  // holding it into the virtual window; the card scrolls itself into place.
+  const revealTarget = useToolCallRevealStore((s) =>
+    s.target?.sessionId === sessionId ? s.target : null
+  )
+  const itemsRef = useRef(groupedItems)
+  itemsRef.current = groupedItems
+  useEffect(() => {
+    if (!revealTarget) return
+    const holds = (item: TimelineItem | TurnTimelineItem): boolean =>
+      item.kind === 'activity'
+        ? item.items.some(holds)
+        : item.kind === 'tool' && item.tool.toolCallId === revealTarget.toolCallId
+    const index = itemsRef.current.findIndex(holds)
+    if (index >= 0) virtualizer.scrollToIndex(index, { align: 'center' })
+  }, [revealTarget, virtualizer])
 
   // Stick-to-bottom while streaming: only auto-follow when the reader is
   // pinned to the live edge (followOnAppend — do NOT pull a reader who has

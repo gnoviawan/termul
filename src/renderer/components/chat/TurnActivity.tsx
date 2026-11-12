@@ -6,6 +6,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import type { ToolCall } from '@/lib/acp-api'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
+import { useToolCallReveal } from '@/stores/tool-call-reveal-store'
 import { ChatMessage } from './ChatMessage'
 import { CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
@@ -13,6 +14,7 @@ import type { TimelineItem } from './chat-timeline'
 import { formatTurnDuration } from './format-turn-duration'
 import { RowReveal } from './RowReveal'
 import { SubagentGroup } from './SubagentGroup'
+import { useSubagentSurface } from './subagent-surface-context'
 import { ThinkingStatus } from './ThinkingStatus'
 import { ThoughtGroup } from './ThoughtGroup'
 import {
@@ -150,6 +152,20 @@ function TurnActivityComponent({
   const [stepLimit, setStepLimit] = useState(
     () => expandedStepLimits.get(turnKey) ?? TURN_STEP_WINDOW
   )
+  // A Background row in the status pill shows a card of this turn.
+  const { sessionId } = useSubagentSurface()
+  const revealNonce = useToolCallReveal(sessionId, (id) =>
+    items.some((item) => item.kind === 'tool' && item.tool.toolCallId === id)
+  )
+  const stepCount = items.length
+  // A new step must not reopen a turn the reader folded while a reveal is pending.
+  const revealedNonce = useRef<number | null>(null)
+  useEffect(() => {
+    if (revealNonce === null || revealNonce === revealedNonce.current) return
+    revealedNonce.current = revealNonce
+    setOpen(true)
+    setStepLimit((limit) => Math.max(limit, stepCount))
+  }, [revealNonce, stepCount])
   const showEarlierSteps = (): void => {
     const next = stepLimit + TURN_STEP_PAGE
     expandedStepLimits.set(turnKey, next)

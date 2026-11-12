@@ -7,7 +7,7 @@
 
 import type { WsAgentSummary } from '@shared/types/web-protocol.types'
 import { sessionModelSnapshot } from '@/components/chat/chat-input-bar-config'
-import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
+import type { AgentId, BackgroundCommandList, SessionId, ToolCall } from '@/lib/acp-api'
 import {
   deriveTitle,
   isUntitledTitle,
@@ -282,7 +282,11 @@ export function persistSession(
     // entry's list forward verbatim so a normal persist never drops (or
     // duplicates) the cache. Absent on unswitched chats — `agentConfigId`
     // above stays the session's own historical attribution.
-    agents: existingEntry?.agents
+    agents: existingEntry?.agents,
+    // Switch-chain edge (CAP-8): like `agents`, the switch orchestration
+    // stamps it once; every other persist carries it forward so a normal
+    // projection never drops the fold's lookup.
+    continuedFrom: existingEntry?.continuedFrom
   }
   const nextIndex = [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
   setIndex(nextIndex)
@@ -704,7 +708,12 @@ export async function adoptHostOwnedAgent(
   configId: string,
   cwd: string,
   options?: { allowDesktop?: boolean; isCurrent?: () => boolean; projectId?: string | null }
-): Promise<{ adopted: AgentId | null; listingTrusted: boolean; working?: boolean }> {
+): Promise<{
+  adopted: AgentId | null
+  listingTrusted: boolean
+  working?: boolean
+  backgroundCommands?: BackgroundCommandList
+}> {
   const trimmedCwd = cwd.trim()
   if ((!options?.allowDesktop && isTauriContext()) || trimmedCwd.length === 0) {
     return { adopted: null, listingTrusted: false }
@@ -765,7 +774,11 @@ export async function adoptHostOwnedAgent(
   return {
     adopted: match.id,
     listingTrusted: true,
-    working: match.workingSessions?.includes(sessionId) === true
+    working: match.workingSessions?.includes(sessionId) === true,
+    backgroundCommands: {
+      revision: match.backgroundCommands?.revision ?? 0,
+      commands: match.backgroundCommands?.sessions[sessionId] ?? []
+    }
   }
 }
 

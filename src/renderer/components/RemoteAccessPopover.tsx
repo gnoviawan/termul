@@ -120,7 +120,7 @@ export function RemoteAccessPopover(): React.JSX.Element {
           {remoteError && (
             <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-3 py-2">
               <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-              <span>{remoteError}</span>
+              <span className="min-w-0 [overflow-wrap:anywhere]">{remoteError}</span>
             </div>
           )}
 

@@ -1096,6 +1096,92 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s-closed'].configOptions).toEqual([])
   })
 
+  it('a reopen drops the command rows of the closed session until the agent lists new ones', async () => {
+    const running = (toolCallId: string) => ({
+      toolCallId,
+      title: 'npm run watch',
+      command: 'npm run watch',
+      startedAtMs: 1_000,
+      state: 'running' as const
+    })
+    const seedClosed = () =>
+      useAcpStore.setState((s) => ({
+        agents: {
+          ...s.agents,
+          'agent-1': {
+            id: 'agent-1',
+            capabilities: { loadSession: false, sessionCapabilities: { resume: {} } }
+          }
+        },
+        agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+        sessions: {
+          's-closed': {
+            id: 's-closed',
+            agentId: 'agent-1',
+            cwd: '/w',
+            status: 'closed',
+            title: 'Was open',
+            activeTurn: false,
+            openTurnId: null,
+            modes: null,
+            configOptions: [],
+            lastError: null,
+            createdAt: 1,
+            backgroundCommands: { agentId: 'agent-1', revision: 4, commands: [running('old')] }
+          }
+        },
+        messages: { 's-closed': [] }
+      }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    const reopen = async (during?: () => void) => {
+      ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        metadata: {
+          id: 's-closed',
+          agentId: 'agent-1',
+          title: 'Was open',
+          cwd: '/w',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 0,
+          status: 'closed'
+        },
+        messages: []
+      })
+      const resumed = deferred<unknown>()
+      ;(invoke as ReturnType<typeof vi.fn>).mockReturnValueOnce(resumed.promise)
+      const opening = useAcpStore.getState().openHistorySession('s-closed')
+      await vi.waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith('acp_resume_session', expect.anything())
+      )
+      during?.()
+      resumed.resolve({ modes: null, configOptions: [] })
+      await opening
+      return useAcpStore.getState().sessions['s-closed']
+    }
+
+    const report = (revision: number, commands: ReturnType<typeof running>[]) =>
+      useAcpStore
+        .getState()
+        ._onBackgroundCommands({ agentId: 'agent-1', sessionId: 's-closed', revision, commands })
+
+    seedClosed()
+    // The close cleared the rows; a list the agent sent before it lands
+    // during the reopen.
+    report(5, [])
+    const reopened = await reopen(() => report(4, [running('old')]))
+    expect(reopened.status).toBe('active')
+    expect(reopened.backgroundCommands).toBeUndefined()
+
+    vi.mocked(invoke).mockClear()
+    seedClosed()
+    const listed = await reopen(() => report(6, [running('new')]))
+    expect(listed.backgroundCommands).toEqual({
+      agentId: 'agent-1',
+      revision: 6,
+      commands: [running('new')]
+    })
+  })
+
   it('a reopen onto a fresh agent attaches the configured MCP servers (idle-stop auto-resume, #1420)', async () => {
     // Idle-stop auto-resume (use-idle-stop-auto-resume.ts) calls
     // `openHistorySession(id)` with NO options. Without the store default the

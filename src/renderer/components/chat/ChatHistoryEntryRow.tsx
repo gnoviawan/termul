@@ -23,6 +23,14 @@ export interface ChatHistorySidebarEntry {
    * the single `agentConfigId` icon exactly as before.
    */
   agents?: string[]
+  /**
+   * Switch-chain membership (spec-in-chat-agent-switch CAP-8): every session
+   * id in this row's chain, oldest → newest, when the row folds more than
+   * one session. `id` stays the terminal (live) session — opens/reloads
+   * target it — while delete walks `chainIds` so absorbed sources do not
+   * resurface as standalone rows. Absent on standalone chats.
+   */
+  chainIds?: string[]
   cwd?: string
   lastActivityAt: number
   /** When the chat was first indexed; never re-stamped. Absent or 0 when unknown. */

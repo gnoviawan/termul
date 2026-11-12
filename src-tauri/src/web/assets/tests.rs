@@ -2,9 +2,9 @@ use super::*;
 use axum::body::to_bytes;
 use axum::http::{Method, Request};
 use axum::routing::Router;
-use tower::ServiceExt; // for `oneshot`
 use flate2::read::GzDecoder;
 use std::io::Read as _;
+use tower::ServiceExt; // for `oneshot`
 
 #[test]
 fn dist_web_dir_points_at_repo_root_sibling() {
@@ -27,6 +27,27 @@ fn dist_web_ready_reflects_index_html_on_disk() {
     // just that it doesn't panic and matches the filesystem.
     let expected = dist_web_dir().join(INDEX_HTML).is_file();
     assert_eq!(dist_web_ready(), expected);
+}
+
+#[test]
+fn web_ui_available_counts_the_embedded_bundle() {
+    // Regression (#1802): the "static routes will 404" warning keyed on
+    // `dist_web_ready()` alone, so a shipped binary (UI embedded, no `dist-web/`
+    // on disk) warned falsely. Force the four disk/embed combinations so a
+    // built `dist-web/` cannot mask a predicate that ignores the embed.
+    assert!(
+        web_ui_available_from(false, true),
+        "embedded bundle must make the UI available with no files on disk"
+    );
+    assert!(web_ui_available_from(true, false));
+    assert!(web_ui_available_from(true, true));
+    assert!(!web_ui_available_from(false, false));
+    // Production wiring still composes the two live checks.
+    assert_eq!(
+        web_ui_available(),
+        web_ui_available_from(dist_web_ready(), embedded_web_ready())
+    );
+    assert_eq!(embedded_web_ready(), Assets::get(INDEX_HTML).is_some());
 }
 
 /// Drive a path through `serve_embedded` (the release fallback) and return
@@ -575,9 +596,7 @@ async fn disk_served_hashed_asset_is_immutable_and_gzipped() {
         .expect("router response");
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(
-        !resp
-            .headers()
-            .contains_key(header::CONTENT_ENCODING),
+        !resp.headers().contains_key(header::CONTENT_ENCODING),
         "identity request must not be compressed"
     );
     let cache = resp
@@ -668,7 +687,11 @@ async fn missing_hashed_asset_falls_back_not_immutable() {
         .await
         .expect("router response");
     // ServeDir's configured fallback serves the SPA shell for missing paths.
-    assert_eq!(resp.status(), StatusCode::OK, "missing asset → SPA fallback");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "missing asset → SPA fallback"
+    );
     let cache = resp
         .headers()
         .get(header::CACHE_CONTROL)

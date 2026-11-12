@@ -599,7 +599,11 @@ describe('provider routing', () => {
   })
 
   it('reads the host-recorded model identically via the desktop and WS readers', async () => {
-    const hostFields = { modelId: 'claude-opus', modelName: 'Claude Opus' }
+    const hostFields = {
+      modelId: 'claude-opus',
+      modelName: 'Claude Opus',
+      continuedFrom: 'src-session'
+    }
     const wireSummary = {
       storageKey: 'opaque',
       sessionId: 'host-1',
@@ -630,10 +634,17 @@ describe('provider routing', () => {
 
     expect(desktop.modelId).toBe('claude-opus')
     expect(desktop.modelName).toBe('Claude Opus')
-    expect({ id: web.id, modelId: web.modelId, modelName: web.modelName }).toEqual({
+    expect(desktop.continuedFrom).toBe('src-session')
+    expect({
+      id: web.id,
+      modelId: web.modelId,
+      modelName: web.modelName,
+      continuedFrom: web.continuedFrom
+    }).toEqual({
       id: desktop.id,
       modelId: desktop.modelId,
-      modelName: desktop.modelName
+      modelName: desktop.modelName,
+      continuedFrom: desktop.continuedFrom
     })
 
     // Round-trip back to the wire shape keeps the fields.

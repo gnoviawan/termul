@@ -17,8 +17,8 @@ use serde_json::{json, Value};
 
 use crate::acp::session_persistence::SESSION_SCHEMA_VERSION;
 use crate::acp::{
-    atomic_file, ChatHistoryStore, PersistedEventRecord, PersistedSessionStatus,
-    SessionPersistence, SessionRegistration,
+    atomic_file, ChatHistoryIndexEntry, ChatHistoryStore, PersistedEventRecord,
+    PersistedSessionStatus, SessionPersistence, SessionRegistration,
 };
 
 /// Records every session id ever imported from the legacy store. Needed so a
@@ -26,6 +26,11 @@ use crate::acp::{
 /// startup import would see the id missing from the catalog and resurrect it
 /// from the (read-only) legacy archive.
 const IMPORTED_LEDGER_FILE: &str = "legacy-imported.json";
+
+/// One-time backfill marker: legacy payloads carry `switches` records that
+/// `synthesize_records` never writes into the durable log, so sessions
+/// imported before the `continuedFrom` feature have no chain edge anywhere.
+const CHAIN_EDGE_BACKFILL_FILE: &str = "legacy-chain-edges-v1";
 
 fn load_imported(persistence: &SessionPersistence) -> HashSet<String> {
     let path = persistence.root().join(IMPORTED_LEDGER_FILE);
@@ -70,9 +75,9 @@ pub async fn import_chat_history(
     chat_history: &Arc<ChatHistoryStore>,
 ) -> usize {
     let mut ledger = load_imported(persistence);
-    let (entries, _) = chat_history.list();
+    let (entries, legacy_transfer_complete) = chat_history.list();
     let mut imported = 0usize;
-    for entry in entries {
+    for entry in &entries {
         // Skip live catalog members AND anything imported before (deleted or
         // not) — the ledger keeps user deletions final across restarts.
         if persistence.metadata(&entry.id).is_ok() || ledger.contains(&entry.id) {
@@ -95,7 +100,100 @@ pub async fn import_chat_history(
         persist_imported(persistence, &ledger);
         log::info!("[acp-history] legacy import finished imported={imported}");
     }
+    // The renderer copies its legacy history in one save at a time and marks
+    // the transfer complete last: a backfill before that would write its
+    // marker over a partial store and never see the later switch arrays.
+    if legacy_transfer_complete {
+        backfill_continued_from(persistence, chat_history, &entries, &ledger).await;
+    }
     imported
+}
+
+/// One-time pass (marker-protected): stamp `continued_from` on chain targets
+/// from the legacy `switches` arrays and `metadata.continuedFrom` fields that
+/// the import's record synthesis does not carry. Targets that are not
+/// importable yet (a legacy payload still awaiting its own import) leave the
+/// marker unwritten so the next startup retries; a target already imported
+/// and deleted, or a native session gone for good, counts as resolved.
+async fn backfill_continued_from(
+    persistence: &Arc<SessionPersistence>,
+    chat_history: &Arc<ChatHistoryStore>,
+    entries: &[ChatHistoryIndexEntry],
+    ledger: &HashSet<String>,
+) {
+    let marker = persistence.root().join(CHAIN_EDGE_BACKFILL_FILE);
+    if marker.exists() {
+        return;
+    }
+    let legacy_ids: HashSet<&str> = entries.iter().map(|entry| entry.id.as_str()).collect();
+    // (target, source) edges. A source has at most one switch: the newest
+    // record by timestamp wins; `metadata.continuedFrom` supplies the edge
+    // from the target side when a newer renderer wrote the payload.
+    let mut edges: Vec<(String, String)> = Vec::new();
+    for entry in entries {
+        let Ok(payload) = chat_history.get(&entry.id) else {
+            continue;
+        };
+        let mut newest_target: Option<(u64, &str)> = None;
+        if let Some(switches) = payload.get("switches").and_then(Value::as_array) {
+            for record in switches {
+                let Some(target) = record
+                    .get("newSessionId")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                else {
+                    continue;
+                };
+                let timestamp = record
+                    .get("timestamp")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                if newest_target.is_none_or(|(seen, _)| timestamp >= seen) {
+                    newest_target = Some((timestamp, target));
+                }
+            }
+        }
+        if let Some((_, target)) = newest_target {
+            edges.push((target.to_string(), entry.id.clone()));
+        }
+        if let Some(source) = payload
+            .get("metadata")
+            .and_then(|metadata| metadata.get("continuedFrom"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            edges.push((entry.id.clone(), source.to_string()));
+        }
+    }
+    let mut stamped = 0usize;
+    let mut incomplete = false;
+    for (target, source) in edges {
+        match persistence.note_continued_from(&target, &source).await {
+            Ok(()) => stamped += 1,
+            Err(crate::acp::session_persistence::SessionPersistenceError::SessionNotFound) => {
+                // A legacy target not yet imported (or a native target gone
+                // for good): only the importable one keeps the pass open.
+                if legacy_ids.contains(target.as_str()) && !ledger.contains(&target) {
+                    incomplete = true;
+                }
+            }
+            Err(error) => {
+                incomplete = true;
+                log::warn!(
+                    "[acp-history] chain-edge backfill failed session_id={}: {error}",
+                    crate::logging::redact_session_id(&target)
+                );
+            }
+        }
+    }
+    if incomplete {
+        return;
+    }
+    if let Err(error) = atomic_file::replace(&marker, b"1") {
+        log::warn!("[acp-history] could not write the chain-edge backfill marker: {error}");
+        return;
+    }
+    log::info!("[acp-history] chain-edge backfill finished stamped={stamped}");
 }
 
 async fn import_session(
@@ -152,6 +250,10 @@ async fn import_session(
         .and_then(Value::as_str)
         .unwrap_or("closed")
         .to_string();
+    // A renderer-authored payload may already carry the switch-chain edge
+    // (the `continuedFrom` index field); keep it through the migration so a
+    // pre-import chain still folds into one row.
+    let continued_from = metadata.get("continuedFrom").and_then(Value::as_str);
 
     let registration = SessionRegistration {
         session_id: session_id.to_string(),
@@ -165,6 +267,17 @@ async fn import_session(
         .register_imported_session(registration, created_at, title)
         .await
         .map_err(|error| error.to_string())?;
+    if let Some(source) = continued_from {
+        if let Err(error) = persistence
+            .note_continued_from(session_id, source)
+            .await
+        {
+            log::warn!(
+                "[acp-history] legacy import could not stamp continued_from on session_id={}: {error}",
+                crate::logging::redact_session_id(session_id)
+            );
+        }
+    }
 
     // Imported sessions are archives: the live agent (if any died with the old
     // renderer) is not attached. `Error` survives; every other historical

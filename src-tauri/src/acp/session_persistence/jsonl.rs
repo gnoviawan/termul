@@ -28,11 +28,13 @@ pub(super) struct RecordProbe {
     pub(super) payload: PayloadProbe,
 }
 
-/// `payload.turnId` of a probed record (the only payload field the open-turn
-/// fold reads); every other payload byte is skipped unparsed.
+/// `payload.turnId`/`payload.newSessionId` of a probed record (the only
+/// payload fields the startup scans read); every other payload byte is
+/// skipped unparsed.
 #[derive(Default)]
 pub(super) struct PayloadProbe {
     pub(super) turn_id: Option<Value>,
+    pub(super) new_session_id: Option<Value>,
 }
 
 impl<'de> Deserialize<'de> for PayloadProbe {
@@ -59,6 +61,8 @@ impl<'de> Deserialize<'de> for PayloadProbe {
                 while let Some(key) = map.next_key::<String>()? {
                     if key == "turnId" {
                         probe.turn_id = Some(map.next_value::<Value>()?);
+                    } else if key == "newSessionId" {
+                        probe.new_session_id = Some(map.next_value::<Value>()?);
                     } else {
                         map.next_value::<IgnoredAny>()?;
                     }
@@ -348,6 +352,57 @@ pub(super) fn scan_fold_tail(
         }
     })?;
     Ok(scan)
+}
+
+static AGENT_SWITCH_NEEDLE: LazyLock<memmem::Finder<'static>> =
+    LazyLock::new(|| memmem::Finder::new(b"\"type\":\"agent_switch\""));
+
+/// How far back the one-time `continued_from` migration scans a log for an
+/// `agent_switch` marker. The marker lands at (or within a few late-event
+/// lines of) the source log's tail — the source stops receiving turns at the
+/// switch — so the tail window covers realistic chains while bounding the
+/// one-time startup read over large histories. A deeper marker misses the
+/// edge: the chain degrades to pre-fold rows, never a crash.
+const MIGRATION_SWITCH_SCAN_TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The `newSessionId` of the newest `agent_switch` in `path` — the session
+/// this log's conversation continued in (the CAP-7 reopen resolution). One
+/// backward pass that parses only candidate lines and stops at the newest
+/// probeable marker: a session is the source of at most one switch, so the
+/// first parseable hit from the tail is the edge. `None` when no probeable
+/// marker exists in the tail window (unswitched chat, or every marker
+/// corrupt). An unterminated final line is still probed — a crash could
+/// leave the marker itself as the bare tail; a partial line simply fails to
+/// parse and the scan continues into the window.
+pub(super) fn newest_agent_switch_target(
+    path: &Path,
+    session_id: &str,
+) -> io::Result<Option<String>> {
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let end = file.metadata()?.len();
+    let mut target = None;
+    let floor = end.saturating_sub(MIGRATION_SWITCH_SCAN_TAIL_BYTES);
+    scan_lines_backward(&mut file, end, floor, |line, _terminated| {
+        if AGENT_SWITCH_NEEDLE.find(line).is_none() {
+            return ControlFlow::Continue(());
+        }
+        match probe_record(line, session_id) {
+            Some(probe) if probe.type_ == "agent_switch" => {
+                target = probe
+                    .payload
+                    .new_session_id
+                    .and_then(|value| value.as_str().map(str::to_string))
+                    .filter(|id| !id.is_empty());
+                ControlFlow::Break(())
+            }
+            _ => ControlFlow::Continue(()),
+        }
+    })?;
+    Ok(target)
 }
 
 static COMMANDS_UPDATE_NEEDLE: LazyLock<memmem::Finder<'static>> =

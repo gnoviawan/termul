@@ -58,20 +58,22 @@ const {
 }))
 
 vi.mock('@/stores/acp-store', () => {
-  const useAcpStore = (sel: (s: unknown) => unknown) =>
-    sel({
-      sessionIndex: sessionIndexRef.current,
-      openHistorySession: mockOpen,
-      deleteHistorySession: mockDelete,
-      discoveredSessions: discoveredSessionsRef.current,
-      agents: agentsRef.current,
-      agentStatus: agentStatusRef.current,
-      agentConfigs: [],
-      configToLiveAgent: configToLiveAgentRef.current,
-      discoverSessions: mockDiscover,
-      openDiscoveredSession: mockOpenDiscovered,
-      activeSessionId: activeSessionIdRef.current
-    })
+  const state = () => ({
+    sessionIndex: sessionIndexRef.current,
+    openHistorySession: mockOpen,
+    deleteHistorySession: mockDelete,
+    discoveredSessions: discoveredSessionsRef.current,
+    agents: agentsRef.current,
+    agentStatus: agentStatusRef.current,
+    agentConfigs: [],
+    configToLiveAgent: configToLiveAgentRef.current,
+    discoverSessions: mockDiscover,
+    openDiscoveredSession: mockOpenDiscovered,
+    activeSessionId: activeSessionIdRef.current
+  })
+  const useAcpStore = Object.assign((sel: (s: unknown) => unknown) => sel(state()), {
+    getState: state
+  })
   // Stubs for the store helpers the component imports.
   const agentReuseKey = (configId: string, cwd: string) => `${configId}\0${cwd.trim()}`
   const configIdFromReuseKey = () => ''

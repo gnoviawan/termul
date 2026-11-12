@@ -157,6 +157,22 @@ pub(crate) async fn record_agent_switch(
             );
             "failed to flush agent switch marker".to_string()
         })?;
+    // Chain edge for the history fold: the marker is the durable authority,
+    // but a list-fold needs the reverse lookup (target → source), which a
+    // marker scan cannot answer without reading every log. Stamp the new
+    // session's index entry. Non-blocking: the fold heals on the renderer's
+    // own projection / a later open, so an index-cache failure never fails
+    // the recorded switch.
+    if let Err(error) = persistence
+        .note_continued_from(&event.new_session_id, &session_id)
+        .await
+    {
+        log::warn!(
+            "[acp-switch] continued_from stamp failed for session {} (source {}): {error}",
+            crate::logging::redact_session_id(&event.new_session_id),
+            crate::logging::redact_session_id(&session_id)
+        );
+    }
     log::info!(
         "[acp-switch] marker persisted and broadcast for session {} ({} → {}, new session {}, seq={next_seq})",
         crate::logging::redact_session_id(&switch_session_id),
