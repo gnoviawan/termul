@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 
 use super::{
-    import_project_files, import_registered_project_files, legacy_project_file, Import, STORE_KEY,
+    import_project_files, import_registered_project_files, legacy_project_file, Import,
+    ALIASES_KEY, STORE_KEY,
 };
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::store::{Precondition, StorePolicy, WebStore};
@@ -36,6 +37,10 @@ impl Host {
 
     fn stored(&self) -> Option<Value> {
         self.store.peek(STORE_KEY).unwrap()
+    }
+
+    fn aliases(&self) -> Option<Value> {
+        self.store.peek(ALIASES_KEY).unwrap()
     }
 }
 
@@ -87,7 +92,8 @@ fn merges_every_project_list_dropping_duplicates_and_renaming_name_collisions() 
         outcome,
         Import::Imported {
             servers: 5,
-            files: 3
+            files: 3,
+            aliases: 2
         }
     );
     assert_eq!(
@@ -103,6 +109,12 @@ fn merges_every_project_list_dropping_duplicates_and_renaming_name_collisions() 
             { "id": "remote-c", "type": "http", "name": "Remote-2", "url": "https://other.example.com",
               "enabled": true }
         ])))
+    );
+    assert_eq!(
+        host.aliases(),
+        Some(envelope(
+            json!({ "files-b": "files-1", "remote-c2": "remote-1" })
+        ))
     );
 }
 
@@ -156,7 +168,8 @@ fn skips_malformed_files_and_entries_without_an_id_or_name() {
         outcome,
         Import::Imported {
             servers: 1,
-            files: 1
+            files: 1,
+            aliases: 0
         }
     );
     assert_eq!(
@@ -188,7 +201,8 @@ fn skips_a_file_over_the_size_limit_and_keeps_the_others() {
         import_project_files(&host.store, &[huge, small]).unwrap(),
         Import::Imported {
             servers: 1,
-            files: 1
+            files: 1,
+            aliases: 0
         }
     );
     assert_eq!(
@@ -208,10 +222,12 @@ fn stores_an_empty_list_when_no_project_has_a_file() {
         import_project_files(&host.store, &[a]).unwrap(),
         Import::Imported {
             servers: 0,
-            files: 0
+            files: 0,
+            aliases: 0
         }
     );
     assert_eq!(host.stored(), Some(envelope(json!([]))));
+    assert_eq!(host.aliases(), None);
 }
 
 #[test]
@@ -328,5 +344,67 @@ fn the_store_file_survives_a_reopen_with_the_imported_list() {
         Some(envelope(
             json!([{ "id": "1", "name": "Files", "command": "one" }])
         ))
+    );
+}
+
+#[test]
+fn a_dropped_id_that_a_later_entry_keeps_names_that_entry_not_an_alias() {
+    let host = Host::new();
+    let a = host.project(
+        "a",
+        Some(&file_of(
+            json!([{ "id": "1", "name": "Files", "command": "one" }]),
+        )),
+    );
+    let b = host.project(
+        "b",
+        Some(&file_of(json!([
+            { "id": "2", "name": "Files", "command": "one" },
+            { "id": "3", "name": "Files", "command": "one" }
+        ]))),
+    );
+    let c = host.project(
+        "c",
+        Some(&file_of(
+            json!([{ "id": "2", "name": "Git", "command": "git" }]),
+        )),
+    );
+
+    assert_eq!(
+        import_project_files(&host.store, &[a, b, c]).unwrap(),
+        Import::Imported {
+            servers: 2,
+            files: 3,
+            aliases: 1
+        }
+    );
+    assert_eq!(host.aliases(), Some(envelope(json!({ "3": "1" }))));
+}
+
+#[test]
+fn the_aliases_survive_a_rerun_and_a_reopen() {
+    let host = Host::new();
+    let a = host.project(
+        "a",
+        Some(&file_of(
+            json!([{ "id": "1", "name": "Files", "command": "one" }]),
+        )),
+    );
+    let b = host.project(
+        "b",
+        Some(&file_of(
+            json!([{ "id": "2", "name": "Files", "command": "one" }]),
+        )),
+    );
+    import_project_files(&host.store, &[a.clone(), b.clone()]).unwrap();
+
+    assert_eq!(
+        import_project_files(&host.store, &[b, a]).unwrap(),
+        Import::AlreadyStored
+    );
+    let reopened = WebStore::open(host.store.path().to_path_buf(), StorePolicy::default()).unwrap();
+    assert_eq!(
+        reopened.peek(ALIASES_KEY).unwrap(),
+        Some(envelope(json!({ "2": "1" })))
     );
 }

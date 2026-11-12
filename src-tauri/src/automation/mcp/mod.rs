@@ -18,7 +18,9 @@ use serde_json::{Map, Value};
 
 pub use arguments::{is_literal, literal_argument, Literal};
 pub use client::RmcpClient;
-pub use registry::{parse_registry, store_servers, McpServerEntry, ProjectMcpServers};
+pub use registry::{
+    attach_aliases, find_server, parse_registry, store_servers, McpServerEntry, ProjectMcpServers,
+};
 pub use tools::{
     Listing, Lookup, McpTools, OnListingChanged, ServerStatus, ServerTools, LISTING_DEADLINE,
 };

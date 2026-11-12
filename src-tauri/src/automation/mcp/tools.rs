@@ -14,7 +14,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::{
-    McpClient, McpFailure, McpServerConfig, McpServerEntry, ProjectMcpServers, ToolSchema,
+    find_server, McpClient, McpFailure, McpServerConfig, McpServerEntry, ProjectMcpServers,
+    ToolSchema,
 };
 use crate::automation::engine::{Clock, ProjectRoots};
 
@@ -23,7 +24,8 @@ pub const LISTING_DEADLINE: Duration = Duration::from_secs(10);
 /// A listing older than this is still answered and listed again.
 pub const STALE_AFTER_MS: i64 = 60_000;
 
-/// Called with `(project_id, server_id)` when a server's listing changed.
+/// Called with `(project_id, id)` for a server's id and each of its aliases
+/// when its listing changed.
 pub type OnListingChanged = Arc<dyn Fn(&str, &str) + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -171,17 +173,17 @@ impl McpTools {
         (self.servers)(project_id)
     }
 
+    /// The enabled server `server_id` names, by id or alias.
     pub fn server(&self, project_id: &str, server_id: &str) -> Option<McpServerEntry> {
-        self.servers(project_id)
-            .into_iter()
-            .find(|s| s.server_id == server_id)
+        find_server(&self.servers(project_id), server_id).cloned()
     }
 
     pub fn client(&self) -> &Arc<dyn McpClient> {
         &self.client
     }
 
-    /// What is known about `server_id` among `servers`. A missing listing is
+    /// What is known about the server `server_id` names among `servers`, by
+    /// id or alias; an alias shares its server's listing. A missing listing is
     /// `Pending`; it, and a listing older than [`STALE_AFTER_MS`], is listed
     /// again in the background when a Tokio runtime is current.
     pub fn lookup(
@@ -190,10 +192,10 @@ impl McpTools {
         servers: &[McpServerEntry],
         server_id: &str,
     ) -> Lookup {
-        let Some(server) = servers.iter().find(|s| s.server_id == server_id) else {
+        let Some(server) = find_server(servers, server_id) else {
             return Lookup::UnknownServer;
         };
-        let key = (project_id.to_string(), server_id.to_string());
+        let key = (project_id.to_string(), server.server_id.clone());
         let identity = identity(&server.config);
         let now = self.clock.now_ms();
         let mut state = self.state.lock();
@@ -347,6 +349,9 @@ impl McpTools {
         };
         if changed {
             (self.on_change)(project_id, &server.server_id);
+            for alias in &server.aliases {
+                (self.on_change)(project_id, alias);
+            }
         }
     }
 }

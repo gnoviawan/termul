@@ -10,12 +10,15 @@ use super::model::{Automation, AutomationChanged, Issue, IssueCode, McpToolPolic
 use super::service::AutomationService;
 use super::test_support::{no_history, node_id, ops, test_engine_with_mcp, MemoryVault};
 
+/// `srv-1` also answers to `srv-old`, an id the one-time import dropped.
 fn service(fake: Arc<FakeMcp>) -> AutomationService {
+    let mut files = server("srv-1", "files");
+    files.aliases = vec!["srv-old".into()];
     let te = test_engine_with_mcp(
         std::env::temp_dir(),
         Arc::new(MemoryVault::default()),
         HttpConfig::default(),
-        registry(vec![server("srv-1", "files"), server("srv-2", "remote")]),
+        registry(vec![files, server("srv-2", "remote")]),
         fake,
     );
     AutomationService::new(te.engine, no_history())
@@ -217,6 +220,43 @@ async fn the_policy_names_the_server_a_tool_runs_on() {
             node_id: node_id("call"),
             server_id: "srv-2".into(),
             server_name: Some("remote".into()),
+            tool: "search".into(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn a_node_naming_an_alias_is_checked_against_its_server_and_told_when_it_lists() {
+    let fake = FakeMcp::new();
+    fake.lists("files", Ok(vec![search_tool()]));
+    let service = service(fake.clone());
+    let a = with_tool(&service, "srv-old", "search", query());
+    let mut changes = service.subscribe();
+    assert_eq!(settled(&service, &a).await, vec![]);
+    let change = tokio::time::timeout(Duration::from_secs(1), changes.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(change.automation_id, Some(a.id.clone()));
+    let unknown_tool = with_tool(&service, "srv-old", "delete_all", json!([]));
+    assert_eq!(
+        settled(&service, &unknown_tool).await,
+        vec![(
+            IssueCode::UnknownMcpTool,
+            "MCP server \"srv-old\" has no tool \"delete_all\"; it has: search".to_string()
+        )]
+    );
+    assert_eq!(
+        fake.list_count(),
+        1,
+        "the alias shares its server's listing"
+    );
+    assert_eq!(
+        service.policy(&a.id).unwrap().mcp_tools,
+        vec![McpToolPolicy {
+            node_id: node_id("call"),
+            server_id: "srv-old".into(),
+            server_name: Some("files".into()),
             tool: "search".into(),
         }]
     );

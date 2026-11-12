@@ -6,9 +6,11 @@
 //!
 //! Before the list was host-wide, `troupe-server` kept one list per project
 //! in `<project root>/.termul/mcp-servers.json`. [`import_project_files`]
-//! merges those files into the store once; the files stay on disk.
+//! merges those files into the store once; the files stay on disk. The id of
+//! an entry it drops as a copy of a kept one stays usable by automation
+//! `mcp_tool` steps through [`ALIASES_KEY`].
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -20,6 +22,11 @@ use crate::web::store::{unix_ms, StoreError, WebStore};
 
 /// Host store key of the MCP server list.
 pub const STORE_KEY: &str = "shared/lww/acp/mcp-servers";
+
+/// Host store key of `{ droppedId: keptId }`: ids the import dropped with a
+/// copy of a kept server, in the `{ _version, data }` envelope. Only the
+/// import writes it; automation resolves a node's `server_id` through it.
+pub const ALIASES_KEY: &str = "shared/lww/acp/mcp-server-aliases";
 
 /// `_version` of the renderer's stored-value envelope.
 const STORED_VALUE_VERSION: u64 = 1;
@@ -38,8 +45,13 @@ pub fn legacy_project_file(project_root: &Path) -> PathBuf {
 pub enum Import {
     /// The store already holds a list; nothing was read or written.
     AlreadyStored,
-    /// The merged list of `files` readable project files was stored.
-    Imported { servers: usize, files: usize },
+    /// The merged list of `files` readable project files was stored, with
+    /// `aliases` dropped ids recorded under [`ALIASES_KEY`].
+    Imported {
+        servers: usize,
+        files: usize,
+        aliases: usize,
+    },
 }
 
 /// Import the legacy list of every registered, non-archived project.
@@ -60,8 +72,11 @@ pub fn import_registered_project_files(
 /// files under `project_roots`, in order. A later entry with an id already
 /// taken, or with a taken name and the same launch, is a duplicate and is
 /// dropped; a taken name with a different launch is kept under the first
-/// free `<name>-<n>`. Missing files are skipped silently, unreadable or
-/// malformed ones with a warning. Writes at most once: a rerun finds the list.
+/// free `<name>-<n>`. The id of an entry dropped for its name and launch is
+/// stored under [`ALIASES_KEY`] as an alias of the kept entry, before the
+/// list, so a failed write leaves no list and the next start imports again.
+/// Missing files are skipped silently, unreadable or malformed ones with a
+/// warning. Writes at most once: a rerun finds the list.
 pub fn import_project_files(
     store: &WebStore,
     project_roots: &[PathBuf],
@@ -80,15 +95,29 @@ pub fn import_project_files(
         }
     }
     let servers = merged.entries.len();
+    let aliases = merged.kept_aliases();
+    let alias_count = aliases.len();
+    if alias_count > 0 {
+        let value = json!({ "_version": STORED_VALUE_VERSION, "data": aliases });
+        if !store.insert_if_absent(ALIASES_KEY, value, unix_ms())? {
+            warn!("kept the MCP server aliases already in the store");
+        }
+    }
     let value = json!({ "_version": STORED_VALUE_VERSION, "data": merged.entries });
     if !store.insert_if_absent(STORE_KEY, value, unix_ms())? {
         return Ok(Import::AlreadyStored);
     }
     info!(
         servers,
-        files, "stored the MCP server list merged from the per-project files"
+        files,
+        aliases = alias_count,
+        "stored the MCP server list merged from the per-project files"
     );
-    Ok(Import::Imported { servers, files })
+    Ok(Import::Imported {
+        servers,
+        files,
+        aliases: alias_count,
+    })
 }
 
 fn read_legacy_file(path: &Path) -> Option<Vec<Value>> {
@@ -122,8 +151,11 @@ fn read_legacy_file(path: &Path) -> Option<Vec<Value>> {
 struct Merged {
     entries: Vec<Value>,
     ids: HashSet<String>,
-    /// The name each kept entry arrived with, and its launch.
-    launches: Vec<(String, Value)>,
+    /// The name each kept entry arrived with, its launch, and its id.
+    launches: Vec<(String, Value, String)>,
+    /// The id of each entry dropped for a kept entry's name and launch, to
+    /// the kept entry's id.
+    aliases: BTreeMap<String, String>,
 }
 
 impl Merged {
@@ -132,12 +164,15 @@ impl Merged {
             return;
         };
         let launch = launch_shape(&entry);
-        if self.ids.contains(&id)
-            || self
-                .launches
-                .iter()
-                .any(|(kept, kept_launch)| *kept == name && *kept_launch == launch)
+        if self.ids.contains(&id) {
+            return;
+        }
+        if let Some((_, _, kept_id)) = self
+            .launches
+            .iter()
+            .find(|(kept, kept_launch, _)| *kept == name && *kept_launch == launch)
         {
+            self.aliases.entry(id).or_insert_with(|| kept_id.clone());
             return;
         }
         let taken: HashSet<&str> = self
@@ -149,9 +184,18 @@ impl Merged {
         if unique != name {
             entry["name"] = Value::String(unique);
         }
-        self.ids.insert(id);
-        self.launches.push((name, launch));
+        self.ids.insert(id.clone());
+        self.launches.push((name, launch, id));
         self.entries.push(entry);
+    }
+
+    /// The aliases, less any id a later kept entry has: that id names it.
+    fn kept_aliases(&self) -> BTreeMap<&str, &str> {
+        self.aliases
+            .iter()
+            .filter(|(alias, _)| !self.ids.contains(*alias))
+            .map(|(alias, kept)| (alias.as_str(), kept.as_str()))
+            .collect()
     }
 }
 

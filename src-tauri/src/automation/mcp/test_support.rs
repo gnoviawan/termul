@@ -37,6 +37,7 @@ pub fn server(id: &str, name: &str) -> McpServerEntry {
                 value: format!("Bearer {SENTINEL_SECRET}"),
             }],
         },
+        aliases: Vec::new(),
     }
 }
 
