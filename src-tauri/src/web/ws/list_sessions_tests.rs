@@ -60,7 +60,7 @@ async fn list_sessions_on_ws_rejects_a_cwd_outside_every_project() {
     assert_eq!(code, "unsupported");
     assert!(
         message.contains("registered project") || message.contains("active project"),
-        "refusal must name the project-folder rule, got: {message}"
+        "refusal must name the project-folder rule"
     );
 }
 
@@ -85,7 +85,7 @@ async fn list_sessions_on_ws_rejects_a_cwd_of_another_project_when_project_id_is
     assert_eq!(code, "unsupported");
     assert!(
         message.contains("active project"),
-        "refusal must name the active project, got: {message}"
+        "refusal must name the active project"
     );
 }
 
@@ -106,7 +106,7 @@ async fn list_sessions_on_desktop_ipc_still_accepts_client_cwd() {
     assert_ne!(code, "unsupported");
     assert!(
         !message.contains("registered project") && !message.contains("active project"),
-        "desktop must not apply the server-mode cwd rule, got: {code} {message}"
+        "desktop must not apply the server-mode cwd rule"
     );
 }
 
