@@ -14,7 +14,7 @@ import {
   type Viewport
 } from '@xyflow/react'
 import { logFrontendError } from '@/lib/log-api'
-import { type CanvasNodeId, drawableEdges, placeNodes } from '../layout'
+import { type CanvasNodeId, drawableEdges, edgeKey, placeNodes } from '../layout'
 import type { CardData } from '../nodes/NodeCard'
 import {
   CARD,
@@ -28,9 +28,16 @@ import {
   SLOT_DEPTH,
   TRIGGER
 } from '../ports'
+import type { CardRun, EdgeRun } from '../run/run-overlay'
 
 export type CardNode = Node<CardData, 'card'>
-export type PortEdge = Edge<{ port: Port }, 'port'>
+export type PortEdge = Edge<{ port: Port; run?: EdgeRun }, 'port'>
+
+/** A run drawn over its graph: each card's status and how each edge took part. */
+export type RunMarks = {
+  cards: ReadonlyMap<string, CardRun>
+  edges: ReadonlyMap<string, EdgeRun>
+}
 
 /** Handle boxes relative to the card, so edges draw before the DOM is measured. */
 function handlesOf(data: CardData): NodeHandle[] {
@@ -54,7 +61,6 @@ function handlesOf(data: CardData): NodeHandle[] {
   ]
 }
 
-const edgeKey = (edge: AutomationEdge): string => `${edge.from}:${edge.port}->${edge.to}`
 const warned = new Set<string>()
 
 /** Each undrawable edge is logged once per session, not on every host refresh. */
@@ -124,7 +130,11 @@ function cardProblems(issues: readonly Issue[]): Map<string, string> {
 
 export function toFlow(
   automation: Pick<Automation, 'graph' | 'trigger' | 'layout'>,
-  { issues = [], editing = false }: { issues?: readonly Issue[]; editing?: boolean } = {}
+  {
+    issues = [],
+    editing = false,
+    run
+  }: { issues?: readonly Issue[]; editing?: boolean; run?: RunMarks } = {}
 ): {
   nodes: CardNode[]
   edges: PortEdge[]
@@ -144,7 +154,8 @@ export function toFlow(
         kind: TRIGGER,
         trigger,
         issues: counts.get(TRIGGER) ?? 0,
-        open: open(TRIGGER, OUTPUT_PORTS.trigger)
+        open: open(TRIGGER, OUTPUT_PORTS.trigger),
+        run: run?.cards.get(TRIGGER)
       }
     ],
     ...graph.nodes.map((node): [CanvasNodeId, CardData] => [
@@ -154,7 +165,8 @@ export function toFlow(
         node,
         issues: counts.get(node.id) ?? 0,
         problem: problems.get(node.id),
-        open: open(node.id, OUTPUT_PORTS[node.spec.kind])
+        open: open(node.id, OUTPUT_PORTS[node.spec.kind]),
+        run: run?.cards.get(node.id)
       }
     ])
   ]
@@ -182,7 +194,7 @@ export function toFlow(
       targetHandle: 'in',
       selectable: editing,
       deletable: editing,
-      data: { port: edge.port }
+      data: { port: edge.port, run: run?.edges.get(edgeKey(edge)) }
     })
   )
   return { nodes, edges }

@@ -16,10 +16,15 @@ import {
   PORT_PRESENTATION,
   TRIGGER
 } from '../ports'
+import type { CardRun } from '../run/run-overlay'
+import { STEP_VIEW, StepGlyph } from '../run/step-view'
 
-/** `issues` counts the validation issues on this card; `open` lists outputs with no edge yet. */
+/**
+ * `issues` counts the validation issues on this card; `open` lists outputs
+ * with no edge yet; `run` is the step's status when the canvas shows a run.
+ */
 export type CardData =
-  | { kind: typeof TRIGGER; trigger: Trigger; issues: number; open: Port[] }
+  | { kind: typeof TRIGGER; trigger: Trigger; issues: number; open: Port[]; run?: CardRun }
   | {
       kind: 'step'
       node: AutomationNode
@@ -27,6 +32,7 @@ export type CardData =
       open: Port[]
       /** An issue that names the broken setting, shown in place of the detail. */
       problem?: string
+      run?: CardRun
     }
 
 type Slot = { label: string; value: string }
@@ -125,16 +131,33 @@ export function NodeCard({
   children?: React.ReactNode
 }): React.JSX.Element {
   const { Icon, title, subtitle, problem, ports, slots } = present(data)
+  const status = data.run?.status
+  const loop = data.run?.loop
+  const live = status === 'running'
   return (
     <div
-      className={cn('relative transition-opacity', dimmed && 'opacity-35')}
+      className={cn(
+        'relative transition-opacity',
+        (dimmed || status === 'skipped' || status === 'cancelled') && 'opacity-50'
+      )}
       style={{ width: CARD.width, height: CARD.height }}
     >
+      {loop && (
+        <span
+          aria-hidden="true"
+          data-testid="card-iterations"
+          className="absolute -top-2.5 right-3 z-10 rounded-full border border-border bg-card px-2 text-xs leading-5 font-medium tabular-nums text-foreground"
+        >
+          {loop.iterations} {loop.iterations === 1 ? 'iteration' : 'iterations'}
+          {loop.failed > 0 && <span className="text-destructive"> · {loop.failed} failed</span>}
+        </span>
+      )}
       <div
         aria-hidden="true"
         className={cn(
           'flex size-full items-center gap-2 rounded-xl border pr-1.5 pl-2.5 shadow-xs',
-          selected ? 'keycap border-foreground/40' : 'border-border bg-card'
+          selected ? 'keycap border-foreground/40' : 'border-border bg-card',
+          live && 'border-primary/55 ring-3 ring-primary/15'
         )}
       >
         <span
@@ -155,6 +178,15 @@ export function NodeCard({
               >
                 <AlertCircle size={12} />
                 {data.issues}
+              </span>
+            )}
+            {status && status !== 'pending' && (
+              <span
+                data-testid="card-status"
+                title={STEP_VIEW[status].label}
+                className="ml-auto flex shrink-0"
+              >
+                <StepGlyph status={status} />
               </span>
             )}
           </span>

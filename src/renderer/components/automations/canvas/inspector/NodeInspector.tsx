@@ -38,7 +38,8 @@ export const INSPECTOR_INSET = PANEL.width + PANEL.gap
  * The inspector's frame: on desktop and in the browser a panel floating at
  * the canvas's right edge, on the phone a sheet under the canvas. Header
  * (icon, title, kind and id, delete, close), the fields, and the dry run's
- * issues on what it inspects.
+ * issues on what it inspects. A run's inspector puts the step's status in
+ * the header and has no issues.
  */
 export function InspectorPanel({
   phone,
@@ -48,6 +49,7 @@ export function InspectorPanel({
   id,
   issues,
   refusal = null,
+  status,
   onDelete,
   onClose,
   children
@@ -57,9 +59,11 @@ export function InspectorPanel({
   title: string
   kind: string
   id: string
-  issues: readonly Issue[]
+  issues?: readonly Issue[]
   /** Why the host refuses the pending edits; the phone sheet shows it in place of the dock. */
   refusal?: string | null
+  /** The run's step status, in the header; a run's inspector has no issues. */
+  status?: React.ReactNode
   onDelete?: () => void
   onClose: () => void
   children: React.ReactNode
@@ -91,6 +95,7 @@ export function InspectorPanel({
             {kind} · <span className="font-mono">{id}</span>
           </p>
         </div>
+        {status}
         {onDelete && (
           <Button
             variant="ghost"
@@ -117,37 +122,39 @@ export function InspectorPanel({
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3.5">
         {children}
       </div>
-      <section
-        aria-label="Issues on this step"
-        className="flex max-h-40 shrink-0 flex-col gap-1.5 overflow-y-auto border-t border-border px-4 pt-3 pb-3.5"
-      >
-        {refusal && (
-          <p className="flex gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
-            <AlertCircle size={14} className="mt-px shrink-0" />
-            <span className="min-w-0 break-words">The host refuses these edits: {refusal}</span>
-          </p>
-        )}
-        <div className="flex items-center justify-between text-xs">
-          <span className="font-medium text-muted-foreground">Issues on this step</span>
-          <span className="tabular-nums text-muted-foreground">{issues.length}</span>
-        </div>
-        {issues.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No issues on {title}.</p>
-        ) : (
-          <ul className="flex flex-col gap-1">
-            {issues.map((issue, index) => (
-              <li
-                // Issues carry no id; the same code can repeat on one step.
-                key={`${issue.code}-${index}`}
-                className="flex gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"
-              >
-                <AlertCircle size={14} className="mt-px shrink-0" />
-                <span className="min-w-0 break-words">{issue.message}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {issues && (
+        <section
+          aria-label="Issues on this step"
+          className="flex max-h-40 shrink-0 flex-col gap-1.5 overflow-y-auto border-t border-border px-4 pt-3 pb-3.5"
+        >
+          {refusal && (
+            <p className="flex gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <AlertCircle size={14} className="mt-px shrink-0" />
+              <span className="min-w-0 break-words">The host refuses these edits: {refusal}</span>
+            </p>
+          )}
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-medium text-muted-foreground">Issues on this step</span>
+            <span className="tabular-nums text-muted-foreground">{issues.length}</span>
+          </div>
+          {issues.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No issues on {title}.</p>
+          ) : (
+            <ul className="flex flex-col gap-1">
+              {issues.map((issue, index) => (
+                <li
+                  // Issues carry no id; the same code can repeat on one step.
+                  key={`${issue.code}-${index}`}
+                  className="flex gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                >
+                  <AlertCircle size={14} className="mt-px shrink-0" />
+                  <span className="min-w-0 break-words">{issue.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
     </aside>
   )
 }

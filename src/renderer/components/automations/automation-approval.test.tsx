@@ -85,8 +85,27 @@ beforeEach(() => {
 })
 
 const renderRun = (run: AutomationRun, onChanged = vi.fn()) => {
-  render(<AutomationRunDetail run={run} onChanged={onChanged} />)
+  render(
+    <AutomationRunDetail
+      run={run}
+      automation={{ trigger: { kind: 'manual' }, layout: {} }}
+      phone={false}
+      onClose={() => {}}
+      onChanged={onChanged}
+    />
+  )
   return onChanged
+}
+
+const stepRows = (): (string | null)[] =>
+  within(screen.getByRole('list', { name: 'Steps' }))
+    .getAllByRole('button')
+    .map((row) => row.getAttribute('aria-label'))
+
+/** The inspector, opened on `label`'s step from the step list. */
+const inspect = (label: string) => {
+  fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${label.replace('?', '\\?')}`) }))
+  return within(screen.getByTestId('automation-inspector'))
 }
 
 const approveEnabled = () =>
@@ -106,13 +125,20 @@ describe('a run parked on an approval', () => {
     expect(card.getByText(`Expires ${formatDateTime(UNTIL)}`)).toBeInTheDocument()
     expect(card.getByRole('button', { name: 'Approve' })).toBeEnabled()
     expect(card.getByRole('button', { name: 'Reject' })).toBeEnabled()
-    expect(screen.getByRole('heading', { level: 3 })).toHaveTextContent('Waiting for approval')
+    expect(
+      screen.getByRole('heading', { level: 3, name: 'Waiting for approval' })
+    ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Cancel run' })).toBeEnabled()
-    const steps = within(screen.getByRole('list', { name: 'Steps' }))
-    expect(steps.getAllByRole('listitem').map((row) => row.textContent)).toEqual([
-      `Ship it?WaitingWaiting for approval until ${formatDateTime(UNTIL)}Output`,
-      'NotifyNot reached'
+    expect(stepRows()).toEqual([
+      'Manual, Trigger, Succeeded',
+      'Ship it?, Approval, Waiting',
+      'Notify, Transform, Not reached'
     ])
+    // The run opens on the step it waits on.
+    const inspector = within(screen.getByTestId('automation-inspector'))
+    expect(inspector.getByText('Waiting for approval until').nextSibling).toHaveTextContent(
+      formatDateTime(UNTIL)
+    )
   })
 
   it('approves through the facade, holds both buttons while pending, then refreshes', async () => {
@@ -208,7 +234,9 @@ describe('a run parked on an approval', () => {
     writes.admitted = false
     renderRun(parkedRun())
 
-    await screen.findByText(/Deploy manual\?/)
+    await within(await screen.findByRole('region', { name: 'Ship it?' })).findByText(
+      /Deploy manual\?/
+    )
     expectWriteGated(screen.getByRole('button', { name: 'Approve' }))
     expectWriteGated(screen.getByRole('button', { name: 'Reject' }))
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
@@ -246,11 +274,10 @@ describe('a run parked on an approval', () => {
     )
     renderRun(parkedRun({ status: 'failed', finished_at: UNTIL, parked: null }))
 
-    const steps = within(screen.getByRole('list', { name: 'Steps' }))
-    await waitFor(() => expect(steps.getByText('Rejected')).toHaveClass('text-destructive'))
-    expect(steps.getAllByRole('listitem')[0]).toHaveTextContent(
-      `Ship it?1 hFailedRejected · ${formatDateTime(UNTIL)}Output`
-    )
+    await waitFor(() => expect(stepRows()[1]).toBe('Ship it?, Approval, Failed, 1 h'))
+    const inspector = inspect('Ship it?')
+    expect(inspector.getByText('Rejected')).toHaveClass('text-destructive')
+    expect(inspector.getByText(`· ${formatDateTime(UNTIL)}`, { exact: false })).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Ship it?' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Cancel run' })).toBeNull()
   })
@@ -261,9 +288,10 @@ describe('a run parked on an approval', () => {
     )
     renderRun(parkedRun({ status: 'cancelled', finished_at: STARTED + 5_000, parked: null }))
 
-    const steps = within(screen.getByRole('list', { name: 'Steps' }))
-    await waitFor(() => expect(steps.getByText('cancelled')).toBeInTheDocument())
-    expect(steps.getAllByRole('listitem')[0]).toHaveTextContent('Ship it?5 sFailedcancelledOutput')
+    await waitFor(() => expect(stepRows()[1]).toBe('Ship it?, Approval, Cancelled, 5 s'))
+    const inspector = inspect('Ship it?')
+    expect(inspector.getByText('cancelled')).toHaveClass('text-destructive')
+    expect(inspector.getByText(/"message": "Deploy manual\?/)).toBeInTheDocument()
   })
 
   it('shows no card for a run parked on a wait', async () => {
@@ -279,11 +307,12 @@ describe('a run parked on an approval', () => {
       })
     )
 
-    const steps = within(screen.getByRole('list', { name: 'Steps' }))
-    await waitFor(() =>
-      expect(steps.getByText(`Waiting until ${formatDateTime(UNTIL)}`)).toBeInTheDocument()
+    await waitFor(() => expect(stepRows()[1]).toBe('Pause, Wait, Waiting'))
+    const inspector = inspect('Pause')
+    expect(inspector.getByText('Waiting until').nextSibling).toHaveTextContent(
+      formatDateTime(UNTIL)
     )
-    expect(screen.getByRole('heading', { level: 3 })).toHaveTextContent('Running')
+    expect(screen.getByRole('heading', { level: 3, name: 'Running' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull()
   })
 })

@@ -331,25 +331,41 @@ describe('AutomationDetail', () => {
   })
 })
 
-describe('AutomationRunDetail', () => {
-  it('lists every node in graph order with its step status, duration, output and error', async () => {
-    api.getAutomationRunSteps.mockResolvedValue(ok(fixtureSteps))
-    render(<AutomationRunDetail run={runWith()} onChanged={() => {}} />)
+const runProps = {
+  automation: { trigger: { kind: 'manual' as const }, layout: {} },
+  phone: false,
+  onClose: () => {},
+  onChanged: () => {}
+}
 
-    const steps = within(screen.getByRole('list', { name: 'Steps' }))
-    await waitFor(() => expect(steps.getByText('Succeeded')).toBeInTheDocument())
-    const rows = steps.getAllByRole('listitem').map((row) => row.textContent)
-    expect(rows).toEqual([
-      'Fetch items800 msSucceededOutput',
-      'ExtractNot reached',
-      'Fetch failedSkipped',
-      'Urgent?Not reached',
-      'ShapeNot reached',
-      'Notify1 sFailedsecret_missing:HOOK_KEY'
+const stepRows = (): (string | null)[] =>
+  within(screen.getByRole('list', { name: 'Steps' }))
+    .getAllByRole('button')
+    .map((row) => row.getAttribute('aria-label'))
+
+describe('AutomationRunDetail', () => {
+  it('lists every node in graph order with its step status and duration', async () => {
+    api.getAutomationRunSteps.mockResolvedValue(ok(fixtureSteps))
+    render(<AutomationRunDetail run={runWith()} {...runProps} />)
+
+    await waitFor(() => expect(stepRows()[1]).toBe('Fetch items, HTTP, Succeeded, 800 ms'))
+    expect(stepRows()).toEqual([
+      'Manual, Trigger, Succeeded',
+      'Fetch items, HTTP, Succeeded, 800 ms',
+      'Extract, Agent, Not reached',
+      'Fetch failed, Fail, Skipped',
+      'Urgent?, Condition, Not reached',
+      'Shape, Transform, Not reached',
+      'Notify, HTTP, Failed, 1 s'
     ])
 
-    fireEvent.click(steps.getByRole('button', { name: 'Output' }))
-    expect(steps.getByText(/"title": "first"/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Notify/ }))
+    const inspector = within(screen.getByTestId('automation-inspector'))
+    expect(inspector.getByText('secret_missing:HOOK_KEY')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Fetch items/ }))
+    expect(
+      within(screen.getByTestId('automation-inspector')).getByText(/"title": "first"/)
+    ).toBeInTheDocument()
   })
 
   it('shows the steps of a running run even when a reply takes longer than the poll', async () => {
@@ -358,14 +374,13 @@ describe('AutomationRunDetail', () => {
       api.getAutomationRunSteps.mockImplementation(
         () => new Promise((resolve) => setTimeout(() => resolve(ok(fixtureSteps)), 3000))
       )
-      render(<AutomationRunDetail run={runWith({ status: 'running' })} onChanged={() => {}} />)
+      render(<AutomationRunDetail run={runWith({ status: 'running' })} {...runProps} />)
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(3100)
       })
 
-      const steps = within(screen.getByRole('list', { name: 'Steps' }))
-      expect(steps.getByText('Succeeded')).toBeInTheDocument()
+      expect(stepRows()[1]).toBe('Fetch items, HTTP, Succeeded, 800 ms')
       expect(api.getAutomationRunSteps).toHaveBeenCalledTimes(1)
     } finally {
       vi.useRealTimers()
@@ -412,7 +427,7 @@ describe('AutomationRunDetail with a loop and a wait', () => {
     ...extra
   })
 
-  it('groups a body node by iteration and says when a parked wait resumes', async () => {
+  it('counts a body node per iteration and says when a parked wait resumes', async () => {
     api.getAutomationRunSteps.mockResolvedValue(
       ok([
         step('each', null, 'running'),
@@ -422,26 +437,25 @@ describe('AutomationRunDetail with a loop and a wait', () => {
         step('pause', 1, 'waiting', { wait_until: WAIT_UNTIL })
       ])
     )
-    render(<AutomationRunDetail run={run} onChanged={() => {}} />)
+    render(<AutomationRunDetail run={run} {...runProps} />)
 
-    const steps = within(screen.getByRole('list', { name: 'Steps' }))
-    await waitFor(() => expect(steps.getByText('Running')).toBeInTheDocument())
-    const waiting = `Waiting until ${formatDateTime(WAIT_UNTIL)}`
-    expect(steps.getAllByRole('listitem').map((row) => row.textContent)).toEqual([
-      'Each itemRunning',
-      'Send2 iterationsSucceededIterations',
-      'Pause2 iterationsWaitingIterations',
-      'DoneNot reached'
+    await waitFor(() => expect(stepRows()[1]).toBe('Each item, For each, 2 iterations, Running'))
+    expect(stepRows()).toEqual([
+      'Manual, Trigger, Succeeded',
+      'Each item, For each, 2 iterations, Running',
+      'Send, Transform, iteration 2, ran in 2 of 2 iterations, Succeeded, 500 ms',
+      'Pause, Wait, iteration 2, ran in 2 of 2 iterations, Waiting',
+      'Done, Transform, Not reached'
     ])
 
-    fireEvent.click(
-      within(steps.getAllByRole('listitem')[2]).getByRole('button', { name: 'Iterations' })
+    fireEvent.click(screen.getByRole('button', { name: /^Pause/ }))
+    const inspector = within(screen.getByTestId('automation-inspector'))
+    expect(inspector.getByText('Waiting until').nextSibling).toHaveTextContent(
+      formatDateTime(WAIT_UNTIL)
     )
-    const pauses = within(screen.getByRole('list', { name: 'Pause iterations' }))
-    expect(pauses.getAllByRole('listitem').map((row) => row.textContent)).toEqual([
-      'Item 1500 msSucceeded',
-      `Item 2Waiting${waiting}`
-    ])
+    fireEvent.click(inspector.getByRole('button', { name: 'Iteration 1, Succeeded' }))
+    expect(inspector.getByText('Duration').nextSibling).toHaveTextContent('500 ms')
+    expect(inspector.queryByText('Waiting until')).toBeNull()
   })
 })
 
@@ -515,7 +529,7 @@ describe('write controls on a server that refuses remote writes', () => {
   it.each(SURFACES)('AutomationRunDetail on %s', (_, admitted) => {
     writes.admitted = admitted
     api.getAutomationRunSteps.mockReturnValue(new Promise(() => {}))
-    render(<AutomationRunDetail run={runWith({ status: 'running' })} onChanged={() => {}} />)
+    render(<AutomationRunDetail run={runWith({ status: 'running' })} {...runProps} />)
 
     const cancel = screen.getByRole('button', { name: 'Cancel run' })
     expectGate(cancel, admitted)

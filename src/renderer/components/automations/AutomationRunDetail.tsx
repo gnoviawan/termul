@@ -1,11 +1,11 @@
 import type {
+  Automation,
+  AutomationNode,
   AutomationRun,
-  AutomationStep,
-  NodeKind,
-  RunTrigger
+  AutomationStep
 } from '@shared/types/automation.types'
 import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, Loader2 } from '@/components/icons'
+import { ArrowLeft, ChevronDown, ChevronUp } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { WriteGate } from '@/components/ui/write-gate'
@@ -16,62 +16,181 @@ import { cn } from '@/lib/utils'
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
 import { AutomationApprovalCard } from './AutomationApprovalCard'
 import {
-  DECISION_PRESENTATION,
   formatDateTime,
   formatDuration,
   NODE_KIND_PRESENTATION,
   type ParkedApproval,
   parkedApproval,
-  runStatusPresentation,
-  STATUS_PRESENTATION
+  runStatusPresentation
 } from './automation-format'
+import { AutomationFlow } from './canvas/flow/AutomationFlow'
+import { INSPECTOR_INSET } from './canvas/inspector/NodeInspector'
 import { stepOrder } from './canvas/layout'
+import { TRIGGER } from './canvas/ports'
+import { RunInspector, TRIGGER_LABEL } from './canvas/run/RunInspector'
+import { openingStep, type RunOverlay, runOverlay, type StepView } from './canvas/run/run-overlay'
+import { STEP_VIEW, StepGlyph } from './canvas/run/step-view'
 import { useRunSteps } from './use-automations'
 
-const TRIGGER_LABEL: Record<RunTrigger, string> = {
-  scheduled: 'Scheduled',
-  catch_up: 'Catch-up',
-  manual: 'Manual'
+/** Until the automation loads, the trigger card says only that the run started. */
+const NO_AUTOMATION: Pick<Automation, 'trigger' | 'layout'> = {
+  trigger: { kind: 'manual' },
+  layout: {}
 }
 
+const parkKey = (approval: ParkedApproval | null): string | null =>
+  approval && `${approval.node.id}:${approval.iteration ?? ''}`
+
+/**
+ * One run on its own graph, filling the pane: the header (status, when,
+ * Cancel), the canvas with each step's status, and the steps as a list
+ * that opens the inspector. Statuses follow the run live through
+ * `useRunSteps`. A run parked on an approval opens on that step, with the
+ * decide actions in the inspector.
+ */
 export function AutomationRunDetail({
   run,
+  automation,
+  phone,
+  onClose,
   onChanged
 }: {
   run: AutomationRun
+  /** Where the cards sit and what the trigger card says; null while it loads. */
+  automation: Pick<Automation, 'trigger' | 'layout'> | null
+  phone: boolean
+  onClose: () => void
   onChanged: () => void
 }): React.JSX.Element {
   const { data: steps, error, reload } = useRunSteps(run)
   const [cancelling, setCancelling] = useState(false)
   const gated = !useServerAdmitsRemoteWrites()
-  // Steps in the order they first run, from the run's own graph snapshot.
-  const nodes = useMemo(() => stepOrder(run.graph), [run.graph])
-  const stepsOf = groupSteps(steps ?? [])
   const approval = parkedApproval(run)
-
+  const [picks, setPicks] = useState<Record<string, number>>({})
+  const [inspected, setInspected] = useState<string | null>(approval?.node.id ?? null)
+  // A step opened from the list or by a park is selected and centred on the canvas.
+  const [focus, setFocus] = useState<{ id: string; nonce: number } | null>(
+    approval ? { id: approval.node.id, nonce: 0 } : null
+  )
+  const show = (id: string): void => {
+    setInspected(id)
+    setFocus({ id, nonce: Date.now() })
+  }
+  // A park that begins while the run is open brings its step, in its iteration, into view.
+  const [park, setPark] = useState(parkKey(approval))
+  const overlay = useMemo(() => runOverlay(run, steps ?? [], picks), [run, steps, picks])
+  if (park !== parkKey(approval)) {
+    setPark(parkKey(approval))
+    if (approval) {
+      show(approval.node.id)
+      const loop = overlay.loopOf.get(approval.node.id)
+      if (loop && approval.iteration !== null) {
+        setPicks((prev) => ({ ...prev, [loop]: approval.iteration as number }))
+      }
+    }
+  }
+  const { trigger, layout } = automation ?? NO_AUTOMATION
+  const shown = useMemo(() => ({ graph: run.graph, trigger, layout }), [run.graph, trigger, layout])
   const status = runStatusPresentation(run)
   const cancel = async (): Promise<void> => {
     setCancelling(true)
     await cancelAutomationRun(run.id)
     setCancelling(false)
   }
+  const pick = (loopId: string, iteration: number): void =>
+    setPicks((prev) => ({ ...prev, [loopId]: iteration }))
+
+  const order = useMemo(() => stepOrder(run.graph), [run.graph])
+  const node = run.graph.nodes.find((candidate) => candidate.id === inspected) ?? null
+  const loopOfNode = node && overlay.loopOf.get(node.id)
+  // Outside a loop the decide card always shows; inside one, in the iteration that waits.
+  const parkedHere =
+    approval !== null &&
+    node?.id === approval.node.id &&
+    (!loopOfNode || overlay.loops.get(loopOfNode)?.picked === approval.iteration)
+  const inspector =
+    inspected === TRIGGER || node ? (
+      <RunInspector
+        // Another step starts with its output unfolded.
+        key={inspected}
+        run={run}
+        node={node}
+        overlay={overlay}
+        phone={phone}
+        onPick={pick}
+        onClose={() => setInspected(null)}
+        approval={
+          parkedHere && (
+            <AutomationApprovalCard
+              key={`${run.id}:${approval.node.id}:${approval.iteration}`}
+              runId={run.id}
+              nodeId={approval.node.id}
+              label={approval.node.label}
+              until={approval.until}
+              message={approvalMessage(approval, steps)}
+              messageFailed={steps === null && error !== null}
+              onRetry={reload}
+              onDecided={() => {
+                reload()
+                onChanged()
+              }}
+            />
+          )
+        }
+      />
+    ) : null
+
+  const notes = [
+    gated && run.status === 'running' && (
+      <p key="gated" className="text-muted-foreground">
+        {READ_ONLY_SERVER_REASON}
+      </p>
+    ),
+    run.stop_reason && (
+      <p key="stop" className="break-words text-destructive">
+        {run.stop_reason}
+      </p>
+    ),
+    run.summary && (
+      <p key="summary" className="text-foreground">
+        {run.summary}
+      </p>
+    ),
+    error && (
+      <p key="error" className="text-destructive">
+        Could not load the steps: {error}
+      </p>
+    )
+  ].filter(Boolean)
 
   return (
-    <div className="flex flex-col gap-4">
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <h3 className={cn('text-sm font-medium', status.className)}>{status.label}</h3>
-        <span className="text-xs tabular-nums text-muted-foreground">
-          {TRIGGER_LABEL[run.trigger]} · {formatDateTime(run.started_at)}
-          {run.finished_at !== null &&
-            ` · took ${formatDuration(run.finished_at - run.started_at)}`}
-          {` · revision ${run.revision}`}
-        </span>
+    <div data-testid="automation-run" className="flex h-full min-h-0 flex-col bg-background">
+      <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-2">
+        <Button
+          variant="ghost"
+          size={phone ? 'touch' : 'icon-sm'}
+          className={phone ? 'w-11' : undefined}
+          aria-label="Back to the automation"
+          title="Back to the automation"
+          onClick={onClose}
+        >
+          <ArrowLeft size={16} />
+        </Button>
+        <div className={cn('flex min-w-0 flex-1', phone ? 'flex-col' : 'items-center gap-3')}>
+          <h3 className={cn('shrink-0 text-sm font-medium', status.className)}>{status.label}</h3>
+          <span className="truncate text-xs tabular-nums text-muted-foreground">
+            {TRIGGER_LABEL[run.trigger]} · {formatDateTime(run.started_at)}
+            {run.finished_at !== null &&
+              ` · took ${formatDuration(run.finished_at - run.started_at)}`}
+            {` · revision ${run.revision}`}
+          </span>
+        </div>
         {run.status === 'running' && (
-          <WriteGate gated={gated} className="ml-auto">
+          <WriteGate gated={gated} className="shrink-0">
             <Button
               variant="outline"
               size="sm"
-              className="ml-auto pointer-coarse:h-11"
+              className="pointer-coarse:h-11"
               disabled={gated || cancelling}
               onClick={() => void cancel()}
             >
@@ -80,40 +199,39 @@ export function AutomationRunDetail({
           </WriteGate>
         )}
       </header>
-      {gated && run.status === 'running' && (
-        <p className="text-xs text-muted-foreground">{READ_ONLY_SERVER_REASON}</p>
-      )}
-      {run.stop_reason && <p className="text-xs text-destructive">{run.stop_reason}</p>}
-      {run.summary && <p className="text-sm text-foreground">{run.summary}</p>}
-      {error && <p className="text-xs text-destructive">Could not load the steps: {error}</p>}
-      {approval && (
-        <AutomationApprovalCard
-          key={`${run.id}:${approval.node.id}:${approval.iteration}`}
-          runId={run.id}
-          nodeId={approval.node.id}
-          label={approval.node.label}
-          until={approval.until}
-          message={approvalMessage(approval, steps)}
-          messageFailed={steps === null && error !== null}
-          onRetry={reload}
-          onDecided={() => {
-            reload()
-            onChanged()
-          }}
-        />
+      {notes.length > 0 && (
+        <div className="flex max-h-24 shrink-0 flex-col gap-1 overflow-y-auto border-b border-border px-4 py-2 text-xs">
+          {notes}
+        </div>
       )}
 
-      <ol className="flex flex-col gap-2" aria-label="Steps">
-        {nodes.map((node) => (
-          <StepRow
-            key={node.id}
-            label={node.label}
-            kind={node.spec.kind}
-            steps={stepsOf.get(node.id) ?? []}
-            loading={steps === null}
-          />
-        ))}
-      </ol>
+      <div className="relative min-h-0 flex-1">
+        <AutomationFlow
+          automation={shown}
+          phone={phone}
+          run={steps === null ? undefined : overlay}
+          focus={focus}
+          openOn={steps === null ? null : openingStep(overlay, order)}
+          inspect={{ id: inspected, onChange: setInspected }}
+          rightInset={inspector && !phone ? INSPECTOR_INSET : 0}
+        />
+        {!phone && inspector}
+      </div>
+
+      {/* The phone sheet takes the step list's place. */}
+      {phone && inspector ? (
+        inspector
+      ) : (
+        <StepList
+          nodes={order}
+          trigger={trigger}
+          steps={steps}
+          overlay={overlay}
+          inspected={inspected}
+          phone={phone}
+          onInspect={show}
+        />
+      )}
     </div>
   )
 }
@@ -128,182 +246,154 @@ function approvalMessage(approval: ParkedApproval, steps: AutomationStep[] | nul
 }
 
 /**
- * A node's rows: one, or one per iteration for a node inside a for_each
- * body, in iteration order. The last one is the node's latest status.
+ * The run's steps in the order they first run, each with its status, its
+ * iterations and its duration. A row opens the step in the inspector; for
+ * keyboards and screen readers it is the way into the canvas.
  */
-function groupSteps(steps: AutomationStep[]): Map<string, AutomationStep[]> {
-  const byNode = new Map<string, AutomationStep[]>()
-  for (const step of steps) byNode.set(step.node_id, [...(byNode.get(step.node_id) ?? []), step])
-  for (const rows of byNode.values()) {
-    rows.sort((a, b) => (a.iteration ?? -1) - (b.iteration ?? -1))
+function StepList({
+  nodes,
+  trigger,
+  steps,
+  overlay,
+  inspected,
+  phone,
+  onInspect
+}: {
+  nodes: readonly AutomationNode[]
+  trigger: Automation['trigger']
+  steps: AutomationStep[] | null
+  overlay: RunOverlay
+  inspected: string | null
+  phone: boolean
+  onInspect: (id: string) => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(true)
+  return (
+    <section
+      aria-label="Steps"
+      className="flex max-h-[40%] shrink-0 flex-col border-t border-border"
+    >
+      <div className="flex shrink-0 items-center gap-1 px-2 py-1">
+        <span className="px-2 text-xs font-medium text-muted-foreground">Steps</span>
+        <Button
+          variant="ghost"
+          size={phone ? 'touch' : 'icon-sm'}
+          className={cn('ml-auto', phone && 'w-11')}
+          aria-label={open ? 'Collapse the steps' : 'Expand the steps'}
+          aria-expanded={open}
+          aria-controls="automation-run-steps"
+          onClick={() => setOpen((value) => !value)}
+        >
+          {open ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+        </Button>
+      </div>
+      {open && (
+        <ol
+          id="automation-run-steps"
+          aria-label="Steps"
+          className="flex min-h-0 flex-col overflow-y-auto px-2 pb-2"
+        >
+          <StepRow
+            title={trigger.kind === 'manual' ? 'Manual' : 'Schedule'}
+            kind="Trigger"
+            status={overlay.cards.get(TRIGGER)?.status ?? 'succeeded'}
+            loading={false}
+            selected={inspected === TRIGGER}
+            onClick={() => onInspect(TRIGGER)}
+          />
+          {nodes.map((node) => (
+            <StepRow
+              key={node.id}
+              title={node.label}
+              kind={NODE_KIND_PRESENTATION[node.spec.kind].label}
+              status={overlay.cards.get(node.id)?.status ?? 'pending'}
+              loading={steps === null}
+              detail={rowDetail(node, overlay, steps ?? [])}
+              selected={inspected === node.id}
+              onClick={() => onInspect(node.id)}
+            />
+          ))}
+        </ol>
+      )}
+    </section>
+  )
+}
+
+/** What a row says beside its status: iterations, or how long it took. */
+function rowDetail(
+  node: AutomationNode,
+  overlay: RunOverlay,
+  steps: AutomationStep[]
+): { chip?: string; spoken?: string; duration?: string } {
+  const loop = overlay.loops.get(node.id)
+  if (loop) {
+    const count = loop.iterations.length
+    const failed = loop.failed > 0 ? ` · ${loop.failed} failed` : ''
+    const text = `${count} ${count === 1 ? 'iteration' : 'iterations'}${failed}`
+    return { chip: text, spoken: text }
   }
-  return byNode
+  const row = overlay.rows.get(node.id)
+  const duration =
+    row?.started_at != null && row.finished_at != null
+      ? formatDuration(row.finished_at - row.started_at)
+      : undefined
+  const loopId = overlay.loopOf.get(node.id)
+  const picked = loopId === undefined ? null : (overlay.loops.get(loopId)?.picked ?? null)
+  if (loopId === undefined || picked === null) return { duration }
+  const count = overlay.loops.get(loopId)?.iterations.length ?? 0
+  const ran = steps.filter(
+    (step) => step.node_id === node.id && step.iteration !== null && step.status !== 'skipped'
+  ).length
+  return {
+    chip: `${ran}/${count}`,
+    spoken: `iteration ${picked + 1}, ran in ${ran} of ${count} iterations`,
+    duration
+  }
 }
 
 function StepRow({
-  label,
+  title,
   kind,
-  steps,
-  loading
+  status,
+  loading,
+  detail = {},
+  selected,
+  onClick
 }: {
-  label: string
-  kind: NodeKind
-  steps: AutomationStep[]
+  title: string
+  kind: string
+  status: StepView
   loading: boolean
+  detail?: { chip?: string; spoken?: string; duration?: string }
+  selected: boolean
+  onClick: () => void
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const { Icon } = NODE_KIND_PRESENTATION[kind]
-  const step = steps.at(-1) ?? null
-  const iterations = steps.filter((row) => row.iteration !== null)
-
+  const label = loading ? null : STEP_VIEW[status].label
   return (
-    <li className="rounded-lg border border-border bg-card">
-      <div className="flex min-h-11 items-center gap-2 px-3 py-2">
-        <Icon size={14} className="shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-sm text-foreground">{label}</span>
-        {iterations.length > 0 ? (
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-            {iterations.length} {iterations.length === 1 ? 'iteration' : 'iterations'}
-          </span>
-        ) : (
-          <StepDuration step={step} />
-        )}
-        <StepStatusLabel step={step} loading={loading} />
-      </div>
-      {iterations.length > 0 ? (
-        <Disclosure label="Iterations" open={open} onToggle={() => setOpen((value) => !value)}>
-          <ol className="flex flex-col" aria-label={`${label} iterations`}>
-            {iterations.map((row) => (
-              <IterationRow key={row.iteration} step={row} kind={kind} />
-            ))}
-          </ol>
-        </Disclosure>
-      ) : (
-        step && <StepBody step={step} kind={kind} />
-      )}
-    </li>
-  )
-}
-
-function IterationRow({ step, kind }: { step: AutomationStep; kind: NodeKind }): React.JSX.Element {
-  return (
-    <li className="border-t border-border">
-      <div className="flex min-h-9 items-center gap-2 px-3 py-1.5">
-        <span className="min-w-0 flex-1 text-xs tabular-nums text-foreground">
-          Item {(step.iteration ?? 0) + 1}
-        </span>
-        <StepDuration step={step} />
-        <StepStatusLabel step={step} loading={false} />
-      </div>
-      <StepBody step={step} kind={kind} />
-    </li>
-  )
-}
-
-function StepDuration({ step }: { step: AutomationStep | null }): React.JSX.Element | null {
-  if (step?.started_at == null || step.finished_at == null) return null
-  return (
-    <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-      {formatDuration(step.finished_at - step.started_at)}
-    </span>
-  )
-}
-
-function StepStatusLabel({
-  step,
-  loading
-}: {
-  step: AutomationStep | null
-  loading: boolean
-}): React.JSX.Element {
-  const status = step ? STATUS_PRESENTATION[step.status] : null
-  return (
-    <>
-      {step?.status === 'running' && (
-        <Loader2 size={12} className="shrink-0 animate-spin text-primary" />
-      )}
-      <span className={cn('shrink-0 text-xs', status?.className ?? 'text-muted-foreground')}>
-        {status?.label ?? (loading ? '' : 'Not reached')}
-      </span>
-    </>
-  )
-}
-
-/** The waiting line, an approval's decision or the error, and the output toggle of one row. */
-function StepBody({ step, kind }: { step: AutomationStep; kind: NodeKind }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const hasOutput = step.output !== null && step.output !== undefined
-  const approval = kind === 'approval' ? parseApprovalOutput(step.output) : null
-  const decision = approval?.decision === undefined ? null : approval
-  return (
-    <>
-      <WaitingLine step={step} kind={kind} />
-      {decision && (
-        <p className="border-t border-border px-3 py-2 text-xs tabular-nums">
-          <span className={DECISION_PRESENTATION[decision.decision].className}>
-            {DECISION_PRESENTATION[decision.decision].label}
-          </span>
-          <span className="text-muted-foreground"> · {formatDateTime(decision.decided_at)}</span>
-        </p>
-      )}
-      {step.error && !decision && (
-        <p className="border-t border-border px-3 py-2 font-mono text-xs break-words text-destructive">
-          {step.error}
-        </p>
-      )}
-      {hasOutput && (
-        <Disclosure label="Output" open={open} onToggle={() => setOpen((value) => !value)}>
-          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words px-3 pb-3 font-mono text-2xs text-secondary-foreground">
-            {JSON.stringify(step.output, null, 2)}
-          </pre>
-        </Disclosure>
-      )}
-    </>
-  )
-}
-
-function WaitingLine({
-  step,
-  kind
-}: {
-  step: AutomationStep
-  kind: NodeKind
-}): React.JSX.Element | null {
-  if (step.status !== 'waiting' || step.wait_until === null) return null
-  return (
-    <p className="border-t border-border px-3 py-2 text-xs text-warning">
-      {kind === 'approval' ? 'Waiting for approval until' : 'Waiting until'}{' '}
-      {formatDateTime(step.wait_until)}
-    </p>
-  )
-}
-
-function Disclosure({
-  label,
-  open,
-  onToggle,
-  children
-}: {
-  label: string
-  open: boolean
-  onToggle: () => void
-  children: React.ReactNode
-}): React.JSX.Element {
-  return (
-    <div className="border-t border-border">
+    <li>
       <button
         type="button"
+        aria-current={selected ? 'true' : undefined}
+        aria-label={[title, kind, detail.spoken, label, detail.duration].filter(Boolean).join(', ')}
+        onClick={onClick}
         className={cn(
-          'flex min-h-9 w-full items-center gap-1 px-3 text-xs text-muted-foreground hover:text-foreground pointer-coarse:min-h-11',
+          'flex min-h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-xs hover:bg-foreground/[0.03] pointer-coarse:min-h-11',
+          selected && 'bg-muted',
           FOCUS_RING_CLASS
         )}
-        aria-expanded={open}
-        onClick={onToggle}
       >
-        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        {label}
+        {loading ? <span className="size-4 shrink-0" /> : <StepGlyph status={status} />}
+        <span className="min-w-0 truncate text-sm text-foreground">{title}</span>
+        <span className="shrink-0 text-muted-foreground">{kind}</span>
+        {detail.chip && (
+          <span className="shrink-0 rounded-full border border-border px-1.5 font-medium leading-5 tabular-nums text-foreground">
+            {detail.chip}
+          </span>
+        )}
+        <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
+          {detail.duration}
+        </span>
       </button>
-      {open && children}
-    </div>
+    </li>
   )
 }

@@ -19,6 +19,9 @@ import { CARD, hasSlots, OUTPUT_PORTS, SLOT_DEPTH, TRIGGER } from './ports'
 
 export type CanvasNodeId = NodeId | typeof TRIGGER
 
+/** An edge's id on the canvas; a run's edge marks use the same key. */
+export const edgeKey = (edge: Edge): string => `${edge.from}:${edge.port}->${edge.to}`
+
 /**
  * Edges whose ends both exist and whose port the source has. An edge to a
  * missing node or from a port the kind lacks is a validation issue
