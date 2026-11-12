@@ -67,7 +67,9 @@ If the automation has problems, they are listed above the card under a heading s
 
 When everything looks right, click **Approve and arm**. The automation turns **Armed** and runs on its schedule. If the automation is switched off, the button says **Approve** instead: approving does not turn it on, so it stays **Disabled** until you turn on **Enabled**.
 
-Below the card, **Diagram** shows the automation's steps and how they connect. A step can:
+Below the card, **Diagram** shows the automation's steps on a canvas, left to right, and how they connect. The first card is the trigger: **Manual** or **Schedule**. Each step card shows its name, its kind and a short detail. An **Agent** card also shows the **Model** and **Tools** under it, and an **MCP tool** card shows the **Server** and **Tool**.
+
+A step can:
 
 - make a web request (HTTP);
 - run an AI agent (Agent);
@@ -79,6 +81,16 @@ Below the card, **Diagram** shows the automation's steps and how they connect. A
 - pause the run for a set time, up to 7 days (Wait). The run picks up on time, even after Troupe or the machine restarts;
 - stop the run with an error (Fail);
 - wait for you to approve or reject (Approval). See [Approve a waiting run](#approve-a-waiting-run).
+
+The canvas is for viewing only. You can select a card, but you cannot move or edit steps on it. To change the automation, ask an agent in a chat.
+
+On a computer or in a browser, drag the background to pan. Click **Zoom in**, **Zoom out** or **Fit to view** at the bottom of the diagram, or pinch to zoom. The mouse wheel still scrolls the page. A small overview in the corner also lets you pan the view. If the whole automation does not fit at a readable size, the first view shows the start of it.
+
+On a phone, the diagram is shorter and has no overview. A one-finger swipe on the canvas scrolls the page. Pinch or drag with two fingers to zoom or move the canvas. The zoom buttons are larger.
+
+Lines between steps can be labeled. The usual next step has no label. An error path is labeled **error** next to the step, as a dashed line. A **Condition** step's paths are labeled **true** and **false** on the lines. A **For each** loop's body is labeled **item** on the line.
+
+Screen readers hear an **Automation steps** list of the same steps and branches, in the order they run.
 
 ## Run, pause or delete an automation
 
