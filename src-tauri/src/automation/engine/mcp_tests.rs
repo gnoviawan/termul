@@ -187,18 +187,64 @@ async fn a_literal_argument_takes_the_type_its_kept_input_schema_declares() {
     let run = run_to_end(&f.te, &a).await;
     assert_eq!(run.status, RunStatus::Succeeded);
     assert_eq!(
+        f.fake.list_count(),
+        1,
+        "the kept listing answers; no second listing"
+    );
+    assert_eq!(
         sent_arguments(&f.fake),
         vec![json!({ "draft": true, "title": "true" })]
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_literal_argument_stays_text_when_no_input_schema_is_kept() {
+async fn a_literal_argument_with_no_kept_listing_is_typed_after_one_listing() {
     let f = fixture();
     f.fake.lists("files", Ok(vec![label_tool()]));
     let a = manual(&f.te, graph(label_call("true"), json!([]), json!([])));
     let run = run_to_end(&f.te, &a).await;
     assert_eq!(run.status, RunStatus::Succeeded);
+    assert_eq!(f.fake.list_count(), 1);
+    assert_eq!(
+        sent_arguments(&f.fake),
+        vec![json!({ "draft": true, "title": "true" })]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn arguments_that_all_have_holes_never_list_the_server() {
+    let f = fixture();
+    f.fake.lists("files", Ok(vec![label_tool()]));
+    let a = manual(
+        &f.te,
+        graph(
+            call_node(
+                "label",
+                json!([{ "name": "draft", "value": "{{nodes.seed.output}}" }]),
+                5_000,
+            ),
+            json!([]),
+            json!([]),
+        ),
+    );
+    let run = run_to_end(&f.te, &a).await;
+    assert_eq!(run.status, RunStatus::Succeeded);
+    assert_eq!(f.fake.list_count(), 0);
+    assert_eq!(
+        sent_arguments(&f.fake),
+        vec![json!({ "draft": { "n": 1_000 } })]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_listing_sends_literal_arguments_as_text_and_the_step_still_runs() {
+    let f = fixture();
+    f.fake.lists("files", Ok(vec![label_tool()]));
+    *f.fake.list_failure.lock() = Some(McpFailure::Unavailable("down".into()));
+    let a = manual(&f.te, graph(label_call("true"), json!([]), json!([])));
+    let run = run_to_end(&f.te, &a).await;
+    assert_eq!(run.status, RunStatus::Succeeded);
+    assert_eq!(f.fake.list_count(), 1);
     assert_eq!(
         sent_arguments(&f.fake),
         vec![json!({ "draft": "true", "title": "true" })]

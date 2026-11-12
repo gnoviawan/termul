@@ -43,10 +43,10 @@ impl fmt::Display for Mismatch {
 /// type the literal fits. `string`, a missing type and a type this host does
 /// not know keep the literal as text.
 pub fn literal_argument(input_schema: &Value, argument: &NamedTemplate) -> Literal {
-    let text = argument.value.as_str();
-    if template::parse(text).map_or(true, |parsed| parsed.has_holes()) {
+    if !is_literal(argument) {
         return Literal::Render;
     }
+    let text = argument.value.as_str();
     let types: Vec<&str> = match &input_schema["properties"][&argument.name]["type"] {
         Value::String(ty) => vec![ty.as_str()],
         Value::Array(types) => types.iter().filter_map(Value::as_str).collect(),
@@ -69,6 +69,11 @@ pub fn literal_argument(input_schema: &Value, argument: &NamedTemplate) -> Liter
         argument: argument.name.clone(),
         expected: types.join(" or "),
     })
+}
+
+/// A value with no `{{ }}` holes, which only the input schema can type.
+pub fn is_literal(argument: &NamedTemplate) -> bool {
+    template::parse(argument.value.as_str()).is_ok_and(|parsed| !parsed.has_holes())
 }
 
 enum Fit {

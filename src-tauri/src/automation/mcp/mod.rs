@@ -16,7 +16,7 @@ use futures::future::BoxFuture;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-pub use arguments::{literal_argument, Literal};
+pub use arguments::{is_literal, literal_argument, Literal};
 pub use client::RmcpClient;
 pub use registry::{parse_registry, store_servers, McpServerEntry, ProjectMcpServers};
 pub use tools::{

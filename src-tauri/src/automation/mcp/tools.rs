@@ -2,6 +2,7 @@
 //! and runs. [`McpTools::lookup`] never blocks: a missing or stale listing
 //! answers from what it has and lists the server again in the background.
 //! [`McpTools::refresh`] lists every server now, for the capabilities answer.
+//! [`McpTools::input_schema`] lists a server now when none is kept, for a run.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -233,8 +234,28 @@ impl McpTools {
     }
 
     /// The input schema of `tool` in the listing kept for `server`'s current
-    /// config, without listing again.
-    pub fn input_schema(
+    /// config, else from listing `server` now within [`LISTING_DEADLINE`] and
+    /// keeping the result. `None` when that listing fails or lacks `tool`.
+    /// Concurrent callers each list: only background lookups share one.
+    pub async fn input_schema(
+        &self,
+        project_id: &str,
+        server: &McpServerEntry,
+        tool: &str,
+    ) -> Option<Value> {
+        if let Some(schema) = self.kept_input_schema(project_id, server, tool) {
+            return Some(schema);
+        }
+        let Listing::Ready { tools, .. } = self.list(project_id, server).await else {
+            return None;
+        };
+        tools
+            .into_iter()
+            .find(|t| t.name == tool)
+            .map(|t| t.input_schema)
+    }
+
+    fn kept_input_schema(
         &self,
         project_id: &str,
         server: &McpServerEntry,
