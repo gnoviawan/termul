@@ -64,7 +64,7 @@ interface RailButtonProps {
   /** Defaults to `md` (36px). */
   size?: RailButtonSize
   /** Runs after the click stops propagating. */
-  onClick: () => void
+  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void
   children: React.ReactNode
 }
 
@@ -85,7 +85,7 @@ export function RailButton({
       type="button"
       onClick={(e) => {
         e.stopPropagation()
-        onClick()
+        onClick(e)
       }}
       className={railButtonClass(pressed ?? false, size)}
       aria-label={ariaLabel}
