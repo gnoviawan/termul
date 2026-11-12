@@ -560,10 +560,7 @@ impl SessionGate {
             }
         })
         .await;
-        if drained.is_err() {
-            return false;
-        }
-        true
+        drained.is_ok()
     }
 
     /// Restores the shell prompt without a draft under the writer lock, without requiring trust.
