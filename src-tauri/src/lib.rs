@@ -1415,6 +1415,7 @@ pub fn run() {
                 }
             };
             let project_registry = Arc::new(project_registry);
+            web::project_registry::install(Arc::clone(&project_registry));
             app.manage(Arc::clone(&project_registry));
 
             // Window chrome is configured before show(). macOS overlay settings

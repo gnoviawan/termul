@@ -80,6 +80,10 @@ impl Harness {
     pub(crate) fn server(&self) -> &Arc<HostPlanServer> {
         &self.server
     }
+
+    pub(crate) fn persistence(&self) -> &Arc<SessionPersistence> {
+        &self.persistence
+    }
 }
 
 impl Drop for Harness {

@@ -201,6 +201,22 @@ struct CachedRoot {
     canonical: Option<PathBuf>,
 }
 
+static INSTALLED: std::sync::OnceLock<std::sync::Arc<ProjectRegistry>> =
+    std::sync::OnceLock::new();
+
+/// Make the host's registry reachable by the host MCP tools, which are built
+/// without a handle to it. The first call wins.
+pub fn install(registry: std::sync::Arc<ProjectRegistry>) {
+    if INSTALLED.set(registry).is_err() {
+        tracing::warn!("a project registry was already installed");
+    }
+}
+
+#[must_use]
+pub fn installed() -> Option<std::sync::Arc<ProjectRegistry>> {
+    INSTALLED.get().cloned()
+}
+
 /// The host's project registry (see the module docs).
 ///
 /// `Arc<ProjectRegistry>` is shared between the router (read path + switch

@@ -2,17 +2,17 @@
 //! `Automation` frame and returns the parent's JSON or text verbatim.
 
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock};
+use rmcp::model::CallToolResult;
 use rmcp::{tool, tool_router};
 use serde_json::Value;
 
-use super::{exchange_frame, TermulPlanServer};
+use super::TermulPlanServer;
 use crate::acp::host_mcp::automation_tools::{
     AutomationApplyOpsInput, AutomationCreateInput, AutomationRefInput, AutomationTool,
     APPLY_OPS_DESCRIPTION, CAPABILITIES_DESCRIPTION, CREATE_DESCRIPTION, GET_DESCRIPTION,
     GUIDE_DESCRIPTION, LIST_DESCRIPTION, PROPOSE_DESCRIPTION,
 };
-use crate::acp::host_mcp::{FrameKind, FrameReply, FrameRequest};
+use crate::acp::host_mcp::{FrameKind, FrameRequest};
 
 /// Service calls are local SQLite reads and writes.
 const ROUND_TRIP: std::time::Duration = std::time::Duration::from_secs(10);
@@ -33,34 +33,7 @@ impl TermulPlanServer {
             automation_input: input,
             ..self.frame(FrameKind::Automation)
         };
-        let reply = tokio::time::timeout(round_trip(tool), exchange_frame(&self.config, request)).await;
-        match reply {
-            Ok(Ok(reply)) => tool_result(reply),
-            Ok(Err(error)) => {
-                eprintln!("[host-mcp-child] {}: {error}", tool.name());
-                CallToolResult::error(vec![ContentBlock::text(format!(
-                    "the Troupe host is unreachable: {error}"
-                ))])
-            }
-            Err(_) => CallToolResult::error(vec![ContentBlock::text(
-                "the Troupe host did not answer in time",
-            )]),
-        }
-    }
-}
-
-/// The parent's `result` as the tool's text: a string as is, anything else
-/// as compact JSON. A refused call is a tool error the agent reads.
-fn tool_result(reply: FrameReply) -> CallToolResult {
-    let text = match reply.result {
-        Some(Value::String(text)) => text,
-        Some(value) => value.to_string(),
-        None => reply.error.unwrap_or_else(|| "no reply".to_string()),
-    };
-    if reply.ok {
-        CallToolResult::success(vec![ContentBlock::text(text)])
-    } else {
-        CallToolResult::error(vec![ContentBlock::text(text)])
+        self.text_call(tool.name(), request, round_trip(tool)).await
     }
 }
 

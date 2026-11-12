@@ -7,6 +7,7 @@ import {
   _resetEphemeralSessionIdsForTesting,
   useAcpStore
 } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
 import { agentChatTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
@@ -492,6 +493,41 @@ describe('ChatsList interactions', () => {
         '“Chat dst” changed while this dialog was open. Delete all 3 of its sessions? This action cannot be undone.'
       )
     ).toBeTruthy()
+  })
+
+  it('copies the chat reference another chat can follow', async () => {
+    useProjectStore.setState({ projects: [project] })
+    render(<ChatsList project={project} />)
+    fireEvent.contextMenu(screen.getByTitle('Chat a'))
+    fireEvent.click(await screen.findByText('Copy Chat Reference'))
+    await waitFor(() =>
+      expect(mocks.writeText).toHaveBeenCalledWith(
+        'Troupe chat: Chat a\nChat ID: a\nProject: Repo (ID p1)\nFolder: /repo/src\nRead it with the Troupe read_chat tool.'
+      )
+    )
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Chat reference copied', { description: 'a' })
+  })
+
+  it('copies the raw chat id', async () => {
+    render(<ChatsList project={project} />)
+    fireEvent.contextMenu(screen.getByTitle('Chat a'))
+    fireEvent.click(await screen.findByText('Copy Chat ID'))
+    await waitFor(() => expect(mocks.writeText).toHaveBeenCalledWith('a'))
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Chat ID copied', { description: 'a' })
+  })
+
+  it('toasts and logs once, without the title, when the reference copy fails', async () => {
+    mocks.writeText.mockResolvedValue({ success: false })
+    render(<ChatsList project={project} />)
+    fireEvent.contextMenu(screen.getByTitle('Chat a'))
+    fireEvent.click(await screen.findByText('Copy Chat Reference'))
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith('Failed to copy chat reference', {
+        description: 'Could not copy to clipboard'
+      })
+    )
+    expect(mocks.logFrontendError).toHaveBeenCalledTimes(1)
+    expect(mocks.logFrontendError.mock.calls[0][0].message).not.toContain('Chat a')
   })
 
   it('toasts and logs once when deleting fails', async () => {

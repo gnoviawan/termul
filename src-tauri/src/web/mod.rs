@@ -191,6 +191,8 @@ pub async fn serve(
         }),
     );
 
+    crate::web::project_registry::install(registry.clone());
+
     // The automation engine, like the reaper, belongs to this process and
     // not to `serve_router`. Its data lives in the locked state dir.
     let automation_engine = {
