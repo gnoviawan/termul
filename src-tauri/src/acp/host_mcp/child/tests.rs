@@ -752,13 +752,20 @@ async fn tools_list_carries_figcraft_tools_by_name_with_the_canvas_tag() {
                 .iter()
                 .find(|tool| tool["name"] == definition["name"])
                 .expect("every figcraft tool is listed");
-            for field in ["inputSchema", "title"] {
-                assert_eq!(
-                    tool[field], definition[field],
-                    "{} {field}",
-                    definition["name"]
-                );
+            let mut input_schema = definition["inputSchema"].clone();
+            if let Some(properties) = input_schema["properties"].as_object_mut() {
+                properties.remove("document");
             }
+            assert_eq!(
+                tool["inputSchema"], input_schema,
+                "{} inputSchema",
+                definition["name"]
+            );
+            assert_eq!(
+                tool["title"], definition["title"],
+                "{} title",
+                definition["name"]
+            );
             if definition["name"] == "export" {
                 continue;
             }
@@ -963,6 +970,60 @@ fn create_node_over_stdio_reaches_the_renderer_and_returns_its_result() {
             .all(|method| method == "node.get" || method.starts_with("host.guest")),
         "only the agent cursor follows: {methods:?}"
     );
+}
+
+/// Troupe's canvas holds one document, so a `document` argument (an agent
+/// copying `inspect_document`'s `name`) is dropped at the gateway rather than
+/// sent to the engine, which would look for an open file by that id or path.
+#[test]
+fn a_document_argument_is_ignored_and_never_reaches_the_renderer() {
+    use crate::acp::host_mcp::gateway_harness::{mount_renderer, Harness};
+
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 3, |frame| {
+        if frame.params.contains("\"document\"") {
+            return Some(Err(crate::acp::host_mcp::canvas::CanvasError::new(
+                crate::acp::host_mcp::canvas::CanvasErrorCode::EngineError,
+                "no open document \"design\" (`document` takes an `id` from doc.list, or an open file's path)",
+            )));
+        }
+        Some(Ok(match frame.method.as_str() {
+            "node.get" => r#"{"id":7,"name":"Card","type":"FRAME"}"#.to_string(),
+            presence if presence.starts_with("host.guest") => "{}".to_string(),
+            other => panic!("unexpected {other}"),
+        }))
+    });
+    harness
+        .runtime
+        .block_on(with_mcp_session(configs[0].clone(), |mut writer, mut reader| async move {
+            send_line(
+                &mut writer,
+                r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            )
+            .await;
+            let listed = read_json_id(&mut reader, 2).await;
+            for tool in listed["result"]["tools"].as_array().expect("tools array") {
+                assert!(
+                    tool["inputSchema"]["properties"].get("document").is_none(),
+                    "{} advertises `document`",
+                    tool["name"]
+                );
+            }
+
+            send_line(
+                &mut writer,
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_node","arguments":{"id":7,"document":"design"}}}"#,
+            )
+            .await;
+            let reply = read_json_id(&mut reader, 3).await;
+            assert_eq!(reply["result"]["isError"], false, "{reply}");
+            let text = reply["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default();
+            assert!(text.contains("Card"), "{text}");
+            drop(writer);
+        }));
+    drop(seen);
 }
 
 #[tokio::test]
