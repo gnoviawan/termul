@@ -1,4 +1,4 @@
-import type { Automation } from '@shared/types/automation.types'
+import type { Automation, Issue } from '@shared/types/automation.types'
 import { useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import {
@@ -13,6 +13,8 @@ import { PORT_PRESENTATION, TRIGGER } from './ports'
 
 interface AutomationCanvasProps {
   automation: Pick<Automation, 'graph' | 'trigger' | 'layout'>
+  /** Shown as a count on the card each one names. */
+  issues?: readonly Issue[]
   /** The phone shell: a readable first zoom, touch-sized controls, no minimap. */
   phone: boolean
 }
@@ -21,7 +23,11 @@ interface AutomationCanvasProps {
  * The automation as a read-only canvas, left to right. Screen readers get
  * the same steps and branches as a list instead, in the order they run.
  */
-export function AutomationCanvas({ automation, phone }: AutomationCanvasProps): React.JSX.Element {
+export function AutomationCanvas({
+  automation,
+  issues,
+  phone
+}: AutomationCanvasProps): React.JSX.Element {
   const { graph, trigger } = automation
   const spoken = useMemo(() => {
     const labels = nodeLabels(graph.nodes)
@@ -55,7 +61,7 @@ export function AutomationCanvas({ automation, phone }: AutomationCanvasProps): 
           <li key={step.id}>{step.lines.join('. ')}</li>
         ))}
       </ol>
-      <AutomationFlow automation={automation} phone={phone} />
+      <AutomationFlow automation={automation} issues={issues} phone={phone} />
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import type { AutomationNode, NodeSpec, Port, Trigger } from '@shared/types/automation.types'
-import { Clock, Zap } from '@/components/icons'
+import { AlertCircle, Clock, Zap } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import {
   formatDuration,
@@ -17,9 +17,10 @@ import {
   TRIGGER
 } from '../ports'
 
+/** `issues` counts the validation issues on this card; `open` lists outputs with no edge yet. */
 export type CardData =
-  | { kind: typeof TRIGGER; trigger: Trigger }
-  | { kind: 'step'; node: AutomationNode }
+  | { kind: typeof TRIGGER; trigger: Trigger; issues: number; open: Port[] }
+  | { kind: 'step'; node: AutomationNode; issues: number; open: Port[] }
 
 type Slot = { label: string; value: string }
 
@@ -104,15 +105,21 @@ function present(data: CardData): {
 export function NodeCard({
   data,
   selected,
+  dimmed = false,
   children
 }: {
   data: CardData
   selected: boolean
+  /** While connecting: this card cannot take the edge. */
+  dimmed?: boolean
   children?: React.ReactNode
 }): React.JSX.Element {
   const { Icon, title, subtitle, ports, slots } = present(data)
   return (
-    <div className="relative" style={{ width: CARD.width, height: CARD.height }}>
+    <div
+      className={cn('relative transition-opacity', dimmed && 'opacity-35')}
+      style={{ width: CARD.width, height: CARD.height }}
+    >
       <div
         aria-hidden="true"
         className={cn(
@@ -129,7 +136,18 @@ export function NodeCard({
           <Icon size={16} />
         </span>
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-sm font-medium text-foreground">{title}</span>
+          <span className="flex min-w-0 items-center gap-1">
+            <span className="truncate text-sm font-medium text-foreground">{title}</span>
+            {data.issues > 0 && (
+              <span
+                data-testid="card-issues"
+                className="ml-auto flex shrink-0 items-center gap-0.5 text-xs font-medium tabular-nums text-destructive"
+              >
+                <AlertCircle size={12} />
+                {data.issues}
+              </span>
+            )}
+          </span>
           <span className="truncate text-xs text-muted-foreground" title={subtitle}>
             {subtitle}
           </span>
