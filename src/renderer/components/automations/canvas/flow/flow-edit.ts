@@ -37,17 +37,26 @@ export const FlowEditContext = createContext<{
   addFrom: (from: Edge['from'], port: Port, screen: ScreenPoint) => void
   /** The "+" on an edge: a new step in its middle. */
   insertOn: (edge: Edge, at: NodePosition, screen: ScreenPoint) => void
-  hoveredEdge: string | null
-  hoverEdge: (id: string | null) => void
 }>({
   editing: false,
   connecting: null,
   canTake: () => false,
   addFrom: () => {},
-  insertOn: () => {},
-  hoveredEdge: null,
-  hoverEdge: () => {}
+  insertOn: () => {}
 })
+
+/**
+ * Which edge the pointer is over, for its "+". Kept apart from
+ * `FlowEditContext` so hovering an edge re-renders edges, not every card.
+ */
+export const EdgeHoverContext = createContext<{
+  hoveredEdge: string | null
+  hoverEdge: (id: string | null) => void
+}>({ hoveredEdge: null, hoverEdge: () => {} })
+
+export function useEdgeHover() {
+  return useContext(EdgeHoverContext)
+}
 
 export function useFlowEdit() {
   return useContext(FlowEditContext)

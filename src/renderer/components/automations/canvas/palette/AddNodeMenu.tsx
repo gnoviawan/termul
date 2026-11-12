@@ -108,7 +108,8 @@ export function AddNodeMenu({
         aria-label="Add a step"
         className={cn(MENU_CONTENT_CLASS, 'w-60 p-0')}
         onKeyDown={(event) => {
-          if (event.key === 'Enter' && groups[0]) {
+          // Enter in the search field takes the top match; on a row it presses that row.
+          if (event.key === 'Enter' && event.target instanceof HTMLInputElement && groups[0]) {
             event.preventDefault()
             pick(groups[0].kinds[0])
           }

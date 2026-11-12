@@ -33,7 +33,7 @@ import { CARD, INPUT_PORT_Y, SLOT_DEPTH, TRIGGER } from '../ports'
 import { CardNodeView } from './CardNodeView'
 import { ConnectBanner } from './ConnectBanner'
 import { FlowToolbar, type Tool } from './FlowToolbar'
-import { type ConnectFrom, type FlowEdit, FlowEditContext } from './flow-edit'
+import { type ConnectFrom, EdgeHoverContext, type FlowEdit, FlowEditContext } from './flow-edit'
 import { type CardNode, contentBounds, type PortEdge, reuseUnchanged, toFlow } from './flow-graph'
 import { PortEdgeView } from './PortEdgeView'
 import './flow.css'
@@ -313,243 +313,244 @@ function Flow({ automation, phone, issues, edit, focus = null }: FlowProps): Rea
         }) === null,
       addFrom,
       insertOn: (edge: Edge, at: NodePosition, screen: { x: number; y: number }) =>
-        editRef.current?.requestAdd({ at, split: edge, screen }),
-      hoveredEdge,
-      hoverEdge
+        editRef.current?.requestAdd({ at, split: edge, screen })
     }),
-    [live, connecting, connectGraph, addFrom, hoveredEdge, hoverEdge]
+    [live, connecting, connectGraph, addFrom]
   )
+  const edgeHover = useMemo(() => ({ hoveredEdge, hoverEdge }), [hoveredEdge, hoverEdge])
   const labelOf = (id: string): string =>
     id === TRIGGER ? 'Trigger' : (graph.nodes.find((node) => node.id === id)?.label ?? id)
 
   return (
     <FlowEditContext.Provider value={context}>
-      {/* Phone view mode: one finger scrolls the page (`touch-action: pan-y` in
+      <EdgeHoverContext.Provider value={edgeHover}>
+        {/* Phone view mode: one finger scrolls the page (`touch-action: pan-y` in
           flow.css), so React Flow only sees a touch once a second finger lands,
           and two fingers pinch and pan like an embedded map. The phone editor
           is full screen, so there one finger pans the canvas. */}
-      <div
-        role="group"
-        aria-label="Automation canvas"
-        className="size-full"
-        onTouchStartCapture={
-          phone && !editing
-            ? (event) => {
-                if (event.touches.length < 2) event.stopPropagation()
-              }
-            : undefined
-        }
-        onDragOver={
-          editing
-            ? (event) => {
-                if (!event.dataTransfer.types.includes(NODE_KIND_MIME)) return
-                event.preventDefault()
-                event.dataTransfer.dropEffect = 'copy'
-              }
-            : undefined
-        }
-        onDrop={
-          editing
-            ? (event) => {
-                const kind = event.dataTransfer.getData(NODE_KIND_MIME) as NodeKind
-                if (!kind || !edit) return
-                event.preventDefault()
-                const at = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY })
-                edit.drop(kind, {
-                  x: Math.round(at.x - CARD.width / 2),
-                  y: Math.round(at.y - CARD.height / 2)
+        <div
+          role="group"
+          aria-label="Automation canvas"
+          className="size-full"
+          onTouchStartCapture={
+            phone && !editing
+              ? (event) => {
+                  if (event.touches.length < 2) event.stopPropagation()
+                }
+              : undefined
+          }
+          onDragOver={
+            live
+              ? (event) => {
+                  if (!event.dataTransfer.types.includes(NODE_KIND_MIME)) return
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'copy'
+                }
+              : undefined
+          }
+          onDrop={
+            editing
+              ? (event) => {
+                  const kind = event.dataTransfer.getData(NODE_KIND_MIME) as NodeKind
+                  if (!kind || !edit || edit.locked) return
+                  event.preventDefault()
+                  const at = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY })
+                  edit.drop(kind, {
+                    x: Math.round(at.x - CARD.width / 2),
+                    y: Math.round(at.y - CARD.height / 2)
+                  })
+                }
+              : undefined
+          }
+          onKeyDown={
+            editing
+              ? (event) => {
+                  if (isTextField(event.target)) return
+                  if (event.key === 'Escape' && connectingRef.current) {
+                    event.preventDefault()
+                    cancelConnecting()
+                  } else if (event.key === 'Delete' || event.key === 'Backspace') {
+                    event.preventDefault()
+                    removeSelected()
+                  }
+                }
+              : undefined
+          }
+        >
+          <ReactFlow<CardNode, PortEdge>
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            nodesDraggable={live}
+            nodesConnectable={live}
+            nodesFocusable={editing}
+            edgesFocusable={editing}
+            deleteKeyCode={null}
+            onBeforeDelete={async () => false}
+            isValidConnection={(connection) =>
+              refuseConnect(graph, edgeOf(connection as Connection)) === null
+            }
+            onConnect={(connection) => {
+              startConnecting(null)
+              edit?.connect(edgeOf(connection))
+            }}
+            onConnectStart={(_, { nodeId, handleId, handleType }) => {
+              if (handleType === 'source' && nodeId && handleId) {
+                startConnecting({
+                  from: nodeId as Edge['from'],
+                  port: handleId as Edge['port'],
+                  tap: false
                 })
               }
-            : undefined
-        }
-        onKeyDown={
-          editing
-            ? (event) => {
-                if (isTextField(event.target)) return
-                if (event.key === 'Escape' && connectingRef.current) {
-                  event.preventDefault()
-                  cancelConnecting()
-                } else if (event.key === 'Delete' || event.key === 'Backspace') {
-                  event.preventDefault()
-                  removeSelected()
+            }}
+            onConnectEnd={(event, state) => {
+              startConnecting(null)
+              if (!edit || state.isValid || !state.fromNode || !state.fromHandle?.id) return
+              if (!state.toNode) {
+                const point = clientPoint(event)
+                const from = {
+                  from: state.fromNode.id as Edge['from'],
+                  port: state.fromHandle.id as Port
                 }
-              }
-            : undefined
-        }
-      >
-        <ReactFlow<CardNode, PortEdge>
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          nodesDraggable={live}
-          nodesConnectable={live}
-          nodesFocusable={editing}
-          edgesFocusable={editing}
-          deleteKeyCode={null}
-          onBeforeDelete={async () => false}
-          isValidConnection={(connection) =>
-            refuseConnect(graph, edgeOf(connection as Connection)) === null
-          }
-          onConnect={(connection) => {
-            startConnecting(null)
-            edit?.connect(edgeOf(connection))
-          }}
-          onConnectStart={(_, { nodeId, handleId, handleType }) => {
-            if (handleType === 'source' && nodeId && handleId) {
-              startConnecting({
-                from: nodeId as Edge['from'],
-                port: handleId as Edge['port'],
-                tap: false
-              })
-            }
-          }}
-          onConnectEnd={(event, state) => {
-            startConnecting(null)
-            if (!edit || state.isValid || !state.fromNode || !state.fromHandle?.id) return
-            if (!state.toNode) {
-              const point = clientPoint(event)
-              const from = {
-                from: state.fromNode.id as Edge['from'],
-                port: state.fromHandle.id as Port
-              }
-              // React Flow only snaps to a port; a drop on a card's body still means that card.
-              const onCard = document
-                .elementFromPoint(point.x, point.y)
-                ?.closest('.react-flow__node')
-                ?.getAttribute('data-id')
-              if (onCard) {
-                if (onCard === from.from) return
-                const edge: Edge = { ...from, to: onCard as NodeId }
-                const refusal = refuseConnect(graph, edge)
+                // React Flow only snaps to a port; a drop on a card's body still means that card.
+                const onCard = document
+                  .elementFromPoint(point.x, point.y)
+                  ?.closest('.react-flow__node')
+                  ?.getAttribute('data-id')
+                if (onCard) {
+                  if (onCard === from.from) return
+                  const edge: Edge = { ...from, to: onCard as NodeId }
+                  const refusal = refuseConnect(graph, edge)
+                  if (refusal) edit.refused(refusal)
+                  else edit.connect(edge)
+                  return
+                }
+                // Dropped on blank canvas: pick a new step to put there, already connected.
+                edit.requestAdd({ at: pointToCard(point), from, screen: point })
+              } else if (state.toNode.id !== state.fromNode.id) {
+                const refusal = refuseConnect(graph, {
+                  from: state.fromNode.id as Edge['from'],
+                  port: state.fromHandle.id as Edge['port'],
+                  to: state.toNode.id as NodeId
+                })
                 if (refusal) edit.refused(refusal)
-                else edit.connect(edge)
-                return
               }
-              // Dropped on blank canvas: pick a new step to put there, already connected.
-              edit.requestAdd({ at: pointToCard(point), from, screen: point })
-            } else if (state.toNode.id !== state.fromNode.id) {
-              const refusal = refuseConnect(graph, {
-                from: state.fromNode.id as Edge['from'],
-                port: state.fromHandle.id as Edge['port'],
-                to: state.toNode.id as NodeId
-              })
-              if (refusal) edit.refused(refusal)
-            }
-          }}
-          connectOnClick={live}
-          onClickConnectStart={(_, { nodeId, handleId, handleType }) => {
-            if (handleType === 'source' && nodeId && handleId) {
-              startConnecting({
-                from: nodeId as Edge['from'],
-                port: handleId as Edge['port'],
-                tap: true
-              })
-            } else {
+            }}
+            connectOnClick={live}
+            onClickConnectStart={(_, { nodeId, handleId, handleType }) => {
+              if (handleType === 'source' && nodeId && handleId) {
+                startConnecting({
+                  from: nodeId as Edge['from'],
+                  port: handleId as Edge['port'],
+                  tap: true
+                })
+              } else {
+                cancelConnecting()
+              }
+            }}
+            onClickConnectEnd={(event) => {
+              const target = (event.target as Element | null)?.closest?.('.react-flow__node')
+              const to = target?.getAttribute('data-id')
+              // A tap on blank canvas ends here first; `onPaneClick` takes it from there.
+              if (!to) return
+              if (connectingRef.current && to !== connectingRef.current.from) {
+                const refusal = refuseConnect(graph, {
+                  from: connectingRef.current.from,
+                  port: connectingRef.current.port,
+                  to: to as NodeId
+                })
+                // A legal tap already connected through `onConnect`.
+                if (refusal) edit?.refused(refusal)
+              }
+              startConnecting(null)
+            }}
+            onNodeClick={(event, node) => {
+              // A tap on a handle bubbles here after React Flow handled it.
+              if ((event.target as Element).closest('.react-flow__handle')) return
+              if (connectingRef.current) finishConnecting(node.id)
+            }}
+            onPaneClick={(event) => {
+              const from = connectingRef.current
+              if (!from) return
               cancelConnecting()
-            }
-          }}
-          onClickConnectEnd={(event) => {
-            const target = (event.target as Element | null)?.closest?.('.react-flow__node')
-            const to = target?.getAttribute('data-id')
-            // A tap on blank canvas ends here first; `onPaneClick` takes it from there.
-            if (!to) return
-            if (connectingRef.current && to !== connectingRef.current.from) {
-              const refusal = refuseConnect(graph, {
-                from: connectingRef.current.from,
-                port: connectingRef.current.port,
-                to: to as NodeId
+              // A tap on blank canvas while connecting offers a new step there, like a drop.
+              const point = clientPoint(event)
+              edit?.requestAdd({
+                at: pointToCard(point),
+                from: { from: from.from, port: from.port },
+                screen: point
               })
-              // A legal tap already connected through `onConnect`.
-              if (refusal) edit?.refused(refusal)
-            }
-            startConnecting(null)
-          }}
-          onNodeClick={(event, node) => {
-            // A tap on a handle bubbles here after React Flow handled it.
-            if ((event.target as Element).closest('.react-flow__handle')) return
-            if (connectingRef.current) finishConnecting(node.id)
-          }}
-          onPaneClick={(event) => {
-            const from = connectingRef.current
-            if (!from) return
-            cancelConnecting()
-            // A tap on blank canvas while connecting offers a new step there, like a drop.
-            const point = clientPoint(event)
-            edit?.requestAdd({
-              at: pointToCard(point),
-              from: { from: from.from, port: from.port },
-              screen: point
-            })
-          }}
-          onEdgeMouseEnter={editing ? (_, edge) => hoverEdge(edge.id) : undefined}
-          onEdgeMouseLeave={editing ? () => hoverEdge(null) : undefined}
-          selectionOnDrag={editing && !phone && tool === 'select'}
-          panOnDrag={editing && !phone && tool === 'select' ? [1, 2] : true}
-          panOnScroll={editing && !phone}
-          // The detail page scrolls; the wheel scrolls it. Pinch and the buttons zoom.
-          zoomOnScroll={false}
-          preventScrolling={editing}
-          minZoom={0.2}
-          maxZoom={2}
-          attributionPosition="bottom-left"
-          className={cn(
-            'automation-flow bg-background',
-            phone && !editing && 'automation-flow-touch'
-          )}
-        >
-          <Background
-            variant={BackgroundVariant.Dots}
-            gap={20}
-            size={1.5}
-            color="oklch(var(--foreground) / 0.16)"
-          />
-          {!phone && (
-            <MiniMap
-              pannable
-              ariaLabel="Diagram overview"
-              className="m-3 overflow-hidden rounded-lg border border-border shadow-lg"
-              style={{ width: 144, height: 88 }}
+            }}
+            onEdgeMouseEnter={editing ? (_, edge) => hoverEdge(edge.id) : undefined}
+            onEdgeMouseLeave={editing ? () => hoverEdge(null) : undefined}
+            selectionOnDrag={editing && !phone && tool === 'select'}
+            panOnDrag={editing && !phone && tool === 'select' ? [1, 2] : true}
+            panOnScroll={editing && !phone}
+            // The detail page scrolls; the wheel scrolls it. Pinch and the buttons zoom.
+            zoomOnScroll={false}
+            preventScrolling={editing}
+            minZoom={0.2}
+            maxZoom={2}
+            attributionPosition="bottom-left"
+            className={cn(
+              'automation-flow bg-background',
+              phone && !editing && 'automation-flow-touch'
+            )}
+          >
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={20}
+              size={1.5}
+              color="oklch(var(--foreground) / 0.16)"
             />
-          )}
-          <ReadableStart phone={phone} />
-          <FocusCard focus={focus} />
-        </ReactFlow>
-      </div>
-      {connecting && (
-        <ConnectBanner
-          from={labelOf(connecting.from)}
-          port={connecting.port}
-          tap={connecting.tap}
+            {!phone && (
+              <MiniMap
+                pannable
+                ariaLabel="Diagram overview"
+                className="m-3 overflow-hidden rounded-lg border border-border shadow-lg"
+                style={{ width: 144, height: 88 }}
+              />
+            )}
+            <ReadableStart phone={phone} />
+            <FocusCard focus={focus} />
+          </ReactFlow>
+        </div>
+        {connecting && (
+          <ConnectBanner
+            from={labelOf(connecting.from)}
+            port={connecting.port}
+            tap={connecting.tap}
+            phone={phone}
+            onCancel={cancelConnecting}
+          />
+        )}
+        <FlowToolbar
           phone={phone}
-          onCancel={cancelConnecting}
+          edit={edit}
+          tool={tool}
+          onTool={setTool}
+          canDelete={live && hasSelection}
+          onDelete={removeSelected}
+          onFit={() => {
+            // Not `fitView`: it fits bare node boxes, clipping slots and `error` labels, and it
+            // waits for React Flow to count pre-sized cards as measured, which never happens here.
+            const { width, height, minZoom } = store.getState()
+            const view = getViewportForBounds(
+              contentBounds(flow.getNodes()),
+              width,
+              height,
+              minZoom,
+              1,
+              0.1
+            )
+            void flow.setViewport(view, { duration: 200 })
+          }}
+          onAdd={addAtCentre}
         />
-      )}
-      <FlowToolbar
-        phone={phone}
-        edit={edit}
-        tool={tool}
-        onTool={setTool}
-        canDelete={live && hasSelection}
-        onDelete={removeSelected}
-        onFit={() => {
-          // Not `fitView`: it fits bare node boxes, clipping slots and `error` labels, and it
-          // waits for React Flow to count pre-sized cards as measured, which never happens here.
-          const { width, height, minZoom } = store.getState()
-          const view = getViewportForBounds(
-            contentBounds(flow.getNodes()),
-            width,
-            height,
-            minZoom,
-            1,
-            0.1
-          )
-          void flow.setViewport(view, { duration: 200 })
-        }}
-        onAdd={addAtCentre}
-      />
+      </EdgeHoverContext.Provider>
     </FlowEditContext.Provider>
   )
 }

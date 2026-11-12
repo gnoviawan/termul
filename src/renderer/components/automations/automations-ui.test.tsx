@@ -288,6 +288,9 @@ describe('AutomationDetail', () => {
 
     expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull()
     expect(screen.getByRole('toolbar', { name: 'Diagram view' })).toBeInTheDocument()
+    // The canvas drew its cards and their handles, none of them connectable.
+    expect(document.querySelectorAll('.react-flow__node').length).toBeGreaterThan(1)
+    expect(document.querySelectorAll('.react-flow__handle').length).toBeGreaterThan(0)
     expect(document.querySelector('.react-flow__handle.connectable')).toBeNull()
   })
 

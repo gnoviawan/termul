@@ -5,7 +5,7 @@ import type {
   Issue,
   NodeKind
 } from '@shared/types/automation.types'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { AlertCircle, ArrowLeft, ChevronDown, ChevronUp, Loader2, X } from '@/components/icons'
@@ -22,6 +22,8 @@ import { AddNodeMenu } from './palette/AddNodeMenu'
 import { chainPort, NODE_KINDS, newNode } from './palette/node-kinds'
 
 const NO_CHAIN = (Object.keys(NODE_KINDS) as NodeKind[]).filter((kind) => chainPort(kind) === null)
+
+const SAVING = 'Saving. Try that again once it finishes.'
 
 const REFUSALS: Record<ConnectRefusal, string> = {
   illegal_port: 'That step has no such port.',
@@ -69,19 +71,29 @@ export function AutomationEditor({
   detail,
   phone,
   onClose,
-  onChanged
+  onChanged,
+  leave = null,
+  onStay
 }: {
   detail: AutomationDetail
   phone: boolean
   onClose: () => void
   onChanged: () => void
+  /** Something else asks to take the pane: close, after a discard confirm when there are edits. */
+  leave?: { nonce: number } | null
+  /** The user kept their edits instead of leaving. */
+  onStay?: () => void
 }): React.JSX.Element {
   const editor = useDraft(detail, onChanged)
   const { draft } = editor
   const [confirmClose, setConfirmClose] = useState(false)
   const [approving, setApproving] = useState(false)
-  const [adding, setAdding] = useState<AddRequest | null>(null)
+  // Each request gets its own id: the menu is keyed by it, and only that request's menu may close it.
+  const [adding, setAdding] = useState<{ id: number; request: AddRequest } | null>(null)
   const requests = useRef(0)
+  const root = useRef<HTMLDivElement>(null)
+  // Undo and redo listen on the editor root, so it takes focus when the editor opens.
+  useEffect(() => root.current?.focus({ preventScroll: true }), [])
   const [focus, setFocus] = useState<{ id: string; nonce: number } | null>(null)
   const automation = draft.base
   const count = draft.pending.length
@@ -102,31 +114,43 @@ export function AutomationEditor({
     [graph, trigger, draft.layout]
   )
 
+  /** Applies a gesture; says why when it cannot. */
+  const apply = (
+    ops: Parameters<typeof editor.apply>[0],
+    layout?: Parameters<typeof editor.apply>[1],
+    refused?: () => void
+  ): boolean => {
+    const refusal = editor.apply(ops, layout)
+    if (!refusal) return true
+    if (refusal.code === 'saving') toast(SAVING)
+    else if (refused) refused()
+    else toast.error(`The host would refuse that edit: ${refusal.code}`)
+    return false
+  }
+
   const add = (kind: NodeKind, placement: Omit<AddRequest, 'screen'>): void => {
     const node = newNode(kind, graph)
     const { ops, layout } = addGesture(graph, draft.layout, node, chainPort(kind), placement)
-    const rejection = editor.apply(ops, layout)
-    if (rejection) toast.error(`Could not add the step: ${rejection.code}`)
-    else setFocus({ id: node.id, nonce: Date.now() })
+    if (apply(ops, layout)) setFocus({ id: node.id, nonce: Date.now() })
   }
 
   const edit: FlowEdit = {
     connect: (edge) => {
-      const rejection = editor.apply([{ op: 'connect', edge }])
-      if (rejection) toast(REFUSALS.duplicate_edge)
+      apply([{ op: 'connect', edge }], {}, () => toast(REFUSALS.duplicate_edge))
     },
     refused: (reason) => toast(REFUSALS[reason]),
     move: (moved) => {
       const patch = movePatch(graph, draft.layout, moved)
-      if (patch) editor.apply([], patch)
+      if (patch) apply([], patch)
     },
     remove: (nodes, edges) => {
       const { ops, layout } = removeGesture(graph, draft.layout, nodes, edges)
-      if (ops.length > 0) editor.apply(ops, layout)
+      if (ops.length > 0) apply(ops, layout)
     },
     requestAdd: (request) => {
+      if (editor.saving) return
       requests.current += 1
-      setAdding(request)
+      setAdding({ id: requests.current, request })
     },
     drop: (kind, at) => {
       setAdding(null)
@@ -146,7 +170,20 @@ export function AutomationEditor({
     if (!result.success) toast.error(`Could not approve: ${result.error}`)
     onChanged()
   }
-  const close = (): void => (dirty ? setConfirmClose(true) : onClose())
+  // Save must finish first: closing would unmount the editor under the request.
+  const close = (): void => {
+    if (editor.saving) return
+    if (dirty) setConfirmClose(true)
+    else onClose()
+  }
+  const leaveNonce = leave?.nonce
+  const closeRef = useRef(close)
+  closeRef.current = close
+  // A request that lands during Save is taken up once Save answers.
+  const saving = editor.saving
+  useEffect(() => {
+    if (leaveNonce !== undefined && !saving) closeRef.current()
+  }, [leaveNonce, saving])
 
   const saveButton = (
     <Button
@@ -181,12 +218,13 @@ export function AutomationEditor({
       data-testid="automation-editor"
       // A tab stop inside the editor, so its shortcuts never reach other panes.
       tabIndex={-1}
+      ref={root}
       className="flex h-full min-h-0 flex-col bg-background outline-none"
       onPointerDownCapture={(event) => {
-        const root = event.currentTarget
+        const host = event.currentTarget
         // React bubbles events from portals (the add menu) here too; those keep their own focus.
-        if (!root.contains(event.target as Node)) return
-        if (!root.contains(document.activeElement)) root.focus({ preventScroll: true })
+        if (!host.contains(event.target as Node)) return
+        if (!host.contains(document.activeElement)) host.focus({ preventScroll: true })
       }}
       onKeyDown={(event) => {
         const target = event.target as HTMLElement
@@ -205,7 +243,8 @@ export function AutomationEditor({
           size={phone ? 'touch' : 'icon-sm'}
           className={phone ? 'w-11' : undefined}
           aria-label="Close the editor"
-          title="Close the editor"
+          title={editor.saving ? 'Saving…' : 'Close the editor'}
+          disabled={editor.saving}
           onClick={close}
         >
           <ArrowLeft size={16} />
@@ -263,18 +302,21 @@ export function AutomationEditor({
 
       <AddNodeMenu
         // One menu per request: a menu still closing cannot dismiss the next one.
-        key={
-          adding ? `${adding.screen.x}:${adding.screen.y}:${adding.at.x}:${adding.at.y}` : 'closed'
-        }
-        anchor={adding?.screen ?? null}
+        key={adding?.id ?? 'closed'}
+        anchor={adding?.request.screen ?? null}
         phone={phone}
         // A step in the middle of an edge has to pass the run on.
-        exclude={adding?.split ? NO_CHAIN : []}
+        exclude={adding?.request.split ? NO_CHAIN : []}
         onPick={(kind) => {
-          if (adding) add(kind, adding)
-          setAdding(null)
+          const request = adding
+          if (!request) return
+          setAdding((current) => (current?.id === request.id ? null : current))
+          add(kind, request.request)
         }}
-        onClose={() => setAdding(null)}
+        onClose={() => {
+          const id = adding?.id
+          setAdding((current) => (current?.id === id ? null : current))
+        }}
       />
 
       <IssuesDock
@@ -291,12 +333,17 @@ export function AutomationEditor({
         message={`Close the editor and discard ${count === 1 ? '1 unsaved change' : `${count} unsaved changes`}?`}
         confirmLabel="Discard"
         variant="danger"
+        isLoading={editor.saving}
         onConfirm={() => {
+          if (editor.saving) return
           setConfirmClose(false)
           editor.discard()
           onClose()
         }}
-        onCancel={() => setConfirmClose(false)}
+        onCancel={() => {
+          setConfirmClose(false)
+          onStay?.()
+        }}
       />
     </div>
   )

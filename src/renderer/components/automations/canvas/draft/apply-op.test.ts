@@ -28,8 +28,9 @@ describe('applyOps mirrors graph::apply_ops', () => {
     if (c.expect) {
       expect(result).toEqual({ ok: true, doc: c.expect })
     } else {
+      if (!c.reject) throw new Error('a fixture case needs expect or reject')
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.rejection).toMatchObject(c.reject ?? {})
+      if (!result.ok) expect(result.rejection).toMatchObject(c.reject)
     }
   })
 

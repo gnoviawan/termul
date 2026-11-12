@@ -15,10 +15,12 @@ import {
 import { logFrontendError } from '@/lib/log-api'
 import type { OpRejection } from './apply-op'
 import {
+  changedPositions,
   type Draft,
   draftReducer,
   type LayoutPatch,
   openDraft,
+  patchLayout,
   pendingOps,
   planGesture,
   type Step
@@ -41,14 +43,8 @@ function canonical(value: unknown): string {
   )
 }
 
-/** Positions of the saved graph's cards, keys sorted, for an equality check. */
-function savedPositions(layout: AutomationLayout, ids: Set<string>): string {
-  return JSON.stringify(
-    Object.entries(layout)
-      .filter(([key]) => ids.has(key))
-      .sort(([a], [b]) => a.localeCompare(b))
-  )
-}
+/** Why a gesture did not apply: the host would refuse its ops, or a Save is running. */
+export type ApplyRefusal = OpRejection | { code: 'saving' }
 
 export interface DraftEditor {
   draft: Draft
@@ -56,7 +52,7 @@ export interface DraftEditor {
   /** The host refused the pending ops in its dry run; Save would fail the same way. */
   refusal: string | null
   /** Applies a gesture, or says why the host would refuse its ops. */
-  apply: (ops: AutomationOp[], layout?: LayoutPatch) => OpRejection | null
+  apply: (ops: AutomationOp[], layout?: LayoutPatch) => ApplyRefusal | null
   undo: () => void
   redo: () => void
   save: () => Promise<void>
@@ -133,13 +129,16 @@ export function useDraft(detail: AutomationDetail, onSaved: () => void): DraftEd
     return () => clearTimeout(timer)
   }, [pending, base, rebaseOnHead])
 
-  const apply = useCallback((ops: AutomationOp[], layout: LayoutPatch = {}): OpRejection | null => {
-    if (latest.current.saving) return null
-    const gesture = planGesture(latest.current.draft, ops, layout)
-    if (!('forward' in gesture)) return gesture
-    dispatch({ type: 'gesture', gesture })
-    return null
-  }, [])
+  const apply = useCallback(
+    (ops: AutomationOp[], layout: LayoutPatch = {}): ApplyRefusal | null => {
+      if (latest.current.saving) return { code: 'saving' }
+      const gesture = planGesture(latest.current.draft, ops, layout)
+      if (!('forward' in gesture)) return gesture
+      dispatch({ type: 'gesture', gesture })
+      return null
+    },
+    []
+  )
 
   const save = useCallback(async (): Promise<void> => {
     const current = latest.current.draft
@@ -171,14 +170,20 @@ export function useDraft(detail: AutomationDetail, onSaved: () => void): DraftEd
           return
         }
       }
-      const ids = new Set(['trigger', ...automation.graph.nodes.map((node) => node.id)])
+      const changed = changedPositions(current.base.layout, current.layout)
       let unsavedLayout: LayoutPatch | null = null
-      if (savedPositions(current.layout, ids) !== savedPositions(automation.layout, ids)) {
-        const placed = await setAutomationLayout(id, current.layout)
+      if (Object.keys(changed).length > 0) {
+        // `set_layout` replaces the whole map and has no revision check, so write only this
+        // draft's positions onto the head's layout, read just before the write: positions other
+        // authors stored survive. A layout written by someone else between this read and our
+        // write is still overwritten; the window is one round trip.
+        const fresh = await getAutomation(id)
+        const onto = fresh.success ? fresh.data.automation.layout : automation.layout
+        const placed = await setAutomationLayout(id, patchLayout(onto, changed))
         if (placed.success) automation = placed.data
         else {
           toast.error(`Saved, but the positions were not: ${placed.error}`)
-          unsavedLayout = { ...current.layout }
+          unsavedLayout = changed
         }
       }
       log('info', `saved ${ops.length} ops on ${id}: revision ${automation.revision}`)
@@ -205,7 +210,9 @@ export function useDraft(detail: AutomationDetail, onSaved: () => void): DraftEd
       if (!latest.current.saving) dispatch({ type: 'redo' })
     }, []),
     save,
-    discard: useCallback(() => dispatch({ type: 'discard' }), []),
+    discard: useCallback(() => {
+      if (!latest.current.saving) dispatch({ type: 'discard' })
+    }, []),
     dismissConflict: useCallback(() => dispatch({ type: 'dismiss_conflict' }), [])
   }
 }

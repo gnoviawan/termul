@@ -29,6 +29,8 @@ export function AutomationsPanel({
   const [chosenId, setSelectedId] = useState<AutomationId | null>(null)
   const [runId, setRunId] = useState<RunId | null>(null)
   const [editingId, setEditingId] = useState<AutomationId | null>(null)
+  // Another automation asked for the pane while the editor is open: the editor confirms first.
+  const [leaveFor, setLeaveFor] = useState<{ id: AutomationId; nonce: number } | null>(null)
   const writable = useServerAdmitsRemoteWrites()
   const list = useAutomationList(projectId)
   // A choice deleted elsewhere (another device, an agent) counts as no choice.
@@ -47,10 +49,19 @@ export function AutomationsPanel({
   const requested = useAutomationFocus((s) => s.requests[projectId])
   useEffect(() => {
     if (!requested) return
+    useAutomationFocus.getState().clear(projectId)
+    // Switching away would unmount the editor and its draft; let the editor ask first.
+    if (editingId !== null && requested !== editingId) {
+      setLeaveFor({ id: requested, nonce: Date.now() })
+      return
+    }
     setSelectedId(requested)
     setRunId(null)
-    useAutomationFocus.getState().clear(projectId)
-  }, [requested, projectId])
+  }, [requested, projectId, editingId])
+  // An editor belongs to the automation it opened on: once that leaves the pane, so does the editor.
+  useEffect(() => {
+    if (editingId !== null && editingId !== selectedId) setEditingId(null)
+  }, [editingId, selectedId])
   const reloadAll = (): void => {
     list.reload()
     detail.reload()
@@ -82,7 +93,11 @@ export function AutomationsPanel({
         onOpenRun={setRunId}
         onDeleted={() => select(null)}
         onChanged={reloadAll}
-        onEdit={() => setEditingId(selectedId)}
+        onEdit={() => {
+          // Pin the selection: on desktop it may only be "the first in the list", which can change.
+          setSelectedId(selectedId)
+          setEditingId(selectedId)
+        }}
       />
     )
 
@@ -93,8 +108,17 @@ export function AutomationsPanel({
         key={editingId}
         detail={detail.data}
         phone={phone}
-        onClose={() => setEditingId(null)}
+        onClose={() => {
+          setEditingId(null)
+          if (leaveFor) {
+            setSelectedId(leaveFor.id)
+            setRunId(null)
+          }
+          setLeaveFor(null)
+        }}
         onChanged={reloadAll}
+        leave={leaveFor}
+        onStay={() => setLeaveFor(null)}
       />
     )
   }

@@ -3,7 +3,7 @@ import { BaseEdge, EdgeLabelRenderer, type EdgeProps, getBezierPath } from '@xyf
 import { Plus } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { CARD, INPUT_PORT_Y, PORT_PRESENTATION } from '../ports'
-import { useFlowEdit } from './flow-edit'
+import { useEdgeHover, useFlowEdit } from './flow-edit'
 import type { PortEdge } from './flow-graph'
 
 /**
@@ -24,7 +24,8 @@ export function PortEdgeView({
   sourcePosition,
   targetPosition
 }: EdgeProps<PortEdge>): React.JSX.Element {
-  const { editing, hoveredEdge, hoverEdge, insertOn } = useFlowEdit()
+  const { editing, insertOn } = useFlowEdit()
+  const { hoveredEdge, hoverEdge } = useEdgeHover()
   const port = data?.port ?? 'out'
   const look = PORT_PRESENTATION[port]
   const [path, labelX, labelY] = getBezierPath({

@@ -291,4 +291,24 @@ describe('draftReducer', () => {
     expect(requeued.redo).toBe(draft.redo)
     expect(requeued.undo).toBe(draft.undo)
   })
+
+  it('shows the head issues again once only position moves are pending', () => {
+    const headIssue: Issue = { node_id: id('fetch'), code: 'invalid_url', message: 'bad url' }
+    const moved = run(openDraft({ automation: head(), issues: [headIssue] }), (d) => ({
+      type: 'gesture',
+      gesture: gesture(d, [], { fetch: { x: 1, y: 2 } })
+    }))
+    const added = run(moved, addShape)
+    const previewed = run(added, {
+      type: 'previewed',
+      pending: added.pending,
+      issues: [unreachable]
+    })
+    expect(previewed.issues).toEqual([unreachable])
+
+    // Undo leaves only the move pending: no ops, so no dry run will replace the stale issues.
+    const undone = run(previewed, { type: 'undo' })
+    expect(undone.pending).toHaveLength(1)
+    expect(undone.issues).toEqual([headIssue])
+  })
 })

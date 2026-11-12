@@ -1479,7 +1479,8 @@
       ],
       "reject": {
         "code": "invalid_node_id",
-        "index": 0
+        "index": 0,
+        "id": "Shape"
       }
     },
     {
@@ -1496,7 +1497,8 @@
       ],
       "reject": {
         "code": "invalid_node_id",
-        "index": 0
+        "index": 0,
+        "id": "trigger"
       }
     }
   ],

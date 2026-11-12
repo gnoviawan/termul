@@ -8,7 +8,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::graph::{apply_ops, validate, OpError};
-use super::model::{Automation, Edge, EdgeSource, Graph, Isolation, IssueCode, Op, Trigger};
+use super::model::{
+    Automation, Edge, EdgeSource, Graph, InvalidNodeId, Isolation, IssueCode, Op, Trigger,
+};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 struct Doc {
@@ -22,6 +24,8 @@ struct Doc {
 struct Rejection {
     code: String,
     index: Option<usize>,
+    /// The refused node id, for `invalid_node_id`.
+    id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,9 +104,18 @@ fn apply_ops_matches_every_fixture_case() {
                 assert_eq!(next.revision, start.revision + 1, "{}", case.name);
             }
             (None, Some(reject)) if reject.code == "invalid_node_id" => {
-                assert!(
-                    parsed.is_err(),
+                let id = reject.id.as_deref().unwrap_or_else(|| {
+                    panic!("{}: an invalid_node_id case names the id", case.name)
+                });
+                let error = parsed.expect_err(&format!(
                     "{}: the host must refuse the node id while parsing",
+                    case.name
+                ));
+                // Any other parse error (a bad tag, a missing field) is a broken fixture, not this refusal.
+                let expected = InvalidNodeId(id.to_string()).to_string();
+                assert!(
+                    error.to_string().contains(&expected),
+                    "{}: expected {expected:?}, got {error}",
                     case.name
                 );
             }

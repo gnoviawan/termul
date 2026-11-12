@@ -14,6 +14,19 @@ const api = vi.hoisted(() => ({
 vi.mock('@/lib/automation-api', () => api)
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn() }))
 vi.mock('sonner', () => ({ toast }))
+/** Card renders per node id, to prove a gesture elsewhere does not redraw them. */
+const renders = vi.hoisted(() => new Map<string, number>())
+vi.mock('./nodes/NodeCard', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./nodes/NodeCard')>()
+  return {
+    ...actual,
+    NodeCard: (props: Parameters<typeof actual.NodeCard>[0]) => {
+      const key = props.data.kind === 'trigger' ? 'trigger' : props.data.node.id
+      renders.set(key, (renders.get(key) ?? 0) + 1)
+      return actual.NodeCard(props)
+    }
+  }
+})
 
 import { AutomationEditor } from './AutomationEditor'
 
@@ -75,6 +88,7 @@ function open(phone = false, shown = detail) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  renders.clear()
   // React Flow reads the element under the pointer to resolve a tapped handle; jsdom has none.
   document.elementFromPoint = () => null
   api.previewAutomationOps.mockResolvedValue(ok(detail))
@@ -280,6 +294,10 @@ describe('AutomationEditor', () => {
     fireEvent.keyDown(editor, { key: 'z', ctrlKey: true })
     expect(edgeCount()).toBe(3)
     expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled()
+    // Closing, discarding or adding now would race the request.
+    expect(screen.getByRole('button', { name: 'Close the editor' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Discard' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add a step' })).toBeDisabled()
 
     const saved = {
       ...detail.automation,
@@ -392,5 +410,57 @@ describe('AutomationEditor', () => {
 
     expect(card('http')).toBeInTheDocument()
     expect(document.querySelector('[data-testid="edge-label-check:false->http"]')).not.toBeNull()
+  })
+
+  it('takes focus when it opens, so Ctrl+Z works without a click first', () => {
+    open()
+    const editor = screen.getByTestId('automation-editor')
+    expect(document.activeElement).toBe(editor)
+
+    fireEvent.click(handle('check', 'true'))
+    fireEvent.click(handle('shape', 'in'))
+    editor.focus()
+    fireEvent.keyDown(document.activeElement as Element, { key: 'z', ctrlKey: true })
+    expect(edgeCount()).toBe(2)
+  })
+
+  it('Enter on a menu row adds that row; Enter in the search field adds the top match', () => {
+    open()
+    fireEvent.click(screen.getByRole('button', { name: 'Add a step' }))
+    const menu = screen.getByRole('dialog', { name: 'Add a step' })
+    const wait = within(menu).getByRole('button', { name: 'Wait' })
+    wait.focus()
+    fireEvent.keyDown(wait, { key: 'Enter' })
+    // The browser turns Enter on a button into a click; the menu must not add HTTP instead.
+    expect(document.querySelector('.react-flow__node[data-id="http"]')).toBeNull()
+    fireEvent.click(wait)
+    expect(card('wait')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add a step' }))
+    const again = screen.getByRole('dialog', { name: 'Add a step' })
+    fireEvent.keyDown(within(again).getByRole('textbox', { name: 'Search steps' }), {
+      key: 'Enter'
+    })
+    expect(card('http')).toBeInTheDocument()
+  })
+
+  it('a second request for the menu opens a fresh menu that the first cannot close', () => {
+    open()
+    const add = screen.getByRole('button', { name: 'Add a step' })
+    fireEvent.click(add)
+    fireEvent.pointerDown(add)
+    fireEvent.click(add)
+    const menu = screen.getByRole('dialog', { name: 'Add a step' })
+    fireEvent.click(within(menu).getByRole('button', { name: 'Merge' }))
+    expect(card('merge')).toBeInTheDocument()
+  })
+
+  it('hovering an edge redraws no card', async () => {
+    open()
+    const before = new Map(renders)
+    const edge = document.querySelector('.react-flow__edge[data-id="fetch:out->check"]') as Element
+    fireEvent.mouseEnter(edge)
+    expect(await screen.findByRole('button', { name: 'Insert a step here' })).toBeInTheDocument()
+    for (const [nodeId, count] of before) expect(renders.get(nodeId), nodeId).toBe(count)
   })
 })

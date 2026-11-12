@@ -41,7 +41,9 @@ export function ConnectBanner({
     >
       {phone ? (
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="text-foreground">Tap a node to connect</span>
+          <span className="text-foreground">
+            {tap ? 'Tap a node to connect' : 'Drop on a node to connect'}
+          </span>
           <span className="truncate text-muted-foreground">from {source}</span>
         </span>
       ) : (

@@ -57,6 +57,8 @@ export function FlowToolbar({
   const add: Control = {
     label: 'Add a step',
     Icon: Plus,
+    // A step picked during Save could not be applied.
+    disabled: edit?.locked,
     run: (event) => {
       const box = event.currentTarget.getBoundingClientRect()
       onAdd({ x: box.left, y: box.top })

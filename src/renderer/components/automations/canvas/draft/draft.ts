@@ -89,13 +89,28 @@ export function pendingOps(draft: Draft): AutomationOp[] {
   return draft.pending.flatMap((step) => step.ops)
 }
 
-function patchLayout(layout: AutomationLayout, patch: LayoutPatch): AutomationLayout {
+export function patchLayout(layout: AutomationLayout, patch: LayoutPatch): AutomationLayout {
   const next = { ...layout }
   for (const [key, position] of Object.entries(patch) as [LayoutKey, NodePosition | null][]) {
     if (position === null) delete next[key]
     else next[key] = position
   }
   return next
+}
+
+/** The positions `next` sets or removes relative to `base`. */
+export function changedPositions(base: AutomationLayout, next: AutomationLayout): LayoutPatch {
+  const patch: LayoutPatch = {}
+  for (const key of new Set([...Object.keys(base), ...Object.keys(next)]) as Set<LayoutKey>) {
+    const was = base[key]
+    const now = next[key]
+    if (!now) {
+      if (was) patch[key] = null
+    } else if (!was || was.x !== now.x || was.y !== now.y) {
+      patch[key] = now
+    }
+  }
+  return patch
 }
 
 type State = Pick<Draft, 'doc' | 'layout'>
@@ -138,22 +153,27 @@ export function planGesture(
   return { forward: { ops, layout }, backward: { ops: backwardOps, layout: backwardLayout } }
 }
 
+/**
+ * Positions never change issues, and no dry run runs while no ops are
+ * pending, so with no pending ops the head's issues are the current ones.
+ */
+function settleIssues(draft: Draft): Draft {
+  return draft.pending.some((step) => step.ops.length > 0)
+    ? draft
+    : { ...draft, issues: draft.baseIssues }
+}
+
 /** Steps `step` onto the draft: drops it when it undoes the last pending step, else appends it. */
 function walk(draft: Draft, step: Step, undoes: Step): Draft | null {
   if (draft.pending.at(-1) === undoes) {
     const pending = draft.pending.slice(0, -1)
     const state = replay(draft.base, pending)
     if (state === null) return null
-    return {
-      ...draft,
-      ...state,
-      pending,
-      issues: pending.length === 0 ? draft.baseIssues : draft.issues
-    }
+    return settleIssues({ ...draft, ...state, pending })
   }
   const state = applyStep(draft, step)
   if (state === null) return null
-  return { ...draft, ...state, pending: [...draft.pending, step] }
+  return settleIssues({ ...draft, ...state, pending: [...draft.pending, step] })
 }
 
 function nodeExists(doc: DraftDoc, id: string): boolean {
