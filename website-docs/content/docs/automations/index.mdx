@@ -116,7 +116,30 @@ A new revision still needs approval: **Approve and arm** (or **Approve**) in the
 
 On a phone, tap a step's output, then tap the step to connect to. A banner says **Tap a node to connect** and names the step you started from, with **Cancel**. **Add a step** opens as a sheet from the bottom.
 
-The editor changes which steps there are and how they connect. To change a step's own settings, such as an agent's prompt or a request's URL, ask an agent in a chat.
+### Change a step's settings
+
+Select a step or the trigger card in the editor to open its inspector. On a computer and in the browser, it floats on the right of the canvas; on a phone, it opens as a sheet from the bottom. A step you just added opens in the inspector too. The header shows the step's name and kind, with **Delete step** and **Close**.
+
+A field change is saved to the draft when you press Enter or leave the field, and a choice is saved when you pick it. Each change is one step you can undo. Press Escape in a field to put back its saved value. While a save is running, the editor keeps what you typed and says **Saving. Try that again once it finishes.**
+
+What you can change depends on the step kind:
+
+- **HTTP**: **Method**, **URL**, **Allowed hosts**, **Headers** and **Body**. If the URL points at a host that is not allowed, a button such as **Allow api.example.com** adds it;
+- **Condition**: **Value**, **Check** (equals, does not equal, contains, is greater than, is less than, exists) and **Compared with**;
+- **For each**: **Items**, a list from an earlier step, and **Max iterations**;
+- **Merge**: **Continue** when any branch arrives or when every branch arrives;
+- **Wait**: **Wait for**, how long the run parks before it continues;
+- **Approval**: **Message**, what the person deciding reads, and **Time out after**;
+- **Transform**: **Fields**, each one a key of the step's output;
+- **Fail**: **Message**, the failure message the run stops with.
+
+Every step also has a **Label**. **Agent** and **MCP tool** steps show their settings read-only for now; ask an agent in a chat to change them.
+
+In a text field, type `{{` to insert a reference. The list offers only what the step can read when it runs: the trigger, the output of steps that run before it, and, inside a **For each** loop, the current item and its index.
+
+The inspector checks fields as you type, such as required fields, allowed ranges, the URL and reference syntax, and shows problems under each field. **Issues on this step** at the bottom lists the draft's issues for that step.
+
+For the trigger, **Runs** is **When you run it** or **On a schedule**. A schedule is a **Cron** expression with a **Time zone**, **Every interval**, or **Once** at the time in **Run at**. **Next runs** shows when it will run next.
 
 ## Run, pause or delete an automation
 
