@@ -478,7 +478,7 @@ async fn session_reopen_resource_not_found_is_prefixed() {
     .await;
     assert_eq!(
         outcome.unwrap_err(),
-        "ACP_RESOURCE_NOT_FOUND: Resource not found: {\n  \"uri\": \"sess-gone\"\n}"
+        "ACP_RESOURCE_NOT_FOUND: Resource not found"
     );
 }
 
