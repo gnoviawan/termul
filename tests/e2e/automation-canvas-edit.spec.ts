@@ -214,6 +214,8 @@ test.describe('phone', () => {
     await expect(sheet).toBeHidden()
     await expect(card(editor, 'wait')).toBeVisible()
 
+    // A new step is centred, so on a narrow phone earlier steps can sit off-screen: fit, as a user would.
+    await editor.getByRole('button', { name: 'Fit to view' }).tap()
     await handle(editor, 'transform', 'out').tap()
     const banner = editor.getByRole('status')
     await expect(banner).toContainText('Tap a node to connect')
