@@ -219,6 +219,62 @@ describe('claude account switch', () => {
     })
   })
 
+  describe('with a command still running in the background', () => {
+    const commands = (state: 'running' | 'ended') => ({
+      agentId: 'agent-c1',
+      revision: state === 'running' ? 1 : 2,
+      commands: [
+        {
+          toolCallId: 'exec-1',
+          title: 'Watch CI',
+          command: 'gh pr checks --watch',
+          startedAtMs: 1_000,
+          ...(state === 'running' ? { state } : { state, endedAtMs: 2_000 })
+        }
+      ]
+    })
+    const setCommands = (state: 'running' | 'ended') =>
+      useAcpStore.setState((s) => ({
+        sessions: { ...s.sessions, c1: { ...s.sessions.c1, backgroundCommands: commands(state) } }
+      }))
+
+    it('defers the restart until the command ends, and logs the wait', async () => {
+      setCommands('running')
+      const restart = restartClaudeSession('c1')
+      await Promise.resolve()
+      expect(killAgent).not.toHaveBeenCalled()
+      expect(
+        vi
+          .mocked(logFrontendError)
+          .mock.calls.map(([entry]) => entry.message)
+          .filter((message) => message.includes('background'))
+      ).toEqual(['Restart of chat c1 waits on 1 background command'])
+
+      setCommands('ended')
+      await expect(restart).resolves.toBe(true)
+      expect(killAgent).toHaveBeenCalledWith('agent-c1')
+    })
+
+    it('stops waiting when the chat closes, like a subagent wait', async () => {
+      setCommands('running')
+      const restart = restartClaudeSession('c1')
+      await Promise.resolve()
+      useAcpStore.setState((s) => ({
+        sessions: { ...s.sessions, c1: { ...s.sessions.c1, status: 'closed' } }
+      }))
+      await expect(restart).resolves.toBe(false)
+      expect(killAgent).not.toHaveBeenCalled()
+    })
+
+    it('does not wait for it when continuing after a limit, like a subagent', async () => {
+      setCommands('running')
+      await expect(restartClaudeSession('c1', { resend: true, cancelTurn: true })).resolves.toBe(
+        true
+      )
+      expect(killAgent).toHaveBeenCalledWith('agent-c1')
+    })
+  })
+
   it('cancels a held turn and resends when continuing after a limit', async () => {
     await restartClaudeSession('c2', { resend: true, cancelTurn: true })
     expect(cancelPrompt).toHaveBeenCalledWith('c2')

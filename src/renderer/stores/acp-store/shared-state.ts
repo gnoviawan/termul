@@ -7,7 +7,7 @@
 
 import type { WsAgentSummary } from '@shared/types/web-protocol.types'
 import { sessionModelSnapshot } from '@/components/chat/chat-input-bar-config'
-import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
+import type { AgentId, BackgroundCommandList, SessionId, ToolCall } from '@/lib/acp-api'
 import {
   deriveTitle,
   isUntitledTitle,
@@ -704,7 +704,12 @@ export async function adoptHostOwnedAgent(
   configId: string,
   cwd: string,
   options?: { allowDesktop?: boolean; isCurrent?: () => boolean; projectId?: string | null }
-): Promise<{ adopted: AgentId | null; listingTrusted: boolean; working?: boolean }> {
+): Promise<{
+  adopted: AgentId | null
+  listingTrusted: boolean
+  working?: boolean
+  backgroundCommands?: BackgroundCommandList
+}> {
   const trimmedCwd = cwd.trim()
   if ((!options?.allowDesktop && isTauriContext()) || trimmedCwd.length === 0) {
     return { adopted: null, listingTrusted: false }
@@ -765,7 +770,11 @@ export async function adoptHostOwnedAgent(
   return {
     adopted: match.id,
     listingTrusted: true,
-    working: match.workingSessions?.includes(sessionId) === true
+    working: match.workingSessions?.includes(sessionId) === true,
+    backgroundCommands: {
+      revision: match.backgroundCommands?.revision ?? 0,
+      commands: match.backgroundCommands?.sessions[sessionId] ?? []
+    }
   }
 }
 

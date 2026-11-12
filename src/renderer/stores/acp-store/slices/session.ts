@@ -4,6 +4,7 @@
 
 import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
+import { newerBackgroundCommands } from '@/components/chat/background-commands'
 import { loadAgentConfigs as loadAgentConfigsFromDisk } from '@/lib/acp-agents-persistence'
 import {
   type AgentId,
@@ -85,6 +86,12 @@ import {
   withSessionResumeError,
   withSwitchMarker
 } from '../helpers'
+import {
+  forgetHostReports,
+  hostReportAfter,
+  hostReportSeq,
+  latestHostReport
+} from '../host-session-reports'
 import { useAcpStore } from '../index'
 import {
   isReopenTurnActiveError,
@@ -129,18 +136,13 @@ import {
   type AcpState,
   ChatLaunchCancelledError,
   type ChatMessage,
+  type HeldBackgroundCommands,
   type OpenHistoryOptions,
   type ReopenControlBaseline,
   type TurnEndSetter
 } from '../types'
 import { authenticatedAgents, evictAgentForTransport, withAuthRetry } from './agent'
-import {
-  agentWorkingReportSeq,
-  flushNextQueuedPrompt,
-  forgetAgentWorkingReports,
-  latestAgentWorkingReport,
-  runPromptTurn
-} from './prompt'
+import { flushNextQueuedPrompt, runPromptTurn } from './prompt'
 import { loadFreshSourcePayload } from './switch-seam'
 import {
   dropSessionBookkeeping,
@@ -997,9 +999,12 @@ async function openHistorySessionInner(
   // this gate exists to close. Desktop stays exempt: its host listing does
   // not model the same-process owner, so an empty result proves nothing.
   let ownerListingTrusted = false
-  // `agent_working` reports newer than this belong to the reopen's live agent
-  // and win over the listing (see `latestAgentWorkingReport`).
-  const reportSeqBeforeListing = agentWorkingReportSeq()
+  // Host reports newer than this belong to the reopen's live agent and win
+  // over the listing (see `host-session-reports`).
+  const reportSeqBeforeListing = hostReportSeq()
+  // The adopted owner's commands for this chat. A list held from before the
+  // reopen is dropped: the session it described was closed.
+  let listedCommands: HeldBackgroundCommands | undefined
   // Guard both fields: `ensureLiveAgent` trims `cwd` (throws on undefined),
   // and a missing/empty cwd can't map to a live agent anyway — fall through
   // to read-only 'local' instead of throwing (spec: do not throw).
@@ -1009,7 +1014,7 @@ async function openHistorySessionInner(
     // spawning — otherwise every reload spawns a duplicate agent and resumes
     // on it while the original keeps running. A live turn also adopts on
     // desktop (#882): spawning would race the owner the guard is protecting.
-    const { adopted, listingTrusted, working } = await adoptHostOwnedAgent(
+    const { adopted, listingTrusted, working, backgroundCommands } = await adoptHostOwnedAgent(
       set,
       id,
       meta.agentConfigId,
@@ -1027,15 +1032,33 @@ async function openHistorySessionInner(
       turnOwnerConnected = true
     }
     // The owner's listing says whether it works in this chat outside a prompt
-    // turn now; later changes arrive as `agent_working` events. A report from
-    // the owner during the listing round trip is newer than the listing.
-    const report = adopted ? latestAgentWorkingReport(id, adopted) : undefined
-    const reportIsNewer = report !== undefined && report.seq > reportSeqBeforeListing
-    const agentWorking = reportIsNewer ? report.working : Boolean(working)
+    // turn now and which commands it left running; later changes arrive as
+    // events. A report from the owner during the listing round trip is newer
+    // than the listing; for commands, the higher revision is.
+    const agentWorking = adopted
+      ? (hostReportAfter(id, adopted, 'working', reportSeqBeforeListing) ?? Boolean(working))
+      : Boolean(working)
+    if (adopted) {
+      const reported = latestHostReport(id, adopted, 'backgroundCommands')?.value
+      listedCommands = newerBackgroundCommands(
+        { agentId: adopted, ...(backgroundCommands ?? { revision: 0, commands: [] }) },
+        reported && { agentId: adopted, ...reported }
+      )
+    }
     set((s) => {
       const session = s.sessions[id]
-      if (!session || Boolean(session.agentWorking) === agentWorking) return {}
-      return { sessions: { ...s.sessions, [id]: { ...session, agentWorking } } }
+      if (!session) return {}
+      if (Boolean(session.agentWorking) === agentWorking && !adopted) return {}
+      return {
+        sessions: {
+          ...s.sessions,
+          [id]: {
+            ...session,
+            agentWorking,
+            ...(listedCommands ? { backgroundCommands: listedCommands } : {})
+          }
+        }
+      }
     })
   }
   if (
@@ -1204,9 +1227,17 @@ async function openHistorySessionInner(
   // `session/load` route to this session, and (for 'load') open the replay
   // window BEFORE the IPC is sent — replayed chunks stream in while the load
   // request is still in flight and must be accepted, not dropped.
-  const lateWorkingReport = latestAgentWorkingReport(id, liveAgentId)
-  const newerWorkingReport =
-    lateWorkingReport && lateWorkingReport.seq > reportSeqBeforeListing ? lateWorkingReport : null
+  const lateWorking = hostReportAfter(id, liveAgentId, 'working', reportSeqBeforeListing)
+  const lateCommands = hostReportAfter(
+    id,
+    liveAgentId,
+    'backgroundCommands',
+    reportSeqBeforeListing
+  )
+  const reopenedCommands = newerBackgroundCommands(
+    listedCommands?.agentId === liveAgentId ? listedCommands : undefined,
+    lateCommands && { agentId: liveAgentId, ...lateCommands }
+  )
   set((s) => {
     const session = s.sessions[id]
     if (!session) return {}
@@ -1216,9 +1247,10 @@ async function openHistorySessionInner(
         [id]: {
           ...session,
           agentId: liveAgentId,
-          // A report from the live agent that `_onAgentWorking` dropped while
-          // the chat still pointed at its persisted agent applies now.
-          agentWorking: newerWorkingReport ? newerWorkingReport.working : session.agentWorking,
+          // A report from the live agent that the event handlers dropped
+          // while the chat still pointed at its persisted agent applies now.
+          agentWorking: lateWorking ?? session.agentWorking,
+          backgroundCommands: reopenedCommands,
           replaying:
             strategy === 'load'
               ? ('pending' as const)
@@ -1710,7 +1742,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
               activeTurn: existing?.activeTurn ?? false,
               // An `agent_working` report can land between `session_created`
               // and this reply; the rebuilt record keeps it.
-              agentWorking: latestAgentWorkingReport(sessionId, agentId)?.working ?? false,
+              agentWorking: latestHostReport(sessionId, agentId, 'working')?.value ?? false,
               mcpServerCount: sessionMcpServers.length,
               openTurnId: existing?.openTurnId ?? null,
               ...addAdvertisedOptionsKeepingCurrent(
@@ -2155,7 +2187,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     pendingHistoryDeletes.set(id, (pendingHistoryDeletes.get(id) ?? 0) + 1)
     try {
       invalidateSessionReopen(id)
-      forgetAgentWorkingReports(id)
+      forgetHostReports(id)
       inFlightHistoryOpens.delete(id)
       inFlightDiscoveredOpens.delete(id)
       invalidateRestorePreload(set, id)

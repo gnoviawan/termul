@@ -28,6 +28,7 @@ use tokio::sync::{oneshot, watch};
 use crate::acp::session_persistence::SessionRegistration;
 
 mod activity;
+mod background_commands;
 mod commands;
 mod sign_in;
 mod subagents;
@@ -35,6 +36,8 @@ mod tool_policy;
 mod unprompted;
 pub(crate) use activity::ActivityClock;
 pub use activity::AgentActivity;
+pub use background_commands::{BackgroundCommandList, BackgroundCommandsSnapshot};
+pub(crate) use background_commands::{BackgroundCommands, TurnEnd};
 pub(crate) use sign_in::{RequestElicitationRoute, SignInPrompt, SignInSlot};
 pub(crate) use subagents::ChildRoute;
 pub use tool_policy::ToolAllowlist;
@@ -49,7 +52,27 @@ pub(crate) use unprompted::UNPROMPTED_QUIET;
 /// request once the user responds (or the turn is cancelled / drained).
 pub(crate) struct PendingPermission {
     pub session_id: String,
+    pub tool_call_id: String,
     pub responder: Responder<RequestPermissionResponse>,
+}
+
+/// What `begin_close_session` leaves the caller to announce or resolve.
+pub(crate) struct ClosingSession {
+    /// Whether the session was ephemeral (captured before the marks clear).
+    pub was_ephemeral: bool,
+    /// Permissions to resolve as cancelled.
+    pub pending: Vec<PendingPermission>,
+    /// The session's emptied command list, when it listed any.
+    pub cleared_commands: Option<BackgroundCommandList>,
+}
+
+/// What `dispose_session` leaves the caller to resolve or announce.
+pub(crate) struct DisposedSession {
+    pub permissions: Vec<PendingPermission>,
+    pub questions: Vec<PendingQuestion>,
+    pub elicitations: Vec<PendingElicitation>,
+    /// The session's emptied command list, when it listed any.
+    pub cleared_commands: Option<BackgroundCommandList>,
 }
 
 /// A structured question (issue #411) awaiting the user's answer.
@@ -166,6 +189,8 @@ pub(crate) struct DriverState {
     sign_in: SignInSlot,
     /// Sessions the agent works in outside a prompt turn.
     unprompted: UnpromptedWork,
+    /// Commands the agent left running, per session.
+    background_commands: BackgroundCommands,
 }
 
 /// State of one session's replay window: how many reopens are in flight and
@@ -291,6 +316,23 @@ impl DriverState {
         &mut self.unprompted
     }
 
+    pub(crate) fn background_commands(&mut self) -> &mut BackgroundCommands {
+        &mut self.background_commands
+    }
+
+    /// A prompt turn of `session_id` ended as `turn`: list the tool calls
+    /// that outlive it. Returns the session's new list when it changed.
+    pub(crate) fn end_turn_background_commands(
+        &mut self,
+        session_id: &str,
+        turn: TurnEnd,
+    ) -> Option<BackgroundCommandList> {
+        let records = &self.subagent_records;
+        self.background_commands.end_turn(session_id, turn, |call| {
+            records.get(session_id, call).is_some()
+        })
+    }
+
     /// Register a pending permission request and return its globally-unique
     /// correlation id.
     ///
@@ -299,6 +341,7 @@ impl DriverState {
     pub(crate) fn register_permission(
         &mut self,
         session_id: String,
+        tool_call_id: String,
         responder: Responder<RequestPermissionResponse>,
     ) -> String {
         self.last_active.touch();
@@ -307,6 +350,7 @@ impl DriverState {
             request_id.clone(),
             PendingPermission {
                 session_id,
+                tool_call_id,
                 responder,
             },
         );
@@ -410,7 +454,8 @@ impl DriverState {
     /// Remove and return all pending permissions belonging to a session.
     ///
     /// Used on cancellation and on prompt completion to resolve every
-    /// outstanding request for the session (cancelled).
+    /// outstanding request for the session (cancelled). The tool calls they
+    /// gated never run, so no turn end lists them as background commands.
     pub(crate) fn drain_session(&mut self, session_id: &str) -> Vec<PendingPermission> {
         let ids: Vec<String> = self
             .pending_permissions
@@ -418,9 +463,15 @@ impl DriverState {
             .filter(|(_, p)| p.session_id == session_id)
             .map(|(id, _)| id.clone())
             .collect();
-        ids.into_iter()
+        let drained: Vec<PendingPermission> = ids
+            .into_iter()
             .filter_map(|id| self.pending_permissions.remove(&id))
-            .collect()
+            .collect();
+        for permission in &drained {
+            self.background_commands
+                .permission_cancelled(session_id, &permission.tool_call_id);
+        }
+        drained
     }
 
     /// Remove and return every pending permission, regardless of session.
@@ -521,17 +572,30 @@ impl DriverState {
 
     /// Begin closing a session: report whether it was ephemeral — captured
     /// BEFORE the marks are cleared, since the CloseSession arm's
-    /// finalization gate depends on the pre-removal value — then forget the
-    /// workspace root + marks, finish any active turn, and return the pending
+    /// finalization gate depends on the pre-removal value — then finish any
+    /// active turn, forget the workspace root + marks, and return the pending
     /// permissions to resolve as cancelled.
-    pub(crate) fn begin_close_session(
+    pub(crate) fn begin_close_session(&mut self, session_id: &str) -> ClosingSession {
+        let was_ephemeral = self.is_ephemeral(session_id);
+        let (pending, cleared_commands) = self.release_session(session_id);
+        ClosingSession {
+            was_ephemeral,
+            pending,
+            cleared_commands,
+        }
+    }
+
+    /// Finish the session's turn, then forget its commands and root. The
+    /// turn's drained permissions note their calls on the command tracker,
+    /// so the forget comes after them.
+    fn release_session(
         &mut self,
         session_id: &str,
-    ) -> (bool, Vec<PendingPermission>) {
-        let was_ephemeral = self.is_ephemeral(session_id);
-        self.remove_session_root(session_id);
+    ) -> (Vec<PendingPermission>, Option<BackgroundCommandList>) {
         let pending = self.finish_turn(session_id);
-        (was_ephemeral, pending)
+        let cleared_commands = self.background_commands.forget(session_id);
+        self.remove_session_root(session_id);
+        (pending, cleared_commands)
     }
 
     /// Forget a session's workspace root (on explicit close).
@@ -547,7 +611,9 @@ impl DriverState {
         self.subagent_records.forget_root(session_id);
         // A closed or deleted session no longer works. A close tells clients
         // with `session_closed`; a delete reports `agent_working` itself.
+        // Close, delete and dispose take the command list first.
         self.unprompted.end(session_id);
+        self.background_commands.forget(session_id);
     }
 
     /// Whether an `available_commands_update` repeats the set last fanned
@@ -867,19 +933,14 @@ impl DriverState {
         self.drain_session_elicitations(session_id)
     }
 
-    pub(crate) fn dispose_session(
-        &mut self,
-        session_id: &str,
-    ) -> (
-        Vec<PendingPermission>,
-        Vec<PendingQuestion>,
-        Vec<PendingElicitation>,
-    ) {
-        self.remove_session_root(session_id);
-        let permissions = self.finish_turn(session_id);
-        let questions = self.finish_turn_questions(session_id);
-        let elicitations = self.finish_turn_elicitations(session_id);
-        (permissions, questions, elicitations)
+    pub(crate) fn dispose_session(&mut self, session_id: &str) -> DisposedSession {
+        let (permissions, cleared_commands) = self.release_session(session_id);
+        DisposedSession {
+            permissions,
+            questions: self.finish_turn_questions(session_id),
+            elicitations: self.finish_turn_elicitations(session_id),
+            cleared_commands,
+        }
     }
 
     /// Activity evidence for the idle reaper. `running_terminals` comes from
@@ -900,6 +961,7 @@ impl DriverState {
                     .map(|w| w.open_count)
                     .sum::<usize>(),
             unprompted_sessions: self.unprompted.count(),
+            running_background_commands: self.background_commands.running_count(),
             last_active_at: self.last_active.last(),
         }
     }

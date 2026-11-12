@@ -197,6 +197,9 @@ pub const EVENT_USAGE_UPDATE: &str = "acp:usage_update";
 /// The agent started or stopped working in a session outside a prompt turn
 /// (live only, never persisted: see `session::unprompted`).
 pub const EVENT_AGENT_WORKING: &str = "acp:agent_working";
+/// The commands an agent left running in a session changed (live only, never
+/// persisted: see `session::background_commands`).
+pub const EVENT_BACKGROUND_COMMANDS: &str = "acp:background_commands";
 /// Event name: the agent tried to open a browser URL on a headless host and
 /// the POSIX browser shim captured it (spec-acp-terminal-auth). Agent-level
 /// (`sid = None`); the payload carries `{agentId, url}` so the renderer can
@@ -1092,6 +1095,32 @@ pub fn emit_agent_working(
         working,
     };
     fan_out(sinks, Some(session_id), EVENT_AGENT_WORKING, &event);
+}
+
+/// Payload of [`EVENT_BACKGROUND_COMMANDS`]: the session's whole list, which
+/// replaces a held list of a lower revision.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundCommandsEvent {
+    pub agent_id: AgentId,
+    pub session_id: SessionId,
+    #[serde(flatten)]
+    pub list: crate::acp::session::BackgroundCommandList,
+}
+
+/// Tell every sink the commands `agent_id` left running in `session_id` now.
+pub fn emit_background_commands(
+    sinks: &[std::sync::Arc<dyn crate::web::EventSink>],
+    agent_id: &AgentId,
+    session_id: &str,
+    list: crate::acp::session::BackgroundCommandList,
+) {
+    let event = BackgroundCommandsEvent {
+        agent_id: agent_id.clone(),
+        session_id: SessionId::new(session_id.to_string()),
+        list,
+    };
+    fan_out(sinks, Some(session_id), EVENT_BACKGROUND_COMMANDS, &event);
 }
 
 /// OpenCode compaction marker carried on `session_info_update` `_meta`.

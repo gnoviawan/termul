@@ -580,7 +580,7 @@ pub(super) async fn run_command_loop(
                         // `session/close` is sent; the session is dropped
                         // locally and the caller learns the close was not
                         // clean.
-                        let was_ephemeral =
+                        let (was_ephemeral, cleared_commands) =
                             close_session_locally(&req_state, &req_plan_server, &session_id.0);
                         if let Err(finalize_error) = finalize_closed_session_if_durable(
                             req_persistence.as_ref(),
@@ -594,7 +594,12 @@ pub(super) async fn run_command_loop(
                                 crate::logging::redact_session_id(&session_id.0)
                             );
                         }
-                        announce_session_closed(&req_sinks, &req_agent_id, &session_id);
+                        announce_session_closed(
+                            &req_sinks,
+                            &req_agent_id,
+                            &session_id,
+                            cleared_commands,
+                        );
                         send_reply(&task_slot, Err(error));
                         return;
                     }
@@ -609,13 +614,13 @@ pub(super) async fn run_command_loop(
                     // sessions skip history finalization below (there is no
                     // durable record to finalize, so closing one must not
                     // surface a spurious "history finalization failed").
-                    let mut was_ephemeral = false;
+                    let (mut was_ephemeral, mut cleared_commands) = (false, None);
                     if result.is_ok() {
                         // Forget the workspace root, resolve any pending
                         // tickets for the now-closed session, and evict
                         // host-plan auth only after the agent confirmed the
                         // close.
-                        was_ephemeral =
+                        (was_ephemeral, cleared_commands) =
                             close_session_locally(&req_state, &req_plan_server, &session_id.0);
                     }
                     let mut result = result;
@@ -626,7 +631,12 @@ pub(super) async fn run_command_loop(
                             was_ephemeral,
                         )
                         .await;
-                        announce_session_closed(&req_sinks, &req_agent_id, &session_id);
+                        announce_session_closed(
+                            &req_sinks,
+                            &req_agent_id,
+                            &session_id,
+                            cleared_commands,
+                        );
                     }
                     send_reply(&task_slot, result);
                 });
@@ -689,6 +699,19 @@ pub(super) async fn run_command_loop(
                 // its own in this session.
                 if driver_state.lock().unprompted().end(&session_id.0) {
                     crate::acp::events::emit_agent_working(&sinks, &agent_id, &session_id.0, false);
+                }
+                // A new prompt clears the commands that ended since the last.
+                let background_commands = driver_state
+                    .lock()
+                    .background_commands()
+                    .begin_turn(&session_id.0);
+                if let Some(commands) = background_commands {
+                    crate::acp::events::emit_background_commands(
+                        &sinks,
+                        &agent_id,
+                        &session_id.0,
+                        commands,
+                    );
                 }
                 // Sequence + fan out the carrier's `user_prompt` NOW — the
                 // driver has accepted the prompt and nothing of its turn has
@@ -790,6 +813,20 @@ pub(super) async fn run_command_loop(
                         let _ = permission.responder.respond(RequestPermissionResponse::new(
                             RequestPermissionOutcome::Cancelled,
                         ));
+                    }
+                    // Listed before the turn's terminator so no client sees the
+                    // chat finished with its command still running.
+                    let background_commands = turn_state.lock().end_turn_background_commands(
+                        &session_id.0,
+                        crate::acp::session::TurnEnd::of(&outcome),
+                    );
+                    if let Some(commands) = background_commands {
+                        crate::acp::events::emit_background_commands(
+                            &turn_sinks,
+                            &turn_agent_id,
+                            &session_id.0,
+                            commands,
+                        );
                     }
                     // Issue #411: model-abandoned questions are first-class
                     // outcomes — a turn that ends without the user answering
@@ -904,6 +941,10 @@ pub(super) async fn run_command_loop(
                 let _ = reply.send(Ok(driver_state.lock().unprompted().session_ids()));
             }
 
+            AcpCommand::BackgroundCommands { reply } => {
+                let _ = reply.send(Ok(driver_state.lock().background_commands().snapshot()));
+            }
+
             AcpCommand::SessionRoots { reply } => {
                 let _ = reply.send(Ok(driver_state.lock().session_roots_snapshot()));
             }
@@ -1007,6 +1048,8 @@ pub(super) async fn run_command_loop(
                 let task_slot = slot.clone();
                 let dispose_state = driver_state.clone();
                 let dispose_plan_server = host_plan_server.clone();
+                let dispose_sinks = sinks.clone();
+                let dispose_agent_id = agent_id.clone();
                 let close_cx = cx.clone();
                 spawn_request(&cx, slot, async move {
                     if let Some(waiter) = waiter {
@@ -1073,7 +1116,7 @@ pub(super) async fn run_command_loop(
                         }
                     }
 
-                    let (permissions, questions, elicitations) = {
+                    let disposed = {
                         let mut state = dispose_state.lock();
                         if state.is_turn_active(&session_id.0) {
                             send_reply(
@@ -1089,18 +1132,26 @@ pub(super) async fn run_command_loop(
                         }
                         state.dispose_session(&session_id.0)
                     };
-                    for permission in permissions {
+                    if let Some(cleared) = disposed.cleared_commands {
+                        crate::acp::events::emit_background_commands(
+                            &dispose_sinks,
+                            &dispose_agent_id,
+                            &session_id.0,
+                            cleared,
+                        );
+                    }
+                    for permission in disposed.permissions {
                         let _ = permission.responder.respond(RequestPermissionResponse::new(
                             RequestPermissionOutcome::Cancelled,
                         ));
                     }
-                    for question in questions {
+                    for question in disposed.questions {
                         let _ = question.responder.respond(serde_json::json!({
                             "questionId": question.question_id,
                             "cancelled": true,
                         }));
                     }
-                    for elicitation in elicitations {
+                    for elicitation in disposed.elicitations {
                         cancel_elicitation(elicitation);
                     }
                     // A promotable warm-pool session carries the injected plan
@@ -1378,7 +1429,20 @@ pub(super) async fn run_command_loop(
                 outcome,
                 reply,
             } => {
-                let pending = driver_state.lock().take_permission(&request_id);
+                let pending = {
+                    let mut state = driver_state.lock();
+                    let pending = state.take_permission(&request_id);
+                    // A cancelled permission's call never runs.
+                    if let Some(permission) = pending
+                        .as_ref()
+                        .filter(|_| matches!(outcome, RequestPermissionOutcome::Cancelled))
+                    {
+                        state
+                            .background_commands()
+                            .permission_cancelled(&permission.session_id, &permission.tool_call_id);
+                    }
+                    pending
+                };
                 match pending {
                     Some(permission) => {
                         let result = permission
@@ -1528,13 +1592,12 @@ pub(super) async fn run_command_loop(
                         .block_task()
                         .await;
                     if result.is_ok() {
-                        let (pending, stopped_working) = {
+                        let (closing, stopped_working) = {
                             let mut state = req_state.lock();
                             // No `session_closed` follows a delete, so clients
                             // hear the end of the agent's own work here.
                             let stopped_working = state.unprompted().end(&session_id.0);
-                            let (_ephemeral, pending) = state.begin_close_session(&session_id.0);
-                            (pending, stopped_working)
+                            (state.begin_close_session(&session_id.0), stopped_working)
                         };
                         if stopped_working {
                             crate::acp::events::emit_agent_working(
@@ -1544,7 +1607,15 @@ pub(super) async fn run_command_loop(
                                 false,
                             );
                         }
-                        for permission in pending {
+                        if let Some(cleared) = closing.cleared_commands {
+                            crate::acp::events::emit_background_commands(
+                                &req_sinks,
+                                &req_agent_id,
+                                &session_id.0,
+                                cleared,
+                            );
+                        }
+                        for permission in closing.pending {
                             let _ = permission.responder.respond(RequestPermissionResponse::new(
                                 RequestPermissionOutcome::Cancelled,
                             ));

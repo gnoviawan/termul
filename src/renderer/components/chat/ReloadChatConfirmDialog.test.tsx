@@ -16,6 +16,34 @@ import { FRESH } from '@/stores/acp-store/testkit'
 import { useReloadConfirmStore } from '@/stores/reload-confirm-store'
 import { ReloadChatConfirmDialog } from './ReloadChatConfirmDialog'
 
+const watch = {
+  toolCallId: 'exec-1',
+  title: 'Watch CI',
+  command: 'gh pr checks --watch',
+  startedAtMs: 1_000,
+  state: 'running' as const
+}
+
+function seedCommands(states: Array<'running' | 'ended'>): void {
+  useAcpStore.setState((s) => ({
+    sessions: {
+      ...s.sessions,
+      s1: {
+        ...s.sessions.s1,
+        backgroundCommands: {
+          agentId: 'agent-1',
+          revision: 1,
+          commands: states.map((state, index) =>
+            state === 'running'
+              ? { ...watch, toolCallId: `exec-${index}` }
+              : { ...watch, toolCallId: `exec-${index}`, state, endedAtMs: 2_000 }
+          )
+        }
+      }
+    }
+  }))
+}
+
 function seed(record?: SubagentRecordOverrides): void {
   useAcpStore.setState({
     ...FRESH,
@@ -63,7 +91,8 @@ describe('reload with background agents', () => {
     expect(reloadMock).not.toHaveBeenCalled()
     expect(useReloadConfirmStore.getState().request).toEqual({
       sessionId: 's1',
-      backgroundAgents: 1
+      backgroundAgents: 1,
+      backgroundCommands: 0
     })
 
     render(<ReloadChatConfirmDialog sessionId="s1" />)
@@ -81,13 +110,55 @@ describe('reload with background agents', () => {
     expect(reloadMock).not.toHaveBeenCalled()
     expect(useReloadConfirmStore.getState().request).toEqual({
       sessionId: 's1',
-      backgroundAgents: 1
+      backgroundAgents: 1,
+      backgroundCommands: 0
     })
+  })
+
+  it('asks first while a command runs in the background, and names it', () => {
+    seed()
+    seedCommands(['running', 'ended'])
+    const { result } = renderHook(() => useReloadChat('s1'))
+    expect(result.current.disabled).toBe(false)
+    act(() => result.current.reload?.())
+    expect(reloadMock).not.toHaveBeenCalled()
+    expect(useReloadConfirmStore.getState().request).toEqual({
+      sessionId: 's1',
+      backgroundAgents: 0,
+      backgroundCommands: 1
+    })
+
+    render(<ReloadChatConfirmDialog sessionId="s1" />)
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+      '1 command is still running in the background. A reload starts a new agent process, and the command stops. Its output does not come back to this chat.'
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Reload anyway' }))
+    expect(reloadMock).toHaveBeenCalledWith('s1')
+  })
+
+  it('names background agents and commands together', () => {
+    useReloadConfirmStore.setState({
+      request: { sessionId: 's1', backgroundAgents: 2, backgroundCommands: 3 }
+    })
+    render(<ReloadChatConfirmDialog sessionId="s1" />)
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+      '2 background agents and 3 commands are still running. A reload starts a new agent process, and they stop. Their results do not come back to this chat.'
+    )
+  })
+
+  it('reloads at once when every command has ended', () => {
+    seed()
+    seedCommands(['ended'])
+    const { result } = renderHook(() => useReloadChat('s1'))
+    act(() => result.current.reload?.())
+    expect(reloadMock).toHaveBeenCalledWith('s1')
   })
 
   it('does not reload on cancel', () => {
     seed({ background: true })
-    useReloadConfirmStore.setState({ request: { sessionId: 's1', backgroundAgents: 2 } })
+    useReloadConfirmStore.setState({
+      request: { sessionId: 's1', backgroundAgents: 2, backgroundCommands: 0 }
+    })
     render(<ReloadChatConfirmDialog sessionId="s1" />)
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(reloadMock).not.toHaveBeenCalled()
@@ -95,7 +166,9 @@ describe('reload with background agents', () => {
   })
 
   it('shows nothing for another chat', () => {
-    useReloadConfirmStore.setState({ request: { sessionId: 's2', backgroundAgents: 1 } })
+    useReloadConfirmStore.setState({
+      request: { sessionId: 's2', backgroundAgents: 1, backgroundCommands: 0 }
+    })
     render(<ReloadChatConfirmDialog sessionId="s1" />)
     expect(screen.queryByRole('alertdialog')).toBeNull()
   })
