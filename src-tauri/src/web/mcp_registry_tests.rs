@@ -168,6 +168,38 @@ fn skips_malformed_files_and_entries_without_an_id_or_name() {
 }
 
 #[test]
+fn skips_a_file_over_the_size_limit_and_keeps_the_others() {
+    let host = Host::new();
+    let padding = " ".repeat(1024 * 1024);
+    let huge = host.project(
+        "huge",
+        Some(&format!(
+            r#"[{{"id":"big","name":"Big","command":"big"}}]{padding}"#
+        )),
+    );
+    let small = host.project(
+        "small",
+        Some(&file_of(
+            json!([{ "id": "ok", "name": "Ok", "command": "ok" }]),
+        )),
+    );
+
+    assert_eq!(
+        import_project_files(&host.store, &[huge, small]).unwrap(),
+        Import::Imported {
+            servers: 1,
+            files: 1
+        }
+    );
+    assert_eq!(
+        host.stored(),
+        Some(envelope(
+            json!([{ "id": "ok", "name": "Ok", "command": "ok" }])
+        ))
+    );
+}
+
+#[test]
 fn stores_an_empty_list_when_no_project_has_a_file() {
     let host = Host::new();
     let a = host.project("a", None);

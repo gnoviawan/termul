@@ -78,6 +78,7 @@ fn write_list(store: &WebStore, value: Value) {
         device_id: "desktop-device".into(),
         client_instance_id: "tab-1".into(),
     };
+    // A base revision above any stored one always wins the last-writer merge.
     let base = Precondition {
         base_revision: Some(u64::MAX),
         ..Precondition::default()

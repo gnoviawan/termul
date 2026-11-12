@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The host store as the web client reaches it through `persistenceApi`.
-const host = vi.hoisted(() => ({ store: new Map<string, unknown>() }))
+const host = vi.hoisted(() => ({
+  store: new Map<string, unknown>(),
+  watchers: [] as Array<(change: { exists: boolean; data?: unknown }) => void>
+}))
 
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), warning: vi.fn(), success: vi.fn() }
@@ -30,7 +33,13 @@ vi.mock('@/lib/api', async (orig) => ({
     write: vi.fn(async (key: string, value: unknown) => {
       host.store.set(key, value)
       return { success: true, data: undefined }
-    })
+    }),
+    watchShared: vi.fn(
+      (_key: string, listener: (change: { exists: boolean; data?: unknown }) => void) => {
+        host.watchers.push(listener)
+        return () => undefined
+      }
+    )
   }
 }))
 
@@ -66,5 +75,17 @@ describe('the web MCP server list is one list for every project', () => {
 
     await openProject('project-c')
     expect(useAcpStore.getState().mcpServers).toEqual([FILES])
+  })
+
+  it('shows a server another browser saved, so the next save keeps it', async () => {
+    await openProject('project-a')
+    const added = { ...FILES, id: 'other', name: 'Other' }
+
+    for (const watcher of host.watchers) watcher({ exists: true, data: [FILES, added] })
+    expect(useAcpStore.getState().mcpServers).toEqual([FILES, added])
+
+    const mine = { ...FILES, id: 'mine', name: 'Mine' }
+    await useAcpStore.getState().saveMcpServer(mine)
+    expect((host.store.get('acp/mcp-servers') as unknown[]).length).toBe(3)
   })
 })

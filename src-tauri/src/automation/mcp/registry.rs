@@ -35,6 +35,9 @@ struct StoredEntry {
 /// duplicate id.
 pub fn parse_registry(value: &Value) -> Vec<McpServerEntry> {
     let Some(items) = registry_items(value) else {
+        log::warn!(
+            "[Automation] the stored MCP registry is not a list; no MCP servers are available"
+        );
         return Vec::new();
     };
     let mut entries: Vec<McpServerEntry> = Vec::new();

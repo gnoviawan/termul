@@ -2,6 +2,7 @@
  * Mcp slice — extracted from ../acp-store.ts (spec-04 PR B). Pure move, no logic changes.
  */
 
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
 import {
@@ -14,10 +15,12 @@ import {
 import {
   catalogInstallEntry,
   loadMcpServers as loadMcpServersFromDisk,
+  normalizeMcpRegistry,
   type StoredMcpServer,
   saveMcpServers as saveMcpServersToDisk
 } from '@/lib/acp-mcp-persistence'
 import { logFrontendError } from '@/lib/log-api'
+import { syncSharedKey } from '@/lib/shared-key-sync'
 import { randomUUID } from '@/lib/uuid'
 import type { AcpState } from '../types'
 
@@ -35,6 +38,22 @@ function runSerializedMcpRegistryMutation<T>(mutation: () => Promise<T>): Promis
   // Swallow for the chain only — the returned promise still rejects to callers.
   mcpRegistryQueue = run.catch(() => undefined)
   return run
+}
+
+let sharedMcpSyncStarted = false
+
+/**
+ * Show the server list another browser or device saved. Started once, after
+ * the first load: the sync reports nothing before the key was read. Applying
+ * only updates memory, so a later save starts from the host's list instead of
+ * overwriting it with this page's stale one.
+ */
+function startSharedMcpSync(set: (partial: { mcpServers: StoredMcpServer[] }) => void): void {
+  if (sharedMcpSyncStarted) return
+  sharedMcpSyncStarted = true
+  syncSharedKey<unknown>(PersistenceKeys.acpMcpServers, (change) => {
+    set({ mcpServers: change.exists ? normalizeMcpRegistry(change.data) : [] })
+  })
 }
 
 type McpSliceState = Pick<
@@ -194,6 +213,7 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
     try {
       const list = await loadMcpServersFromDisk()
       set({ mcpServers: list, mcpServersLoaded: true })
+      startSharedMcpSync(set)
     } catch (err) {
       void logFrontendError({
         source: 'acp-store.loadMcpServers',

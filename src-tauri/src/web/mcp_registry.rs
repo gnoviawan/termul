@@ -9,6 +9,7 @@
 //! merges those files into the store once; the files stay on disk.
 
 use std::collections::HashSet;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -91,14 +92,19 @@ pub fn import_project_files(
 }
 
 fn read_legacy_file(path: &Path) -> Option<Vec<Value>> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
+    let mut bytes = Vec::new();
+    let read = std::fs::File::open(path).and_then(|file| {
+        file.take(MAX_LEGACY_FILE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+    });
+    match read {
+        Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
         Err(error) => {
             warn!(path = %path.display(), %error, "skipping an unreadable project MCP server file");
             return None;
         }
-    };
+    }
     if bytes.len() > MAX_LEGACY_FILE_BYTES {
         warn!(path = %path.display(), "skipping a project MCP server file over 1 MiB");
         return None;
