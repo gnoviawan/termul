@@ -196,14 +196,17 @@ pub fn classify_provider_error(detail: &AcpErrorDetail) -> Option<ProviderErrorK
     None
 }
 
-/// The error string the manager returns for `detail`: prefixed with the
-/// provider tag when it classifies as a provider failure, the bare message
-/// otherwise.
+/// The error string the manager returns to a client for `detail`: prefixed
+/// with the provider tag when it classifies as a provider failure, the bare
+/// message otherwise. The message is [`AcpErrorDetail::client_message`], never
+/// the `Display` text that appends the raw JSON-RPC `data`; classification
+/// still reads the full detail.
 #[must_use]
 pub fn tag_provider_error(detail: &AcpErrorDetail) -> String {
+    let message = detail.client_message();
     match classify_provider_error(detail) {
-        Some(kind) => format!("{}: {}", kind.prefix(), detail.message),
-        None => detail.message.clone(),
+        Some(kind) => format!("{}: {message}", kind.prefix()),
+        None => message,
     }
 }
 

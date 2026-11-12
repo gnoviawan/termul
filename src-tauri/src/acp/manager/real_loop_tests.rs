@@ -117,6 +117,10 @@ for line in sys.stdin:
         elif text == "rpcfail":
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32000, "message": "mock failure"}})
+        elif text == "leaky":
+            send({"jsonrpc": "2.0", "id": rid,
+                  "error": {"code": -32603, "message": "Internal error",
+                            "data": {"headers": {"authorization": "Bearer sk-test"}}}})
         elif text == "providerlimit":
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32603,
@@ -577,6 +581,18 @@ async fn rpc_error_turn_emits_one_error_terminator_and_releases_the_claim() {
     assert_eq!(terminators(&events)[0]["turnId"], "t1");
 
     assert_eq!(h.run("ok", "t2").await.unwrap(), StopReason::EndTurn);
+    h.finish().await;
+}
+
+/// The raw JSON-RPC `data` of a failed prompt (here a bearer token) never
+/// reaches the client that sent the prompt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_prompt_reply_omits_the_error_data() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let error = h.run("leaky", "t1").await.unwrap_err();
+    assert_eq!(error, "Internal error");
     h.finish().await;
 }
 
