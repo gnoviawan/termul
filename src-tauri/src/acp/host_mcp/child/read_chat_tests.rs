@@ -213,19 +213,26 @@ fn an_agent_switch_cycle_stops_instead_of_looping_forever() {
             "agent_switch",
             json!({ "fromConfigId": "x", "toConfigId": "y", "newSessionId": "chat-c" }),
         ),
-        record_in(
-            "chat-c",
-            1,
-            "message_chunk",
-            json!({ "role": "agent", "content": { "type": "text", "text": "Middle." } }),
-        ),
+        // The linked chat's records come after the switch that opened it.
+        PersistedEventRecord {
+            recorded_at: BASE + 3000,
+            ..record_in(
+                "chat-c",
+                1,
+                "message_chunk",
+                json!({ "role": "agent", "content": { "type": "text", "text": "Middle." } }),
+            )
+        },
         // The cycle back to chat-b ends the chain, not the transcript.
-        record_in(
-            "chat-c",
-            2,
-            "agent_switch",
-            json!({ "fromConfigId": "y", "toConfigId": "x", "newSessionId": "chat-b" }),
-        ),
+        PersistedEventRecord {
+            recorded_at: BASE + 4000,
+            ..record_in(
+                "chat-c",
+                2,
+                "agent_switch",
+                json!({ "fromConfigId": "y", "toConfigId": "x", "newSessionId": "chat-b" }),
+            )
+        },
     ] {
         persistence.enqueue_event(record).unwrap();
     }
@@ -243,7 +250,7 @@ fn an_agent_switch_cycle_stops_instead_of_looping_forever() {
             let body = text.split_once('\n').unwrap().1;
             assert!(
                 body.ends_with(
-                    "Messages 1-3 of 3.\n\n[1] user · 2025-11-08T10:00:01Z\nStart here.\n\n[2] assistant · 2025-11-08T10:00:02Z\n--- agent switch: test → test (chat chat-c) ---\n\n[3] assistant · 2025-11-08T10:00:01Z\nMiddle."
+                    "Messages 1-3 of 3.\n\n[1] user · 2025-11-08T10:00:01Z\nStart here.\n\n[2] assistant · 2025-11-08T10:00:02Z\n--- agent switch: test → test (chat chat-c) ---\n\n[3] assistant · 2025-11-08T10:00:03Z\nMiddle."
                 ),
                 "{text}"
             );

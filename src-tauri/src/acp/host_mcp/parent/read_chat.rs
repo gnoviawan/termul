@@ -81,8 +81,9 @@ impl HostPlanServer {
                 }
                 // The fold and render are pure CPU; keep them off the
                 // listener's single-thread runtime so other sessions' frames
-                // are not starved by a long chat.
-                let chat = match tokio::task::spawn_blocking(move || {
+                // are not starved by a long chat or one huge message.
+                let (offset, limit) = (input.offset, input.limit);
+                let (page, total) = match tokio::task::spawn_blocking(move || {
                     let registry = crate::web::project_registry::installed();
                     let mut iter = segments.into_iter();
                     let (_, first) = iter.next().expect("one segment");
@@ -131,11 +132,11 @@ impl HostPlanServer {
                     if let Some(continuation) = continuation {
                         chat.notes.push(continuation);
                     }
-                    chat
+                    (render_page(&chat, offset, limit), chat.messages.len())
                 })
                 .await
                 {
-                    Ok(chat) => chat,
+                    Ok(rendered) => rendered,
                     Err(error) => {
                         log::warn!(
                             "[host-mcp] read_chat by session {caller} of chat {target} failed: {error}"
@@ -143,11 +144,9 @@ impl HostPlanServer {
                         return FrameReply::err("could not read that chat's history");
                     }
                 };
-                let page = render_page(&chat, input.offset, input.limit);
                 log::info!(
-                    "[host-mcp] read_chat by session {caller} of chat {target}: {} of {} messages",
-                    page.returned,
-                    chat.messages.len()
+                    "[host-mcp] read_chat by session {caller} of chat {target}: {} of {total} messages",
+                    page.returned
                 );
                 FrameReply::ok_with(Value::String(page.text))
             }
