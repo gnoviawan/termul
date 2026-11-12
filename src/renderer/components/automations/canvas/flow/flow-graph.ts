@@ -4,7 +4,14 @@ import type {
   Issue,
   Port
 } from '@shared/types/automation.types'
-import { type Edge, type Node, type NodeHandle, Position, type Rect } from '@xyflow/react'
+import {
+  type Edge,
+  type Node,
+  type NodeHandle,
+  Position,
+  type Rect,
+  type Viewport
+} from '@xyflow/react'
 import { logFrontendError } from '@/lib/log-api'
 import { type CanvasNodeId, drawableEdges, placeNodes } from '../layout'
 import type { CardData } from '../nodes/NodeCard'
@@ -184,4 +191,35 @@ export function reuseUnchanged<T extends CardNode | PortEdge>(prev: T[], next: T
     return old === undefined ? item : ({ ...old, ...item } as T)
   })
   return same ? prev : out
+}
+
+/**
+ * The viewport that centres `card` in the part of a `width` x `height` canvas
+ * left of `rightInset`, or null when the card (and the config slots an agent
+ * or MCP tool card hangs below it) is already fully there.
+ */
+export function panToShow(
+  card: Pick<CardNode, 'position' | 'data'>,
+  viewport: Viewport,
+  size: { width: number; height: number; rightInset: number }
+): Viewport | null {
+  const { x, y, zoom } = viewport
+  const tall =
+    CARD.height + (card.data.kind === 'step' && hasSlots(card.data.node.spec) ? SLOT_DEPTH : 0)
+  const free = size.width - size.rightInset
+  const left = card.position.x * zoom + x
+  const top = card.position.y * zoom + y
+  if (
+    left >= 0 &&
+    top >= 0 &&
+    left + CARD.width * zoom <= free &&
+    top + tall * zoom <= size.height
+  ) {
+    return null
+  }
+  return {
+    zoom,
+    x: free / 2 - (card.position.x + CARD.width / 2) * zoom,
+    y: size.height / 2 - (card.position.y + tall / 2) * zoom
+  }
 }
