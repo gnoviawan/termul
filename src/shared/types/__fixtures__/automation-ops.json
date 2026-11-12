@@ -1,0 +1,1673 @@
+{
+  "start": {
+    "name": "Digest",
+    "trigger": {
+      "kind": "manual"
+    },
+    "isolation": "shared_in_root",
+    "graph": {
+      "nodes": [
+        {
+          "id": "fetch",
+          "label": "Fetch",
+          "spec": {
+            "kind": "http",
+            "method": "GET",
+            "url": "https://api.example.com/items",
+            "headers": [],
+            "body": null,
+            "allowed_hosts": ["api.example.com"]
+          }
+        },
+        {
+          "id": "check",
+          "label": "Check",
+          "spec": {
+            "kind": "condition",
+            "left": "{{nodes.fetch.output.ok}}",
+            "op": "eq",
+            "right": "true"
+          }
+        },
+        {
+          "id": "stop",
+          "label": "Stop",
+          "spec": {
+            "kind": "fail",
+            "message": "fetch failed"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "trigger",
+          "port": "out",
+          "to": "fetch"
+        },
+        {
+          "from": "fetch",
+          "port": "out",
+          "to": "check"
+        },
+        {
+          "from": "fetch",
+          "port": "error",
+          "to": "stop"
+        }
+      ]
+    }
+  },
+  "apply": [
+    {
+      "name": "add_node appends the node",
+      "ops": [
+        {
+          "op": "add_node",
+          "node": {
+            "id": "shape",
+            "label": "Shape",
+            "spec": {
+              "kind": "transform",
+              "fields": [
+                {
+                  "name": "text",
+                  "value": "{{nodes.fetch.output}}"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "fetch failed"
+              }
+            },
+            {
+              "id": "shape",
+              "label": "Shape",
+              "spec": {
+                "kind": "transform",
+                "fields": [
+                  {
+                    "name": "text",
+                    "value": "{{nodes.fetch.output}}"
+                  }
+                ]
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            },
+            {
+              "from": "fetch",
+              "port": "error",
+              "to": "stop"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "add_node then connect it from a branch",
+      "ops": [
+        {
+          "op": "add_node",
+          "node": {
+            "id": "shape",
+            "label": "Shape",
+            "spec": {
+              "kind": "transform",
+              "fields": [
+                {
+                  "name": "text",
+                  "value": "{{nodes.fetch.output}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "op": "connect",
+          "edge": {
+            "from": "check",
+            "port": "true",
+            "to": "shape"
+          }
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "fetch failed"
+              }
+            },
+            {
+              "id": "shape",
+              "label": "Shape",
+              "spec": {
+                "kind": "transform",
+                "fields": [
+                  {
+                    "name": "text",
+                    "value": "{{nodes.fetch.output}}"
+                  }
+                ]
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            },
+            {
+              "from": "fetch",
+              "port": "error",
+              "to": "stop"
+            },
+            {
+              "from": "check",
+              "port": "true",
+              "to": "shape"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "update_node with only a label keeps the spec",
+      "ops": [
+        {
+          "op": "update_node",
+          "id": "check",
+          "label": "Is it ok?"
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Is it ok?",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "fetch failed"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            },
+            {
+              "from": "fetch",
+              "port": "error",
+              "to": "stop"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "update_node with only a spec keeps the label",
+      "ops": [
+        {
+          "op": "update_node",
+          "id": "stop",
+          "spec": {
+            "kind": "fail",
+            "message": "gave up"
+          }
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "gave up"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            },
+            {
+              "from": "fetch",
+              "port": "error",
+              "to": "stop"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "update_node can change the kind",
+      "ops": [
+        {
+          "op": "update_node",
+          "id": "stop",
+          "label": "Pause",
+          "spec": {
+            "kind": "wait",
+            "duration_ms": 60000
+          }
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Pause",
+              "spec": {
+                "kind": "wait",
+                "duration_ms": 60000
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            },
+            {
+              "from": "fetch",
+              "port": "error",
+              "to": "stop"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "remove_node drops the node and every edge touching it",
+      "ops": [
+        {
+          "op": "remove_node",
+          "id": "fetch"
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "fetch failed"
+              }
+            }
+          ],
+          "edges": []
+        }
+      }
+    },
+    {
+      "name": "remove_node keeps unrelated edges in order",
+      "ops": [
+        {
+          "op": "remove_node",
+          "id": "stop"
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "connect appends the edge",
+      "ops": [
+        {
+          "op": "connect",
+          "edge": {
+            "from": "check",
+            "port": "false",
+            "to": "stop"
+          }
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "fetch failed"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            },
+            {
+              "from": "fetch",
+              "port": "error",
+              "to": "stop"
+            },
+            {
+              "from": "check",
+              "port": "false",
+              "to": "stop"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "connect on a port the source lacks still applies; validation flags it",
+      "ops": [
+        {
+          "op": "connect",
+          "edge": {
+            "from": "check",
+            "port": "out",
+            "to": "stop"
+          }
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "fetch failed"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            },
+            {
+              "from": "fetch",
+              "port": "error",
+              "to": "stop"
+            },
+            {
+              "from": "check",
+              "port": "out",
+              "to": "stop"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "connect to a missing node still applies; validation flags it",
+      "ops": [
+        {
+          "op": "connect",
+          "edge": {
+            "from": "check",
+            "port": "true",
+            "to": "ghost"
+          }
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "fetch failed"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            },
+            {
+              "from": "fetch",
+              "port": "error",
+              "to": "stop"
+            },
+            {
+              "from": "check",
+              "port": "true",
+              "to": "ghost"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "disconnect removes the edge",
+      "ops": [
+        {
+          "op": "disconnect",
+          "edge": {
+            "from": "fetch",
+            "port": "error",
+            "to": "stop"
+          }
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "fetch failed"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "disconnect then connect moves the edge to the end",
+      "ops": [
+        {
+          "op": "disconnect",
+          "edge": {
+            "from": "trigger",
+            "port": "out",
+            "to": "fetch"
+          }
+        },
+        {
+          "op": "connect",
+          "edge": {
+            "from": "trigger",
+            "port": "out",
+            "to": "fetch"
+          }
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "fetch failed"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            },
+            {
+              "from": "fetch",
+              "port": "error",
+              "to": "stop"
+            },
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "set_trigger replaces the trigger",
+      "ops": [
+        {
+          "op": "set_trigger",
+          "trigger": {
+            "kind": "schedule",
+            "schedule": {
+              "kind": "cron",
+              "expr": "0 9 * * 1-5",
+              "timezone": "Asia/Jakarta"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "schedule",
+          "schedule": {
+            "kind": "cron",
+            "expr": "0 9 * * 1-5",
+            "timezone": "Asia/Jakarta"
+          }
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "fetch failed"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            },
+            {
+              "from": "fetch",
+              "port": "error",
+              "to": "stop"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "rename sets the name",
+      "ops": [
+        {
+          "op": "rename",
+          "name": "Morning digest"
+        }
+      ],
+      "expect": {
+        "name": "Morning digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "fetch failed"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            },
+            {
+              "from": "fetch",
+              "port": "error",
+              "to": "stop"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "set_isolation sets the isolation",
+      "ops": [
+        {
+          "op": "set_isolation",
+          "isolation": "worktree_per_run"
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "worktree_per_run",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "fetch failed"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            },
+            {
+              "from": "fetch",
+              "port": "error",
+              "to": "stop"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "remove then re-add restores the node at the end",
+      "ops": [
+        {
+          "op": "remove_node",
+          "id": "check"
+        },
+        {
+          "op": "add_node",
+          "node": {
+            "id": "check",
+            "label": "Check",
+            "spec": {
+              "kind": "condition",
+              "left": "{{nodes.fetch.output.ok}}",
+              "op": "eq",
+              "right": "true"
+            }
+          }
+        },
+        {
+          "op": "connect",
+          "edge": {
+            "from": "fetch",
+            "port": "out",
+            "to": "check"
+          }
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "fetch failed"
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "error",
+              "to": "stop"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "add_node of an approval step, chained after a branch",
+      "ops": [
+        {
+          "op": "add_node",
+          "node": {
+            "id": "ask",
+            "label": "Ask",
+            "spec": {
+              "kind": "approval",
+              "message": "Ship {{nodes.fetch.output}}?",
+              "timeout_ms": 3600000
+            }
+          }
+        },
+        {
+          "op": "connect",
+          "edge": {
+            "from": "check",
+            "port": "true",
+            "to": "ask"
+          }
+        }
+      ],
+      "expect": {
+        "name": "Digest",
+        "trigger": {
+          "kind": "manual"
+        },
+        "isolation": "shared_in_root",
+        "graph": {
+          "nodes": [
+            {
+              "id": "fetch",
+              "label": "Fetch",
+              "spec": {
+                "kind": "http",
+                "method": "GET",
+                "url": "https://api.example.com/items",
+                "headers": [],
+                "body": null,
+                "allowed_hosts": ["api.example.com"]
+              }
+            },
+            {
+              "id": "check",
+              "label": "Check",
+              "spec": {
+                "kind": "condition",
+                "left": "{{nodes.fetch.output.ok}}",
+                "op": "eq",
+                "right": "true"
+              }
+            },
+            {
+              "id": "stop",
+              "label": "Stop",
+              "spec": {
+                "kind": "fail",
+                "message": "fetch failed"
+              }
+            },
+            {
+              "id": "ask",
+              "label": "Ask",
+              "spec": {
+                "kind": "approval",
+                "message": "Ship {{nodes.fetch.output}}?",
+                "timeout_ms": 3600000
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": "trigger",
+              "port": "out",
+              "to": "fetch"
+            },
+            {
+              "from": "fetch",
+              "port": "out",
+              "to": "check"
+            },
+            {
+              "from": "fetch",
+              "port": "error",
+              "to": "stop"
+            },
+            {
+              "from": "check",
+              "port": "true",
+              "to": "ask"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "an empty batch is refused",
+      "ops": [],
+      "reject": {
+        "code": "empty_batch"
+      }
+    },
+    {
+      "name": "add_node with an existing id is refused",
+      "ops": [
+        {
+          "op": "add_node",
+          "node": {
+            "id": "fetch",
+            "label": "Shape",
+            "spec": {
+              "kind": "transform",
+              "fields": [
+                {
+                  "name": "text",
+                  "value": "{{nodes.fetch.output}}"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "reject": {
+        "code": "node_exists",
+        "index": 0
+      }
+    },
+    {
+      "name": "update_node on a missing node is refused",
+      "ops": [
+        {
+          "op": "update_node",
+          "id": "ghost",
+          "label": "Ghost"
+        }
+      ],
+      "reject": {
+        "code": "node_not_found",
+        "index": 0
+      }
+    },
+    {
+      "name": "a refused op refuses the whole batch",
+      "ops": [
+        {
+          "op": "rename",
+          "name": "Kept?"
+        },
+        {
+          "op": "remove_node",
+          "id": "ghost"
+        }
+      ],
+      "reject": {
+        "code": "node_not_found",
+        "index": 1
+      }
+    },
+    {
+      "name": "removing a node twice is refused",
+      "ops": [
+        {
+          "op": "remove_node",
+          "id": "stop"
+        },
+        {
+          "op": "remove_node",
+          "id": "stop"
+        }
+      ],
+      "reject": {
+        "code": "node_not_found",
+        "index": 1
+      }
+    },
+    {
+      "name": "connect with an existing edge is refused",
+      "ops": [
+        {
+          "op": "connect",
+          "edge": {
+            "from": "trigger",
+            "port": "out",
+            "to": "fetch"
+          }
+        }
+      ],
+      "reject": {
+        "code": "edge_exists",
+        "index": 0
+      }
+    },
+    {
+      "name": "disconnect of a missing edge is refused",
+      "ops": [
+        {
+          "op": "disconnect",
+          "edge": {
+            "from": "check",
+            "port": "true",
+            "to": "stop"
+          }
+        }
+      ],
+      "reject": {
+        "code": "edge_not_found",
+        "index": 0
+      }
+    },
+    {
+      "name": "rename to blank is refused",
+      "ops": [
+        {
+          "op": "rename",
+          "name": "   "
+        }
+      ],
+      "reject": {
+        "code": "empty_name",
+        "index": 0
+      }
+    },
+    {
+      "name": "a node id with capitals is refused",
+      "ops": [
+        {
+          "op": "add_node",
+          "node": {
+            "id": "Shape",
+            "label": "Shape",
+            "spec": {
+              "kind": "transform",
+              "fields": [
+                {
+                  "name": "text",
+                  "value": "{{nodes.fetch.output}}"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "reject": {
+        "code": "invalid_node_id",
+        "index": 0
+      }
+    },
+    {
+      "name": "an edge into the trigger is refused",
+      "ops": [
+        {
+          "op": "connect",
+          "edge": {
+            "from": "fetch",
+            "port": "out",
+            "to": "trigger"
+          }
+        }
+      ],
+      "reject": {
+        "code": "invalid_node_id",
+        "index": 0
+      }
+    }
+  ],
+  "connect": [
+    {
+      "name": "a free branch port to another step",
+      "edge": {
+        "from": "check",
+        "port": "true",
+        "to": "stop"
+      },
+      "refuse": null
+    },
+    {
+      "name": "a new step after its parent",
+      "ops": [
+        {
+          "op": "add_node",
+          "node": {
+            "id": "shape",
+            "label": "Shape",
+            "spec": {
+              "kind": "transform",
+              "fields": [
+                {
+                  "name": "text",
+                  "value": "{{nodes.fetch.output}}"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "edge": {
+        "from": "check",
+        "port": "false",
+        "to": "shape"
+      },
+      "refuse": null
+    },
+    {
+      "name": "a port the condition does not have",
+      "edge": {
+        "from": "check",
+        "port": "out",
+        "to": "stop"
+      },
+      "refuse": "illegal_port"
+    },
+    {
+      "name": "any port out of a fail step",
+      "edge": {
+        "from": "stop",
+        "port": "out",
+        "to": "check"
+      },
+      "refuse": "illegal_port"
+    },
+    {
+      "name": "an error port out of the trigger",
+      "edge": {
+        "from": "trigger",
+        "port": "error",
+        "to": "check"
+      },
+      "refuse": "illegal_port"
+    },
+    {
+      "name": "an edge that already exists",
+      "edge": {
+        "from": "fetch",
+        "port": "out",
+        "to": "check"
+      },
+      "refuse": "duplicate_edge"
+    },
+    {
+      "name": "a step into itself",
+      "edge": {
+        "from": "check",
+        "port": "true",
+        "to": "check"
+      },
+      "refuse": "cycle"
+    },
+    {
+      "name": "a step back into its ancestor",
+      "edge": {
+        "from": "check",
+        "port": "false",
+        "to": "fetch"
+      },
+      "refuse": "cycle"
+    },
+    {
+      "name": "out of an approval step",
+      "ops": [
+        {
+          "op": "add_node",
+          "node": {
+            "id": "ask",
+            "label": "Ask",
+            "spec": {
+              "kind": "approval",
+              "message": "Ship {{nodes.fetch.output}}?",
+              "timeout_ms": 3600000
+            }
+          }
+        }
+      ],
+      "edge": {
+        "from": "ask",
+        "port": "out",
+        "to": "stop"
+      },
+      "refuse": null
+    },
+    {
+      "name": "error out of an approval step",
+      "ops": [
+        {
+          "op": "add_node",
+          "node": {
+            "id": "ask",
+            "label": "Ask",
+            "spec": {
+              "kind": "approval",
+              "message": "Ship {{nodes.fetch.output}}?",
+              "timeout_ms": 3600000
+            }
+          }
+        }
+      ],
+      "edge": {
+        "from": "ask",
+        "port": "error",
+        "to": "stop"
+      },
+      "refuse": null
+    },
+    {
+      "name": "a branch port an approval step does not have",
+      "ops": [
+        {
+          "op": "add_node",
+          "node": {
+            "id": "ask",
+            "label": "Ask",
+            "spec": {
+              "kind": "approval",
+              "message": "Ship {{nodes.fetch.output}}?",
+              "timeout_ms": 3600000
+            }
+          }
+        }
+      ],
+      "edge": {
+        "from": "ask",
+        "port": "true",
+        "to": "stop"
+      },
+      "refuse": "illegal_port"
+    },
+    {
+      "name": "a step that does not exist",
+      "edge": {
+        "from": "check",
+        "port": "true",
+        "to": "ghost"
+      },
+      "refuse": "unknown_node"
+    }
+  ]
+}

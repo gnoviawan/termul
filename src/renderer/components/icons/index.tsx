@@ -41,6 +41,7 @@ import {
   CopyIcon,
   CopyXIcon,
   CpuIcon,
+  Cursor01Icon,
   Delete01Icon,
   DotIcon,
   Download01Icon,
@@ -115,6 +116,7 @@ import {
   PenTool01Icon,
   PinIcon,
   PlusIcon,
+  Redo02Icon,
   RefreshCcwIcon,
   RefreshCwIcon,
   RegexIcon,
@@ -139,6 +141,7 @@ import {
   TerminalIcon,
   TriangleAlertIcon,
   TypeIcon,
+  Undo02Icon,
   Unlink01Icon,
   Upload01Icon,
   UserIcon,
@@ -218,6 +221,9 @@ export const Globe = hugeIcon('Globe', Globe02Icon)
 export const MoreHorizontal = hugeIcon('MoreHorizontal', MoreHorizontalIcon)
 export const ZoomIn = hugeIcon('ZoomIn', ZoomInIcon)
 export const ZoomOut = hugeIcon('ZoomOut', ZoomOutIcon)
+export const Undo2 = hugeIcon('Undo2', Undo02Icon)
+export const Redo2 = hugeIcon('Redo2', Redo02Icon)
+export const MousePointer2 = hugeIcon('MousePointer2', Cursor01Icon)
 export const ArrowLeft = hugeIcon('ArrowLeft', ArrowLeft02Icon)
 export const AlertCircle = hugeIcon('AlertCircle', AlertCircleIcon)
 export const AlertTriangle = hugeIcon('AlertTriangle', TriangleAlertIcon)

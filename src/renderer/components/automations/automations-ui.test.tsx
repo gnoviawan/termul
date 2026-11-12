@@ -274,6 +274,23 @@ describe('AutomationDetail', () => {
     await waitFor(() => expect(api.approveAutomation).toHaveBeenCalledWith('auto-1', 7))
   })
 
+  it('offers Edit on a writable client and opens the editor', () => {
+    const onEdit = vi.fn()
+    render(<AutomationDetail {...props} detail={detailWith()} onEdit={onEdit} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(onEdit).toHaveBeenCalled()
+  })
+
+  it('has no Edit entry on a read-only server, only the view-mode canvas', () => {
+    writes.admitted = false
+    render(<AutomationDetail {...props} detail={detailWith()} onEdit={vi.fn()} />)
+
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull()
+    expect(screen.getByRole('toolbar', { name: 'Diagram view' })).toBeInTheDocument()
+    expect(document.querySelector('.react-flow__handle.connectable')).toBeNull()
+  })
+
   it('lists validation issues by node label and blocks approval', () => {
     render(
       <AutomationDetail

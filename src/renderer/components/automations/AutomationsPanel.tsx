@@ -3,10 +3,12 @@ import { useEffect, useState } from 'react'
 import { ArrowLeft, Workflow } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { AutomationDetail } from './AutomationDetail'
 import { AutomationList, AutomationListEmpty } from './AutomationList'
 import { AutomationRunDetail } from './AutomationRunDetail'
 import { useAutomationFocus } from './automation-focus'
+import { AutomationEditor } from './canvas/AutomationEditor'
 import { SuggestedAutomations } from './SuggestedAutomations'
 import { useAutomationDetail, useAutomationList, useAutomationRuns } from './use-automations'
 
@@ -26,6 +28,8 @@ export function AutomationsPanel({
   const phone = useMobileWebShell()
   const [chosenId, setSelectedId] = useState<AutomationId | null>(null)
   const [runId, setRunId] = useState<RunId | null>(null)
+  const [editingId, setEditingId] = useState<AutomationId | null>(null)
+  const writable = useServerAdmitsRemoteWrites()
   const list = useAutomationList(projectId)
   // A choice deleted elsewhere (another device, an agent) counts as no choice.
   const chosen =
@@ -78,8 +82,22 @@ export function AutomationsPanel({
         onOpenRun={setRunId}
         onDeleted={() => select(null)}
         onChanged={reloadAll}
+        onEdit={() => setEditingId(selectedId)}
       />
     )
+
+  // The editor takes the whole pane, on the phone too.
+  if (writable && editingId !== null && editingId === selectedId && detail.data) {
+    return (
+      <AutomationEditor
+        key={editingId}
+        detail={detail.data}
+        phone={phone}
+        onClose={() => setEditingId(null)}
+        onChanged={reloadAll}
+      />
+    )
+  }
 
   const runView = run ? <AutomationRunDetail run={run} onChanged={runs.reload} /> : null
 
