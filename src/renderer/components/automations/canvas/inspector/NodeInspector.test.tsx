@@ -396,14 +396,6 @@ describe('NodeInspector', () => {
     ])
   })
 
-  it('agent: shows its settings read-only under the label', () => {
-    open()
-    const panel = inspect('classify', 'Classify')
-    expect(within(panel).getAllByRole('textbox')).toHaveLength(1)
-    expect(within(panel).getByText('claude-code')).toBeVisible()
-    expect(within(panel).getByText('tools: read files')).toBeVisible()
-  })
-
   it('lists the dry run issues on this step in the footer', async () => {
     open()
     const panel = inspect('join', 'Join')

@@ -2,6 +2,7 @@ import type {
   Automation,
   Edge as AutomationEdge,
   Issue,
+  IssueCode,
   Port
 } from '@shared/types/automation.types'
 import {
@@ -104,6 +105,23 @@ function issueCounts(issues: readonly Issue[]): Map<CanvasNodeId, number> {
   return counts
 }
 
+/** Issues a card names in place of its detail, so the broken setting reads on the canvas. */
+const CARD_PROBLEMS: Partial<Record<IssueCode, string>> = {
+  unknown_mcp_server: 'Server not configured',
+  unknown_mcp_tool: 'Tool not found'
+}
+
+function cardProblems(issues: readonly Issue[]): Map<string, string> {
+  const problems = new Map<string, string>()
+  for (const issue of issues) {
+    const problem = CARD_PROBLEMS[issue.code]
+    if (problem && issue.node_id && !problems.has(issue.node_id)) {
+      problems.set(issue.node_id, problem)
+    }
+  }
+  return problems
+}
+
 export function toFlow(
   automation: Pick<Automation, 'graph' | 'trigger' | 'layout'>,
   { issues = [], editing = false }: { issues?: readonly Issue[]; editing?: boolean } = {}
@@ -114,6 +132,7 @@ export function toFlow(
   const { graph, trigger, layout } = automation
   const positions = placeNodes(graph, layout)
   const counts = issueCounts(issues)
+  const problems = cardProblems(issues)
   const used = new Set(graph.edges.map((edge) => `${edge.from}:${edge.port}`))
   // Outputs with nothing behind them get a dangling "+" while editing; `error` is optional.
   const open = (id: CanvasNodeId, ports: readonly Port[]): Port[] =>
@@ -134,6 +153,7 @@ export function toFlow(
         kind: 'step',
         node,
         issues: counts.get(node.id) ?? 0,
+        problem: problems.get(node.id),
         open: open(node.id, OUTPUT_PORTS[node.spec.kind])
       }
     ])

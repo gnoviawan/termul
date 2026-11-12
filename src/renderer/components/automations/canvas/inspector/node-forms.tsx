@@ -1,8 +1,13 @@
-import type { NamedTemplate, NodeKind, NodeSpec } from '@shared/types/automation.types'
+import type {
+  Graph,
+  NamedTemplate,
+  NodeId,
+  NodeKind,
+  NodeSpec
+} from '@shared/types/automation.types'
 import { Plus, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { agentToolsLabel, formatDuration } from '../../automation-format'
 import { SAVING_MESSAGE } from '../draft/use-draft'
 import {
   approvalTimeoutError,
@@ -34,15 +39,18 @@ export type FormProps<K extends NodeKind> = {
   commit: (spec: SpecOf<K>) => boolean
   /** What this step's templates may reference. */
   scope: readonly TemplateSuggestion[]
+  /** The draft graph and this step's id, for rules that read the steps around it. */
+  graph: Graph
+  nodeId: NodeId
 }
 
 /** A field edit; the field keeps its text when the draft does not take it. */
-const taking =
+export const taking =
   (apply: (text: string) => boolean) =>
   (text: string): string | null =>
     apply(text) ? null : SAVING_MESSAGE
 
-function HttpForm({ id, spec, commit, scope }: FormProps<'http'>): React.JSX.Element {
+export function HttpForm({ id, spec, commit, scope }: FormProps<'http'>): React.JSX.Element {
   const problem = urlProblem(spec.url, spec.allowed_hosts)
   return (
     <>
@@ -109,7 +117,12 @@ function HttpForm({ id, spec, commit, scope }: FormProps<'http'>): React.JSX.Ele
   )
 }
 
-function TransformForm({ id, spec, commit, scope }: FormProps<'transform'>): React.JSX.Element {
+export function TransformForm({
+  id,
+  spec,
+  commit,
+  scope
+}: FormProps<'transform'>): React.JSX.Element {
   return (
     <NamedTemplates
       id={`${id}-fields`}
@@ -132,7 +145,12 @@ const CONDITION_OPS = [
   { value: 'exists', label: 'exists' }
 ] as const
 
-function ConditionForm({ id, spec, commit, scope }: FormProps<'condition'>): React.JSX.Element {
+export function ConditionForm({
+  id,
+  spec,
+  commit,
+  scope
+}: FormProps<'condition'>): React.JSX.Element {
   return (
     <>
       <TemplateField
@@ -167,7 +185,7 @@ function ConditionForm({ id, spec, commit, scope }: FormProps<'condition'>): Rea
   )
 }
 
-function FailForm({ id, spec, commit, scope }: FormProps<'fail'>): React.JSX.Element {
+export function FailForm({ id, spec, commit, scope }: FormProps<'fail'>): React.JSX.Element {
   return (
     <TemplateField
       id={`${id}-message`}
@@ -181,7 +199,7 @@ function FailForm({ id, spec, commit, scope }: FormProps<'fail'>): React.JSX.Ele
   )
 }
 
-function ForEachForm({ id, spec, commit, scope }: FormProps<'for_each'>): React.JSX.Element {
+export function ForEachForm({ id, spec, commit, scope }: FormProps<'for_each'>): React.JSX.Element {
   return (
     <>
       <TemplateField
@@ -205,7 +223,7 @@ function ForEachForm({ id, spec, commit, scope }: FormProps<'for_each'>): React.
   )
 }
 
-function MergeForm({ id, spec, commit }: FormProps<'merge'>): React.JSX.Element {
+export function MergeForm({ id, spec, commit }: FormProps<'merge'>): React.JSX.Element {
   return (
     <ChoiceField
       id={`${id}-mode`}
@@ -221,7 +239,7 @@ function MergeForm({ id, spec, commit }: FormProps<'merge'>): React.JSX.Element 
   )
 }
 
-function WaitForm({ id, spec, commit }: FormProps<'wait'>): React.JSX.Element {
+export function WaitForm({ id, spec, commit }: FormProps<'wait'>): React.JSX.Element {
   return (
     <DurationField
       id={`${id}-duration`}
@@ -234,7 +252,12 @@ function WaitForm({ id, spec, commit }: FormProps<'wait'>): React.JSX.Element {
   )
 }
 
-function ApprovalForm({ id, spec, commit, scope }: FormProps<'approval'>): React.JSX.Element {
+export function ApprovalForm({
+  id,
+  spec,
+  commit,
+  scope
+}: FormProps<'approval'>): React.JSX.Element {
   return (
     <>
       <TemplateField
@@ -258,68 +281,8 @@ function ApprovalForm({ id, spec, commit, scope }: FormProps<'approval'>): React
   )
 }
 
-function Summary({ rows }: { rows: [string, string][] }): React.JSX.Element {
-  return (
-    <>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs">
-        {rows.map(([term, value]) => (
-          <div key={term} className="contents">
-            <dt className="text-muted-foreground">{term}</dt>
-            <dd className="min-w-0 break-words text-foreground">{value}</dd>
-          </div>
-        ))}
-      </dl>
-      <p className="text-xs text-muted-foreground">
-        These settings are read-only here for now. A chat agent can change them.
-      </p>
-    </>
-  )
-}
-
-function AgentSummary({ spec }: FormProps<'agent'>): React.JSX.Element {
-  return (
-    <Summary
-      rows={[
-        ['Agent', spec.agent_id || 'None'],
-        ['Model', spec.model ?? 'Default'],
-        ['Prompt', spec.prompt || 'Empty'],
-        ['Tools', agentToolsLabel(spec.tools)],
-        ['Timeout', formatDuration(spec.timeout_ms)],
-        ['Attempts', String(spec.max_attempts)]
-      ]}
-    />
-  )
-}
-
-function McpToolSummary({ spec }: FormProps<'mcp_tool'>): React.JSX.Element {
-  return (
-    <Summary
-      rows={[
-        ['Server', spec.server_id || 'None'],
-        ['Tool', spec.tool || 'None'],
-        ['Arguments', spec.arguments.map((argument) => argument.name).join(', ') || 'None'],
-        ['Timeout', formatDuration(spec.timeout_ms)]
-      ]}
-    />
-  )
-}
-
-/** The form under the label for each kind. A new kind is one entry. */
-export const NODE_FORMS: { [K in NodeKind]: (props: FormProps<K>) => React.JSX.Element } = {
-  http: HttpForm,
-  transform: TransformForm,
-  condition: ConditionForm,
-  fail: FailForm,
-  for_each: ForEachForm,
-  merge: MergeForm,
-  wait: WaitForm,
-  approval: ApprovalForm,
-  agent: AgentSummary,
-  mcp_tool: McpToolSummary
-}
-
-/** Name and template rows: http headers, transform fields. */
-function NamedTemplates({
+/** Name and template rows: http headers, transform fields, MCP tool arguments. */
+export function NamedTemplates({
   id,
   label,
   noun,
@@ -382,12 +345,13 @@ function NamedTemplates({
 }
 
 /** A row's name field and its remove button; the field's own refusal wins over the list's check. */
-function NameRow({
+export function NameRow({
   id,
   label,
   removeLabel,
   value,
   error,
+  check,
   commit,
   onRemove
 }: {
@@ -396,10 +360,12 @@ function NameRow({
   removeLabel: string
   value: string
   error: string | null
+  /** Why `name` cannot be taken at all, before the draft is asked. */
+  check?: (name: string) => string | null
   commit: (name: string) => boolean
   onRemove: () => void
 }): React.JSX.Element {
-  const field = useFieldText(value, taking(commit))
+  const field = useFieldText(value, (text) => check?.(text) ?? taking(commit)(text))
   const shown = field.error ?? error
   return (
     <>

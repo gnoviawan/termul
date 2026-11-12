@@ -1,8 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { ChevronDown } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { MENU_CONTENT_CLASS } from '@/components/ui/menu-styles'
-import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
+import { FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { PopoverSearchBand } from '@/components/ui/popover-search-band'
 import {
   Select,
   SelectContent,
@@ -126,6 +129,7 @@ export function TextField({
   placeholder,
   mono = false,
   type,
+  suffix,
   onText
 }: {
   id: string
@@ -137,25 +141,42 @@ export function TextField({
   placeholder?: string
   mono?: boolean
   type?: 'datetime-local'
+  /** A unit drawn inside the field's end, such as `seconds`. */
+  suffix?: string
   /** Hears the text as it is typed, before it is saved. */
   onText?: (text: string) => void
 }): React.JSX.Element {
   const field = useFieldText(value, commit)
   const shown = field.error ?? error
   useEffect(() => onText?.(field.text), [onText, field.text])
+  const input = (
+    <Input
+      id={id}
+      type={type}
+      value={field.text}
+      placeholder={placeholder}
+      className={cn(FIELD_HEIGHT, mono && 'font-mono', suffix && 'pr-20 tabular-nums')}
+      {...describedBy(id, shown, help)}
+      onChange={(event) => field.setText(event.target.value)}
+      onBlur={field.save}
+      onKeyDown={(event) => field.onKeyDown(event)}
+    />
+  )
   return (
     <Field id={id} label={label} error={shown} help={help}>
-      <Input
-        id={id}
-        type={type}
-        value={field.text}
-        placeholder={placeholder}
-        className={cn(FIELD_HEIGHT, mono && 'font-mono')}
-        {...describedBy(id, shown, help)}
-        onChange={(event) => field.setText(event.target.value)}
-        onBlur={field.save}
-        onKeyDown={(event) => field.onKeyDown(event)}
-      />
+      {suffix ? (
+        <div className="relative">
+          {input}
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground"
+          >
+            {suffix}
+          </span>
+        </div>
+      ) : (
+        input
+      )}
     </Field>
   )
 }
@@ -460,20 +481,33 @@ export function ChoiceField<T extends string>({
   value,
   options,
   onChange,
-  help
+  help,
+  error,
+  placeholder,
+  disabled = false,
+  labelHidden = false
 }: {
   id: string
   label: string
-  value: T
+  /** `''` shows the placeholder. */
+  value: T | ''
   options: readonly { value: T; label: string }[]
   onChange: (value: T) => void
   help?: string
+  error?: string | null
+  placeholder?: string
+  disabled?: boolean
+  labelHidden?: boolean
 }): React.JSX.Element {
   return (
-    <Field id={id} label={label} help={help}>
-      <Select value={value} onValueChange={(next) => next !== value && onChange(next as T)}>
-        <SelectTrigger id={id} className={FIELD_HEIGHT} {...describedBy(id, null, help)}>
-          <SelectValue />
+    <Field id={id} label={label} help={help} error={error} labelHidden={labelHidden}>
+      <Select
+        value={value}
+        disabled={disabled}
+        onValueChange={(next) => next !== value && onChange(next as T)}
+      >
+        <SelectTrigger id={id} className={FIELD_HEIGHT} {...describedBy(id, error, help)}>
+          <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>
           {options.map((option) => (
@@ -484,5 +518,153 @@ export function ChoiceField<T extends string>({
         </SelectContent>
       </Select>
     </Field>
+  )
+}
+
+/** More options than this, and the picker gets a search band. */
+const SEARCH_FROM = 8
+
+/**
+ * A pick-one field over a list that can run long (an MCP server's tools):
+ * a select-like trigger opening a list with a description per option,
+ * searchable when it is long.
+ */
+export function PickerField({
+  id,
+  label,
+  value,
+  options,
+  onChange,
+  placeholder,
+  error,
+  help,
+  disabled = false
+}: {
+  id: string
+  label: string
+  value: string
+  options: readonly { value: string; detail?: string }[]
+  onChange: (value: string) => void
+  placeholder: string
+  error?: string | null
+  help?: string
+  disabled?: boolean
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const q = query.trim().toLowerCase()
+  const shown = q
+    ? options.filter(
+        (option) =>
+          option.value.toLowerCase().includes(q) || option.detail?.toLowerCase().includes(q)
+      )
+    : options
+  const pick = (next: string): void => {
+    setOpen(false)
+    setQuery('')
+    if (next !== value) onChange(next)
+  }
+  return (
+    <Field id={id} label={label} error={error} help={help}>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            id={id}
+            type="button"
+            disabled={disabled}
+            aria-haspopup="listbox"
+            className={cn(
+              FIELD_HEIGHT,
+              'flex w-full items-center justify-between gap-2 rounded-lg border border-field-border bg-background px-3 text-left text-sm transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-50',
+              FIELD_FOCUS_CLASS
+            )}
+            {...describedBy(id, error, help)}
+          >
+            <span className={cn('truncate font-mono', !value && 'text-muted-foreground')}>
+              {value || placeholder}
+            </span>
+            <ChevronDown size={16} className="shrink-0 opacity-50" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          className={cn(MENU_CONTENT_CLASS, 'w-[var(--radix-popover-trigger-width)] p-0')}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && shown[0]) {
+              event.preventDefault()
+              pick(shown[0].value)
+            }
+          }}
+        >
+          {options.length > SEARCH_FROM && (
+            <PopoverSearchBand
+              autoFocus
+              value={query}
+              onChange={setQuery}
+              placeholder={`Search ${label.toLowerCase()}s`}
+              ariaLabel={`Search ${label.toLowerCase()}s`}
+              inputClassName="text-sm"
+            />
+          )}
+          <div role="listbox" aria-label={label} className="max-h-72 overflow-y-auto p-1">
+            {shown.length === 0 && (
+              <p className="px-2 py-3 text-xs text-muted-foreground">Nothing matches.</p>
+            )}
+            {shown.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={option.value === value}
+                onClick={() => pick(option.value)}
+                className={cn(
+                  'flex min-h-8 w-full flex-col items-start rounded-lg px-2 py-1.5 text-left outline-none hover:bg-foreground/[0.06] focus-visible:bg-foreground/[0.06]',
+                  option.value === value && 'bg-foreground/[0.06]'
+                )}
+              >
+                <span className="truncate font-mono text-xs text-foreground">{option.value}</span>
+                {option.detail && (
+                  <span className="line-clamp-2 text-xs text-muted-foreground">
+                    {option.detail}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </Field>
+  )
+}
+
+/** A duration stored in milliseconds, typed in seconds. */
+export function SecondsField({
+  id,
+  label,
+  value,
+  commit,
+  error
+}: {
+  id: string
+  label: string
+  value: number
+  commit: (ms: number) => boolean
+  error?: string | null
+}): React.JSX.Element {
+  return (
+    <TextField
+      id={id}
+      label={label}
+      value={String(value / 1000)}
+      suffix="seconds"
+      error={error}
+      commit={(text) => {
+        const n = Number(text.trim())
+        if (text.trim() === '' || !Number.isFinite(n) || n < 0) return 'Enter a number of seconds'
+        const ms = Math.round(n * 1000)
+        if (!Number.isSafeInteger(ms)) return 'That is too long'
+        return commit(ms) ? null : SAVING_MESSAGE
+      }}
+    />
   )
 }

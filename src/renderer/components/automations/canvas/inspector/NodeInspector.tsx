@@ -12,8 +12,20 @@ import { cn } from '@/lib/utils'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { NODE_KIND_PRESENTATION } from '../../automation-format'
 import { SAVING_MESSAGE } from '../draft/use-draft'
+import { AgentForm } from './AgentForm'
 import { TextField } from './fields'
-import { type FormProps, NODE_FORMS } from './node-forms'
+import { McpToolForm } from './McpToolForm'
+import {
+  ApprovalForm,
+  ConditionForm,
+  FailForm,
+  ForEachForm,
+  type FormProps,
+  HttpForm,
+  MergeForm,
+  TransformForm,
+  WaitForm
+} from './node-forms'
 import { templateScope } from './template-scope'
 
 /** The floating panel's width and its gap from the canvas edges. */
@@ -140,6 +152,20 @@ export function InspectorPanel({
   )
 }
 
+/** The form under the label for each kind. A new kind is one entry. */
+const NODE_FORMS: { [K in NodeKind]: (props: FormProps<K>) => React.JSX.Element } = {
+  http: HttpForm,
+  transform: TransformForm,
+  condition: ConditionForm,
+  fail: FailForm,
+  for_each: ForEachForm,
+  merge: MergeForm,
+  wait: WaitForm,
+  approval: ApprovalForm,
+  agent: AgentForm,
+  mcp_tool: McpToolForm
+}
+
 /** What an edit changes on a step; the editor sends it as one `update_node`. */
 export type NodeChange = { label: string } | { spec: NodeSpec }
 
@@ -200,6 +226,8 @@ export function NodeInspector({
           id={prefix}
           spec={node.spec}
           scope={scope}
+          graph={graph}
+          nodeId={node.id}
           commit={(spec) =>
             JSON.stringify(spec) === JSON.stringify(node.spec) || onChange({ spec })
           }

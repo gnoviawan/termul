@@ -20,7 +20,14 @@ import {
 /** `issues` counts the validation issues on this card; `open` lists outputs with no edge yet. */
 export type CardData =
   | { kind: typeof TRIGGER; trigger: Trigger; issues: number; open: Port[] }
-  | { kind: 'step'; node: AutomationNode; issues: number; open: Port[] }
+  | {
+      kind: 'step'
+      node: AutomationNode
+      issues: number
+      open: Port[]
+      /** An issue that names the broken setting, shown in place of the detail. */
+      problem?: string
+    }
 
 type Slot = { label: string; value: string }
 
@@ -71,6 +78,7 @@ function present(data: CardData): {
   Icon: typeof Zap
   title: string
   subtitle: string
+  problem: boolean
   ports: readonly Port[]
   slots: Slot[]
 } {
@@ -80,6 +88,7 @@ function present(data: CardData): {
       Icon: manual ? Zap : Clock,
       title: manual ? 'Manual' : 'Schedule',
       subtitle: triggerSummary(data.trigger),
+      problem: false,
       ports: OUTPUT_PORTS.trigger,
       slots: []
     }
@@ -89,7 +98,8 @@ function present(data: CardData): {
   return {
     Icon: kind.Icon,
     title: label,
-    subtitle: `${kind.label} · ${cardDetail(spec)}`,
+    subtitle: data.problem ?? `${kind.label} · ${cardDetail(spec)}`,
+    problem: data.problem !== undefined,
     ports: OUTPUT_PORTS[spec.kind],
     slots: slotsOf(spec)
   }
@@ -114,7 +124,7 @@ export function NodeCard({
   dimmed?: boolean
   children?: React.ReactNode
 }): React.JSX.Element {
-  const { Icon, title, subtitle, ports, slots } = present(data)
+  const { Icon, title, subtitle, problem, ports, slots } = present(data)
   return (
     <div
       className={cn('relative transition-opacity', dimmed && 'opacity-35')}
@@ -148,7 +158,13 @@ export function NodeCard({
               </span>
             )}
           </span>
-          <span className="truncate text-xs text-muted-foreground" title={subtitle}>
+          <span
+            className={cn(
+              'truncate text-xs',
+              problem ? 'text-destructive' : 'text-muted-foreground'
+            )}
+            title={subtitle}
+          >
             {subtitle}
           </span>
         </span>
