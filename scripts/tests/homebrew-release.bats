@@ -112,12 +112,12 @@ EOF
   local intel_sha="72b1d5ab617dcc72c021ec4524ec90a8607870d2011fa83686c4ccda185854c8"
 
   write_homebrew_cask "$troupe" "0.5.0" "$arm_sha" "$intel_sha"
-  grep -Fxq '  url "https://github.com/gnoviawan/termul/releases/download/v#{version}/Troupe_#{version}_#{arch}.dmg"' "$troupe"
+  grep -Fxq '  url "https://github.com/gnoviawan/troupe/releases/download/v#{version}/Troupe_#{version}_#{arch}.dmg"' "$troupe"
   grep -Fxq '  name "Troupe"' "$troupe"
   grep -Fxq '  app "Troupe.app"' "$troupe"
 
   write_homebrew_cask "$legacy" "0.4.60" "$arm_sha" "$intel_sha"
-  grep -Fxq '  url "https://github.com/gnoviawan/termul/releases/download/v#{version}/Termul.Manager_#{version}_#{arch}.dmg"' "$legacy"
+  grep -Fxq '  url "https://github.com/gnoviawan/troupe/releases/download/v#{version}/Termul.Manager_#{version}_#{arch}.dmg"' "$legacy"
   grep -Fxq '  name "Termul Manager"' "$legacy"
   grep -Fxq '  app "Termul Manager.app"' "$legacy"
 }
@@ -299,10 +299,10 @@ NAMES
   sha256 arm:   "6be298c2c2c8562b340b069357e8b5d6c3838791ac77c089114004db6a663e69",
          intel: "72b1d5ab617dcc72c021ec4524ec90a8607870d2011fa83686c4ccda185854c8"
 
-  url "https://github.com/gnoviawan/termul/releases/download/v#{version}/Troupe_#{version}_#{arch}.dmg"
+  url "https://github.com/gnoviawan/troupe/releases/download/v#{version}/Troupe_#{version}_#{arch}.dmg"
   name "Troupe"
   desc "Terminal-native workspace and CLI agent manager"
-  homepage "https://github.com/gnoviawan/termul"
+  homepage "https://github.com/gnoviawan/troupe"
 
   auto_updates true
 
@@ -336,7 +336,7 @@ end' ]
   [ ! -e "$tap/cask_renames.json" ]
   [ "$(sed -n '1p;4p;8,10p;15p' "$tap/Casks/termul.rb")" = 'cask "termul" do
   version "0.4.61"
-  url "https://github.com/gnoviawan/termul/releases/download/v#{version}/Termul.Manager_#{version}_#{arch}.dmg"
+  url "https://github.com/gnoviawan/troupe/releases/download/v#{version}/Termul.Manager_#{version}_#{arch}.dmg"
   name "Termul Manager"
   desc "Terminal-native workspace and CLI agent manager"
   app "Termul Manager.app"' ]

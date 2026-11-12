@@ -13,7 +13,7 @@ import { isExcludedContributor } from '../src/lib/contributors';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const outputPath = path.resolve(__dirname, '../src/data/contributors.ts');
 
-const GITHUB_REPO = 'gnoviawan/termul';
+const GITHUB_REPO = 'gnoviawan/troupe';
 const PER_PAGE = 100;
 
 type GitHubContributor = {

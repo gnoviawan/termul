@@ -54,7 +54,7 @@ jobs:
           VERSION="$(normalize_release_version "$INPUT_VERSION")"
           TAG="v$VERSION"
           IS_PRERELEASE="$(gh release view "$TAG" \
-            --repo gnoviawan/termul \
+            --repo gnoviawan/troupe \
             --json isPrerelease \
             --jq '.isPrerelease')"
 
@@ -91,7 +91,7 @@ jobs:
         run: |
           mkdir -p release-assets
           gh release download "$TAG" \
-            --repo gnoviawan/termul \
+            --repo gnoviawan/troupe \
             --dir release-assets
 
       - name: Generate SHA256SUMS
@@ -105,7 +105,7 @@ jobs:
           # match one. Fails loudly on any mismatch instead of shipping a
           # SHA256SUMS.txt the installer cannot resolve (#546).
           gh release view "$TAG" \
-            --repo gnoviawan/termul \
+            --repo gnoviawan/troupe \
             --json assets \
             --jq '.assets[].name' > release-asset-names.txt
 
@@ -121,7 +121,7 @@ jobs:
           TAG: ${{ needs.release_metadata.outputs.tag }}
         run: |
           gh release upload "$TAG" SHA256SUMS.txt \
-            --repo gnoviawan/termul \
+            --repo gnoviawan/troupe \
             --clobber
 
   homebrew:
@@ -157,7 +157,7 @@ jobs:
         run: |
           mkdir -p release-assets
           gh release download "$TAG" \
-            --repo gnoviawan/termul \
+            --repo gnoviawan/troupe \
             --pattern SHA256SUMS.txt \
             --dir release-assets
 
