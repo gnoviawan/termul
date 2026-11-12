@@ -1,4 +1,4 @@
-import type { NodeKind, Port } from '@shared/types/automation.types'
+import type { NodeKind, NodeSpec, Port } from '@shared/types/automation.types'
 
 export const TRIGGER = 'trigger'
 
@@ -8,8 +8,11 @@ export const CARD = { width: 192, height: 64 } as const
 /** Agent and MCP tool cards hang two config slots below the card. */
 export const SLOT_DEPTH = 56
 
-export function hasSlots(kind: NodeKind): boolean {
-  return kind === 'agent' || kind === 'mcp_tool'
+const SLOT_KINDS = ['agent', 'mcp_tool'] as const
+export type SlotSpec = Extract<NodeSpec, { kind: (typeof SLOT_KINDS)[number] }>
+
+export function hasSlots(spec: NodeSpec): spec is SlotSpec {
+  return (SLOT_KINDS as readonly NodeKind[]).includes(spec.kind)
 }
 
 /** Legal output ports per kind (`graph.rs` `legal_ports`), top to bottom on the card. */
@@ -44,6 +47,8 @@ export const PORT_PRESENTATION: Record<
 }
 
 export const HANDLE_SIZE = 10
+/** Room a port name drawn beside its handle takes right of the card. */
+export const HANDLE_LABEL_WIDTH = 40
 const PORT_PITCH = 18
 const LAST_PORT_CENTRE = 49
 

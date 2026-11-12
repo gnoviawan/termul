@@ -1,8 +1,32 @@
 import type { Automation, AutomationLayout, NodeId } from '@shared/types/automation.types'
-import { fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fixtureAutomation } from '@/lib/test-utils/automation-fixtures'
+
+const log = vi.hoisted(() => ({ logFrontendError: vi.fn(async () => {}) }))
+vi.mock('@/lib/log-api', () => log)
+
+/** Card renders per node id, to prove an unchanged card is not redrawn. */
+const renders = vi.hoisted(() => new Map<string, number>())
+vi.mock('./nodes/NodeCard', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./nodes/NodeCard')>()
+  return {
+    ...actual,
+    NodeCard: (props: Parameters<typeof actual.NodeCard>[0]) => {
+      const key = props.data.kind === 'trigger' ? 'trigger' : props.data.node.id
+      renders.set(key, (renders.get(key) ?? 0) + 1)
+      return actual.NodeCard(props)
+    }
+  }
+})
+
 import { AutomationCanvas } from './AutomationCanvas'
+import { contentBounds, toFlow } from './flow/flow-graph'
+
+beforeEach(() => {
+  renders.clear()
+  log.logFrontendError.mockClear()
+})
 
 type Shown = Pick<Automation, 'graph' | 'trigger' | 'layout'>
 
@@ -173,7 +197,7 @@ describe('AutomationCanvas', () => {
     expect(gate.getByText('error')).toBeInTheDocument()
   })
 
-  it('reads out every step and branch as a list', () => {
+  it('reads out every step and branch as a list, in run order', () => {
     render(<AutomationCanvas automation={fixtureAutomation} phone={false} />)
 
     const steps = within(screen.getByRole('list', { name: 'Automation steps' }))
@@ -181,11 +205,95 @@ describe('AutomationCanvas', () => {
       'Trigger: Cron 0 5 * * 1-5 (America/New_York). Next: Fetch items',
       'Fetch items, HTTP: GET api.example.com. Next: Extract. On error: Fetch failed',
       'Extract, Agent: claude · sonnet. Next: Urgent?',
+      'Fetch failed, Fail: fetch failed',
       'Urgent?, Condition: {{nodes.extract.output.urgent}} eq true. If true: Shape',
       'Shape, Transform: text. Next: Notify',
-      'Notify, HTTP: POST hooks.example.com',
-      'Fetch failed, Fail: fetch failed'
+      'Notify, HTTP: POST hooks.example.com'
     ])
+  })
+
+  it('reads a loop body out before the step that follows the loop', () => {
+    const loop: Shown = {
+      trigger: { kind: 'manual' },
+      layout: {},
+      graph: {
+        nodes: [
+          { id: id('report'), label: 'Report', spec: { kind: 'transform', fields: [] } },
+          { id: id('pause'), label: 'Pause', spec: { kind: 'wait', duration_ms: 1_000 } },
+          { id: id('send'), label: 'Send', spec: { kind: 'transform', fields: [] } },
+          {
+            id: id('each'),
+            label: 'Each',
+            spec: { kind: 'for_each', items: '{{nodes.fetch.output}}', max_iterations: 5 }
+          },
+          { id: id('fetch'), label: 'Fetch', spec: { kind: 'transform', fields: [] } }
+        ],
+        edges: [
+          { from: 'trigger', port: 'out', to: id('fetch') },
+          { from: id('fetch'), port: 'out', to: id('each') },
+          { from: id('each'), port: 'out', to: id('report') },
+          { from: id('each'), port: 'item', to: id('send') },
+          { from: id('send'), port: 'out', to: id('pause') }
+        ]
+      }
+    }
+    render(<AutomationCanvas automation={loop} phone={false} />)
+
+    const steps = within(screen.getByRole('list', { name: 'Automation steps' }))
+    expect(steps.getAllByRole('listitem').map((item) => item.textContent?.split(',')[0])).toEqual([
+      'Trigger: Run manually. Next: Fetch',
+      'Fetch',
+      'Each',
+      'Send',
+      'Pause',
+      'Report'
+    ])
+  })
+
+  it('neither draws nor reads out an edge from a port its step lacks, and logs it once', () => {
+    const illegal: Shown = {
+      ...triage,
+      graph: {
+        ...triage.graph,
+        edges: [
+          ...triage.graph.edges,
+          { from: id('alert'), port: 'out', to: id('note') },
+          { from: id('fetch'), port: 'true', to: id('note') }
+        ]
+      }
+    }
+    const view = render(<AutomationCanvas automation={illegal} phone={false} />)
+    view.rerender(<AutomationCanvas automation={{ ...illegal }} phone={false} />)
+
+    expect(document.querySelectorAll('.react-flow__edge')).toHaveLength(8)
+    const steps = within(screen.getByRole('list', { name: 'Automation steps' }))
+    expect(steps.getByText('Alert, Fail: fetch failed')).toBeInTheDocument()
+    expect(steps.queryByText(/If true: Note/)).toBeNull()
+    expect(log.logFrontendError).toHaveBeenCalledTimes(1)
+    expect(log.logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        message: expect.stringContaining('alert:out->note, fetch:true->note')
+      })
+    )
+  })
+
+  it('bounds the drawing by its slots and error labels, and only where cards have them', () => {
+    const { nodes } = toFlow(withLayout({ trigger: { x: 0, y: 0 }, classify: { x: 300, y: 0 } }))
+    const pair = nodes.filter((node) => node.id === 'trigger' || node.id === 'classify')
+    // Classify: 192 wide plus its 40 px error label, 64 tall plus its 56 px slots.
+    expect(contentBounds(pair)).toEqual({ x: 0, y: 0, width: 300 + 192 + 40, height: 64 + 56 })
+    // The trigger alone has neither.
+    expect(contentBounds(pair.slice(0, 1))).toEqual({ x: 0, y: 0, width: 192, height: 64 })
+  })
+
+  it('shows the minimap on desktop and leaves it out on the phone', () => {
+    const desktop = render(<AutomationCanvas automation={triage} phone={false} />)
+    expect(document.querySelector('.react-flow__minimap')).not.toBeNull()
+    desktop.unmount()
+
+    render(<AutomationCanvas automation={triage} phone />)
+    expect(document.querySelector('.react-flow__minimap')).toBeNull()
   })
 
   it('lays out an unplaced graph left to right in run order', () => {
@@ -228,11 +336,11 @@ describe('AutomationCanvas', () => {
     expect(positionOf('is_bug').x).toBeGreaterThan(40)
   })
 
-  it('keeps the selection and untouched cards when the host sends an update', () => {
+  it('redraws only the changed card on a host update and keeps the selection', () => {
     const view = render(<AutomationCanvas automation={triage} phone={false} />)
     fireEvent.click(within(card('classify')).getByText('Classify'))
     expect(card('classify')).toHaveClass('selected')
-    const fetchCard = within(card('fetch')).getByText('Fetch issues')
+    const before = new Map(renders)
 
     view.rerender(
       <AutomationCanvas
@@ -241,7 +349,7 @@ describe('AutomationCanvas', () => {
           graph: {
             ...triage.graph,
             nodes: triage.graph.nodes.map((node) =>
-              node.id === 'note' ? { ...node, label: 'Write note' } : node
+              node.id === 'note' ? { ...node, label: 'Write note' } : { ...node }
             )
           }
         }}
@@ -251,7 +359,28 @@ describe('AutomationCanvas', () => {
 
     expect(within(card('note')).getByText('Write note')).toBeInTheDocument()
     expect(card('classify')).toHaveClass('selected')
-    expect(within(card('fetch')).getByText('Fetch issues')).toBe(fetchCard)
+    expect(renders.get('note')).toBe((before.get('note') ?? 0) + 1)
+    for (const unchanged of ['trigger', 'fetch', 'each', 'classify', 'is_bug', 'post']) {
+      expect(renders.get(unchanged), unchanged).toBe(before.get(unchanged))
+    }
+  })
+
+  it('keeps a selected card when Delete or Backspace is pressed', async () => {
+    render(<AutomationCanvas automation={triage} phone={false} />)
+    fireEvent.click(within(card('classify')).getByText('Classify'))
+    expect(card('classify')).toHaveClass('selected')
+
+    fireEvent.keyDown(document.body, { key: 'Delete', code: 'Delete' })
+    fireEvent.keyUp(document.body, { key: 'Delete', code: 'Delete' })
+    fireEvent.keyDown(document.body, { key: 'Backspace', code: 'Backspace' })
+    fireEvent.keyUp(document.body, { key: 'Backspace', code: 'Backspace' })
+    // React Flow deletes asynchronously, after its `onBeforeDelete` promise.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+
+    expect(within(card('classify')).getByText('Classify')).toBeInTheDocument()
+    expect(document.querySelectorAll('.react-flow__node')).toHaveLength(9)
   })
 
   it('offers fit and zoom controls, and no editing', () => {

@@ -410,12 +410,12 @@ describe('AutomationRunDetail with a loop and a wait', () => {
     expect(steps.getAllByRole('listitem').map((row) => row.textContent)).toEqual([
       'Each itemRunning',
       'Send2 iterationsSucceededIterations',
-      'DoneNot reached',
-      'Pause2 iterationsWaitingIterations'
+      'Pause2 iterationsWaitingIterations',
+      'DoneNot reached'
     ])
 
     fireEvent.click(
-      within(steps.getAllByRole('listitem')[3]).getByRole('button', { name: 'Iterations' })
+      within(steps.getAllByRole('listitem')[2]).getByRole('button', { name: 'Iterations' })
     )
     const pauses = within(screen.getByRole('list', { name: 'Pause iterations' }))
     expect(pauses.getAllByRole('listitem').map((row) => row.textContent)).toEqual([

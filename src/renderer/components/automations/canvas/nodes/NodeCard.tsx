@@ -7,7 +7,15 @@ import {
   nodeKeyDetail,
   triggerSummary
 } from '../../automation-format'
-import { CARD, HANDLE_SIZE, OUTPUT_PORTS, outputPortY, PORT_PRESENTATION, TRIGGER } from '../ports'
+import {
+  CARD,
+  HANDLE_SIZE,
+  hasSlots,
+  OUTPUT_PORTS,
+  outputPortY,
+  PORT_PRESENTATION,
+  TRIGGER
+} from '../ports'
 
 export type CardData =
   | { kind: typeof TRIGGER; trigger: Trigger }
@@ -46,20 +54,16 @@ function cardDetail(spec: NodeSpec): string {
 
 /** Config slots an agent or MCP tool card hangs below itself. */
 function slotsOf(spec: NodeSpec): Slot[] {
-  switch (spec.kind) {
-    case 'agent':
-      return [
-        { label: 'Model', value: spec.model ?? 'Default' },
+  if (!hasSlots(spec)) return []
+  return spec.kind === 'agent'
+    ? [
+        { label: 'Model', value: spec.model || 'Default' },
         { label: 'Tools', value: spec.tools.join(', ') || 'None' }
       ]
-    case 'mcp_tool':
-      return [
+    : [
         { label: 'Server', value: spec.server_id },
         { label: 'Tool', value: spec.tool }
       ]
-    default:
-      return []
-  }
 }
 
 function present(data: CardData): {

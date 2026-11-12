@@ -11,17 +11,26 @@ import type {
   Edge,
   Graph,
   NodeId,
-  NodePosition
+  NodePosition,
+  Port
 } from '@shared/types/automation.types'
 import { logFrontendError } from '@/lib/log-api'
-import { CARD, hasSlots, SLOT_DEPTH, TRIGGER } from './ports'
+import { CARD, hasSlots, OUTPUT_PORTS, SLOT_DEPTH, TRIGGER } from './ports'
 
 export type CanvasNodeId = NodeId | typeof TRIGGER
 
-/** Edges whose ends both exist; an edge to a missing node is a validation issue, not a line. */
+/**
+ * Edges whose ends both exist and whose port the source has. An edge to a
+ * missing node or from a port the kind lacks is a validation issue
+ * (`unknown_edge_endpoint`, `illegal_port`) the issue list names; the drawing
+ * and the step list both leave it out.
+ */
 export function drawableEdges(graph: Graph): Edge[] {
-  const known = new Set<string>([TRIGGER, ...graph.nodes.map((node) => node.id)])
-  return graph.edges.filter((edge) => known.has(edge.from) && known.has(edge.to))
+  const ports = new Map<string, readonly Port[]>([[TRIGGER, OUTPUT_PORTS.trigger]])
+  for (const node of graph.nodes) ports.set(node.id, OUTPUT_PORTS[node.spec.kind])
+  return graph.edges.filter(
+    (edge) => ports.has(edge.to) && edge.to !== TRIGGER && ports.get(edge.from)?.includes(edge.port)
+  )
 }
 
 /**
@@ -66,7 +75,7 @@ function autoPlace(graph: Graph, edges: Edge[]): Map<CanvasNodeId, NodePosition>
     [TRIGGER, CARD.height],
     ...graph.nodes.map((node): [CanvasNodeId, number] => [
       node.id,
-      CARD.height + (hasSlots(node.spec.kind) ? SLOT_DEPTH : 0)
+      CARD.height + (hasSlots(node.spec) ? SLOT_DEPTH : 0)
     ])
   ]
   try {
@@ -94,50 +103,49 @@ function autoPlace(graph: Graph, edges: Edge[]): Map<CanvasNodeId, NodePosition>
 }
 
 /**
- * Steps in the order they first run: a step after all its parents, a loop's
- * body before what follows the loop, siblings in input order. Unreachable
- * steps follow; steps a cycle holds back come last, in input order.
+ * Steps in the order they first run: a step after all its parents, siblings
+ * in input order, and a loop's whole body before what follows the loop.
+ * Unreachable steps follow; steps a cycle holds back come last, in input order.
  */
 export function stepOrder(graph: Graph): AutomationNode[] {
   const edges = drawableEdges(graph)
+  const byId = new Map<CanvasNodeId, AutomationNode>(graph.nodes.map((node) => [node.id, node]))
   const index = new Map(graph.nodes.map((node, i) => [node.id as CanvasNodeId, i]))
   const indegree = new Map<CanvasNodeId, number>()
   for (const edge of edges) indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1)
+  const order: CanvasNodeId[] = []
+  const seen = new Set<CanvasNodeId>()
 
-  const queue: CanvasNodeId[] = []
-  const queued = new Set<CanvasNodeId>()
-  const enqueue = (id: CanvasNodeId): void => {
-    queue.push(id)
-    queued.add(id)
-  }
-  let head = 0
-  const drain = (): void => {
-    for (; head < queue.length; head += 1) {
-      const id = queue[head]
+  // Breadth-first, except that a for_each drains its `item` body before
+  // releasing its other children.
+  const drain = (queue: CanvasNodeId[]): void => {
+    for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+      order.push(id)
       const children = edges
         .filter((edge) => edge.from === id)
-        .sort(
-          (a, b) =>
-            Number(b.port === 'item') - Number(a.port === 'item') ||
-            (index.get(a.to) ?? 0) - (index.get(b.to) ?? 0)
-        )
-      for (const edge of children) {
+        .sort((a, b) => (index.get(a.to) ?? 0) - (index.get(b.to) ?? 0))
+      const release = (edge: Edge, into: CanvasNodeId[]): void => {
         const left = (indegree.get(edge.to) ?? 0) - 1
         indegree.set(edge.to, left)
-        if (left === 0 && !queued.has(edge.to)) enqueue(edge.to)
+        if (left === 0 && !seen.has(edge.to)) {
+          seen.add(edge.to)
+          into.push(edge.to)
+        }
       }
+      const body: CanvasNodeId[] = []
+      for (const edge of children) if (edge.port === 'item') release(edge, body)
+      drain(body)
+      for (const edge of children) if (edge.port !== 'item') release(edge, queue)
     }
   }
 
-  enqueue(TRIGGER)
-  drain()
+  seen.add(TRIGGER)
+  drain([TRIGGER])
   for (const node of graph.nodes) {
-    if (queued.has(node.id) || (indegree.get(node.id) ?? 0) > 0) continue
-    enqueue(node.id)
-    drain()
+    if (seen.has(node.id) || (indegree.get(node.id) ?? 0) > 0) continue
+    seen.add(node.id)
+    drain([node.id])
   }
-  for (const node of graph.nodes) if (!queued.has(node.id)) enqueue(node.id)
-
-  const byId = new Map<CanvasNodeId, AutomationNode>(graph.nodes.map((node) => [node.id, node]))
-  return queue.flatMap((id) => byId.get(id) ?? [])
+  for (const node of graph.nodes) if (!seen.has(node.id)) order.push(node.id)
+  return order.flatMap((id) => byId.get(id) ?? [])
 }

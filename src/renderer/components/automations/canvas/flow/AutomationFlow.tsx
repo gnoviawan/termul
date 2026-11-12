@@ -3,6 +3,7 @@ import {
   applyNodeChanges,
   Background,
   BackgroundVariant,
+  getViewportForBounds,
   MiniMap,
   type OnNodesChange,
   ReactFlow,
@@ -10,15 +11,16 @@ import {
   type Rect,
   useReactFlow,
   useStore,
+  useStoreApi,
   type Viewport
 } from '@xyflow/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Maximize2, ZoomIn, ZoomOut } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { SLOT_DEPTH, TRIGGER } from '../ports'
+import { TRIGGER } from '../ports'
 import { CardNodeView } from './CardNodeView'
-import { type CardNode, type PortEdge, reuseUnchanged, toFlow } from './flow-graph'
+import { type CardNode, contentBounds, type PortEdge, reuseUnchanged, toFlow } from './flow-graph'
 import { PortEdgeView } from './PortEdgeView'
 import './flow.css'
 
@@ -28,7 +30,6 @@ const edgeTypes = { port: PortEdgeView }
 /** Below this a card's 14 px title is too small to read, so the first view pans instead of fitting. */
 const READABLE_ZOOM = { desktop: 0.75, phone: 0.85 }
 const MARGIN = 24
-const PORT_LABEL_WIDTH = 40
 
 /**
  * The first view: the whole graph when it fits at a readable zoom, else the
@@ -66,13 +67,9 @@ function ReadableStart({ phone }: { phone: boolean }): null {
     const trigger = nodes.find((node) => node.id === TRIGGER)
     if (!trigger) return
     done.current = true
-    const bounds = flow.getNodesBounds(nodes)
-    // Slots hang below agent and MCP tool cards, and `error` labels right of them, outside the node box.
-    bounds.height += SLOT_DEPTH
-    bounds.width += PORT_LABEL_WIDTH
     void flow.setViewport(
       startViewport(
-        bounds,
+        contentBounds(nodes),
         flow.getNodesBounds([trigger]),
         { x: 0, y: 0, zoom: 1, width, height },
         phone ? READABLE_ZOOM.phone : READABLE_ZOOM.desktop
@@ -83,14 +80,27 @@ function ReadableStart({ phone }: { phone: boolean }): null {
 }
 
 function ViewControls({ phone }: { phone: boolean }): React.JSX.Element {
-  const flow = useReactFlow()
+  const flow = useReactFlow<CardNode, PortEdge>()
+  const store = useStoreApi()
   const size = phone ? 'touch' : 'icon-sm'
   const square = phone ? 'w-11' : undefined
   const controls = [
     {
       label: 'Fit to view',
       Icon: Maximize2,
-      run: () => flow.fitView({ padding: 0.1, maxZoom: 1, duration: 200 })
+      run: () => {
+        // fitView would use the bare node boxes and clip slots and `error` labels.
+        const { width, height, minZoom } = store.getState()
+        const view = getViewportForBounds(
+          contentBounds(flow.getNodes()),
+          width,
+          height,
+          minZoom,
+          1,
+          0.1
+        )
+        return flow.setViewport(view, { duration: 200 })
+      }
     },
     { label: 'Zoom in', Icon: ZoomIn, run: () => flow.zoomIn({ duration: 150 }) },
     { label: 'Zoom out', Icon: ZoomOut, run: () => flow.zoomOut({ duration: 150 }) }
@@ -138,8 +148,14 @@ export function AutomationFlow({
     setNodes((prev) => reuseUnchanged(prev, next.nodes))
     setEdges((prev) => reuseUnchanged(prev, next.edges))
   }, [next])
+  // View mode: only selection and measurement may change a card, never its existence or position.
   const onNodesChange: OnNodesChange<CardNode> = (changes) =>
-    setNodes((prev) => applyNodeChanges(changes, prev))
+    setNodes((prev) =>
+      applyNodeChanges(
+        changes.filter((change) => change.type === 'select' || change.type === 'dimensions'),
+        prev
+      )
+    )
 
   return (
     <ReactFlowProvider>
@@ -163,6 +179,7 @@ export function AutomationFlow({
           edgeTypes={edgeTypes}
           onNodesChange={onNodesChange}
           nodesDraggable={false}
+          deleteKeyCode={null}
           nodesConnectable={false}
           nodesFocusable={false}
           edgesFocusable={false}
