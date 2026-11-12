@@ -19,7 +19,7 @@ The agent works only in tabs that it opened. It can't see or control the browser
 
 ## Open sites
 
-By default, the agent opens public sites and devices on your local network without asking you. Payments, uploads, downloads and the other [risky actions](#risky-actions) still ask, and passwords follow their own setting.
+By default, the agent opens public sites and devices on your local network without asking you. [Risky actions](#risky-actions) such as payments, uploads and downloads still ask by default, unless you pre-approve them in the browser settings. Passwords follow their own setting.
 
 To be asked before the agent opens each new site, turn on **Ask before opening new sites** in the browser settings. See [Browser rules](#browser-rules). Troupe then asks you the first time the agent wants to open a site in a chat. The prompt reads **Allow the agent to open this site?** and names the agent and the site, for example "Claude wants to open https://example.com in the agent browser."
 
@@ -48,7 +48,7 @@ If a project folder covers your whole home folder, Troupe treats it as too broad
 
 ## Risky actions
 
-Some actions ask every time, even on a site you allowed:
+Some actions still ask even on a site you allowed, unless you pre-approve them:
 
 - Submitting payment details, including "Place order" buttons and card fields.
 - Uploading a file.
