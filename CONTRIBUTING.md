@@ -12,7 +12,7 @@ By participating in this project, you agree to maintain a respectful and inclusi
 
 Before submitting a bug report:
 
-1. Check the [existing issues](https://github.com/gnoviawan/termul/issues) to avoid duplicates
+1. Check the [existing issues](https://github.com/gnoviawan/troupe/issues) to avoid duplicates
 2. Use the latest version to see if the bug still exists
 
 When submitting a bug report, include:

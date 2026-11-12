@@ -279,7 +279,7 @@ async fn report_bug_inner_admitted_returns_the_submit_result() {
         assert_eq!(title, "the title");
         assert_eq!(body, "the body");
         BugReportSubmitResult::Submitted {
-            issue_url: "https://github.com/gnoviawan/termul/issues/1".to_string(),
+            issue_url: "https://github.com/gnoviawan/troupe/issues/1".to_string(),
         }
     })
     .await;
@@ -287,7 +287,7 @@ async fn report_bug_inner_admitted_returns_the_submit_result() {
     assert!(body.success, "{:?}", body.error);
     match body.data.expect("data") {
         BugReportSubmitResult::Submitted { issue_url } => {
-            assert_eq!(issue_url, "https://github.com/gnoviawan/termul/issues/1")
+            assert_eq!(issue_url, "https://github.com/gnoviawan/troupe/issues/1")
         }
         other => panic!("expected submitted, got {other:?}"),
     }

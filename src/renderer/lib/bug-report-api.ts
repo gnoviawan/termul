@@ -111,7 +111,7 @@ export const bugReportApi = {
  * `-R` target). Written as the full `github.com/...` URL so the rebrand
  * codemod's repo-url rule rewrites it together with the tests.
  */
-const ISSUE_NEW_URL = 'https://github.com/gnoviawan/termul/issues/new'
+const ISSUE_NEW_URL = 'https://github.com/gnoviawan/troupe/issues/new'
 
 /**
  * ~8KB cap on the `issues/new` prefill URL (spec: "body >~8KB → URL carries

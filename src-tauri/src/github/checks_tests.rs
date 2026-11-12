@@ -5,12 +5,12 @@ use super::types::{GithubCheck, GithubCheckRollup, GithubCheckStatus};
 
 /// Rows of `gh pr checks 1579 --json name,state,bucket,link,workflow` (gh 2.98).
 const CHECKS_JSON: &str = r#"[
-{"bucket":"skipping","link":"https://github.com/gnoviawan/termul/actions/runs/41100700259/job/124222171366","name":"Verify Tauri Frontend Build","state":"SKIPPED","workflow":"PR Validation"},
-{"bucket":"fail","link":"https://github.com/gnoviawan/termul/actions/runs/41100700259/job/124217788236","name":"Validate PR Description","state":"FAILURE","workflow":"PR Validation"},
-{"bucket":"pass","link":"https://github.com/gnoviawan/termul/runs/124217588359","name":"CodeQL","state":"SUCCESS","workflow":""},
+{"bucket":"skipping","link":"https://github.com/gnoviawan/troupe/actions/runs/41100700259/job/124222171366","name":"Verify Tauri Frontend Build","state":"SKIPPED","workflow":"PR Validation"},
+{"bucket":"fail","link":"https://github.com/gnoviawan/troupe/actions/runs/41100700259/job/124217788236","name":"Validate PR Description","state":"FAILURE","workflow":"PR Validation"},
+{"bucket":"pass","link":"https://github.com/gnoviawan/troupe/runs/124217588359","name":"CodeQL","state":"SUCCESS","workflow":""},
 {"bucket":"skipping","link":"https://www.cubic.dev/pr/gnoviawan/termul/pull/1579","name":"cubic","state":"NEUTRAL","workflow":""},
 {"bucket":"pending","link":"","name":"E2E","state":"IN_PROGRESS","workflow":"E2E"},
-{"bucket":"cancel","link":"https://github.com/gnoviawan/termul/actions/runs/1/job/2","name":"Old","state":"CANCELLED","workflow":"CI"}
+{"bucket":"cancel","link":"https://github.com/gnoviawan/troupe/actions/runs/1/job/2","name":"Old","state":"CANCELLED","workflow":"CI"}
 ]"#;
 
 fn check(status: GithubCheckStatus) -> GithubCheck {
@@ -33,7 +33,7 @@ fn checks_map_buckets_links_and_job_ids() {
             workflow: Some("PR Validation".into()),
             status: GithubCheckStatus::Failure,
             details_url: Some(
-                "https://github.com/gnoviawan/termul/actions/runs/41100700259/job/124217788236"
+                "https://github.com/gnoviawan/troupe/actions/runs/41100700259/job/124217788236"
                     .into()
             ),
             job_id: Some(124217788236),

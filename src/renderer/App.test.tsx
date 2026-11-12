@@ -338,7 +338,7 @@ describe('App CAP-3 resilience wiring (web entry)', () => {
       isOpen: true,
       version: '0.4.8',
       notes: 'Release notes',
-      htmlUrl: 'https://github.com/gnoviawan/termul/releases/tag/v0.4.8',
+      htmlUrl: 'https://github.com/gnoviawan/troupe/releases/tag/v0.4.8',
       close: vi.fn()
     })
 

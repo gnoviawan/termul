@@ -23,13 +23,13 @@ case "$(uname -m)" in
 	aarch64|arm64) asset=troupe-server-linux-aarch64 ;;
 	*) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
-curl -fL -o troupe-server "https://github.com/gnoviawan/termul/releases/latest/download/$asset"
+curl -fL -o troupe-server "https://github.com/gnoviawan/troupe/releases/latest/download/$asset"
 chmod +x troupe-server
 ```
 
 The builds need glibc 2.35 or newer, which Ubuntu 22.04 and later have. Distributions that use musl instead of glibc, such as Alpine, aren't supported.
 
-The link above gets the latest stable release. For the nightly build, download from `https://github.com/gnoviawan/termul/releases/download/nightly/$asset` instead.
+The link above gets the latest stable release. For the nightly build, download from `https://github.com/gnoviawan/troupe/releases/download/nightly/$asset` instead.
 
 Move the file to a folder on your `PATH`, such as `~/.local/bin`, so you can run `troupe-server` from anywhere.
 

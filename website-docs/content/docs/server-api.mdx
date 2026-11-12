@@ -44,7 +44,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/openapi.json
 
 You can also get the spec without a running server:
 
-- Download `openapi.yaml` from the [latest release](https://github.com/gnoviawan/termul/releases/latest). Each stable and nightly release has its own copy.
+- Download `openapi.yaml` from the [latest release](https://github.com/gnoviawan/troupe/releases/latest). Each stable and nightly release has its own copy.
 - Run `troupe-server openapi` to print the spec of the binary you have. Add `--format json` for JSON.
 - Browse the spec in the <a href="/docs/api-reference.html">interactive API reference</a>. It shows the latest stable release that ships the spec, as of the last docs deploy.
 
@@ -90,7 +90,7 @@ The upgrade request itself needs no token. After the socket opens, send an `auth
 {"id":"1","type":"authenticate","payload":{"protocolVersion":7,"deviceId":"my-client","clientInstanceId":"my-client-1","token":"<token>"}}
 ```
 
-The server refuses an `authenticate` with a different `protocolVersion`. The current frames, request types, and version number are in [`src/shared/types/web-protocol.types.ts`](https://github.com/gnoviawan/termul/blob/dev/src/shared/types/web-protocol.types.ts) in the Troupe repository. The Troupe web app is the reference client, and its socket code is in `src/renderer/lib/`.
+The server refuses an `authenticate` with a different `protocolVersion`. The current frames, request types, and version number are in [`src/shared/types/web-protocol.types.ts`](https://github.com/gnoviawan/troupe/blob/dev/src/shared/types/web-protocol.types.ts) in the Troupe repository. The Troupe web app is the reference client, and its socket code is in `src/renderer/lib/`.
 
 ## Add a route to the spec
 

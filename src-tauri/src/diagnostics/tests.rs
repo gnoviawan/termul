@@ -384,7 +384,7 @@ fn gh_success_returns_issue_url_and_cleans_up_body_file() {
             *staged_body.borrow_mut() =
                 std::fs::read_to_string(&file).expect("body file readable during create");
             *staged.borrow_mut() = file;
-            return output(0, "https://github.com/gnoviawan/termul/issues/42\n", "");
+            return output(0, "https://github.com/gnoviawan/troupe/issues/42\n", "");
         }
         output(0, "ok", "")
     });
@@ -392,7 +392,7 @@ fn gh_success_returns_issue_url_and_cleans_up_body_file() {
     assert_eq!(
         result,
         BugReportSubmitResult::Submitted {
-            issue_url: "https://github.com/gnoviawan/termul/issues/42".to_string()
+            issue_url: "https://github.com/gnoviawan/troupe/issues/42".to_string()
         }
     );
 
@@ -405,7 +405,7 @@ fn gh_success_returns_issue_url_and_cleans_up_body_file() {
     let create = calls.nth(2);
     assert_eq!(
         create[..4],
-        ["issue", "create", "-R", "github.com/gnoviawan/termul"]
+        ["issue", "create", "-R", "github.com/gnoviawan/troupe"]
     );
     assert!(
         create
@@ -531,9 +531,9 @@ fn parse_issue_url_anchors_to_the_issue_repo_shape() {
     // A warning URL printed before the issue URL must not be captured.
     assert_eq!(
         parse_issue_url(
-            "warning: see https://github.com/settings/tokens first\nhttps://github.com/gnoviawan/termul/issues/42\n"
+            "warning: see https://github.com/settings/tokens first\nhttps://github.com/gnoviawan/troupe/issues/42\n"
         ),
-        Some("https://github.com/gnoviawan/termul/issues/42".to_string())
+        Some("https://github.com/gnoviawan/troupe/issues/42".to_string())
     );
     // Non-issue URLs, other repos and non-numeric ids never match.
     assert_eq!(parse_issue_url("https://example.com/x"), None);
@@ -550,11 +550,11 @@ fn parse_issue_url_anchors_to_the_issue_repo_shape() {
         None
     );
     assert_eq!(
-        parse_issue_url("https://github.com/gnoviawan/termul/issues/abc"),
+        parse_issue_url("https://github.com/gnoviawan/troupe/issues/abc"),
         None
     );
     assert_eq!(
-        parse_issue_url("http://github.com/gnoviawan/termul/issues/4"),
+        parse_issue_url("http://github.com/gnoviawan/troupe/issues/4"),
         None
     );
     assert_eq!(parse_issue_url("Created issue draft"), None);

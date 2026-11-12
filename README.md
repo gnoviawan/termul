@@ -6,17 +6,17 @@
 
 Troupe treats workspaces as first-class citizens, allowing you to organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface. Each project also gets ACP agent chats and Git and worktree tools, and the app adds SSH sessions and remote access from your phone.
 
-[![GitHub Stars](https://img.shields.io/github/stars/gnoviawan/termul?style=social)](https://github.com/gnoviawan/termul/stargazers)
-[![GitHub Issues](https://img.shields.io/github/issues/gnoviawan/termul)](https://github.com/gnoviawan/termul/issues)
+[![GitHub Stars](https://img.shields.io/github/stars/gnoviawan/termul?style=social)](https://github.com/gnoviawan/troupe/stargazers)
+[![GitHub Issues](https://img.shields.io/github/issues/gnoviawan/termul)](https://github.com/gnoviawan/troupe/issues)
 [![License](https://img.shields.io/github/license/gnoviawan/termul)](LICENSE)
-[![Latest Release](https://img.shields.io/github/v/release/gnoviawan/termul?include_prereleases)](https://github.com/gnoviawan/termul/releases)
+[![Latest Release](https://img.shields.io/github/v/release/gnoviawan/termul?include_prereleases)](https://github.com/gnoviawan/troupe/releases)
 
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)](https://github.com/gnoviawan/termul)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)](https://github.com/gnoviawan/troupe)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?logo=tauri&logoColor=white)](https://tauri.app)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 
-[Getting Started](#-getting-started) · [Features](#-features) · [Documentation](#-documentation) · [Contributing](CONTRIBUTING.md) · [Report Bug](https://github.com/gnoviawan/termul/issues/new?template=bug_report.md) · [Request Feature](https://github.com/gnoviawan/termul/issues/new?template=feature_request.md)
+[Getting Started](#-getting-started) · [Features](#-features) · [Documentation](#-documentation) · [Contributing](CONTRIBUTING.md) · [Report Bug](https://github.com/gnoviawan/troupe/issues/new?template=bug_report.md) · [Request Feature](https://github.com/gnoviawan/troupe/issues/new?template=feature_request.md)
 
 </div>
 
@@ -177,7 +177,7 @@ brew install --cask termul
 curl -fsSL https://raw.githubusercontent.com/gnoviawan/termul/main/scripts/install.sh | bash
 ```
 
-Windows users should install the `.exe` or `.msi` from [GitHub Releases](https://github.com/gnoviawan/termul/releases). Manual DMG downloads in a browser may still hit Gatekeeper, so macOS users should prefer Homebrew or curl.
+Windows users should install the `.exe` or `.msi` from [GitHub Releases](https://github.com/gnoviawan/troupe/releases). Manual DMG downloads in a browser may still hit Gatekeeper, so macOS users should prefer Homebrew or curl.
 
 ## 🚀 Getting Started
 
@@ -248,7 +248,7 @@ rustc --version && cargo --version
 
 ```bash
 # Clone the repository
-git clone https://github.com/gnoviawan/termul.git
+git clone https://github.com/gnoviawan/troupe.git
 cd termul
 
 # Install dependencies

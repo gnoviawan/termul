@@ -15,7 +15,7 @@ The app is bundled through Tauri with updater artifacts enabled by `createUpdate
 
 The stable updater endpoint is:
 
-- `https://github.com/gnoviawan/termul/releases/latest/download/latest.json`
+- `https://github.com/gnoviawan/troupe/releases/latest/download/latest.json`
 
 The desktop release build also creates `dist-web/` before compiling so the embedded browser client is present in both desktop binaries and the standalone Linux server.
 
@@ -100,11 +100,11 @@ case "$(uname -m)" in
   aarch64|arm64)   asset=troupe-server-linux-aarch64 ;;
   *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
-curl -fL -o troupe-server "https://github.com/gnoviawan/termul/releases/latest/download/$asset"
+curl -fL -o troupe-server "https://github.com/gnoviawan/troupe/releases/latest/download/$asset"
 chmod +x troupe-server
 ```
 
-`releases/latest/download/` resolves to the latest stable release only. For the nightly channel use `https://github.com/gnoviawan/termul/releases/download/nightly/$asset`. Each asset has a minisign signature next to it (`$asset.sig`) and is listed in the release's `SHA256SUMS.txt`. The arm64 binary is built on Ubuntu 22.04 (glibc 2.35 or newer required), so musl-based distributions such as Alpine are not supported.
+`releases/latest/download/` resolves to the latest stable release only. For the nightly channel use `https://github.com/gnoviawan/troupe/releases/download/nightly/$asset`. Each asset has a minisign signature next to it (`$asset.sig`) and is listed in the release's `SHA256SUMS.txt`. The arm64 binary is built on Ubuntu 22.04 (glibc 2.35 or newer required), so musl-based distributions such as Alpine are not supported.
 
 The opt-in self-updater selects its manifest key from the architecture the binary was built for (`linux-x86_64-server` or `linux-aarch64-server`), so each host updates to its own binary and keeps the installed filename.
 

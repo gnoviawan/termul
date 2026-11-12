@@ -1,6 +1,6 @@
 # Troupe Documentation
 
-Public documentation site for [Troupe](https://github.com/gnoviawan/termul), built with Fumadocs, React Router, and static hosting.
+Public documentation site for [Troupe](https://github.com/gnoviawan/troupe), built with Fumadocs, React Router, and static hosting.
 
 ## Development
 
