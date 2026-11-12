@@ -10,6 +10,7 @@ import {
   useAgentChatStatusSignals
 } from '@/components/workspace/tabs/agent-chat-status'
 import { useMobileTabActions } from '@/hooks/use-mobile-tab-actions'
+import { copyChatReference } from '@/lib/chat-reference'
 import { logFrontendError } from '@/lib/log-api'
 import { formatChatCreatedTime } from '@/lib/relative-time'
 import { cn } from '@/lib/utils'
@@ -590,6 +591,15 @@ export function MobileRecentsList({
         open={actionsOpen}
         onOpenChange={setActionsOpen}
         title={actionsTarget?.title ?? ''}
+        onCopyReference={() => {
+          if (actionsTarget) {
+            void copyChatReference(
+              actionsTarget.entryId,
+              actionsTarget.title,
+              'MobileRecentsList.copy'
+            )
+          }
+        }}
         onCloseChat={
           actionsTarget?.canClose ? () => closeOpenChat(actionsTarget.entryId) : undefined
         }

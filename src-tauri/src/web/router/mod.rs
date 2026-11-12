@@ -36,7 +36,6 @@ use crate::web::install_api;
 use crate::web::log_api;
 use crate::web::mcp_oauth_api;
 use crate::web::mcp_probe_api;
-use crate::web::mcp_servers_api;
 use crate::web::openapi;
 use crate::web::host_allow::{self, HostAllowList};
 use crate::web::origin::{self, OriginPolicy};
@@ -216,10 +215,6 @@ pub fn router(
         .route(
             "/projects/{projectId}",
             put(projects_api::update_project).delete(projects_api::remove_project),
-        )
-        .route(
-            "/mcp-servers",
-            get(mcp_servers_api::get).put(mcp_servers_api::put),
         )
         // On-demand MCP client probe (web parity): runs on the termul-server
         // host where stdio commands execute. Mirrors the `acp_probe_mcp_server`
@@ -522,10 +517,6 @@ pub fn router_with_static(
         .route("/terminal/ws", get(terminal_ws_upgrade))
         .route("/projects", get(projects_api::list))
         .route("/projects/default", post(projects_api::set_default_project))
-        .route(
-            "/mcp-servers",
-            get(mcp_servers_api::get).put(mcp_servers_api::put),
-        )
         .route("/mcp-servers/probe", post(mcp_probe_api::probe))
         .route("/fs/mkdir", post(fs_api::mkdir))
         .route("/fs/write", post(fs_api::write))

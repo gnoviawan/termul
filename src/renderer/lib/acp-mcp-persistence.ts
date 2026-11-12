@@ -6,9 +6,6 @@ import type {
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { AgentCapabilities, McpServer, McpServerConfig } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
-import { syncMcpRegistryToProject } from '@/lib/tauri-remote-api'
-import { isTauriContext } from '@/lib/tauri-runtime'
-import { webServerMcpServers } from '@/lib/web-server-api'
 import { logFrontendError } from './log-api'
 
 export type McpTransport = 'stdio' | 'http' | 'sse'
@@ -287,17 +284,10 @@ export function selectMcpServersForAgent(
   return { servers, skipped, pending }
 }
 
-/**
- * The registry is one list. Desktop keeps it once in the app store; a web
- * client reads the host file of the project it names (`projectId`, the active
- * project); an empty id (no project yet) loads nothing.
- */
-export async function loadMcpServers(projectId: string): Promise<StoredMcpServer[]> {
-  if (!isTauriContext() && !projectId) return []
-  const res = isTauriContext()
-    ? await persistenceApi.read<unknown>(PersistenceKeys.acpMcpServers)
-    : await webServerMcpServers.get(projectId as string)
-  if (res.success) return dropLegacyCanvasMcpEntries(res.data, projectId)
+/** The registry is one host-wide list, read the same way on every surface. */
+export async function loadMcpServers(): Promise<StoredMcpServer[]> {
+  const res = await persistenceApi.read<unknown>(PersistenceKeys.acpMcpServers)
+  if (res.success) return dropLegacyCanvasMcpEntries(res.data)
   if (res.code === 'KEY_NOT_FOUND') return []
   throw new Error(res.error ?? 'Failed to load MCP servers')
 }
@@ -311,10 +301,7 @@ const LEGACY_CANVAS_MCP_ID_PREFIX = 'canvas-mcp-'
  * load finds nothing to drop. A failed write-back leaves the file as it was
  * and the next load retries.
  */
-async function dropLegacyCanvasMcpEntries(
-  raw: unknown,
-  projectId: string
-): Promise<StoredMcpServer[]> {
+async function dropLegacyCanvasMcpEntries(raw: unknown): Promise<StoredMcpServer[]> {
   if (!Array.isArray(raw)) return normalizeMcpRegistry(raw)
   const kept = raw.filter(
     (entry) =>
@@ -333,7 +320,7 @@ async function dropLegacyCanvasMcpEntries(
     message: `removed ${dropped} legacy canvas-mcp-* MCP registry entries`
   })
   try {
-    await saveMcpServers(registry, projectId)
+    await saveMcpServers(registry)
   } catch (err) {
     void logFrontendError({
       level: 'warn',
@@ -344,54 +331,9 @@ async function dropLegacyCanvasMcpEntries(
   return registry
 }
 
-export async function saveMcpServers(list: StoredMcpServer[], projectId: string): Promise<void> {
-  const normalized = normalizeMcpRegistry(list)
-  if (isTauriContext()) {
-    const res = await persistenceApi.write(PersistenceKeys.acpMcpServers, normalized)
-    if (!res.success) {
-      throw new Error(res.error ?? 'Failed to persist MCP servers')
-    }
-    // CAP-7: mirror the app-store registry to the active project's
-    // `.termul/mcp-servers.json` so the web `GET /mcp-servers?projectId=` route
-    // (file-based) serves the same registry. Best-effort — a sync failure is
-    // logged but never blocks the app-store save (the save above already
-    // succeeded).
-    await syncMcpRegistryToProjectBestEffort(projectId, normalized)
-    return
-  }
-  if (!projectId) throw new Error('Select a project to save MCP servers')
-  const res = await webServerMcpServers.put(projectId, normalized)
+export async function saveMcpServers(list: StoredMcpServer[]): Promise<void> {
+  const res = await persistenceApi.write(PersistenceKeys.acpMcpServers, normalizeMcpRegistry(list))
   if (!res.success) {
     throw new Error(res.error ?? 'Failed to persist MCP servers')
-  }
-}
-
-/**
- * Best-effort wrapper for `syncMcpRegistryToProject`: logs a failure via
- * `logFrontendError` (with the IpcResult error/code) and never throws. Shared by
- * the `saveMcpServers` desktop hook and the acp-store mirror so the error path
- * stays identical (CAP-7 — registry sync is always non-fatal). An empty
- * project id (none active yet) mirrors nothing; a project the host registry does
- * not hold yet (`NOT_FOUND`, e.g. shared-live off) is expected and only noted.
- */
-export async function syncMcpRegistryToProjectBestEffort(
-  projectId: string,
-  registry: StoredMcpServer[]
-): Promise<void> {
-  if (!projectId) return
-  try {
-    const result = await syncMcpRegistryToProject(projectId, registry)
-    if (!result.success) {
-      void logFrontendError({
-        level: result.code === 'NOT_FOUND' ? 'info' : 'error',
-        source: 'acp-mcp-persistence.syncMcpRegistryToProject',
-        message: `MCP registry project-file sync failed (${result.error ?? result.code ?? 'unknown'})`
-      })
-    }
-  } catch (err) {
-    void logFrontendError({
-      source: 'acp-mcp-persistence.syncMcpRegistryToProject',
-      message: `MCP registry project-file sync failed (${String(err)})`
-    })
   }
 }

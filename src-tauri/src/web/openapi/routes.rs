@@ -59,7 +59,6 @@ use crate::web::mcp_oauth_api::{
     OAuthCallbackQuery, OAuthCompleteRequest, OAuthStartRequest, OAuthStartResponse,
     OAuthStatusRequest, OAuthStatusResponse,
 };
-use crate::web::mcp_servers_api::McpProjectQuery;
 use crate::web::project_icon_api::ProjectIconRequest;
 use crate::web::project_registry::{ProjectListPayload, ProjectSummary};
 use crate::web::projects_api::{
@@ -117,9 +116,6 @@ pub(super) const MEDIA: &[&str] = &[
     "application/pdf",
 ];
 const ANY_CONTENT: &[&str] = &["*/*"];
-
-/// The project's MCP registry file: a JSON array of server entries.
-type McpRegistryFile = Vec<serde_json::Value>;
 
 pub static ROUTES: &[ApiRoute] = &[
     // Host
@@ -351,14 +347,6 @@ pub static ROUTES: &[ApiRoute] = &[
         ])
         .describe("Needs a verified bearer token even on loopback."),
     // MCP servers
-    ApiRoute::get("/mcp-servers", Tag::McpServers, "Read a project's MCP registry")
-        .query::<McpProjectQuery>()
-        .ipc::<McpRegistryFile>()
-        .describe("`data` is the project's MCP registry file, `[]` when it does not exist."),
-    ApiRoute::put("/mcp-servers", Tag::McpServers, "Replace a project's MCP registry")
-        .query::<McpProjectQuery>()
-        .json::<McpRegistryFile>()
-        .describe("The body is the whole registry file (at most 1 MiB). Anything but a JSON array is refused with `MCP_REGISTRY_INVALID`."),
     ApiRoute::post("/mcp-servers/probe", Tag::McpServers, "Connect to an MCP server and list its tools")
         .json::<McpServerConfig>()
         .ipc::<ProbeResult>(),
@@ -433,6 +421,9 @@ pub static ROUTES: &[ApiRoute] = &[
         .ipc::<bool>(),
     ApiRoute::get("/api/automation-runs/{run_id}/steps", Tag::Automations, "A run's steps")
         .ipc::<Vec<Step>>(),
+    ApiRoute::post("/api/automation-runs/{run_id}/approval", Tag::Automations, "Approve or reject a parked approval")
+        .json::<automation::ApprovalBody>()
+        .ipc::<bool>(),
     ApiRoute::get("/api/automation-agents", Tag::Automations, "Agents an automation can use")
         .ipc::<Vec<KnownAgent>>(),
     ApiRoute::get("/api/automation-secrets", Tag::Automations, "Names of a project's automation secrets")

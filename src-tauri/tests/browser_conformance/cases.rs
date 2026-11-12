@@ -18,6 +18,8 @@ use crate::fixture_server::{FixtureServer, REDIRECT_PATH, REDIRECT_TARGET_PATH};
 
 #[path = "event_cases.rs"]
 mod events;
+#[path = "file_page_cases.rs"]
+mod file_pages;
 #[path = "form_cases.rs"]
 mod forms;
 #[path = "frame_cases.rs"]
@@ -121,6 +123,9 @@ pub const CAPABILITIES: &[Capability] = &[
     cap("frame_upload", &["snapshot"]),
     cap("frame_file_chooser", &["click"]),
     cap("frame_denied_origin", &["snapshot"]),
+    cap("file_pages", &["navigate", "snapshot", "screenshot"]),
+    cap("file_link_hops", &["navigate", "snapshot", "click"]),
+    cap("agent_overlay", &["snapshot", "screenshot"]),
 ];
 
 pub fn ids() -> Vec<&'static str> {
@@ -335,11 +340,17 @@ async fn tab_lifecycle(c: &Ctx<'_>) -> CaseResult {
 }
 
 async fn error_codes(c: &Ctx<'_>) -> CaseResult {
-    expect_code(
-        c.call("navigate", json!({ "url": "file:///etc/hosts" }))
-            .await,
+    // A file URL every OS refuses for the same reason: one that names no
+    // file (a real file outside the project would ask the user instead).
+    let missing = c.engine.project_file("no-such-page.html");
+    let missing = tauri::Url::from_file_path(&missing)
+        .map(|url| url.to_string())
+        .map_err(|()| mismatch("the fixture folder has no file URL"))?;
+    sensitive_cases::expect_refusal(
+        c.call("navigate", json!({ "url": missing })).await,
         "invalid_params",
-        "navigate to a file url",
+        "file_not_found",
+        "navigate to a missing file",
     )?;
     expect_code(
         c.call("navigate", json!({})).await,
@@ -650,6 +661,9 @@ pub async fn run(
         "frame_upload" => frames::frame_upload(&ctx).await,
         "frame_file_chooser" => frames::frame_file_chooser(&ctx).await,
         "frame_denied_origin" => frames::frame_denied_origin(&ctx).await,
+        "file_pages" => file_pages::file_pages(&ctx).await,
+        "file_link_hops" => file_pages::file_link_hops(&ctx).await,
+        "agent_overlay" => file_pages::agent_overlay(&ctx).await,
         other => Err(mismatch(format!("no case named {other}"))),
     };
     engine.end_session(&ctx.session);

@@ -68,6 +68,11 @@ export type NodeSpec =
   | { kind: 'merge'; mode: MergeMode }
   /** Parks the run durably for `duration_ms`. */
   | { kind: 'wait'; duration_ms: number }
+  /**
+   * Parks the run until a person approves it (`out`). A rejection, or
+   * `timeout_ms` passing first, fails the step (`error`).
+   */
+  | { kind: 'approval'; message: Template; timeout_ms: number }
   | {
       kind: 'mcp_tool'
       /** The project MCP server's registry entry id. */
@@ -148,6 +153,7 @@ export type IssueCode =
   | 'nested_for_each'
   | 'loop_item_outside_body'
   | 'merge_needs_two_inputs'
+  | 'approval_timeout_out_of_range'
   | 'unknown_agent'
   | 'mcp_timeout_out_of_range'
   | 'invalid_mcp_arguments'
@@ -161,6 +167,9 @@ export type Issue = { node_id: NodeId | null; code: IssueCode; message: string }
 export type ApplyOpsResult = { automation: Automation; issues: Issue[] }
 
 export type RunTrigger = 'scheduled' | 'catch_up' | 'manual'
+
+/** The step a `running` run is parked on; `until` is when the park ends (epoch ms). */
+export type Parked = { node_id: NodeId; iteration: number | null; until: number }
 
 export type AutomationRun = {
   id: RunId
@@ -177,6 +186,8 @@ export type AutomationRun = {
   summary: string | null
   conversation_id: string | null
   worktree_id: string | null
+  /** Read from the run's `waiting` step; a parked run's status stays `running`. */
+  parked: Parked | null
 }
 
 export type StepStatus = 'running' | 'succeeded' | 'failed' | 'skipped' | 'waiting'
@@ -191,9 +202,19 @@ export type AutomationStep = {
   error: string | null
   started_at: number | null
   finished_at: number | null
-  /** When a `waiting` step's run resumes. */
+  /** When a `waiting` step's park ends. */
   wait_until: number | null
 }
+
+export type ApprovalDecision = 'approved' | 'rejected' | 'timed_out'
+
+/**
+ * An approval step's `output`: the rendered message, plus the decision once
+ * made. A cancelled approval keeps only the message.
+ */
+export type ApprovalStepOutput =
+  | { message: string; decision?: undefined }
+  | { message: string; decision: ApprovalDecision; decided_at: number }
 
 export type AgentPolicy = {
   node_id: NodeId

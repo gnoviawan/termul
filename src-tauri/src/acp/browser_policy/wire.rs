@@ -28,6 +28,7 @@ pub(crate) enum ProjectOpWire {
 pub(crate) enum AppOpWire {
     SetGlobalProfile { enabled: bool },
     SetAskBeforePasswordSubmit { enabled: bool },
+    SetAskBeforeOpeningSites { enabled: bool },
     AddPreapproval { action: ActionClass, origin: String },
     RemovePreapproval { action: ActionClass, origin: String },
     ClearGlobalProfile,
@@ -81,6 +82,9 @@ pub fn parse_app_op(value: &Value, owned_ports: &[u16]) -> Result<AppOperation, 
             }
             AppOpWire::SetAskBeforePasswordSubmit { enabled } => {
                 AppOperation::Edit(AppPolicyOp::SetAskBeforePasswordSubmit(enabled))
+            }
+            AppOpWire::SetAskBeforeOpeningSites { enabled } => {
+                AppOperation::Edit(AppPolicyOp::SetAskBeforeOpeningSites(enabled))
             }
             AppOpWire::AddPreapproval { action, origin } => {
                 AppOperation::Edit(AppPolicyOp::AddPreapproval(AppPreapproval::new(
@@ -157,6 +161,7 @@ pub struct AppPolicyView {
     /// engine can keep one (macOS needs 14).
     pub effective_global_profile: bool,
     pub ask_before_password_submit: bool,
+    pub ask_before_opening_sites: bool,
     pub preapprovals: Vec<PreapprovalView>,
     /// What clearing the global profile would close right now.
     pub clear_impact: ClearImpact,
@@ -170,6 +175,7 @@ impl AppPolicyView {
             global_profile_enabled: policy.global_profile_enabled,
             effective_global_profile: policy.global_profile_enabled && engine_keeps_global,
             ask_before_password_submit: policy.ask_before_password_submit,
+            ask_before_opening_sites: policy.ask_before_opening_sites,
             preapprovals: preapproval_views(&policy.preapprovals),
             clear_impact,
         }

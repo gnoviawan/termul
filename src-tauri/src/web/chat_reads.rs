@@ -100,6 +100,11 @@ impl ChatReads {
     pub fn get(&self, session_id: &str) -> Option<ReadMark> {
         self.marks.lock().get(session_id).cloned()
     }
+
+    /// Drop the marker of a deleted session.
+    pub fn forget(&self, session_id: &str) {
+        self.marks.lock().remove(session_id);
+    }
 }
 
 #[cfg(test)]

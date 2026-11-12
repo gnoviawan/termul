@@ -1,4 +1,4 @@
-import { Trash2, X } from '@/components/icons'
+import { Copy, Trash2, X } from '@/components/icons'
 import {
   Sheet,
   SheetContent,
@@ -16,6 +16,8 @@ interface MobileRecentsActionsSheetProps {
   onOpenChange: (open: boolean) => void
   /** The chat's title, so the sheet makes sense on its own. */
   title: string
+  /** Every chat: copies the reference another chat's agent can follow. */
+  onCopyReference: () => void
   /** Open chats only: closes the chat through its guarded close. */
   onCloseChat?: () => void
   /** History chats only: requests the existing delete confirm. */
@@ -26,13 +28,14 @@ interface MobileRecentsActionsSheetProps {
 
 /**
  * The Recents row actions, opened by a long-press (`contextmenu`) or the row's
- * keyboard-reachable actions button: Close for an open chat, Delete for a
- * history chat. Recents rows carry no trailing icons of their own.
+ * keyboard-reachable actions button: Copy chat reference for every chat, Close
+ * for an open chat, Delete for a history chat. Recents rows carry no trailing icons of their own.
  */
 export function MobileRecentsActionsSheet({
   open,
   onOpenChange,
   title,
+  onCopyReference,
   onCloseChat,
   onDeleteChat,
   onCloseAutoFocus
@@ -57,6 +60,14 @@ export function MobileRecentsActionsSheet({
           <SheetTitle className="truncate text-base">{title}</SheetTitle>
           <SheetDescription className="sr-only">Chat actions</SheetDescription>
         </SheetHeader>
+        <button
+          type="button"
+          className={`${SHEET_ROW_CLASS_NAME} hover:bg-accent`}
+          onClick={choose(onCopyReference)}
+        >
+          <Copy size={16} />
+          Copy chat reference
+        </button>
         {onCloseChat && (
           <button
             type="button"
@@ -68,7 +79,7 @@ export function MobileRecentsActionsSheet({
           </button>
         )}
         {onDeleteChat && (
-          <div className={onCloseChat ? SHEET_DESTRUCTIVE_DIVIDER_CLASS_NAME : undefined}>
+          <div className={SHEET_DESTRUCTIVE_DIVIDER_CLASS_NAME}>
             <button
               type="button"
               className={`${SHEET_ROW_CLASS_NAME} text-destructive hover:bg-destructive/10`}

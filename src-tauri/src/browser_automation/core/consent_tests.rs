@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, Notify};
 
 use super::*;
-use crate::browser_automation::core::ports::{ActionClass, PortFuture};
+use crate::browser_automation::core::ports::{ActionClass, AppPolicy, AppPolicyOp, PortFuture, ProjectPolicy};
 use crate::browser_automation::core::test_support::{InMemoryPolicyStore, ScriptedPermissions};
 
 /// Tickets wait until the test answers them.
@@ -207,6 +207,11 @@ async fn always_allow_lands_in_the_project_policy_file_and_survives_a_restart() 
         ConsentOption::AllowProject,
     )]));
     let first = fixture(root.path(), Vec::new());
+    first
+        .service
+        .apply_app_op(0, crate::acp::browser_policy::AppPolicyOp::SetAskBeforeOpeningSites(true))
+        .await
+        .unwrap();
     let gate = ConsentGate::new(perms.clone(), first.service.clone());
     authorize(&gate, "session-a", "https://dashboard.example.net/home")
         .await
@@ -529,4 +534,203 @@ async fn session_end_withdraws_tickets_and_forgets_grants() {
         2,
         "the ended session's grant is gone"
     );
+}
+
+/// A policy store whose app policy cannot be read.
+struct UnreadableAppPolicy(InMemoryPolicyStore);
+
+impl PolicyStore for UnreadableAppPolicy {
+    fn project<'a>(&'a self, project_id: &'a str) -> PortFuture<'a, Result<ProjectPolicy, PolicyRefusal>> {
+        self.0.project(project_id)
+    }
+
+    fn app(&self) -> PortFuture<'_, Result<AppPolicy, PolicyRefusal>> {
+        Box::pin(async { Err(PolicyRefusal::ReadOnly) })
+    }
+
+    fn apply_project<'a>(
+        &'a self,
+        project_id: &'a str,
+        expected_revision: u64,
+        op: ProjectPolicyOp,
+    ) -> PortFuture<'a, Result<ProjectPolicy, PolicyRefusal>> {
+        self.0.apply_project(project_id, expected_revision, op)
+    }
+
+    fn apply_app(&self, expected_revision: u64, op: AppPolicyOp) -> PortFuture<'_, Result<AppPolicy, PolicyRefusal>> {
+        self.0.apply_app(expected_revision, op)
+    }
+}
+
+fn unasked(
+    outcomes: impl IntoIterator<Item = TicketOutcome>,
+) -> (Arc<ScriptedPermissions>, Arc<InMemoryPolicyStore>, ConsentGate) {
+    let perms = Arc::new(ScriptedPermissions::answering(outcomes));
+    let store = Arc::new(InMemoryPolicyStore::opening_sites_unasked());
+    let gate = ConsentGate::new(perms.clone(), store.clone());
+    (perms, store, gate)
+}
+
+#[tokio::test]
+async fn with_the_default_policy_public_and_lan_sites_open_without_a_prompt() {
+    let (perms, _store, gate) = unasked([]);
+    for url in ["https://new.example/", "http://192.168.1.1/", "http://10.0.0.5:8080/admin"] {
+        authorize(&gate, "s1", url).await.unwrap_or_else(|e| panic!("{url}: {e}"));
+    }
+    assert!(perms.requests.lock().is_empty(), "no prompt for new sites");
+    let opened: Url = "https://new.example/".parse().unwrap();
+    assert!(
+        !gate.vouched_for("s1", &opened, TabProfile::Ephemeral),
+        "a site opened without a prompt is not vouched for"
+    );
+    assert!(gate.opened_unasked("s1", &opened));
+}
+
+#[tokio::test]
+async fn hard_denies_stay_hard_with_the_site_prompt_off() {
+    let (perms, _store, gate) = unasked([]);
+    for (url, reason) in [
+        ("http://169.254.169.254/latest", "metadata_address"),
+        ("http://0.0.0.0:3000/", "unspecified_address"),
+        ("http://tauri.localhost/", "app_origin"),
+        ("ftp://files.example/", "scheme_not_allowed"),
+    ] {
+        let err = authorize(&gate, "s1", url).await.unwrap_err();
+        assert_eq!(code_reason(&err), ("invalid_params", Some(reason)), "{url}");
+    }
+    let owned = crate::host_perimeter::OwnedPort::claim(61_391);
+    let err = authorize(&gate, "s1", "http://127.0.0.1:61391/").await.unwrap_err();
+    assert_eq!(code_reason(&err), ("invalid_params", Some("troupe_owned_origin")));
+    drop(owned);
+    assert!(perms.requests.lock().is_empty());
+}
+
+#[tokio::test]
+async fn the_stop_latch_holds_with_the_site_prompt_off() {
+    let (_perms, _store, gate) = unasked([]);
+    assert!(gate.stop("s1"));
+    let err = authorize(&gate, "s1", "https://new.example/").await.unwrap_err();
+    assert_eq!(code_reason(&err), ("confirmation_required", Some("stopped_by_user")));
+}
+
+#[tokio::test]
+async fn turning_the_switch_on_mid_session_prompts_on_the_next_call() {
+    let (perms, store, gate) = unasked([]);
+    authorize(&gate, "s1", "https://new.example/").await.unwrap();
+    assert!(perms.requests.lock().is_empty());
+    store
+        .apply_app(0, AppPolicyOp::SetAskBeforeOpeningSites(true))
+        .await
+        .unwrap();
+    let err = authorize(&gate, "s1", "https://new.example/").await.unwrap_err();
+    assert_eq!(code_reason(&err), ("confirmation_required", Some("unattended")));
+    assert_eq!(perms.requests.lock().len(), 1, "the unlisted site prompts again");
+    let lan = authorize(&gate, "s1", "http://192.168.1.1/").await.unwrap_err();
+    assert_eq!(code_reason(&lan), ("confirmation_required", Some("unattended")));
+    assert_eq!(perms.requests.lock()[1].0.action, ActionClass::LocalNetwork);
+}
+
+#[tokio::test]
+async fn an_unreadable_app_policy_asks_before_opening_sites() {
+    let perms = Arc::new(ScriptedPermissions::default());
+    let store = Arc::new(UnreadableAppPolicy(InMemoryPolicyStore::opening_sites_unasked()));
+    let gate = ConsentGate::new(perms.clone(), store);
+    let err = authorize(&gate, "s1", "https://new.example/").await.unwrap_err();
+    assert_eq!(code_reason(&err), ("confirmation_required", Some("unattended")));
+    assert_eq!(perms.requests.lock().len(), 1);
+}
+
+/// The URL of `rel` under the temp folder: a local path on any host.
+fn file_url_of(rel: &str) -> Url {
+    Url::from_file_path(std::env::temp_dir().join(rel)).unwrap()
+}
+
+fn local_file(rel: &str, inside: bool) -> LocalFile {
+    let real = std::env::temp_dir().join(rel);
+    let url = file_url_of(rel);
+    LocalFile {
+        read_access: real.clone(),
+        real,
+        url,
+        inside,
+    }
+}
+
+async fn open_file(gate: &ConsentGate, session_id: &str, file: &LocalFile) -> Result<(), BrowserError> {
+    let token = gate.begin(session_id)?;
+    let url = file.url.to_string();
+    let request = req(session_id, &url);
+    let outcome = token.guard(gate.authorize_file(&token, &request, file)).await;
+    outcome
+}
+
+#[tokio::test]
+async fn a_project_file_opens_without_a_prompt_and_is_granted_exactly() {
+    let (perms, _store, gate) = scripted([]);
+    let file = local_file("proj/dist/index.html", true);
+    open_file(&gate, "s1", &file).await.unwrap();
+    assert!(perms.requests.lock().is_empty());
+    assert_eq!(gate.check_hop("s1", &file.url), HopVerdict::Allow);
+    let sibling = file_url_of("proj/dist/other.html");
+    assert_eq!(
+        gate.check_hop("s1", &sibling),
+        HopVerdict::Deny(DenyReason::FileNotGranted),
+        "the grant names one file, never its folder"
+    );
+    assert!(!gate.vouched_for("s1", &file.url, TabProfile::Ephemeral), "files are never vouched for");
+}
+
+#[tokio::test]
+async fn a_file_outside_the_project_asks_once_or_deny_each_time() {
+    let (perms, _store, gate) = scripted([
+        TicketOutcome::Answered(ConsentOption::AllowSession),
+        TicketOutcome::Answered(ConsentOption::Deny),
+    ]);
+    let file = local_file("notes/a.html", false);
+    open_file(&gate, "s1", &file).await.unwrap();
+    assert_eq!(gate.check_hop("s1", &file.url), HopVerdict::Allow);
+    {
+        let requests = perms.requests.lock();
+        let ticket = &requests[0].0;
+        assert_eq!(ticket.options, &ConsentOption::ONCE_OR_DENY[..]);
+        assert!(matches!(ticket.origin, TicketTarget::File(_)));
+        assert_eq!(ticket.origin.kind(), "file");
+        assert_eq!(ticket.target_url, file_url_of("notes/a.html").to_string());
+        assert_eq!(ticket.action, ActionClass::Navigate);
+    }
+    let err = open_file(&gate, "s1", &file).await.unwrap_err();
+    assert_eq!(code_reason(&err), ("confirmation_required", Some("denied_by_user")));
+    assert_eq!(perms.requests.lock().len(), 2, "opening it again asks again");
+}
+
+#[tokio::test]
+async fn an_outside_file_with_no_approver_is_confirmation_required() {
+    let (_perms, _store, gate) = scripted([]);
+    let file = local_file("notes/a.html", false);
+    let err = open_file(&gate, "s1", &file).await.unwrap_err();
+    assert_eq!(code_reason(&err), ("confirmation_required", Some("unattended")));
+    assert_eq!(gate.check_hop("s1", &file.url), HopVerdict::Deny(DenyReason::FileNotGranted));
+}
+
+#[tokio::test]
+async fn a_session_that_opens_a_file_first_still_opens_web_links_unasked() {
+    let (_perms, _store, gate) = unasked([]);
+    let file = local_file("proj/index.html", true);
+    open_file(&gate, "s1", &file).await.unwrap();
+    let link: Url = "https://docs.example/".parse().unwrap();
+    assert_eq!(
+        gate.check_hop("s1", &link),
+        HopVerdict::Allow,
+        "opening the file snapshotted the site switch too"
+    );
+}
+
+#[tokio::test]
+async fn stop_revokes_file_grants() {
+    let (_perms, _store, gate) = scripted([]);
+    let file = local_file("proj/index.html", true);
+    open_file(&gate, "s1", &file).await.unwrap();
+    gate.stop("s1");
+    assert_eq!(gate.check_hop("s1", &file.url), HopVerdict::Deny(DenyReason::FileNotGranted));
+    assert_eq!(gate.file_read_access("s1", &file.url), None);
 }

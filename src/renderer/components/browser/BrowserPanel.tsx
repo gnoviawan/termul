@@ -15,9 +15,6 @@ const DEFAULT_URL = 'https://www.google.com'
 export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): React.JSX.Element {
   const url = useBrowserSessionStore((state) => state.tabs.get(browserTabId)?.url || DEFAULT_URL)
   const loading = useBrowserSessionStore((state) => state.tabs.get(browserTabId)?.loading ?? false)
-  const agentControlled = useBrowserSessionStore(
-    (state) => state.tabs.get(browserTabId)?.agentControlled ?? false
-  )
 
   // Visibility is owned solely by useBrowserWebview — it serializes
   // show/hide after create and inspects IpcResult.success.
@@ -25,14 +22,12 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
 
   return (
     <div
+      // An agent-driven tab is marked inside its page (the Iris overlay the
+      // host injects) and by the Agent chip on its workspace tab
+      // (browser-tab.tsx), never by pane chrome around the native webview.
       className={cn(
         'w-full h-full flex flex-col',
-        isVisible ? 'visible' : 'invisible absolute inset-0',
-        // Agent-driven tab: Gemini-style gradient ring on every side of the
-        // pane. The padding is real layout space — the ResizeObserver in
-        // useBrowserWebview shrinks the native webview inside it, so the ring
-        // is never painted over (spec-acp-browser-pane-agent-ui).
-        agentControlled && 'termul-agent-border p-0.5'
+        isVisible ? 'visible' : 'invisible absolute inset-0'
       )}
     >
       {isVisible && <BrowserControls browserTabId={browserTabId} />}

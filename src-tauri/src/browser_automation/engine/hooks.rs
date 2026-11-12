@@ -1,7 +1,7 @@
 //! Engine hooks every tab webview is built with, through tauri's
 //! cross-engine builder hooks: navigation start (with the core's verdict),
 //! new-document commit, load finish and title change, and on agent tabs
-//! the new-window request. Each adapter adds what tauri does not expose
+//! the new-window request and the agent-control overlay script. Each adapter adds what tauri does not expose
 //! (same-document URL changes, script dialogs, external-app launches)
 //! when the webview is confirmed.
 
@@ -28,6 +28,8 @@ pub fn install(builder: WebviewBuilder<Wry>, events: &TabEvents) -> WebviewBuild
     if events.role() != TabRole::Agent {
         return builder;
     }
+    // The agent-control overlay: main frame only, at every new document.
+    let builder = builder.initialization_script(super::assets::AGENT_OVERLAY);
     // WebView2 observes the console through CDP instead.
     #[cfg(not(target_os = "windows"))]
     let builder = builder.initialization_script_for_all_frames(super::assets::CONSOLE_SHIM);

@@ -1,7 +1,9 @@
 import { useCallback } from 'react'
 import { toast } from 'sonner'
 import type { ProjectChatEntry } from '@/components/sidebar/project-chat-row'
-import { clipboardApi, openerApi } from '@/lib/api'
+import { openerApi } from '@/lib/api'
+import { copyChatReference } from '@/lib/chat-reference'
+import { copyTextWithToast } from '@/lib/copy-text'
 import { logFrontendError } from '@/lib/log-api'
 import { openAgentChatPlaced } from '@/lib/open-agent-chat'
 import { conversationDeleteIds } from '@/lib/session-chain'
@@ -29,11 +31,13 @@ export interface ChatCardActions {
   onOpenTerminal: (entry: ProjectChatEntry) => Promise<void>
   onOpenInFileExplorer: (cwd: string) => Promise<void>
   onCopyPath: (cwd: string) => Promise<void>
+  onCopyChatId: (entry: ProjectChatEntry) => Promise<void>
+  onCopyChatReference: (entry: ProjectChatEntry) => Promise<void>
 }
 
 /**
  * Chat card interactions: open or resume a chat, open its terminal or folder,
- * copy its path and delete it, plus one warn log per failed open or delete.
+ * copy its path, id or reference and delete it, plus one warn log per failed open or delete.
  */
 export function useChatCardActions(projectId: string): ChatCardActions {
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
@@ -104,16 +108,25 @@ export function useChatCardActions(projectId: string): ChatCardActions {
   )
 
   const onCopyPath = useCallback(async (cwd: string) => {
-    try {
-      const result = await clipboardApi.writeText(cwd)
-      if (result.success) {
-        toast.success('Path copied', { description: cwd })
-      } else {
-        toast.error('Failed to copy path', { description: 'Could not copy to clipboard' })
-      }
-    } catch {
-      toast.error('Failed to copy path', { description: 'Could not copy to clipboard' })
-    }
+    await copyTextWithToast(cwd, {
+      title: 'Path copied',
+      description: cwd,
+      failureTitle: 'Failed to copy path',
+      logSource: LOG_SOURCE
+    })
+  }, [])
+
+  const onCopyChatId = useCallback(async (entry: ProjectChatEntry) => {
+    await copyTextWithToast(entry.id, {
+      title: 'Chat ID copied',
+      description: entry.id,
+      failureTitle: 'Failed to copy chat ID',
+      logSource: LOG_SOURCE
+    })
+  }, [])
+
+  const onCopyChatReference = useCallback(async (entry: ProjectChatEntry) => {
+    await copyChatReference(entry.id, entry.title, LOG_SOURCE)
   }, [])
 
   const onOpenInFileExplorer = useCallback(
@@ -127,5 +140,14 @@ export function useChatCardActions(projectId: string): ChatCardActions {
     [onCopyPath]
   )
 
-  return { onOpen, onOpenInSplit, onDelete, onOpenTerminal, onOpenInFileExplorer, onCopyPath }
+  return {
+    onOpen,
+    onOpenInSplit,
+    onDelete,
+    onOpenTerminal,
+    onOpenInFileExplorer,
+    onCopyPath,
+    onCopyChatId,
+    onCopyChatReference
+  }
 }

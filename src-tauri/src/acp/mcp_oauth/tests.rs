@@ -127,6 +127,15 @@ impl Drop for TokenDirGuard {
 pub(crate) async fn serve_token_endpoint(
     body: serde_json::Value,
 ) -> (String, std::sync::Arc<Mutex<Vec<String>>>) {
+    serve_token_endpoint_with_status(body, axum::http::StatusCode::OK).await
+}
+
+/// Like [`serve_token_endpoint`] but answers with `status`, so a test can drive
+/// the error path (400 + `invalid_grant` is a rejected refresh).
+pub(crate) async fn serve_token_endpoint_with_status(
+    body: serde_json::Value,
+    status: axum::http::StatusCode,
+) -> (String, std::sync::Arc<Mutex<Vec<String>>>) {
     let requests = std::sync::Arc::new(Mutex::new(Vec::new()));
     let seen = requests.clone();
     let registrations = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -138,7 +147,7 @@ pub(crate) async fn serve_token_endpoint(
                 let body = body.clone();
                 async move {
                     seen.lock().push(form);
-                    axum::Json(body)
+                    (status, axum::Json(body))
                 }
             }),
         )
@@ -204,4 +213,94 @@ async fn expired_token_with_refresh_token_is_refreshed() {
         "{}",
         requests[0]
     );
+}
+
+/// Issue #1364: two concurrent `get_valid_token` calls share one refresh
+/// against a server that rotates refresh tokens. One `/token` POST goes out and
+/// both callers get the new access token. A second POST would send the rotated
+/// refresh token, draw `invalid_grant` on a real server, and delete the fresh
+/// token.
+#[tokio::test]
+async fn concurrent_get_valid_token_calls_share_one_refresh() {
+    let _tokens = TokenDirGuard::new("single-flight");
+    let (url, requests) = serve_token_endpoint(serde_json::json!({
+        "access_token": "fresh-access",
+        "token_type": "Bearer",
+        "refresh_token": "rotated-refresh",
+        "expires_in": 3600,
+    }))
+    .await;
+    store_token(&url, &expired_token_with_refresh(&url)).unwrap();
+
+    let (first, second) = tokio::join!(get_valid_token(&url), get_valid_token(&url));
+
+    assert_eq!(first.unwrap().as_deref(), Some("fresh-access"));
+    assert_eq!(second.unwrap().as_deref(), Some("fresh-access"));
+    assert_eq!(requests.lock().len(), 1);
+    let stored = load_stored_token(&url).unwrap().expect("token kept");
+    assert_eq!(stored.refresh_token.as_deref(), Some("rotated-refresh"));
+}
+
+/// Issue #1364: a refresh that fails on a connection error keeps the stored
+/// token so the next call can retry. The chat continues without it.
+#[tokio::test]
+async fn refresh_connection_error_keeps_stored_token() {
+    let _tokens = TokenDirGuard::new("conn-error");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    drop(listener);
+    store_token(&url, &expired_token_with_refresh(&url)).unwrap();
+
+    let token = get_valid_token(&url).await;
+
+    assert_eq!(token.unwrap(), None);
+    assert!(
+        load_stored_token(&url).unwrap().is_some(),
+        "a connection error must keep the token"
+    );
+}
+
+/// Issue #1364: a refresh that outlives [`REFRESH_TIMEOUT`] keeps the stored
+/// token and returns no token instead of pinning the caller.
+#[tokio::test(start_paused = true)]
+async fn refresh_timeout_keeps_stored_token() {
+    let _tokens = TokenDirGuard::new("timeout");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    store_token(&url, &expired_token_with_refresh(&url)).unwrap();
+
+    let token = get_valid_token(&url).await;
+
+    assert_eq!(token.unwrap(), None);
+    assert!(
+        load_stored_token(&url).unwrap().is_some(),
+        "a timeout must keep the token"
+    );
+}
+
+/// Issue #1364: the one failure that still deletes. The authorization server
+/// rejects the refresh token outright (`invalid_grant`).
+#[tokio::test]
+async fn rejected_refresh_deletes_stored_token() {
+    let _tokens = TokenDirGuard::new("rejected");
+    let (url, _requests) = serve_token_endpoint_with_status(
+        serde_json::json!({
+            "error": "invalid_grant",
+            "error_description": "refresh token revoked",
+        }),
+        axum::http::StatusCode::BAD_REQUEST,
+    )
+    .await;
+    store_token(&url, &expired_token_with_refresh(&url)).unwrap();
+
+    let token = get_valid_token(&url).await;
+
+    assert_eq!(token.unwrap(), None);
+    assert!(load_stored_token(&url).unwrap().is_none());
 }

@@ -213,6 +213,7 @@ pub mod conformance_support {
         budgets, create_tab, dispatch, session_ended, set_browser_host,
         BrowserCall, DesktopBrowserHost, HostServices,
     };
+    pub use crate::browser_automation::engine::assets::{overlay_state, overlay_visibility};
     pub use crate::browser_automation::engine::events::{NavPolicy, NavVerdict, TabEvents};
     pub use crate::browser_automation::engine::profile::{delete_dir, DataStore};
     pub use crate::browser_tab_manager::{BrowserBounds, BrowserTabManager};
@@ -1414,6 +1415,7 @@ pub fn run() {
                 }
             };
             let project_registry = Arc::new(project_registry);
+            web::project_registry::install(Arc::clone(&project_registry));
             app.manage(Arc::clone(&project_registry));
 
             // Window chrome is configured before show(). macOS overlay settings
@@ -1780,11 +1782,9 @@ pub fn run() {
                 let registry = Arc::clone(&project_registry);
                 Arc::new(move |project_id| registry.canonical_root(project_id))
             };
-            // `mcp_tool` nodes call the desktop's one MCP server list, kept in
-            // the web store; the project file is only its mirror.
-            let mcp_servers = automation::mcp::desktop_store_servers(
+            // `mcp_tool` nodes call the host's one MCP server list.
+            let mcp_servers = automation::mcp::store_servers(
                 handle.state::<remote::SharedLiveData>().store.clone(),
-                project_roots.clone(),
             );
             match automation::service::AutomationService::open(
                 &app_data_dir,
@@ -2110,6 +2110,7 @@ pub fn run() {
             commands::automation_approve,
             commands::automation_run_now,
             commands::automation_cancel_run,
+            commands::automation_decide_approval,
             commands::automation_list_runs,
             commands::automation_run_steps,
             commands::automation_mark_seen,
@@ -2280,7 +2281,6 @@ pub fn run() {
             commands::remote_server_status,
             commands::project_registry_import,
             commands::remote_sync_chat_history,
-            commands::remote_sync_mcp_registry,
             // Desktop ACP renderer-history storage
             commands::acp_history_list,
             commands::acp_history_get,

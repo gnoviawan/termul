@@ -1,4 +1,6 @@
+import { toast } from 'sonner'
 import { clipboardApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 
 /**
  * Copy text to the clipboard reliably across the Tauri webview.
@@ -48,4 +50,31 @@ export async function copyText(text: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+export interface CopyToast {
+  title: string
+  description?: string
+  failureTitle: string
+  /** `logFrontendError` source of the failure line. */
+  logSource: string
+}
+
+/**
+ * `copyText` with the outcome toasted, and one warn log when it fails. The log
+ * never carries the copied text: it can hold a chat title or a path.
+ */
+export async function copyTextWithToast(text: string, notice: CopyToast): Promise<boolean> {
+  const copied = await copyText(text)
+  if (copied) {
+    toast.success(notice.title, { description: notice.description })
+    return true
+  }
+  toast.error(notice.failureTitle, { description: 'Could not copy to clipboard' })
+  void logFrontendError({
+    level: 'warn',
+    source: notice.logSource,
+    message: `${notice.failureTitle}: every clipboard strategy failed`
+  })
+  return false
 }

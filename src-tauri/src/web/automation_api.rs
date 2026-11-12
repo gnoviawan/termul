@@ -41,8 +41,8 @@ use crate::automation::model::{
 };
 use crate::automation::service::{AutomationService, ServiceError, ServiceResult};
 use crate::commands::automation::{
-    delete_secret, list_suggestions, match_suggestion, parse_ops, preview_schedule, set_secret,
-    UNAVAILABLE,
+    decide_approval, delete_secret, list_suggestions, match_suggestion, parse_ops,
+    preview_schedule, set_secret, UNAVAILABLE,
 };
 use crate::web::auth::BearerVerified;
 use crate::web::capabilities::WriteFlags;
@@ -74,6 +74,7 @@ const RUN: &str = "/api/automations/{id}/run";
 const RUNS: &str = "/api/automations/{id}/runs";
 const SEEN: &str = "/api/automations/{id}/seen";
 const CANCEL_RUN: &str = "/api/automation-runs/{run_id}/cancel";
+const RUN_APPROVAL: &str = "/api/automation-runs/{run_id}/approval";
 const RUN_STEPS: &str = "/api/automation-runs/{run_id}/steps";
 const AGENTS: &str = "/api/automation-agents";
 const SECRETS: &str = "/api/automation-secrets";
@@ -94,6 +95,7 @@ pub fn automation_router<S>(state: AutomationRouteState) -> Router<S> {
         .route(RUNS, get(list_runs))
         .route(SEEN, post(mark_seen))
         .route(CANCEL_RUN, post(cancel_run))
+        .route(RUN_APPROVAL, post(decide))
         .route(RUN_STEPS, get(run_steps))
         .route(AGENTS, get(list_agents))
         .route(
@@ -277,6 +279,12 @@ pub(crate) struct ApproveBody {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct ApprovalBody {
+    node_id: String,
+    approved: bool,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub(crate) struct PreviewBody {
     // Parsed into a `Schedule` by the command; the spec documents that shape.
     #[schemars(with = "crate::automation::model::Schedule")]
@@ -454,6 +462,21 @@ async fn cancel_run(
 ) -> Reply {
     let service = admit(&state, &parts, peer, CANCEL_RUN, true)?;
     reply(CANCEL_RUN, service.cancel_run(&RunId::from(run_id)))
+}
+
+async fn decide(
+    State(state): State<AutomationRouteState>,
+    ConnectInfo(peer): Peer,
+    parts: Parts,
+    Path(run_id): Path<String>,
+    body: Body<ApprovalBody>,
+) -> Reply {
+    let service = admit(&state, &parts, peer, RUN_APPROVAL, true)?;
+    let Json(body) = body.map_err(|e| invalid_body(RUN_APPROVAL, &e))?;
+    reply(
+        RUN_APPROVAL,
+        decide_approval(&service, run_id, body.node_id, body.approved),
+    )
 }
 
 async fn run_steps(

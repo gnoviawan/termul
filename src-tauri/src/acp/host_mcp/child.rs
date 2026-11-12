@@ -17,7 +17,7 @@ use rmcp::handler::server::router::tool::{ToolRoute, ToolRouter};
 use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
+    CallToolResult, ContentBlock, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
     ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, MetaObject,
     PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
     Tool,
@@ -38,6 +38,7 @@ use crate::acp::host_mcp::{
 };
 
 mod automation;
+mod read_chat;
 
 /// Env-derived configuration for the child. Extracted so the arg parser is
 /// unit-testable without touching `std::env`.
@@ -133,7 +134,8 @@ struct DescribedTool {
 
 impl TermulPlanServer {
     fn new(config: ChildConfig, browser: Option<DescribedTool>) -> Self {
-        let mut tool_router = Self::tool_router() + Self::automation_tool_router();
+        let mut tool_router =
+            Self::tool_router() + Self::automation_tool_router() + Self::read_chat_tool_router();
         for tool in canvas_tools::tools() {
             tool_router.add_route(canvas_route(tool));
         }
@@ -148,6 +150,29 @@ impl TermulPlanServer {
 
     fn frame(&self, kind: FrameKind) -> FrameRequest {
         frame(&self.config, kind)
+    }
+
+    /// Send `request` and return the parent's text or JSON as the tool
+    /// result, bounded by `round_trip`.
+    async fn text_call(
+        &self,
+        tool: &str,
+        request: FrameRequest,
+        round_trip: std::time::Duration,
+    ) -> CallToolResult {
+        let reply = tokio::time::timeout(round_trip, exchange_frame(&self.config, request)).await;
+        match reply {
+            Ok(Ok(reply)) => text_result(reply),
+            Ok(Err(error)) => {
+                eprintln!("[host-mcp-child] {tool}: {error}");
+                CallToolResult::error(vec![ContentBlock::text(format!(
+                    "the Troupe host is unreachable: {error}"
+                ))])
+            }
+            Err(_) => CallToolResult::error(vec![ContentBlock::text(
+                "the Troupe host did not answer in time",
+            )]),
+        }
     }
 
     /// Forward the raw arguments; the parent folds, checks and dispatches
@@ -204,6 +229,21 @@ fn browser_reply(reply: Result<FrameReply, String>) -> serde_json::Value {
             "reason": "host_unreachable",
             "message": e,
         }),
+    }
+}
+
+/// The parent's `result` as the tool's text: a string as is, anything else
+/// as compact JSON. A refused call is a tool error the agent reads.
+fn text_result(reply: FrameReply) -> CallToolResult {
+    let text = match reply.result {
+        Some(Value::String(text)) => text,
+        Some(value) => value.to_string(),
+        None => reply.error.unwrap_or_else(|| "no reply".to_string()),
+    };
+    if reply.ok {
+        CallToolResult::success(vec![ContentBlock::text(text)])
+    } else {
+        CallToolResult::error(vec![ContentBlock::text(text)])
     }
 }
 
@@ -670,5 +710,7 @@ fn fill_discover_request_meta(line: &str) -> (String, bool) {
 
 #[cfg(test)]
 mod automation_tests;
+#[cfg(test)]
+mod read_chat_tests;
 #[cfg(test)]
 mod tests;

@@ -51,3 +51,31 @@ fn a_download_mark_is_the_one_the_os_checks() {
         );
     }
 }
+
+/// A FIFO swapped in for a checked file must not hang the host: the
+/// non-blocking open returns at once, and the regular-file check refuses
+/// it.
+#[cfg(unix)]
+#[test]
+fn a_fifo_opens_at_once_and_is_refused_as_not_a_file() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::time::{Duration, Instant};
+
+    use crate::browser_automation::core::local_files::{open_regular, OpenRefusal};
+
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("pipe.html");
+    let c_path = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    // SAFETY: a NUL-terminated path that lives across the call.
+    assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0, "mkfifo");
+
+    let started = Instant::now();
+    let opened = open_nonblocking(&fifo).expect("a FIFO with no writer opens for reading");
+    assert!(started.elapsed() < Duration::from_secs(2), "the open did not wait for a writer");
+    assert!(!opened.metadata().unwrap().is_file());
+
+    let started = Instant::now();
+    assert!(matches!(open_regular(&fifo), Err(OpenRefusal::NotAFile)));
+    assert!(started.elapsed() < Duration::from_secs(2));
+}

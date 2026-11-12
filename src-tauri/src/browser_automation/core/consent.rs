@@ -1,7 +1,9 @@
 //! Origin consent for agent browser calls: classify the call's target,
 //! honour the session's grants and the project allow-list, and raise a
-//! host-originated consent ticket for everything else. Owns the Stop
-//! latch, because Stop revokes exactly what consent grants.
+//! host-originated consent ticket for everything else (unless the app opens
+//! new sites without asking). Local files the host checked are granted per
+//! exact file: project files at once, others after an allow-once ticket.
+//! Owns the Stop latch, because Stop revokes exactly what consent grants.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,9 +14,10 @@ use tauri::Url;
 
 use super::authz::{DenyReason, HopVerdict, OriginClass, PromptKind, SessionGrants};
 use super::dispatch::Verb;
+use super::local_files::LocalFile;
 use super::ports::{
     ActionClass, CanonicalOrigin, ConsentOption, PermissionRequest, PolicyRefusal, PolicyStore,
-    ProjectPolicyOp, TabProfile, TicketFile, TicketId, TicketOutcome, TicketRequest,
+    ProjectPolicyOp, TabProfile, TicketFile, TicketId, TicketOutcome, TicketRequest, TicketTarget,
 };
 use super::sensitivity::{Sensitive, Taint};
 use super::stop::{stopped_error, StopLatch, StopToken};
@@ -41,7 +44,13 @@ fn confirmation(reason: &'static str, message: String) -> BrowserError {
 }
 
 fn denied(reason: DenyReason) -> BrowserError {
-    BrowserError::invalid("this origin is never reachable from the agent browser")
+    let message = match reason {
+        DenyReason::FileNotGranted => {
+            "this session no longer holds access to the local file this tab shows (Stop or a profile change revoked it); call navigate with its url to open it again"
+        }
+        _ => "this origin is never reachable from the agent browser",
+    };
+    BrowserError::invalid(message)
         .with_reason(reason.as_str())
         .with_arg_keys(&["url"])
 }
@@ -118,6 +127,11 @@ pub struct ConsentGate {
     /// One consent ticket per session at a time: a concurrent call for the
     /// same origin waits, then finds the grant instead of prompting again.
     prompts: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Bumped by every policy refresh. A snapshot carries the generation
+    /// current when its policy was read, and never replaces a newer one:
+    /// a call that read the policy before a refresh cannot write it back
+    /// over the refresh.
+    policy_generation: std::sync::atomic::AtomicU64,
 }
 
 impl ConsentGate {
@@ -132,6 +146,7 @@ impl ConsentGate {
             permissions,
             policy,
             prompts: Mutex::new(HashMap::new()),
+            policy_generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -148,8 +163,6 @@ impl ConsentGate {
             .url
             .parse()
             .map_err(|_| BrowserError::invalid("invalid url").with_arg_keys(&["url"]))?;
-        let allow_list = self.allow_list(req.project_id).await;
-        self.grants.set_allow_list(req.session_id, allow_list);
         let lock = self
             .prompts
             .lock()
@@ -158,8 +171,19 @@ impl ConsentGate {
             .clone();
         let _one_prompt = lock.lock().await;
         token.check()?;
+        // Read under the session's lock: a call that read the policy
+        // earlier cannot overwrite a newer snapshot after this one.
+        self.snapshot_policy(req.session_id, req.project_id).await;
         match self.grants.check_hop(req.session_id, &url) {
-            HopVerdict::Allow => Ok(()),
+            HopVerdict::Allow => {
+                if self.grants.opened_unasked(req.session_id, &url) {
+                    log::info!(
+                        "[browser-agent] site opened without a prompt (ask before opening sites is off) session={}",
+                        crate::logging::redact_session_id(req.session_id)
+                    );
+                }
+                Ok(())
+            }
             HopVerdict::Deny(reason) => {
                 log::info!(
                     "[browser-agent] origin denied code={} reason={} keys=[url]",
@@ -170,6 +194,209 @@ impl ConsentGate {
             }
             HopVerdict::Ungranted(kind, origin) => self.prompt(token, &req, kind, origin).await,
         }
+    }
+
+    /// The policy changed: refresh the snapshot of every live session now,
+    /// so page-started hops follow it before the agent's next call.
+    pub async fn refresh_policies(&self, project_of: impl Fn(&str) -> String) {
+        let generation = self
+            .policy_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1;
+        let sessions = self.grants.session_ids();
+        if sessions.is_empty() {
+            return;
+        }
+        let ask_sites = self.asks_before_opening_sites().await;
+        for session_id in sessions {
+            let allow_list = self.allow_list(&project_of(&session_id)).await;
+            self.grants.refresh_policy(&session_id, generation, allow_list, ask_sites);
+        }
+        log::info!("[browser-agent] live sessions picked up a browser policy change ask_sites={ask_sites}");
+    }
+
+    /// Snapshot the project allow-list and the site switch the session's
+    /// synchronous hop checks decide from. Callers hold the session's
+    /// prompt lock.
+    async fn snapshot_policy(&self, session_id: &str, project_id: &str) {
+        use std::sync::atomic::Ordering;
+        // A refresh that lands while this reads makes the read stale: read
+        // again, so the snapshot is never older than the last refresh.
+        for _ in 0..3 {
+            let generation = self.policy_generation.load(Ordering::Acquire);
+            let allow_list = self.allow_list(project_id).await;
+            let ask_sites = self.asks_before_opening_sites().await;
+            self.grants.set_policy(session_id, generation, allow_list, ask_sites);
+            if self.policy_generation.load(Ordering::Acquire) == generation {
+                return;
+            }
+        }
+    }
+
+    /// The app's "ask before opening new sites" switch. A policy that
+    /// cannot be read asks.
+    async fn asks_before_opening_sites(&self) -> bool {
+        match self.policy.app().await {
+            Ok(app) => app.ask_before_opening_sites,
+            Err(error) => {
+                log::warn!(
+                    "[browser-agent] app policy read failed reason={}; asking before opening sites",
+                    error.reason()
+                );
+                true
+            }
+        }
+    }
+
+    /// Open a local file the host checked: a project file is granted at
+    /// once; any other asks this once (allow once or deny), every time
+    /// the agent opens it. The grant is the exact real-path URL, which the
+    /// engine's hop checks and frame guards then allow.
+    pub async fn authorize_file(
+        &self,
+        token: &StopToken,
+        req: &OriginRequest<'_>,
+        file: &LocalFile,
+    ) -> Result<(), BrowserError> {
+        let lock = self
+            .prompts
+            .lock()
+            .entry(req.session_id.to_string())
+            .or_default()
+            .clone();
+        let _one_prompt = lock.lock().await;
+        token.check()?;
+        // The file page's own web links are verdicted from this snapshot.
+        self.snapshot_policy(req.session_id, req.project_id).await;
+        let session = crate::logging::redact_session_id(req.session_id);
+        if file.inside {
+            log::info!("[browser-agent] project file opened without a prompt session={session}");
+            return self.keep_file_grant(token, req.session_id, file);
+        }
+        let ticket = TicketRequest {
+            id: TicketId::mint(),
+            session_id: req.session_id.to_string(),
+            project_id: req.project_id.to_string(),
+            origin: TicketTarget::File(file.display()),
+            target_url: file.url.to_string(),
+            action: ActionClass::Navigate,
+            element: req.element.map(str::to_string),
+            file: None,
+            profile: req.profile,
+            options: &ConsentOption::ONCE_OR_DENY,
+        };
+        let outcome = self
+            .permissions
+            .request(ticket, req.deadline.clamp(budgets::CONSENT_WAIT))
+            .await;
+        log::info!(
+            "[browser-agent] file consent outcome={} session={session}",
+            outcome_label(&outcome)
+        );
+        match outcome {
+            TicketOutcome::Answered(ConsentOption::AllowSession) => self.stop.commit(req.session_id, token, || {
+                self.grants.grant_file_once(req.session_id, &file.url, &file.read_access);
+            }),
+            // Never offered; an answer naming it is treated as a denial. A
+            // denial also ends an earlier "allow once" of the same file.
+            TicketOutcome::Answered(ConsentOption::AllowProject | ConsentOption::Deny) => {
+                self.grants.revoke_file(req.session_id, &file.url);
+                Err(confirmation(
+                    "denied_by_user",
+                    "the user did not allow the agent browser to open this file".to_string(),
+                ))
+            }
+            TicketOutcome::Unattended => Err(confirmation(
+                "unattended",
+                "no one can approve opening a file outside the project right now; ask the user, or copy it into the project".to_string(),
+            )),
+            TicketOutcome::TimedOut => Err(confirmation(
+                "consent_timeout",
+                "the user did not answer the request to open this file".to_string(),
+            )),
+            TicketOutcome::Cancelled if token.is_stopped() => Err(stopped_error()),
+            TicketOutcome::Cancelled => Err(confirmation(
+                "consent_cancelled",
+                "the request to open this file was withdrawn".to_string(),
+            )),
+        }
+    }
+
+    /// Grant the project file a page on `from` linked to, in one step with
+    /// the check that the session still holds `from`, under the locks Stop
+    /// and revokes take: `Ok(false)` when `from` lost its grant, an error
+    /// when Stop came first.
+    pub fn keep_linked_file_grant(
+        &self,
+        token: &StopToken,
+        session_id: &str,
+        from: &Url,
+        file: &LocalFile,
+    ) -> Result<bool, BrowserError> {
+        self.stop.commit(session_id, token, || {
+            self.grants
+                .grant_file_if_held(session_id, from, &file.url, &file.read_access)
+        })
+    }
+
+    /// Keep the grant of the checked `file` unless Stop came first.
+    pub fn keep_file_grant(
+        &self,
+        token: &StopToken,
+        session_id: &str,
+        file: &LocalFile,
+    ) -> Result<(), BrowserError> {
+        self.stop.commit(session_id, token, || {
+            self.grants.grant_file(session_id, &file.url, &file.read_access);
+        })
+    }
+
+    /// The host sent `tab` to the file `url` (see
+    /// [`SessionGrants::file_load_dispatched`]).
+    pub fn file_load_dispatched(&self, session_id: &str, tab: &str, url: &Url) {
+        self.grants.file_load_dispatched(session_id, tab, url);
+    }
+
+    /// The load of the file `url` failed (see
+    /// [`SessionGrants::file_load_failed`]).
+    pub fn file_load_failed(&self, session_id: &str, tab: Option<&str>, url: &Url) {
+        if self.grants.file_load_failed(session_id, tab, url) {
+            log::info!(
+                "[browser-agent] allow-once file grant ended reason=load_failed session={}",
+                crate::logging::redact_session_id(session_id)
+            );
+        }
+    }
+
+    /// A call approved to open a file failed before it dispatched the load:
+    /// end the "allow once" grants nothing holds or loads (see
+    /// [`SessionGrants::end_unused_once_files`]).
+    pub fn end_unused_file_grants(&self, session_id: &str) {
+        let ended = self.grants.end_unused_once_files(session_id);
+        if ended > 0 {
+            log::info!(
+                "[browser-agent] allow-once file grant ended count={ended} reason=open_failed session={}",
+                crate::logging::redact_session_id(session_id)
+            );
+        }
+    }
+
+    /// Tab `tab` of the session committed `url`, or closed (`None`): end
+    /// the "allow once" file grants no tab holds any longer.
+    pub fn tab_moved(&self, session_id: &str, tab: &str, url: Option<&Url>) {
+        let ended = self.grants.tab_moved(session_id, tab, url);
+        if ended > 0 {
+            log::info!(
+                "[browser-agent] allow-once file grant ended count={ended} reason=tab_left_file session={}",
+                crate::logging::redact_session_id(session_id)
+            );
+        }
+    }
+
+    /// Whether the session holds a grant for the exact file `url`, and the
+    /// directory its page may read.
+    pub fn file_read_access(&self, session_id: &str, url: &Url) -> Option<std::path::PathBuf> {
+        self.grants.file_read_access(session_id, url)
     }
 
     async fn allow_list(&self, project_id: &str) -> Vec<OriginPattern> {
@@ -196,7 +423,7 @@ impl ConsentGate {
             id: TicketId::mint(),
             session_id: req.session_id.to_string(),
             project_id: req.project_id.to_string(),
-            origin: origin.clone(),
+            origin: origin.clone().into(),
             target_url: req.url.to_string(),
             action: kind.action(),
             element: req.element.map(str::to_string),
@@ -290,7 +517,8 @@ impl ConsentGate {
 
     /// The origins the user vouched for: loopback, and for ephemeral tabs
     /// the project's allow-list. A global tab's logins outlive the project
-    /// whose list vouched for the origin.
+    /// whose list vouched for the origin. A site opened without a prompt,
+    /// and a local file, is never vouched for.
     pub fn vouched_for(&self, session_id: &str, url: &Url, profile: TabProfile) -> bool {
         match self.grants.class_of(session_id, url) {
             OriginClass::Loopback => true,
@@ -343,7 +571,7 @@ impl ConsentGate {
             id: TicketId::mint(),
             session_id: req.session_id.to_string(),
             project_id: req.project_id.to_string(),
-            origin: origin.clone(),
+            origin: origin.clone().into(),
             target_url: item.target.clone(),
             action: item.class,
             element: req.element.map(str::to_string),
@@ -459,6 +687,11 @@ impl ConsentGate {
         self.grants.check_hop(session_id, url)
     }
 
+    /// See [`SessionGrants::opened_unasked`].
+    pub fn opened_unasked(&self, session_id: &str, url: &Url) -> bool {
+        self.grants.opened_unasked(session_id, url)
+    }
+
     pub fn end_session(&self, session_id: &str) {
         self.stop.forget(session_id);
         self.grants.forget_session(session_id);
@@ -501,19 +734,21 @@ impl DesktopBrowserHost {
         };
         let project_id = (self.project_of)(session_id);
         let profile = self.call_profile(session_id, verb, call).await;
-        self.gate
-            .authorize(
-                token,
-                OriginRequest {
-                    session_id,
-                    project_id: &project_id,
-                    url: &url,
-                    element: call.element.as_deref(),
-                    profile,
-                    deadline,
-                },
-            )
-            .await?;
+        let request = OriginRequest {
+            session_id,
+            project_id: &project_id,
+            url: &url,
+            element: call.element.as_deref(),
+            profile,
+            deadline,
+        };
+        // A file the agent asks to open is checked on disk first; a tab
+        // already showing a file passes on its exact grant alone.
+        if matches!(verb, Verb::Navigate | Verb::NewTab) && super::local_files::is_file_url(&url) {
+            let file = self.check_local_file(session_id, &url, deadline).await?;
+            return self.gate.authorize_file(token, &request, &file).await;
+        }
+        self.gate.authorize(token, request).await?;
         self.authorize_frames(token, session_id, call, &project_id, profile, deadline)
             .await?;
         let keys_to_focus = matches!(verb, Verb::Press | Verb::Type)

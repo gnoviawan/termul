@@ -1,7 +1,8 @@
 //! Engine debug and automation switches a process can inherit from its
 //! environment. Each one makes a webview engine listen on a local port or
 //! pipe that any same-user process could attach to and drive the app UI or
-//! a tab through.
+//! a tab through. Also the switches that let a `file://` page read other
+//! local files, which would undo the agent browser's per-file grants.
 
 use std::ffi::OsString;
 
@@ -21,6 +22,14 @@ const REMOVED: &[&str] = &[
 const WEBVIEW2_ARGS: &str = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
 
 const DEBUG_SWITCHES: &[&str] = &["remote-debugging", "remote-allow-origins"];
+
+/// Switches that let pages read local files or other origins. Always
+/// removed, the dev opt-in included.
+const FILE_ACCESS_SWITCHES: &[&str] = &[
+    "allow-file-access-from-files",
+    "allow-file-access",
+    "disable-web-security",
+];
 
 /// Dropped even under the dev opt-in, so the debug port keeps the engine's
 /// loopback default.
@@ -86,7 +95,9 @@ pub(crate) fn plan(read: impl Fn(&str) -> Option<OsString>, debug_build: bool) -
             Err(_) => actions.push(EnvScrub::Remove(WEBVIEW2_ARGS)),
             Ok(text) => {
                 let blocked = |arg: &str| {
-                    if keep_debug {
+                    if is_file_access_switch(arg) {
+                        true
+                    } else if keep_debug {
                         is_switch(arg, BIND_SWITCH)
                     } else {
                         is_debug_switch(arg)
@@ -125,6 +136,11 @@ fn switch_name(arg: &str) -> Option<String> {
 fn is_debug_switch(arg: &str) -> bool {
     switch_name(arg)
         .is_some_and(|name| DEBUG_SWITCHES.iter().any(|switch| name.starts_with(switch)))
+}
+
+fn is_file_access_switch(arg: &str) -> bool {
+    switch_name(arg)
+        .is_some_and(|name| FILE_ACCESS_SWITCHES.iter().any(|switch| name.starts_with(switch)))
 }
 
 fn is_switch(arg: &str, switch: &str) -> bool {

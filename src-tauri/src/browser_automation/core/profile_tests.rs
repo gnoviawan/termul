@@ -243,6 +243,11 @@ async fn opting_out_closes_that_project_s_global_tabs_and_its_next_tab_is_epheme
 #[tokio::test]
 async fn opting_out_revokes_the_session_s_origin_grants_and_withdraws_its_tickets() {
     let p = profile_harness(Support::Trusted);
+    // Granted origins are what the opt-out revokes: ask before new sites.
+    p.policy
+        .apply_app_op(0, crate::acp::browser_policy::AppPolicyOp::SetAskBeforeOpeningSites(true))
+        .await
+        .expect("the switch saves");
     let reply = p
         .h
         .call_as(
@@ -269,6 +274,33 @@ async fn opting_out_revokes_the_session_s_origin_grants_and_withdraws_its_ticket
     ));
     assert_eq!(*p.permissions.cancelled_sessions.lock(), ["projA:1"]);
     assert!(p.h.host.registry.lock().get(&kept).is_some());
+}
+
+/// The switch reaches live sessions through the service's change hook: a
+/// page-started hop right after it follows the new setting, with no agent
+/// call in between.
+#[tokio::test]
+async fn turning_the_site_prompt_on_applies_to_page_started_hops_at_once() {
+    let p = profile_harness(Support::Trusted);
+    let (tab, _) = p.open("projA:1").await;
+    p.h.pane.user_navigates(&tab, "https://first.example/");
+    p.settle().await;
+    let url_of = |p: &ProfileHarness| p.h.host.registry.lock().get(&tab).map(|r| r.url.clone());
+    assert_eq!(url_of(&p).as_deref(), Some("https://first.example/"), "unasked while off");
+
+    p.app_op(json!({ "op": "set_ask_before_opening_sites", "enabled": true })).await;
+    p.settle().await;
+    p.h.pane.user_navigates(&tab, "https://second.example/");
+    p.settle().await;
+    assert_eq!(
+        url_of(&p).as_deref(),
+        Some("https://first.example/"),
+        "the unlisted site is denied without an agent call in between"
+    );
+    assert!(matches!(
+        p.h.host.gate.check_hop("projA:1", &Url::parse("https://second.example/").unwrap()),
+        HopVerdict::Ungranted(..)
+    ));
 }
 
 #[tokio::test]

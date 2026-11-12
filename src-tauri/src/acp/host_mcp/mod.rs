@@ -30,11 +30,14 @@ pub mod canvas_tools;
 pub mod child;
 pub mod parent;
 pub mod presence;
+pub mod read_chat;
 
 #[cfg(test)]
 mod automation_tools_tests;
 #[cfg(test)]
 mod gateway_harness;
+#[cfg(test)]
+mod read_chat_tests;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -82,7 +85,8 @@ or update a todo list, send the full list with each item's status every time, an
 list of your own. In the first turn, once the user's intent is clear, call `set_session_title` \
 once with a short title and a kebab-case `branch` slug. When you need a decision or missing \
 details from the user, ask with the `ask_user` tool or your client's own question tool, not in \
-plain text.";
+plain text. When the user gives you a Troupe chat ID or a copied chat reference, read that chat \
+with the `read_chat` tool.";
 
 /// The context budget Claude Code gives a server's `instructions`: it keeps
 /// this many UTF-16 code units (`CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`,
@@ -189,6 +193,8 @@ pub enum FrameKind {
     /// An `automation_*` tool call, answered by the host automation service
     /// for the session's project.
     Automation,
+    /// A `read_chat` tool call: any chat on this host, rendered as text.
+    ReadChat,
 }
 
 /// One option the agent offers in an `ask_user` question.
@@ -390,6 +396,9 @@ pub struct FrameRequest {
     /// An `Automation` frame's tool arguments, parsed by the parent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub automation_input: Option<serde_json::Value>,
+    /// The chat and page a `ReadChat` frame asks for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_chat: Option<read_chat::ReadChatInput>,
 }
 
 /// Parent reply frame (one per connection). `result` carries the browser

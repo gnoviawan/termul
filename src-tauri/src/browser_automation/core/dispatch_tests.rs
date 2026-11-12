@@ -326,7 +326,7 @@ fn description_says_where_results_live_and_lists_every_failure_code() {
         "snapshot gives the outline in page.snapshot and a ref count in data.refs",
         "screenshot gives the file path in data.path",
         "tab.id is the tabId to pass back",
-        "the first call in a session may wait for their answer",
+        "a call may wait for their answer when it opens a site and the user asks before new sites open, opens a file outside the project",
     ] {
         assert!(description.contains(line), "missing {line:?}: {description}");
     }
@@ -340,6 +340,18 @@ fn description_says_where_results_live_and_lists_every_failure_code() {
         "internal",
     ] {
         assert!(description.contains(&format!("{code} (")), "missing code {code}: {description}");
+    }
+}
+
+#[test]
+fn the_url_arg_documents_file_targets_and_when_they_ask() {
+    let schema = schema(Some(&EngineFacts::all_trusted()));
+    let doc = schema.input_schema["properties"]["url"]["description"]
+        .as_str()
+        .expect("url is documented")
+        .to_string();
+    for part in ["file://", "project folder open without asking", "ask the user each time", "refused"] {
+        assert!(doc.contains(part), "missing {part:?}: {doc}");
     }
 }
 

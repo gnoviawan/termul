@@ -4,9 +4,9 @@ use super::*;
 use crate::browser_automation::{ERR_INVALID_PARAMS, ERR_TAB_NOT_FOUND};
 
 #[test]
-fn url_allowlist_accepts_http_s_only() {
-    assert!(check_url("https://example.com").is_ok());
-    assert!(check_url("http://127.0.0.1:3000/app").is_ok());
+fn the_web_check_accepts_http_s_only() {
+    assert!(check_web_url("https://example.com").is_ok());
+    assert!(check_web_url("http://127.0.0.1:3000/app").is_ok());
     for bad in [
         "file:///etc/passwd",
         "javascript:alert(1)",
@@ -15,11 +15,32 @@ fn url_allowlist_accepts_http_s_only() {
         "not a url",
         "",
     ] {
-        let err = check_url(bad).unwrap_err();
+        let err = check_web_url(bad).unwrap_err();
         assert_eq!(err.code, ERR_INVALID_PARAMS);
         // Site attribution pinned from origin: the failing key is `url`.
         assert_eq!(err.arg_keys, vec!["url"], "must name 'url': {bad}");
     }
+}
+
+/// Only navigate and new_tab take file URLs; popups and the sensitive gate
+/// keep the web-only check above.
+#[test]
+fn the_agent_target_check_adds_file_urls_and_nothing_else() {
+    assert_eq!(
+        check_target_url("https://example.com/a").unwrap(),
+        AgentTarget::Web("https://example.com/a".into())
+    );
+    assert_eq!(
+        check_target_url("file:///tmp/dist/index.html").unwrap(),
+        AgentTarget::File("file:///tmp/dist/index.html".into())
+    );
+    for bad in ["javascript:alert(1)", "data:text/html,x", "about:blank", "ftp://x.example/", "not a url"] {
+        let err = check_target_url(bad).unwrap_err();
+        assert_eq!(err.code, ERR_INVALID_PARAMS, "{bad}");
+        assert_eq!(err.arg_keys, vec!["url"], "{bad}");
+    }
+    let ftp = check_target_url("ftp://x.example/").unwrap_err();
+    assert!(ftp.message.contains("(http/https/file only)"), "{}", ftp.message);
 }
 
 #[test]

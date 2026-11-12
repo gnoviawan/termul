@@ -718,6 +718,7 @@ fn running_row(a: &Automation) -> Run {
         summary: None,
         conversation_id: None,
         worktree_id: None,
+        parked: None,
     }
 }
 

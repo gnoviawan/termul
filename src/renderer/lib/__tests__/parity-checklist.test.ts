@@ -2575,6 +2575,7 @@ describe('Browser policy parity', () => {
       set_ephemeral: 'SetEphemeral',
       set_global_profile: 'SetGlobalProfile',
       set_ask_before_password_submit: 'SetAskBeforePasswordSubmit',
+      set_ask_before_opening_sites: 'SetAskBeforeOpeningSites',
       clear_global_profile: 'ClearGlobalProfile'
     }
     for (const [name, variant] of Object.entries(variants)) {
@@ -3002,6 +3003,13 @@ describe('Automation parity (facade)', () => {
       command: 'automation_cancel_run',
       http: '"/api/automation-runs/{run_id}/cancel"',
       route: 'RUNS}/${seg(runId)}/cancel`'
+    },
+    {
+      fn: 'decideAutomationApproval',
+      method: 'decideApproval',
+      command: 'automation_decide_approval',
+      http: '"/api/automation-runs/{run_id}/approval"',
+      route: 'RUNS}/${seg(runId)}/approval`'
     },
     {
       fn: 'listAutomationRuns',

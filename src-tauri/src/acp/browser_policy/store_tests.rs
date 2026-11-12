@@ -170,9 +170,10 @@ async fn an_unparseable_file_fails_closed_and_is_left_as_it_is() {
             app.read_only,
             app.global_profile_enabled,
             app.ask_before_password_submit,
+            app.ask_before_opening_sites,
             app.preapprovals.len()
         ),
-        (true, false, true, 0)
+        (true, false, true, true, 0)
     );
     assert_eq!(
         (project.read_only, project.profile_mode, project.allow_list.len()),
@@ -194,6 +195,33 @@ async fn an_unparseable_file_fails_closed_and_is_left_as_it_is() {
     );
     assert_eq!(std::fs::read(&app_path).unwrap(), b"{ not json");
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "no copies are written");
+}
+
+/// An app file written before the switch existed reads as the shipped
+/// default: new sites open without a prompt. The switch round-trips.
+#[tokio::test]
+async fn an_app_file_without_the_site_prompt_field_opens_sites_unasked() {
+    let (dir, files) = files();
+    let path = dir.path().join("app.json");
+    std::fs::write(
+        &path,
+        br#"{"version":1,"revision":4,"globalProfileEnabled":true,"askBeforePasswordSubmit":true}"#,
+    )
+    .unwrap();
+    let policy = files.read_app().await.unwrap();
+    assert!(!policy.read_only);
+    assert!(!policy.ask_before_opening_sites);
+    assert!(policy.ask_before_password_submit, "the other fields still load");
+
+    let (saved, changed) = files
+        .edit_app(4, |p| p.apply(AppPolicyOp::SetAskBeforeOpeningSites(true)))
+        .await
+        .unwrap();
+    assert!(changed);
+    assert!(saved.ask_before_opening_sites);
+    let stored = std::fs::read_to_string(&path).unwrap();
+    assert!(stored.contains(r#""askBeforeOpeningSites": true"#), "{stored}");
+    assert!(files.read_app().await.unwrap().ask_before_opening_sites);
 }
 
 #[tokio::test]

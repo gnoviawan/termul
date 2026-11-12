@@ -62,8 +62,8 @@ pub(super) enum NodeError {
     /// A `fail` node: the run fails with this message.
     Halt(String),
     Cancelled,
-    /// A `wait` parked the run; nothing after it runs or is recorded until
-    /// it resumes.
+    /// A `wait` or `approval` parked the run; nothing after it runs or is
+    /// recorded until it resumes.
     Parked { wait_until: i64 },
 }
 
@@ -131,6 +131,10 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: &NodeSpec) -> Result<NodeSu
         } => control::for_each(scope, items, *max_iterations).await,
         NodeSpec::Merge { .. } => Ok(out(control::merge(scope))),
         NodeSpec::Wait { duration_ms } => Err(control::wait(scope, *duration_ms)),
+        NodeSpec::Approval {
+            message,
+            timeout_ms,
+        } => Err(control::approval(scope, message, *timeout_ms)),
         NodeSpec::McpTool {
             server_id,
             tool,

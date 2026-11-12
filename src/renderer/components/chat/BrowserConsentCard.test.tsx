@@ -116,6 +116,56 @@ describe('BrowserConsentCard', () => {
     ])
   })
 
+  it('words a file outside the project as opening a file, allowed once at a time', () => {
+    render(
+      <BrowserConsentCard
+        consent={ticket({
+          origin: '/home/me/notes/a.html',
+          targetKind: 'file',
+          fileName: 'a.html',
+          targetUrl: 'file:///home/me/notes/a.html',
+          targetUrlBytes: 28,
+          options: ['allow_session', 'deny']
+        })}
+      />
+    )
+    expect(screen.getByText('Allow the agent to open this file?')).toBeInTheDocument()
+    expect(
+      screen.getByText(/wants to open the file \/home\/me\/notes\/a\.html in the agent browser/)
+    ).toBeInTheDocument()
+    expect(screen.getByText('File')).toBeInTheDocument()
+    expect(screen.queryByText('Site')).not.toBeInTheDocument()
+    // The name stands on its own line and the full path wraps: neither is
+    // cut at the end.
+    const name = screen.getByText('a.html')
+    expect(name).toHaveClass('break-all')
+    expect(name).not.toHaveClass('truncate')
+    const path = screen.getByText('/home/me/notes/a.html')
+    expect(path).toHaveClass('break-all')
+    expect(path).not.toHaveClass('truncate')
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Allow once', 'Deny'])
+  })
+
+  it('shows the host-sent file name, never one split out of the escaped path', () => {
+    render(
+      <BrowserConsentCard
+        consent={ticket({
+          // The host escapes hidden characters as ⟨U+XXXX⟩ and sends the
+          // name it took from the raw path. The card shows that name even
+          // when it differs from the last segment of the escaped path.
+          origin: '/home/me/notes/derived⟨U+202E⟩name.html',
+          targetKind: 'file',
+          fileName: 'sent⟨U+202E⟩name.html',
+          targetUrl: 'file:///home/me/notes/sent%E2%80%AEname.html',
+          targetUrlBytes: 44,
+          options: ['allow_session', 'deny']
+        })}
+      />
+    )
+    expect(screen.getByText('sent⟨U+202E⟩name.html')).toBeInTheDocument()
+    expect(screen.queryByText('derived⟨U+202E⟩name.html')).not.toBeInTheDocument()
+  })
+
   it('asks about one sensitive action and offers only what the host offered', () => {
     render(
       <BrowserConsentCard

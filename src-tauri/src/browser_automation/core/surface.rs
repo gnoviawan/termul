@@ -95,6 +95,7 @@ impl TabSurface for PaneSurface {
         self.tabs.navigate(tab, url)
     }
 
+
     fn history(&self, tab: &str, step: HistoryStep) -> Result<(), String> {
         match step {
             HistoryStep::Back => self.tabs.go_back(tab),

@@ -70,8 +70,7 @@ vi.mock('@/lib/acp-mcp-persistence', async (importActual) => {
   return {
     ...actual,
     loadMcpServers: vi.fn(async () => []),
-    saveMcpServers: vi.fn(async () => {}),
-    syncMcpRegistryToProjectBestEffort: vi.fn(async () => {})
+    saveMcpServers: vi.fn(async () => {})
   }
 })
 
@@ -158,6 +157,8 @@ describe('browser consent tickets on the permission contract', () => {
       requestId: TICKET_ID,
       sessionId: 'sess-1',
       origin: 'https://docs.example.com',
+      targetKind: 'web',
+      fileName: undefined,
       targetUrl: 'https://docs.example.com/start?q=1',
       targetUrlBytes: 34,
       action: 'navigate',
@@ -165,6 +166,24 @@ describe('browser consent tickets on the permission contract', () => {
       profile: 'global',
       options: ['allow_session', 'allow_project', 'deny']
     })
+  })
+
+  it('carries a file ticket as a file target', () => {
+    const request = permissionRequest({
+      options: [
+        { optionId: 'allow_session', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'deny', name: 'Deny', kind: 'reject_once' }
+      ]
+    }) as unknown as { _meta: { termul: { browser: Record<string, unknown> } } }
+    request._meta.termul.browser.origin = '/home/me/notes/a.html'
+    request._meta.termul.browser.targetKind = 'file'
+    request._meta.termul.browser.fileName = 'a.html'
+    request._meta.termul.browser.targetUrl = 'file:///home/me/notes/a.html'
+    useAcpStore.getState()._onPermissionRequest(request as never)
+    const ticket = useAcpStore.getState().pendingBrowserConsents[TICKET_ID]
+    expect(ticket?.targetKind).toBe('file')
+    expect(ticket?.fileName).toBe('a.html')
+    expect(ticket?.options).toEqual(['allow_session', 'deny'])
   })
 
   it.each([

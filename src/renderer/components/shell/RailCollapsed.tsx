@@ -9,6 +9,7 @@ import { SSHPopover } from '@/components/shell/SSHPopover'
 import { useTopRowPlatform } from '@/components/shell/top-row-context'
 import { useTrafficLightInset } from '@/components/shell/traffic-light-inset'
 import { useShortcutLabel } from '@/components/shell/use-shortcut-label'
+import { useTabTrackHold } from '@/components/shell/use-tab-track-hold'
 import { showsFileColumn } from '@/layouts/workspace-layout/explorer-column-blocks'
 import { cn } from '@/lib/utils'
 import { useFileExplorerVisible } from '@/stores/file-explorer-store'
@@ -144,9 +145,15 @@ export function RailCollapsed({
     workspaceOpen: useSSHWorkspaceOpen(),
     hasSidePanel: Boolean(activeProject)
   })
+  const rail = useTabTrackHold(sidePanelOnScreen)
 
   return (
-    <div className="flex h-full w-12 shrink-0 flex-col items-center gap-1 pb-2">
+    <div
+      ref={rail.railRef}
+      className="flex h-full w-12 shrink-0 flex-col items-center gap-1 pb-2"
+      onPointerEnter={rail.onPointerEnter}
+      onPointerLeave={rail.onPointerLeave}
+    >
       {/* Top row part, drag space. Under the macOS traffic lights it stays
           empty and the mark / toggle swap sits just below it; elsewhere the
           swap sits in it. */}
@@ -171,14 +178,15 @@ export function RailCollapsed({
 
         {/* The Column tabs sit in a track, like the Side panel's tab bar, so
             they read as tabs and not as actions. While the Side panel is on
-            screen it shows the tabs itself, so the Rail shows none. */}
-        {!sidePanelOnScreen && (
+            screen it shows the tabs itself, so the Rail shows none; after a
+            Rail tab click, only once the pointer leaves (#1725). */}
+        {rail.showTrack && (
           <div
             data-testid="rail-column-tab-track"
             // 10px = the 8px buttons inside + the 2px padding (concentric).
             className="flex flex-col items-center gap-0.5 rounded-[10px] border border-border bg-card p-0.5"
           >
-            <RailColumnIcons activeProject={activeProject} />
+            <RailColumnIcons activeProject={activeProject} onOpenPanel={rail.onTabOpensPanel} />
           </div>
         )}
 

@@ -67,6 +67,7 @@ export function createBrowserPolicyHost(): BrowserPolicyHost {
       globalProfileEnabled: true,
       effectiveGlobalProfile: true,
       askBeforePasswordSubmit: false,
+      askBeforeOpeningSites: false,
       preapprovals: [],
       clearImpact: { sessions: 0, projects: 0 }
     },
@@ -192,6 +193,10 @@ export function createBrowserPolicyHost(): BrowserPolicyHost {
       case 'set_ask_before_password_submit':
         changed = host.app.askBeforePasswordSubmit !== op.enabled
         host.app.askBeforePasswordSubmit = op.enabled
+        break
+      case 'set_ask_before_opening_sites':
+        changed = host.app.askBeforeOpeningSites !== op.enabled
+        host.app.askBeforeOpeningSites = op.enabled
         break
       case 'add_preapproval': {
         if (APP_REFUSED_ACTIONS.has(op.action)) {
