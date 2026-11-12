@@ -1,4 +1,9 @@
-import type { Automation, Edge as AutomationEdge, Port } from '@shared/types/automation.types'
+import type {
+  Automation,
+  Edge as AutomationEdge,
+  Issue,
+  Port
+} from '@shared/types/automation.types'
 import { type Edge, type Node, type NodeHandle, Position, type Rect } from '@xyflow/react'
 import { logFrontendError } from '@/lib/log-api'
 import { type CanvasNodeId, drawableEdges, placeNodes } from '../layout'
@@ -82,15 +87,49 @@ export function contentBounds(nodes: CardNode[]): Rect {
   }
 }
 
-export function toFlow(automation: Pick<Automation, 'graph' | 'trigger' | 'layout'>): {
+/** Issue count per card; an issue that names no step belongs to the trigger. */
+function issueCounts(issues: readonly Issue[]): Map<CanvasNodeId, number> {
+  const counts = new Map<CanvasNodeId, number>()
+  for (const issue of issues) {
+    const card = issue.node_id ?? TRIGGER
+    counts.set(card, (counts.get(card) ?? 0) + 1)
+  }
+  return counts
+}
+
+export function toFlow(
+  automation: Pick<Automation, 'graph' | 'trigger' | 'layout'>,
+  { issues = [], editing = false }: { issues?: readonly Issue[]; editing?: boolean } = {}
+): {
   nodes: CardNode[]
   edges: PortEdge[]
 } {
   const { graph, trigger, layout } = automation
   const positions = placeNodes(graph, layout)
+  const counts = issueCounts(issues)
+  const used = new Set(graph.edges.map((edge) => `${edge.from}:${edge.port}`))
+  // Outputs with nothing behind them get a dangling "+" while editing; `error` is optional.
+  const open = (id: CanvasNodeId, ports: readonly Port[]): Port[] =>
+    editing ? ports.filter((port) => port !== 'error' && !used.has(`${id}:${port}`)) : []
   const cards: [CanvasNodeId, CardData][] = [
-    [TRIGGER, { kind: TRIGGER, trigger }],
-    ...graph.nodes.map((node): [CanvasNodeId, CardData] => [node.id, { kind: 'step', node }])
+    [
+      TRIGGER,
+      {
+        kind: TRIGGER,
+        trigger,
+        issues: counts.get(TRIGGER) ?? 0,
+        open: open(TRIGGER, OUTPUT_PORTS.trigger)
+      }
+    ],
+    ...graph.nodes.map((node): [CanvasNodeId, CardData] => [
+      node.id,
+      {
+        kind: 'step',
+        node,
+        issues: counts.get(node.id) ?? 0,
+        open: open(node.id, OUTPUT_PORTS[node.spec.kind])
+      }
+    ])
   ]
   const nodes = cards.map(
     ([id, data]): CardNode => ({
@@ -100,6 +139,7 @@ export function toFlow(automation: Pick<Automation, 'graph' | 'trigger' | 'layou
       width: CARD.width,
       height: CARD.height,
       handles: handlesOf(data),
+      deletable: editing && id !== TRIGGER,
       data
     })
   )
@@ -113,7 +153,8 @@ export function toFlow(automation: Pick<Automation, 'graph' | 'trigger' | 'layou
       sourceHandle: edge.port,
       target: edge.to,
       targetHandle: 'in',
-      selectable: false,
+      selectable: editing,
+      deletable: editing,
       data: { port: edge.port }
     })
   )

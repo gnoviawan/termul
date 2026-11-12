@@ -224,15 +224,15 @@ fn channel_parse_recognizes_known_values() {
 fn channel_manifest_urls_match_hosting_scheme() {
     assert_eq!(
         UpdateChannel::Stable.manifest_url(),
-        "https://github.com/gnoviawan/termul/releases/latest/download/latest-stable.json"
+        "https://github.com/gnoviawan/troupe/releases/latest/download/latest-stable.json"
     );
     assert_eq!(
         UpdateChannel::Insider.manifest_url(),
-        "https://github.com/gnoviawan/termul/releases/download/insider/latest-insider.json"
+        "https://github.com/gnoviawan/troupe/releases/download/insider/latest-insider.json"
     );
     assert_eq!(
         UpdateChannel::Nightly.manifest_url(),
-        "https://github.com/gnoviawan/termul/releases/download/nightly/latest-nightly.json"
+        "https://github.com/gnoviawan/troupe/releases/download/nightly/latest-nightly.json"
     );
 }
 
@@ -274,6 +274,8 @@ fn validate_binary_url_rejects_a_lookalike_repo() {
 fn validate_binary_url_rejects_dot_segments_that_leave_the_repo() {
     for url in [
         "https://github.com/gnoviawan/troupe/../../attacker/repo/troupe-server",
+        "https://github.com/gnoviawan/troupe/%2e%2e/%2E%2E/attacker/repo/troupe-server",
+        "https://github.com/gnoviawan/termul/../../attacker/repo/troupe-server",
         "https://github.com/gnoviawan/termul/%2e%2e/%2E%2E/attacker/repo/troupe-server",
     ] {
         let err = validate_binary_url(url).expect_err("dot segments rejected");
@@ -286,7 +288,7 @@ fn validate_binary_url_rejects_dot_segments_that_leave_the_repo() {
 
 #[test]
 fn validate_binary_url_rejects_an_unparseable_url() {
-    let err = validate_binary_url("https://github.com:notaport/gnoviawan/termul/troupe-server")
+    let err = validate_binary_url("https://github.com:notaport/gnoviawan/troupe/troupe-server")
         .expect_err("unparseable url rejected");
     assert!(
         err.to_string().contains("outside the allowed origins"),
@@ -315,7 +317,7 @@ fn validate_binary_url_rejects_foreign_origin() {
 
 #[test]
 fn validate_binary_url_rejects_plain_http() {
-    let err = validate_binary_url("http://github.com/gnoviawan/termul/x")
+    let err = validate_binary_url("http://github.com/gnoviawan/troupe/x")
         .expect_err("plain http rejected");
     assert!(
         err.to_string().contains("outside the allowed origins"),

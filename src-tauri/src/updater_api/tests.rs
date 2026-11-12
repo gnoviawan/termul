@@ -22,15 +22,15 @@ async fn fetch_channel_manifest_rejects_unknown_channel_without_network() {
 fn channel_manifest_urls_match_server_update() {
     assert_eq!(
         UpdateChannel::Stable.manifest_url(),
-        "https://github.com/gnoviawan/termul/releases/latest/download/latest-stable.json"
+        "https://github.com/gnoviawan/troupe/releases/latest/download/latest-stable.json"
     );
     assert_eq!(
         UpdateChannel::Insider.manifest_url(),
-        "https://github.com/gnoviawan/termul/releases/download/insider/latest-insider.json"
+        "https://github.com/gnoviawan/troupe/releases/download/insider/latest-insider.json"
     );
     assert_eq!(
         UpdateChannel::Nightly.manifest_url(),
-        "https://github.com/gnoviawan/termul/releases/download/nightly/latest-nightly.json"
+        "https://github.com/gnoviawan/troupe/releases/download/nightly/latest-nightly.json"
     );
 }
 

@@ -236,7 +236,7 @@ describe('tauri-updater-api', () => {
 
       const result = await checkForUpdates('nightly')
 
-      expect(result?.downloadUrl).toBe('https://github.com/gnoviawan/termul/releases/tag/nightly')
+      expect(result?.downloadUrl).toBe('https://github.com/gnoviawan/troupe/releases/tag/nightly')
       expect(result?.installMode).toBe('manual')
       const state = await getUpdaterState()
       expect(state.success && state.data.isManualUpdateMode).toBe(true)
@@ -274,7 +274,7 @@ describe('tauri-updater-api', () => {
       const result = await checkForUpdates('insider')
 
       expect(mockInvoke).not.toHaveBeenCalledWith('updater_check_channel', expect.anything())
-      expect(result?.downloadUrl).toBe('https://github.com/gnoviawan/termul/releases/tag/insider')
+      expect(result?.downloadUrl).toBe('https://github.com/gnoviawan/troupe/releases/tag/insider')
       expect(result?.installMode).toBe('manual')
     })
 
@@ -322,7 +322,7 @@ describe('tauri-updater-api', () => {
       vi.mocked(check).mockRejectedValue(new Error('network down'))
 
       await expect(checkForUpdates()).rejects.toThrow(
-        'Failed to check for updates from https://github.com/gnoviawan/termul/releases/latest/download/latest.json: network down'
+        'Failed to check for updates from https://github.com/gnoviawan/troupe/releases/latest/download/latest.json: network down'
       )
     })
 
@@ -333,7 +333,7 @@ describe('tauri-updater-api', () => {
         json: async () => ({
           tag_name: 'v0.3.4',
           body: 'release notes',
-          html_url: 'https://github.com/gnoviawan/termul/releases/tag/v0.3.4',
+          html_url: 'https://github.com/gnoviawan/troupe/releases/tag/v0.3.4',
           published_at: '2026-05-01T15:13:12Z'
         })
       })
@@ -343,7 +343,7 @@ describe('tauri-updater-api', () => {
         releaseDate: '2026-05-01T15:13:12Z',
         releaseNotes: 'release notes',
         isSecurityUpdate: false,
-        downloadUrl: 'https://github.com/gnoviawan/termul/releases/tag/v0.3.4',
+        downloadUrl: 'https://github.com/gnoviawan/troupe/releases/tag/v0.3.4',
         installMode: 'manual'
       })
 
@@ -360,7 +360,7 @@ describe('tauri-updater-api', () => {
       vi.mocked(check).mockRejectedValue({ status: 500, url: 'latest.json' })
 
       await expect(checkForUpdates()).rejects.toThrow(
-        'Failed to check for updates from https://github.com/gnoviawan/termul/releases/latest/download/latest.json: {"status":500,"url":"latest.json"}'
+        'Failed to check for updates from https://github.com/gnoviawan/troupe/releases/latest/download/latest.json: {"status":500,"url":"latest.json"}'
       )
       expect(mockFetch).not.toHaveBeenCalled()
     })

@@ -21,7 +21,7 @@ export function TermsPage() {
           <LegalLink href={LICENSE_URL}>MIT License</LegalLink>. The license
           text in the repository is the authoritative document; if anything on
           this page differs from it, the license wins. Source code is at{' '}
-          <LegalLink href={GITHUB_REPO_URL}>github.com/gnoviawan/termul</LegalLink>.
+          <LegalLink href={GITHUB_REPO_URL}>github.com/gnoviawan/troupe</LegalLink>.
         </p>
         <p>
           Troupe is free to download and use. Nothing on this website asks for

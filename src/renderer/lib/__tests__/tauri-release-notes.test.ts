@@ -121,13 +121,13 @@ describe('tauri-release-notes', () => {
       mockFetchResponse({
         tag_name: 'v0.4.7',
         body: '### Features\n- Something new',
-        html_url: 'https://github.com/gnoviawan/termul/releases/tag/v0.4.7'
+        html_url: 'https://github.com/gnoviawan/troupe/releases/tag/v0.4.7'
       })
 
       const result = await fetchReleaseNotes('0.4.7')
 
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        'https://api.github.com/repos/gnoviawan/termul/releases/tags/v0.4.7',
+        'https://api.github.com/repos/gnoviawan/troupe/releases/tags/v0.4.7',
         expect.objectContaining({
           headers: { Accept: 'application/vnd.github+json' }
         })
@@ -135,7 +135,7 @@ describe('tauri-release-notes', () => {
       expect(result).toEqual({
         version: '0.4.7',
         notes: '### Features\n- Something new',
-        htmlUrl: 'https://github.com/gnoviawan/termul/releases/tag/v0.4.7'
+        htmlUrl: 'https://github.com/gnoviawan/troupe/releases/tag/v0.4.7'
       })
     })
 

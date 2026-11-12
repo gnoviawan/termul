@@ -20,6 +20,8 @@ pub mod template;
 #[cfg(test)]
 mod agents_tests;
 #[cfg(test)]
+mod graph_fixture_tests;
+#[cfg(test)]
 mod graph_tests;
 #[cfg(test)]
 mod model_tests;

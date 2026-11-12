@@ -4,7 +4,7 @@
 **Status:** approved
 **Author:** brainstorm session
 **Spec path:** docs/pocket/spec/2026-10-20-native-command-editor/native-command-editor.md
-**Issue:** https://github.com/gnoviawan/termul/issues/1484
+**Issue:** https://github.com/gnoviawan/troupe/issues/1484
 
 ---
 
@@ -73,7 +73,7 @@ A Warp-like composer needs the real command buffer: cursor, selection, multiline
 - A persisted "force raw input" preference. Handshake failure is the rollback.
 - The landing site.
 - Copying AGPL source from warpdotdev/warp. That repository is an architectural reference only.
-- Splitting, moving, or reorganizing an existing file. This change is contributed to someone else's repository, so an existing-file split in the same PR would bury the feature in a large diff. The size guideline applies to new files only. The follow-up split of `ConnectedTerminal.tsx` and `web-terminal-api.ts` is https://github.com/gnoviawan/termul/issues/1487.
+- Splitting, moving, or reorganizing an existing file. This change is contributed to someone else's repository, so an existing-file split in the same PR would bury the feature in a large diff. The size guideline applies to new files only. The follow-up split of `ConnectedTerminal.tsx` and `web-terminal-api.ts` is https://github.com/gnoviawan/troupe/issues/1487.
 
 ---
 

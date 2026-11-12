@@ -266,7 +266,7 @@ describe('updater-store', () => {
       vi.mocked(tauriUpdaterApi.checkForUpdates).mockResolvedValue({
         version: '0.5.0-nightly.20261028.101.bbbbbbb',
         isSecurityUpdate: false,
-        downloadUrl: 'https://github.com/gnoviawan/termul/releases/tag/nightly',
+        downloadUrl: 'https://github.com/gnoviawan/troupe/releases/tag/nightly',
         installMode: 'manual'
       })
 

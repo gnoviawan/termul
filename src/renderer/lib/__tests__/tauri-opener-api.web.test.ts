@@ -49,7 +49,7 @@ vi.mock('../tauri-os', () => ({
 
 import { openerApi } from '../tauri-opener-api'
 
-const URL = 'https://github.com/gnoviawan/termul/releases/tag/v0.4.8'
+const URL = 'https://github.com/gnoviawan/troupe/releases/tag/v0.4.8'
 const PATH = '/some/path/file.txt'
 
 describe('openerApi.openUrlWithSystemBrowser (web vs desktop branch)', () => {

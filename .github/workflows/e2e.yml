@@ -114,7 +114,7 @@ jobs:
           # These seven tests fail on dev for reasons outside the harness. In four of
           # them a project switch opens the Project Settings dialog, which then
           # covers the New chat button. The other three fail or flake on chat tab and
-          # tool card assertions. Tracked in https://github.com/gnoviawan/termul/issues/1343.
+          # tool card assertions. Tracked in https://github.com/gnoviawan/troupe/issues/1343.
           # Remove a title from this list when its test is fixed.
           E2E_KNOWN_RED: 'closing a chat mid-turn only detaches it|tab switching mid-run: another chat tab|project switching mid-run|three projects run concurrently|browser reload with a crashed chat open|project switch round-trips the streaming chat tab|reload mid-turn: the reopened chat shows the tool cards'
         # Playwright reads each word of E2E_SPECS as a file filter. `set -f` stops the
