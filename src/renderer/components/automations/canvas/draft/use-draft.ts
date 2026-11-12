@@ -46,6 +46,9 @@ function canonical(value: unknown): string {
 /** Why a gesture did not apply: the host would refuse its ops, or a Save is running. */
 export type ApplyRefusal = OpRejection | { code: 'saving' }
 
+/** What to tell the user when an edit arrives while Save runs. */
+export const SAVING_MESSAGE = 'Saving. Try that again once it finishes.'
+
 export interface DraftEditor {
   draft: Draft
   saving: boolean

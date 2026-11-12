@@ -15,15 +15,16 @@ import { cn } from '@/lib/utils'
 import { automationState, STATE_PRESENTATION } from '../automation-format'
 import type { ConnectRefusal } from './draft/apply-op'
 import { addGesture, movePatch, removeGesture } from './draft/gestures'
-import { useDraft } from './draft/use-draft'
+import { SAVING_MESSAGE, useDraft } from './draft/use-draft'
 import { AutomationFlow } from './flow/AutomationFlow'
 import type { AddRequest, FlowEdit } from './flow/flow-edit'
+import { NodeInspector } from './inspector/NodeInspector'
+import { TriggerInspector } from './inspector/TriggerInspector'
 import { AddNodeMenu } from './palette/AddNodeMenu'
 import { chainPort, NODE_KINDS, newNode } from './palette/node-kinds'
+import { TRIGGER } from './ports'
 
 const NO_CHAIN = (Object.keys(NODE_KINDS) as NodeKind[]).filter((kind) => chainPort(kind) === null)
-
-const SAVING = 'Saving. Try that again once it finishes.'
 
 const REFUSALS: Record<ConnectRefusal, string> = {
   illegal_port: 'That step has no such port.',
@@ -54,6 +55,9 @@ function describeOp(op: AutomationOp, label: (id: string) => string): string {
       return 'Change the isolation'
   }
 }
+
+/** Width of the floating inspector plus its gap from the canvas edge. */
+const INSPECTOR_INSET = 356
 
 /** The phone header has room only for the count beside the state pill at 390 px. */
 function changesLabel(count: number, phone: boolean): string {
@@ -95,6 +99,7 @@ export function AutomationEditor({
   // Undo and redo listen on the editor root, so it takes focus when the editor opens.
   useEffect(() => root.current?.focus({ preventScroll: true }), [])
   const [focus, setFocus] = useState<{ id: string; nonce: number } | null>(null)
+  const [inspected, setInspected] = useState<string | null>(null)
   const automation = draft.base
   const count = draft.pending.length
   const dirty = count > 0
@@ -122,7 +127,7 @@ export function AutomationEditor({
   ): boolean => {
     const refusal = editor.apply(ops, layout)
     if (!refusal) return true
-    if (refusal.code === 'saving') toast(SAVING)
+    if (refusal.code === 'saving') toast(SAVING_MESSAGE)
     else if (refused) refused()
     else toast.error(`The host would refuse that edit: ${refusal.code}`)
     return false
@@ -131,7 +136,10 @@ export function AutomationEditor({
   const add = (kind: NodeKind, placement: Omit<AddRequest, 'screen'>): void => {
     const node = newNode(kind, graph)
     const { ops, layout } = addGesture(graph, draft.layout, node, chainPort(kind), placement)
-    if (apply(ops, layout)) setFocus({ id: node.id, nonce: Date.now() })
+    if (apply(ops, layout)) {
+      setFocus({ id: node.id, nonce: Date.now() })
+      setInspected(node.id)
+    }
   }
 
   const edit: FlowEdit = {
@@ -162,6 +170,36 @@ export function AutomationEditor({
     canUndo: !editor.saving && draft.undo.length > 0,
     canRedo: !editor.saving && draft.redo.length > 0
   }
+
+  const inspectedNode = graph.nodes.find((node) => node.id === inspected)
+  const closeInspector = (): void => setInspected(null)
+  const inspector =
+    inspected === TRIGGER ? (
+      <TriggerInspector
+        trigger={trigger}
+        issues={draft.issues.filter((issue) => issue.node_id === null)}
+        phone={phone}
+        locked={editor.saving}
+        onChange={(next) => apply([{ op: 'set_trigger', trigger: next }])}
+        onClose={closeInspector}
+      />
+    ) : inspectedNode ? (
+      <NodeInspector
+        // A new step starts its fields afresh.
+        key={inspectedNode.id}
+        node={inspectedNode}
+        graph={graph}
+        issues={draft.issues.filter((issue) => issue.node_id === inspectedNode.id)}
+        phone={phone}
+        locked={editor.saving}
+        onChange={(change) => apply([{ op: 'update_node', id: inspectedNode.id, ...change }])}
+        onDelete={() => {
+          const { ops, layout } = removeGesture(graph, draft.layout, [inspectedNode.id], [])
+          apply(ops, layout)
+        }}
+        onClose={closeInspector}
+      />
+    ) : null
 
   const approve = async (): Promise<void> => {
     setApproving(true)
@@ -290,7 +328,10 @@ export function AutomationEditor({
           issues={draft.issues}
           edit={edit}
           focus={focus}
+          inspect={{ id: inspected, onChange: setInspected }}
+          rightInset={inspector && !phone ? INSPECTOR_INSET : 0}
         />
+        {!phone && inspector}
         {draft.conflict && (
           <ConflictBanner
             by={draft.conflict.by}
@@ -319,13 +360,21 @@ export function AutomationEditor({
         }}
       />
 
-      <IssuesDock
-        issues={draft.issues}
-        refusal={editor.refusal}
-        label={labels}
-        phone={phone}
-        onShow={(id) => setFocus({ id, nonce: Date.now() })}
-      />
+      {/* The phone sheet takes the dock's place; its footer lists the step's issues. */}
+      {phone && inspector ? (
+        inspector
+      ) : (
+        <IssuesDock
+          issues={draft.issues}
+          refusal={editor.refusal}
+          label={labels}
+          phone={phone}
+          onShow={(id) => {
+            setFocus({ id, nonce: Date.now() })
+            setInspected(id)
+          }}
+        />
+      )}
 
       <ConfirmDialog
         isOpen={confirmClose}
