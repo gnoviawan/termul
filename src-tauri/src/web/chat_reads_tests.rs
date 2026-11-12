@@ -53,3 +53,14 @@ fn a_read_from_another_log_epoch_never_moves_the_marker() {
     assert_eq!(reads.mark("s1", &e2, Some("e1"), 50), MarkOutcome::OtherEpoch(read("e2", 3)));
     assert_eq!(reads.get("s1"), Some(read("e2", 3)));
 }
+
+#[test]
+fn forgetting_a_session_drops_only_its_marker() {
+    let reads = ChatReads::default();
+    reads.mark("s1", &head("e1", 40), Some("e1"), 12);
+    reads.mark("s2", &head("e1", 40), Some("e1"), 7);
+    reads.forget("s1");
+    reads.forget("never-read");
+    assert_eq!(reads.get("s1"), None);
+    assert_eq!(reads.get("s2"), Some(read("e1", 7)));
+}
