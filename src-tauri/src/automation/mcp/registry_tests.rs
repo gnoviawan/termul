@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use super::registry::{parse_registry, store_servers};
+use super::registry::{attach_aliases, find_server, parse_registry, store_servers};
 use super::{McpServerConfig, McpServerEntry};
 use crate::acp::mcp_probe::McpNameValuePair;
-use crate::web::mcp_registry::STORE_KEY;
+use crate::web::mcp_registry::{ALIASES_KEY, STORE_KEY};
 use crate::web::store::{Precondition, StorePolicy, WebStore};
 use crate::web::ws::ClientIdentity;
 
@@ -105,4 +105,105 @@ fn every_project_reads_the_one_stored_list() {
 
     write_list(&store, json!({ "_version": 1, "data": "not a list" }));
     assert_eq!(servers("p1"), vec![]);
+}
+
+fn aliases_of(entries: &[McpServerEntry]) -> Vec<(&str, Vec<&str>)> {
+    entries
+        .iter()
+        .map(|e| {
+            let mut aliases: Vec<&str> = e.aliases.iter().map(String::as_str).collect();
+            aliases.sort_unstable();
+            (e.server_id.as_str(), aliases)
+        })
+        .collect()
+}
+
+#[test]
+fn an_alias_attaches_only_to_an_enabled_entry_and_never_shadows_an_id() {
+    let mut entries = parse_registry(&stored_list());
+    attach_aliases(
+        &mut entries,
+        &stored_list(),
+        &json!({ "_version": 1, "data": {
+            "old-files": "srv-1",
+            "older-files": "srv-1",
+            "old-off": "srv-2",
+            "old-gone": "srv-9",
+            "srv-3": "srv-1",
+            "bad": 7
+        } }),
+    );
+    assert_eq!(
+        aliases_of(&entries),
+        vec![
+            ("srv-1", vec!["old-files", "older-files"]),
+            ("srv-3", vec![])
+        ]
+    );
+    assert_eq!(
+        find_server(&entries, "older-files").unwrap().server_id,
+        "srv-1"
+    );
+    assert_eq!(find_server(&entries, "srv-3").unwrap().server_id, "srv-3");
+    assert!(find_server(&entries, "old-off").is_none());
+    assert!(find_server(&entries, "old-gone").is_none());
+
+    let mut bare = parse_registry(&stored_list());
+    attach_aliases(&mut bare, &stored_list(), &json!({ "old-files": "srv-1" }));
+    assert_eq!(find_server(&bare, "old-files").unwrap().server_id, "srv-1");
+    let mut wrong = parse_registry(&stored_list());
+    attach_aliases(&mut wrong, &stored_list(), &json!(["old-files"]));
+    assert!(find_server(&wrong, "old-files").is_none());
+}
+
+#[test]
+fn an_alias_never_takes_over_the_id_of_a_disabled_or_unparsed_stored_entry() {
+    let list = stored_list();
+    let mut entries = parse_registry(&list);
+    attach_aliases(
+        &mut entries,
+        &json!({ "_version": 1, "data": list }),
+        &json!({ "srv-2": "srv-1", "srv-4": "srv-1", "old-files": "srv-1" }),
+    );
+    assert_eq!(
+        aliases_of(&entries),
+        vec![("srv-1", vec!["old-files"]), ("srv-3", vec![])]
+    );
+    assert!(
+        find_server(&entries, "srv-2").is_none(),
+        "a disabled server's id runs nothing"
+    );
+    assert!(find_server(&entries, "srv-4").is_none());
+}
+
+#[test]
+fn the_stored_aliases_follow_the_stored_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let store =
+        Arc::new(WebStore::open(dir.path().join("store.json"), StorePolicy::default()).unwrap());
+    store
+        .insert_if_absent(
+            ALIASES_KEY,
+            json!({ "_version": 1, "data": { "old-files": "srv-1" } }),
+            1,
+        )
+        .unwrap();
+    let servers = store_servers(store.clone());
+    assert_eq!(servers("p1"), vec![]);
+
+    write_list(&store, json!({ "_version": 1, "data": stored_list() }));
+    assert_eq!(
+        find_server(&servers("p1"), "old-files").map(|s| s.server_id.clone()),
+        Some("srv-1".to_string())
+    );
+
+    // The kept server deleted: its alias names nothing.
+    write_list(
+        &store,
+        json!({ "_version": 1, "data": [
+            { "id": "srv-3", "type": "http", "name": "Remote", "url": "https://mcp.example.com" }
+        ] }),
+    );
+    assert_eq!(aliases_of(&servers("p1")), vec![("srv-3", vec![])]);
+    assert!(find_server(&servers("p1"), "old-files").is_none());
 }

@@ -1,11 +1,10 @@
 //! `mcp_tool` nodes: one `tools/call` on a project MCP server, with no LLM.
-//! The server is resolved when the step runs, the arguments render with no
-//! secrets, and the call never answers a request for user input. A literal
-//! argument is parsed into the type the tool's input schema declares for it
-//! (listing the server first when no listing is kept), and a literal that
-//! fits none fails the step. Logs name the
-//! server, tool, outcome, duration and argument names, never argument values
-//! or results.
+//! The server is resolved by id or alias when the step runs, the arguments
+//! render with no secrets, and the call never answers a request for user
+//! input. A literal argument is parsed into the type the tool's input schema
+//! declares for it (listing the server first when no listing is kept), and a
+//! literal that fits none fails the step. Logs name the server, tool,
+//! outcome, duration and argument names, never argument values or results.
 
 use std::time::{Duration, Instant};
 
@@ -38,6 +37,15 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: McpSpec<'_>) -> Result<Valu
         .mcp
         .server(project_id, spec.server_id)
         .ok_or_else(|| NodeError::failed(format!("mcp_server_unknown:{}", spec.server_id)))?;
+    if server.server_id != spec.server_id {
+        log::info!(
+            "[Automation] run {} step {}: MCP server id {} is an alias of {}",
+            scope.run.run.id,
+            scope.node_id,
+            spec.server_id,
+            server.server_id
+        );
+    }
     let input_schema = if spec.arguments.iter().any(is_literal) {
         let schema = engine
             .mcp

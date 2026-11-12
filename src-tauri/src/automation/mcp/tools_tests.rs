@@ -8,10 +8,13 @@ use super::test_support::{registry, search_tool, server, FakeMcp, SENTINEL_SECRE
 use super::{Lookup, McpFailure, McpTools, OnListingChanged};
 use crate::automation::test_support::FakeClock;
 
+/// Each listing change: the project and the server's id with its aliases.
+type Changes = Arc<Mutex<Vec<(String, Vec<String>)>>>;
+
 struct Fixture {
     fake: Arc<FakeMcp>,
     clock: Arc<FakeClock>,
-    changes: Arc<Mutex<Vec<(String, String)>>>,
+    changes: Changes,
     tools: Arc<McpTools>,
 }
 
@@ -20,11 +23,13 @@ fn fixture() -> Fixture {
     let clock = FakeClock::at(1_000);
     let changes = Arc::new(Mutex::new(Vec::new()));
     let seen = changes.clone();
-    let on_change: OnListingChanged = Arc::new(move |project: &str, server: &str| {
-        seen.lock().push((project.to_string(), server.to_string()))
+    let on_change: OnListingChanged = Arc::new(move |project: &str, ids: &[String]| {
+        seen.lock().push((project.to_string(), ids.to_vec()))
     });
+    let mut files = server("srv-1", "files");
+    files.aliases = vec!["srv-old".into(), "srv-older".into()];
     let tools = McpTools::new(
-        registry(vec![server("srv-1", "files"), server("srv-2", "remote")]),
+        registry(vec![files, server("srv-2", "remote")]),
         Arc::new(|project: &str| Some(std::path::PathBuf::from(format!("/projects/{project}")))),
         fake.clone(),
         clock.clone(),
@@ -67,7 +72,11 @@ async fn a_first_lookup_is_pending_lists_once_and_announces_the_result() {
     );
     assert_eq!(
         *f.changes.lock(),
-        vec![("p1".to_string(), "srv-1".to_string())]
+        vec![(
+            "p1".to_string(),
+            vec!["srv-1".into(), "srv-old".into(), "srv-older".into()]
+        )],
+        "one announcement names the server's id and every alias"
     );
     assert_eq!(
         f.tools.lookup("p1", &servers, "srv-9"),

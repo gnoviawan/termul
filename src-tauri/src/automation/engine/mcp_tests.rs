@@ -9,9 +9,12 @@ use super::HttpConfig;
 use crate::automation::mcp::test_support::{
     registry, search_tool, server, tool, FakeMcp, SeenCall,
 };
-use crate::automation::mcp::{McpFailure, ToolResponse};
+use crate::automation::mcp::{store_servers, McpFailure, ToolResponse};
 use crate::automation::model::{Automation, Graph, Run, RunStatus, RunTrigger, StepStatus};
 use crate::automation::test_support::{test_engine_with_mcp, MemoryVault, TestEngine};
+use crate::web::mcp_registry::{import_project_files, legacy_project_file, STORE_KEY};
+use crate::web::store::{Precondition, StorePolicy, WebStore};
+use crate::web::ws::ClientIdentity;
 
 struct Fixture {
     te: TestEngine,
@@ -461,8 +464,10 @@ async fn structured_output_over_the_cap_fails_the_step() {
         body_cap: 16,
         ..HttpConfig::default()
     });
-    f.fake
-        .lists("files", Ok(vec![tool("dump", json!({ "type": "object" }), None)]));
+    f.fake.lists(
+        "files",
+        Ok(vec![tool("dump", json!({ "type": "object" }), None)]),
+    );
     f.fake.answers(
         "dump",
         ToolResponse::Complete {
@@ -471,11 +476,101 @@ async fn structured_output_over_the_cap_fails_the_step() {
             is_error: false,
         },
     );
-    let a = manual(&f.te, graph(call_node("dump", json!([]), 5_000), json!([]), json!([])));
+    let a = manual(
+        &f.te,
+        graph(call_node("dump", json!([]), 5_000), json!([]), json!([])),
+    );
     let run = run_to_end(&f.te, &a).await;
     assert_eq!(run.status, RunStatus::Failed);
     assert_eq!(
         step(&f.te, &run, "call"),
         failed("mcp_output_too_large: structured output is 27 bytes, over the 16 byte cap")
     );
+}
+
+/// Two projects that each added the same server under their own id, merged
+/// into the host list by the one-time import: the second id is dropped.
+fn imported_host() -> (tempfile::TempDir, Arc<WebStore>) {
+    let dir = tempfile::tempdir().unwrap();
+    let store =
+        Arc::new(WebStore::open(dir.path().join("store.json"), StorePolicy::default()).unwrap());
+    let mut roots = Vec::new();
+    for (project, id) in [("a", "files-a"), ("b", "files-b")] {
+        let root = dir.path().join(project);
+        let file = legacy_project_file(&root);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let entries = json!([{ "id": id, "name": "files", "command": "npx", "args": ["fs"] }]);
+        std::fs::write(file, entries.to_string()).unwrap();
+        roots.push(root);
+    }
+    import_project_files(&store, &roots).unwrap();
+    (dir, store)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_step_naming_an_id_the_import_dropped_calls_the_kept_server() {
+    let (_host, store) = imported_host();
+    let fake = FakeMcp::new();
+    fake.lists("files", Ok(vec![search_tool()]));
+    let root = tempfile::tempdir().unwrap();
+    let te = test_engine_with_mcp(
+        root.path().to_path_buf(),
+        Arc::new(MemoryVault::default()),
+        HttpConfig::default(),
+        store_servers(Arc::clone(&store)),
+        fake.clone(),
+    );
+    let mut call = call_node("search", json!([{ "name": "query", "value": "x" }]), 5_000);
+    call["spec"]["server_id"] = json!("files-b");
+    let a = manual(&te, graph(call, json!([]), json!([])));
+
+    let run = run_to_end(&te, &a).await;
+
+    assert_eq!(run.status, RunStatus::Succeeded, "{:?}", run.stop_reason);
+    let calls = fake.calls.lock().clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].server, "files");
+    assert_eq!(calls[0].tool, "search");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_id_stops_resolving_once_the_kept_server_is_deleted() {
+    let (_host, store) = imported_host();
+    let client = ClientIdentity {
+        device_id: "desktop-device".into(),
+        client_instance_id: "tab-1".into(),
+    };
+    store
+        .write(
+            STORE_KEY,
+            json!({ "_version": 1, "data": [] }),
+            Precondition {
+                base_revision: Some(u64::MAX),
+                ..Precondition::default()
+            },
+            &client,
+            2,
+        )
+        .unwrap();
+    let fake = FakeMcp::new();
+    fake.lists("files", Ok(vec![search_tool()]));
+    let root = tempfile::tempdir().unwrap();
+    let te = test_engine_with_mcp(
+        root.path().to_path_buf(),
+        Arc::new(MemoryVault::default()),
+        HttpConfig::default(),
+        store_servers(Arc::clone(&store)),
+        fake.clone(),
+    );
+    let mut call = call_node("search", json!([]), 5_000);
+    call["spec"]["server_id"] = json!("files-b");
+    let a = manual(&te, graph(call, json!([]), json!([])));
+
+    let run = run_to_end(&te, &a).await;
+
+    assert_eq!(
+        step(&te, &run, "call"),
+        failed("mcp_server_unknown:files-b")
+    );
+    assert!(fake.calls.lock().is_empty());
 }
