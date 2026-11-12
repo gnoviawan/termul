@@ -25,6 +25,7 @@ const RESOLVER_FAILURE_PATTERN = /program not found(?: or not executable| on PAT
 // or an absent module). dash writes `sh: 1: <bin>: not found` where bash
 // writes "command not found"; both are the same corruption.
 const SH_NOT_FOUND_PATTERN = /\bsh:\s+(?:\d+:\s+)?([^\s:'"]+):\s*(?:command )?not found\b/
+const NPX_ENTRY_MANIFEST_PATTERN = /enoent[\s\S]*?_npx[\\/]+[0-9a-f]+[\\/]+package\.json/i
 const NPM_MISSING_DEP_PATTERN =
   /missing optional dependency|cannot find module|err_module_not_found|module_not_found/i
 
@@ -38,7 +39,9 @@ function npxDamagedCacheBin(message: string): string | null {
 function isNpxCacheDamage(message: string, command?: string): boolean {
   return (
     command === 'npx' &&
-    (npxDamagedCacheBin(message) !== null || NPM_MISSING_DEP_PATTERN.test(message))
+    (npxDamagedCacheBin(message) !== null ||
+      NPX_ENTRY_MANIFEST_PATTERN.test(message) ||
+      NPM_MISSING_DEP_PATTERN.test(message))
   )
 }
 
@@ -95,6 +98,9 @@ export function formatAcpSpawnError(raw: unknown, config?: Pick<AgentConfig, 'co
   // optional/platform dependency or an absent module — where the vendor's own
   // "npm install -g" advice would not repair the cache npx reuses.
   if (config?.command === 'npx') {
+    if (NPX_ENTRY_MANIFEST_PATTERN.test(message)) {
+      return `npm could not read package.json in its npx cache entry for this agent. ${NPX_CACHE_REPAIR_GUIDANCE}`
+    }
     const missingBin = npxDamagedCacheBin(message)
     if (missingBin) {
       return `npx started, but its package executable "${missingBin}" was not found. ${NPX_CACHE_REPAIR_GUIDANCE}`
