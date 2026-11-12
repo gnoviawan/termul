@@ -275,6 +275,8 @@ fn validate_binary_url_rejects_dot_segments_that_leave_the_repo() {
     for url in [
         "https://github.com/gnoviawan/troupe/../../attacker/repo/troupe-server",
         "https://github.com/gnoviawan/troupe/%2e%2e/%2E%2E/attacker/repo/troupe-server",
+        "https://github.com/gnoviawan/termul/../../attacker/repo/troupe-server",
+        "https://github.com/gnoviawan/termul/%2e%2e/%2E%2E/attacker/repo/troupe-server",
     ] {
         let err = validate_binary_url(url).expect_err("dot segments rejected");
         assert!(

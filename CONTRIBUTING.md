@@ -39,8 +39,8 @@ Feature requests are welcome! Please:
 1. Fork the repository
 2. Clone your fork:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/termul.git
-   cd termul
+   git clone https://github.com/YOUR_USERNAME/troupe.git
+   cd troupe
    ```
 3. Install dependencies:
    ```bash

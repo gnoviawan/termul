@@ -25,8 +25,6 @@ use crate::process_util::background_command_hygiene;
 const LOG_TAIL_BYTES: usize = 64 * 1024;
 
 /// Repo `gh issue create` files against, in `gh -R` `HOST/OWNER/REPO` form.
-/// The full `github.com/...` path lets the rebrand codemod's repo-url rule
-/// rewrite it together with the tests once the repo is renamed.
 const ISSUE_REPO: &str = "github.com/gnoviawan/troupe";
 /// Owner part of every issue link the issue repo can print.
 const ISSUE_URL_OWNER_PREFIX: &str = "https://github.com/gnoviawan/";

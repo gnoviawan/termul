@@ -249,7 +249,7 @@ rustc --version && cargo --version
 ```bash
 # Clone the repository
 git clone https://github.com/gnoviawan/troupe.git
-cd termul
+cd troupe
 
 # Install dependencies
 bun install
