@@ -345,6 +345,56 @@ describe('AutomationEditor', () => {
     expect(within(card('wait')).getByText('Wait')).toBeInTheDocument()
     expect(edgeCount()).toBe(2)
     expect(status()).toBe('Draft · 1 unsaved change')
+    // On desktop the new step opens in the floating inspector.
+    expect(
+      within(screen.getByTestId('automation-inspector')).getByRole('heading', { name: 'Wait' })
+    ).toBeInTheDocument()
+  })
+
+  it('on the phone, every way of adding a step selects it and leaves the sheet closed', async () => {
+    open(true)
+    const pick = (kind: string) =>
+      fireEvent.click(
+        within(screen.getByRole('dialog', { name: 'Add a step' })).getByRole('button', {
+          name: kind
+        })
+      )
+    const expectAdded = (id: string) => {
+      expect(card(id)).toHaveClass('selected')
+      expect(screen.queryByTestId('automation-inspector')).toBeNull()
+      expect(screen.getByRole('region', { name: 'Dock' })).toBeVisible()
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add a step' }))
+    pick('Wait')
+    await waitFor(() => expectAdded('wait'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add a step after Check (true)' }))
+    pick('Transform')
+    await waitFor(() => expectAdded('transform'))
+
+    fireEvent.click(handle('check', 'false'))
+    fireEvent.click(document.querySelector('.react-flow__pane') as Element)
+    pick('HTTP')
+    await waitFor(() => expectAdded('http'))
+
+    fireEvent.click(
+      document.querySelector('.react-flow__edge[data-id="fetch:out->check"]') as Element
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Insert a step here' }))
+    pick('Merge')
+    await waitFor(() => expectAdded('merge'))
+
+    fireEvent.drop(screen.getByRole('group', { name: 'Automation canvas' }), {
+      dataTransfer: { getData: () => 'approval', types: ['application/x-troupe-node-kind'] },
+      clientX: 200,
+      clientY: 200
+    })
+    await waitFor(() => expectAdded('approval'))
+
+    // A tap on the new card opens it, as for any card.
+    fireEvent.click(card('approval'))
+    expect(screen.getByTestId('automation-inspector')).toHaveClass('rounded-t-2xl')
   })
 
   it('chains a new step from the dangling + of an open output', () => {
