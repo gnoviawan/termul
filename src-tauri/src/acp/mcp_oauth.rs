@@ -58,6 +58,9 @@ pub enum McpOAuthError {
     RegistrationFailed(String),
     AuthUrlFailed(String),
     TokenExchangeFailed(String),
+    /// The authorization server definitively rejected the refresh token
+    /// (`invalid_grant`). No retry can succeed.
+    RefreshRejected(String),
     Timeout,
     Keychain(String),
     Http(String),
@@ -74,6 +77,7 @@ impl std::fmt::Display for McpOAuthError {
             Self::RegistrationFailed(m) => write!(f, "Registration failed: {m}"),
             Self::AuthUrlFailed(m) => write!(f, "Auth URL failed: {m}"),
             Self::TokenExchangeFailed(m) => write!(f, "Token exchange failed: {m}"),
+            Self::RefreshRejected(m) => write!(f, "Refresh token rejected: {m}"),
             Self::Timeout => write!(f, "OAuth timed out"),
             Self::Keychain(m) => write!(f, "Keychain: {m}"),
             Self::Http(m) => write!(f, "HTTP: {m}"),
@@ -211,27 +215,72 @@ pub fn is_token_expired(token: &StoredToken) -> bool {
     }
 }
 
+/// Longest a caller waits for a token refresh before it continues without one.
+const REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// One lock per normalized server URL, so a server that rotates refresh tokens
+/// sees one refresh at a time. A second POST with the rotated-out token draws
+/// `invalid_grant` and used to delete the fresh token.
+static REFRESH_LOCKS: LazyLock<Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn refresh_lock(server_url: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    REFRESH_LOCKS
+        .lock()
+        .entry(server_url.trim_end_matches('/').to_string())
+        .or_default()
+        .clone()
+}
+
+/// A usable access token for `server_url`, refreshing an expired one. Only a
+/// definitive rejection of the refresh token deletes the stored token; a
+/// connection error, a timeout or a server error keeps it for the next call
+/// and the caller continues without a token.
 pub async fn get_valid_token(server_url: &str) -> Result<Option<String>, McpOAuthError> {
-    let stored = load_stored_token(server_url)?;
-    match stored {
+    match load_stored_token(server_url)? {
         Some(t) if !is_token_expired(&t) => Ok(Some(t.access_token)),
-        Some(t) if t.refresh_token.is_some() => match refresh_token(&t).await {
-            Ok(new) => {
-                store_token(server_url, &new)?;
-                log::info!("[mcp-oauth] expired token refreshed (url redacted)");
-                Ok(Some(new.access_token))
+        Some(t) if t.refresh_token.is_some() => {
+            match tokio::time::timeout(REFRESH_TIMEOUT, refresh_expired(server_url)).await {
+                Ok(result) => result,
+                Err(_) => {
+                    log::warn!("[mcp-oauth] token refresh timed out (url redacted)");
+                    Ok(None)
+                }
             }
-            Err(_) => {
-                log::warn!("[mcp-oauth] token refresh failed, stored token removed (url redacted)");
-                let _ = delete_stored_token(server_url);
-                Ok(None)
-            }
-        },
+        }
         Some(_) => {
             let _ = delete_stored_token(server_url);
             Ok(None)
         }
         None => Ok(None),
+    }
+}
+
+async fn refresh_expired(server_url: &str) -> Result<Option<String>, McpOAuthError> {
+    let lock = refresh_lock(server_url);
+    let _guard = lock.lock().await;
+    // A caller ahead in the queue may have refreshed or removed the token.
+    let Some(stored) = load_stored_token(server_url)? else {
+        return Ok(None);
+    };
+    if !is_token_expired(&stored) {
+        return Ok(Some(stored.access_token));
+    }
+    match refresh_token(&stored).await {
+        Ok(new) => {
+            store_token(server_url, &new)?;
+            log::info!("[mcp-oauth] expired token refreshed (url redacted)");
+            Ok(Some(new.access_token))
+        }
+        Err(McpOAuthError::RefreshRejected(_)) => {
+            log::warn!("[mcp-oauth] refresh token rejected, stored token removed (url redacted)");
+            let _ = delete_stored_token(server_url);
+            Ok(None)
+        }
+        Err(_) => {
+            log::warn!("[mcp-oauth] token refresh failed, stored token kept (url redacted)");
+            Ok(None)
+        }
     }
 }
 
@@ -267,10 +316,12 @@ async fn refresh_token(stored: &StoredToken) -> Result<StoredToken, McpOAuthErro
         .await
         .map_err(|e| McpOAuthError::TokenExchangeFailed(e.to_string()))?;
     manager.set_credential_store(store);
-    let tr = manager
-        .refresh_token()
-        .await
-        .map_err(|e| McpOAuthError::TokenExchangeFailed(e.to_string()))?;
+    let tr = manager.refresh_token().await.map_err(|e| match e {
+        rmcp::transport::auth::AuthError::TokenRefreshRejected(m) => {
+            McpOAuthError::RefreshRejected(m)
+        }
+        e => McpOAuthError::TokenExchangeFailed(e.to_string()),
+    })?;
     use oauth2::TokenResponse;
     Ok(StoredToken {
         access_token: tr.access_token().secret().to_string(),
