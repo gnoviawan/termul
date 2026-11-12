@@ -173,8 +173,8 @@ Tauri commands take camelCase arguments and run only from the `main` webview. Ot
 | `automation_get` | `GET /api/automations/{id}` | `id` | `AutomationDetail` (`{automation, issues, policy}`) |
 | `automation_create` | `POST /api/automations` | `projectId`, `name` | `Automation` |
 | `automation_apply_ops` | `POST /api/automations/{id}/ops` | `id`, `baseRevision`, `ops` | `ApplyOpsResult` (`{automation, issues}`) |
-| `automation_preview_ops` | `POST /api/automations/{id}/ops/preview` | `id`, `baseRevision`, `ops` | `AutomationDetail`. A dry run of `automation_apply_ops` that saves and announces nothing. The automation carries the would-be graph at `baseRevision`, not the revision a save would assign. A stale `baseRevision` is the same `revision_conflict`. |
-| `automation_set_layout` | `POST /api/automations/{id}/layout` | `id`, `layout` | `Automation`. Saves canvas node positions (`{ [nodeId or "trigger"]: {x, y} }`) without a new revision, so an approval stands. Keys that are not `trigger` or a node are dropped, and removing a node drops its position. |
+| `automation_preview_ops` | `POST /api/automations/{id}/ops/preview` | `id`, `baseRevision`, `ops` | `AutomationDetail`. A dry run of `automation_apply_ops` that saves and announces nothing. The automation is what a save would store: the next revision, so an approval of `baseRevision` no longer arms it and `next_run_at` is null. A stale `baseRevision` is the same `revision_conflict`. |
+| `automation_set_layout` | `POST /api/automations/{id}/layout` | `id`, `layout` | `Automation`. Saves canvas node positions (`{ [nodeId or "trigger"]: {x, y} }`) without a new revision, so an approval stands. A NaN or infinite coordinate under any key is `invalid_input` and nothing is saved. Otherwise keys that are not `trigger` or a node are dropped, and removing a node drops its position. |
 | `automation_delete` | `DELETE /api/automations/{id}` | `id` | `null` |
 | `automation_set_enabled` | `POST /api/automations/{id}/enabled` | `id`, `enabled` | `Automation` |
 | `automation_approve` | `POST /api/automations/{id}/approve` | `id`, `revision` | `Automation` |

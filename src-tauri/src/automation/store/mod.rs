@@ -523,7 +523,8 @@ fn schedule_broken(
 /// The `next_run_at` an automation should hold: the first slot after `now`
 /// when armed with a schedule, otherwise none. A schedule that cannot be
 /// evaluated also yields none; validation keeps those from being approved.
-fn armed_next_run(a: &Automation, now_ms: i64) -> Option<i64> {
+/// When `a` runs next on its schedule; `None` unless it is armed.
+pub(crate) fn armed_next_run(a: &Automation, now_ms: i64) -> Option<i64> {
     let schedule = a.schedule().filter(|_| a.armed())?;
     compute_next_run(schedule, now_ms).ok().flatten()
 }

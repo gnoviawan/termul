@@ -22,7 +22,7 @@ use super::model::{
 use super::policy;
 use super::schedule;
 use super::secrets::{self, SecretError, Secrets};
-use super::store::{AutomationStore, StoreError, DB_FILE_NAME};
+use super::store::{armed_next_run, AutomationStore, StoreError, DB_FILE_NAME};
 use super::suggest::{self, Candidate, Prompt, PromptHistory, SessionHistory, Suggestion};
 use crate::acp::config::AgentConfig;
 use crate::acp::AcpManager;
@@ -245,9 +245,9 @@ impl AutomationService {
 
     /// What `apply_ops` would answer, without saving or announcing anything:
     /// the same revision check, the same op rules, the same issues and run
-    /// policy. The automation carries the would-be graph and trigger at the
-    /// revision it was based on, never the one a save would assign, so a
-    /// caller cannot mistake it for a stored head.
+    /// policy. The automation is the one a save would store: the next
+    /// revision, so an approval of `base_revision` no longer arms it and no
+    /// run is scheduled.
     pub fn preview_ops(
         &self,
         id: &AutomationId,
@@ -255,8 +255,8 @@ impl AutomationService {
         ops: &[Op],
     ) -> ServiceResult<AutomationDetail> {
         let mut next = self.staged(id, base_revision, ops)?;
-        next.revision = base_revision;
         next.layout.retain_nodes(&next.graph);
+        next.next_run_at = armed_next_run(&next, self.engine.now_ms());
         let servers = self.mcp_servers(&next);
         let issues = self.issues_with(&next, &servers);
         log::debug!(

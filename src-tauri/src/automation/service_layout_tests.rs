@@ -102,9 +102,12 @@ fn set_layout_refuses_a_position_that_is_not_finite() {
     let service = service();
     let approved = approved(&service);
     let mut changes = service.subscribe();
-    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+    for (x, y) in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY]
+        .into_iter()
+        .flat_map(|bad| [(bad, 0.0), (0.0, bad)])
+    {
         let refused = service
-            .set_layout(&approved.id, layout(&[("shape", bad, 0.0)]))
+            .set_layout(&approved.id, layout(&[("shape", x, y)]))
             .unwrap_err();
         assert_eq!(
             refused,
@@ -220,8 +223,8 @@ fn preview_ops_answers_like_apply_ops_and_leaves_the_store_untouched() {
             previewed.automation.revision,
             previewed.automation.approved_revision
         ),
-        (2, Some(2)),
-        "the revision stays the one the edit was based on"
+        (3, Some(2)),
+        "the revision a save would assign, which the approval does not cover"
     );
     assert!(
         previewed.automation.layout.0.is_empty(),
@@ -267,6 +270,48 @@ fn preview_ops_lists_the_issues_a_save_would_leave_and_refuses_what_apply_ops_re
         service.preview_ops(&approved.id, 3, &missing).unwrap_err(),
         service.apply_ops(&approved.id, 3, &missing).unwrap_err()
     );
+}
+
+#[test]
+fn preview_ops_of_an_armed_schedule_shows_it_disarmed_as_a_save_would() {
+    let service = service();
+    let created = service.create("p1", "Digest").unwrap();
+    service
+        .apply_ops(
+            &created.id,
+            1,
+            &ops(json!([
+                shape_node(),
+                { "op": "connect", "edge": { "from": "trigger", "port": "out", "to": "shape" } },
+                { "op": "set_trigger", "trigger": { "kind": "schedule",
+                    "schedule": { "kind": "cron", "expr": "*/5 * * * *", "timezone": "UTC" } } }
+            ])),
+        )
+        .unwrap();
+    let armed = service.approve(&created.id, 2).unwrap();
+    assert!(armed.armed() && armed.next_run_at.is_some(), "{armed:?}");
+    let edit = ops(json!([
+        { "op": "add_node", "node": { "id": "stop", "label": "Stop",
+            "spec": { "kind": "fail", "message": "no" } } },
+        { "op": "connect", "edge": { "from": "shape", "port": "out", "to": "stop" } }
+    ]));
+
+    let previewed = service
+        .preview_ops(&created.id, 2, &edit)
+        .unwrap()
+        .automation;
+    let saved = service.apply_ops(&created.id, 2, &edit).unwrap().automation;
+
+    assert!(!previewed.armed());
+    assert_eq!(
+        (
+            previewed.revision,
+            previewed.approved_revision,
+            previewed.next_run_at
+        ),
+        (saved.revision, saved.approved_revision, saved.next_run_at)
+    );
+    assert_eq!(previewed.next_run_at, None);
 }
 
 #[test]

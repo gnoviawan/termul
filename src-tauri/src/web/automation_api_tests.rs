@@ -961,8 +961,8 @@ async fn a_dry_run_answers_over_its_route_and_changes_nothing() {
     assert_eq!(status, 200);
     assert_eq!(
         previewed["data"]["automation"],
-        automation_json(&id, 1, None, shaped_graph()),
-        "the would-be graph at the revision it was based on"
+        automation_json(&id, 2, None, shaped_graph()),
+        "what a save would store, at the revision it would assign"
     );
     assert_eq!(previewed["data"]["issues"], json!([]));
     assert_eq!(
