@@ -199,7 +199,7 @@ pub(super) async fn handle_close_session(
 ///
 /// Desktop IPC (`Carrier::Ipc`) keeps the client cwd. A remote `/ws` client
 /// (including a view-only peer; `list_sessions` is a read) cannot pick an
-/// arbitrary folder. A supplied cwd is canonicalized (it must exist; `..`
+/// arbitrary folder. A supplied cwd is canonicalized (it must exist and be a directory; `..`
 /// and symlinks cannot walk out) and is then checked with a component-wise
 /// `Path::starts_with` against a similarly canonicalized project root.
 /// Verbatim `\\?\` prefixes are stripped on both sides first so a Windows
@@ -283,9 +283,14 @@ fn cwd_is_inside_root(resolved: &std::path::Path, root: &std::path::Path) -> boo
 }
 
 fn canonicalize_list_cwd(cwd: &str) -> Result<std::path::PathBuf, String> {
-    std::fs::canonicalize(cwd).map_err(|_| {
-        "list_sessions cwd must be an existing folder inside a registered project".to_string()
-    })
+    let refused =
+        || "list_sessions cwd must be an existing folder inside a registered project".to_string();
+    let resolved = std::fs::canonicalize(cwd).map_err(|_| refused())?;
+    let metadata = std::fs::metadata(&resolved).map_err(|_| refused())?;
+    if !metadata.is_dir() {
+        return Err(refused());
+    }
+    Ok(resolved)
 }
 
 fn listing_path_buf(path: &std::path::Path) -> std::path::PathBuf {

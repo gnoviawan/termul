@@ -292,6 +292,29 @@ fn resolve_list_sessions_cwd_rejects_a_nonexistent_path() {
     );
 }
 
+/// A regular file inside the project is not a listing folder, with or
+/// without projectId. Canonicalize succeeds; the directory check refuses it.
+#[test]
+fn resolve_list_sessions_cwd_rejects_a_regular_file() {
+    let root = tempfile::tempdir().unwrap();
+    let registry = registry_with_default("p-1", root.path());
+    let file = root.path().join("file.txt");
+    std::fs::write(&file, "not a folder").unwrap();
+    must_refuse(
+        resolve_list_sessions_cwd(
+            Carrier::Ws,
+            &registry,
+            Some("p-1"),
+            Some(file.to_str().unwrap()),
+        ),
+        "projectId + regular file",
+    );
+    must_refuse(
+        resolve_list_sessions_cwd(Carrier::Ws, &registry, None, Some(file.to_str().unwrap())),
+        "no projectId + regular file",
+    );
+}
+
 #[tokio::test]
 async fn list_sessions_on_ws_rejects_a_dotdot_escape() {
     let (_parent, proj, _foreign) = sibling_dirs();
