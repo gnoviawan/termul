@@ -286,7 +286,7 @@ fn validate_binary_url_rejects_dot_segments_that_leave_the_repo() {
 
 #[test]
 fn validate_binary_url_rejects_an_unparseable_url() {
-    let err = validate_binary_url("https://github.com:notaport/gnoviawan/termul/troupe-server")
+    let err = validate_binary_url("https://github.com:notaport/gnoviawan/troupe/troupe-server")
         .expect_err("unparseable url rejected");
     assert!(
         err.to_string().contains("outside the allowed origins"),

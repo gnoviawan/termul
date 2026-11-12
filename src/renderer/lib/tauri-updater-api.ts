@@ -19,7 +19,7 @@ import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 // overridden per check from the renderer) keeps resolving for stable users.
 const STABLE_UPDATE_MANIFEST_URL =
   'https://github.com/gnoviawan/troupe/releases/latest/download/latest.json'
-const UPSTREAM_LATEST_RELEASE_URL = 'https://api.github.com/repos/gnoviawan/termul/releases/latest'
+const UPSTREAM_LATEST_RELEASE_URL = 'https://api.github.com/repos/gnoviawan/troupe/releases/latest'
 const AUR_UPDATE_CHECK_TIMEOUT_MS = 8000
 // Total cap on the signed package download (reqwest's request timeout covers
 // the whole body). Without one, a stalled connection or proxy left the download

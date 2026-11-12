@@ -127,7 +127,7 @@ describe('tauri-release-notes', () => {
       const result = await fetchReleaseNotes('0.4.7')
 
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        'https://api.github.com/repos/gnoviawan/termul/releases/tags/v0.4.7',
+        'https://api.github.com/repos/gnoviawan/troupe/releases/tags/v0.4.7',
         expect.objectContaining({
           headers: { Accept: 'application/vnd.github+json' }
         })
