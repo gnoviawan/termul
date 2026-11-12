@@ -1,5 +1,5 @@
 //! The update sequences below are the ones claude-agent-acp 0.100.0 and
-//! codex-acp 2.5.0 sent to a raw ACP client with Termul's capabilities
+//! codex-acp 2.5.0 sent to a raw ACP client with Troupe's capabilities
 //! (2026-11-05), output deltas elided.
 
 use super::*;
@@ -232,6 +232,73 @@ fn subagent_child_traffic_is_never_listed() {
     assert!(commands
         .end_turn("s1", TurnEnd::Stopped, |_| false)
         .is_none());
+    assert!(commands.list("s1").is_empty());
+}
+
+#[test]
+fn a_subagent_call_stays_unlisted_when_a_later_update_lacks_the_marker() {
+    let id = "toolu_child";
+    let parent = "toolu_01RN1hhaJ9mJibrLfeDa4xFQ";
+    let mut commands = BackgroundCommands::default();
+    feed(
+        &mut commands,
+        "s1",
+        &[
+            json!({"_meta":{"claudeCode":{"toolName":"Bash","parentToolUseId":parent},"terminal_info":{"terminal_id":id}},"toolCallId":id,"sessionUpdate":"tool_call","status":"pending","title":"Terminal","kind":"execute"}),
+            json!({"_meta":{"terminal_output_delta":""},"toolCallId":id,"sessionUpdate":"tool_call_update","status":"in_progress"}),
+        ],
+        1_000,
+    );
+    assert_eq!(commands.end_turn("s1", TurnEnd::Stopped, |_| false), None);
+    feed(
+        &mut commands,
+        "s1",
+        &[
+            json!({"_meta":{"terminal_info":{"terminal_id":id}},"toolCallId":id,"sessionUpdate":"tool_call_update","status":"completed"}),
+        ],
+        2_000,
+    );
+    assert!(commands.list("s1").is_empty());
+}
+
+#[test]
+fn a_call_that_reported_its_exit_never_outlives_its_turn() {
+    let id = "exec-exited";
+    let mut commands = BackgroundCommands::default();
+    feed(
+        &mut commands,
+        "s1",
+        &[
+            codex_command_call(id, "true"),
+            json!({"sessionUpdate":"tool_call_update","toolCallId":id,"_meta":{"terminal_exit":{"exit_code":0,"signal":null,"terminal_id":id}}}),
+        ],
+        1_000,
+    );
+    assert_eq!(commands.end_turn("s1", TurnEnd::Stopped, |_| false), None);
+    assert_eq!(commands.running_count(), 0);
+}
+
+#[test]
+fn a_call_whose_permission_was_cancelled_is_not_listed_by_its_final_status() {
+    let id = "toolu_denied";
+    let mut commands = BackgroundCommands::default();
+    feed(
+        &mut commands,
+        "s1",
+        &[
+            json!({"_meta":{"terminal_info":{"terminal_id":id}},"toolCallId":id,"sessionUpdate":"tool_call","status":"pending","title":"Terminal","kind":"execute"}),
+        ],
+        1_000,
+    );
+    commands.permission_cancelled("s1", id);
+    assert_eq!(
+        commands.note(
+            "s1",
+            &update(json!({"toolCallId":id,"sessionUpdate":"tool_call_update","status":"failed"})),
+            2_000
+        ),
+        None
+    );
     assert!(commands.list("s1").is_empty());
 }
 

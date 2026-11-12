@@ -84,13 +84,23 @@ describe('ToolCallCard background commands', () => {
     expect(row.parentElement).toHaveTextContent('14s')
   })
 
-  it('shows the finished row once the command ended', () => {
+  it('shows the finished row with the command run time once the command ended', () => {
     seed({ ...running, state: 'ended', endedAtMs: NOW })
     renderCard()
     const row = screen.getByRole('button', { expanded: false })
     expect(row).not.toHaveTextContent('Running in background')
     expect(row).toHaveTextContent('sleep 25; echo probe-done')
+    expect(row.parentElement).toHaveTextContent('12s')
     expect(row.closest('[data-status]')).not.toHaveAttribute('aria-busy')
+  })
+
+  it('ignores a Background row of another chat showing the same tool call id', () => {
+    seed(running)
+    renderCard()
+    act(() => {
+      useToolCallRevealStore.getState().reveal('s2', 'toolu_bg')
+    })
+    expect(screen.getByRole('button', { expanded: false })).toBeInTheDocument()
   })
 
   it('opens and scrolls to itself when a Background row asks for it', () => {

@@ -33,6 +33,7 @@ import { CHEVRON_TRANSITION } from './chat-motion'
 import { DiffPreview } from './DiffPreview'
 import { EditDiffBlock } from './EditDiffBlock'
 import { HighlightedCode } from './highlighted-code'
+import { useSubagentSurface } from './subagent-surface-context'
 import { BackgroundCommandElapsed } from './subagent-time'
 import { type ToolIconName, toolIconName } from './tool-call-format'
 import {
@@ -255,7 +256,8 @@ function ToolCallCardComponent({
   // The status pill's Background row shows this card: open it and scroll to it
   // once the turn and work run around it have expanded.
   const rowRef = useRef<HTMLDivElement>(null)
-  const revealNonce = useToolCallReveal((id) => id === toolCall.toolCallId)
+  const { sessionId } = useSubagentSurface()
+  const revealNonce = useToolCallReveal(sessionId, (id) => id === toolCall.toolCallId)
   useEffect(() => {
     if (revealNonce === null) return
     if (hasDetail) setOpen(true)
@@ -416,8 +418,8 @@ function ToolCallCardComponent({
                 {rowSummary}
               </div>
             )}
-            {inBackground ? (
-              <BackgroundCommandElapsed command={inBackground} className="min-w-[4.5ch] text-2xs" />
+            {background ? (
+              <BackgroundCommandElapsed command={background} className="min-w-[4.5ch] text-2xs" />
             ) : (
               durationMs != null && (
                 <span className="min-w-[4.5ch] shrink-0 text-right text-2xs tabular-nums text-muted-foreground">

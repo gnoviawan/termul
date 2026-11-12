@@ -14,6 +14,9 @@
 //! - no running prompt turn,
 //! - no unanswered permission, question or elicitation,
 //! - no running agent-owned ACP terminal ("reported background work"),
+//! - no running subagent,
+//! - no session the agent works in outside a prompt turn,
+//! - no command the agent left running in the background,
 //! - no session reopen in flight, and
 //! - `last_active_at` (turn start/end, session updates, ticket
 //!   register/resolve, prompt send) is at least one whole window old.

@@ -64,11 +64,11 @@ An agent can end its turn while a command it started keeps running. For example,
 
 The [status pill](#review-changed-files) also shows these commands. In a wide chat it shows how many are running and how many have ended, and on hover it shows "1 command running in the background". On a phone or in a narrow pane it shows only the total. Open the list to see each command, its state, and how long it ran. When the list has tabs, the commands are on the **Background** tab. Click a row to go to the step of that command in the chat and open its output.
 
-The agent gets the result of each command when the command ends. An ended command stays in the list until you send your next message. You can keep chatting while a command runs. Termul does not switch the agent or the Claude account of the chat while a command runs, because that would stop the command. **Reload this chat** also stops it, so Termul asks you to confirm the reload first. When you close the chat, its commands leave the list.
+The agent gets the result of each command when the command ends. An ended command stays in the list until you send your next message. You can keep chatting while a command runs. Troupe does not switch the agent or the Claude account of the chat while a command runs, because that would stop the command. The one exception is a chat that hit a usage limit and continues on another Claude account: it continues at once and stops its commands. **Reload this chat** also stops it, so Troupe asks you to confirm the reload first. When you close the chat, its commands leave the list.
 
-When you stop a reply, the list keeps only a command that had already started. A command that was waiting for your approval does not run, so it is not listed. When a reply fails or times out, Termul lists no command for it.
+When you stop a reply, the list keeps only a command that had already started. A command that was waiting for your approval does not run, so it is not listed. When a reply fails or times out, Troupe lists no command for it.
 
-Termul shows background commands of agents that report when the command ends, such as Claude Code, Codex, and Factory Droid. The list has no stop button for a command.
+Troupe shows background commands of agents that report when the command ends, such as Claude Code, Codex, and Factory Droid. The list has no stop button for a command.
 
 ## See earlier steps of a long turn
 

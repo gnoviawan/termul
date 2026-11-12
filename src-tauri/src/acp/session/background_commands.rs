@@ -20,7 +20,7 @@
 //! Every change stamps the session's list with the agent's next revision, so
 //! a client that hears two lists out of order keeps the newer one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use agent_client_protocol::schema::v1::{Meta, SessionUpdate, StopReason, ToolCallStatus};
 use serde::Serialize;
@@ -127,7 +127,7 @@ struct Seen {
 impl Seen {
     /// Whether the call keeps running after its turn ended as `turn`.
     fn outlives(&self, turn: TurnEnd) -> bool {
-        if self.permission_cancelled {
+        if self.permission_cancelled || self.exited {
             return false;
         }
         match turn {
@@ -154,6 +154,9 @@ impl Seen {
 #[derive(Debug, Default)]
 struct SessionCommands {
     seen: HashMap<String, Seen>,
+    /// Calls a subagent made: an update of one that lacks the subagent
+    /// marker still never counts.
+    subagent_calls: HashSet<String>,
     /// Ordered by when each command went to the background.
     commands: Vec<Tracked>,
 }
@@ -252,6 +255,11 @@ impl BackgroundCommands {
 
     fn apply(&mut self, session_id: &str, update: &SessionUpdate, now_ms: u64) -> bool {
         if is_subagent_update(update) {
+            if let Some(facts) = tool_call_facts(update) {
+                let session = self.sessions.entry(session_id.to_string()).or_default();
+                session.seen.remove(&facts.id);
+                session.subagent_calls.insert(facts.id);
+            }
             return false;
         }
         if let Some(tool_call_id) = qwen_completed_task(update) {
@@ -281,7 +289,7 @@ impl BackgroundCommands {
             }
             return ends;
         }
-        if session.is_tracked(&facts.id) {
+        if session.is_tracked(&facts.id) || session.subagent_calls.contains(&facts.id) {
             return false;
         }
         let seen = session
@@ -313,7 +321,7 @@ impl BackgroundCommands {
         if is_open(status) {
             return false;
         }
-        let backgrounded = seen.terminal && !seen.exited;
+        let backgrounded = seen.terminal && !seen.exited && !seen.permission_cancelled;
         let Some(seen) = session.seen.remove(&facts.id).filter(|_| backgrounded) else {
             return false;
         };

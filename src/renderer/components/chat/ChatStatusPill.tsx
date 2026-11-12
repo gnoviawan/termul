@@ -351,18 +351,19 @@ export function ChatStatusPill({
     .filter(Boolean)
     .join('; ')
 
-  const liveText = !shown
-    ? ''
-    : subagents.length > 0
-      ? (waitingLabel ?? `Subagents: ${subagentSummary}`)
-      : (backgroundLabel ?? '')
+  const liveText = shown
+    ? [subagents.length > 0 && (waitingLabel ?? `Subagents: ${subagentSummary}`), backgroundLabel]
+        .filter(Boolean)
+        .join('. ')
+    : ''
+  const tooltip = [waitingLabel, backgroundLabel].filter(Boolean).join('. ') || undefined
 
   const trigger = (
     <button
       ref={triggerRef}
       type="button"
       aria-label={`Session status: ${triggerLabel}`}
-      title={backgroundLabel ?? waitingLabel ?? undefined}
+      title={tooltip}
       className={cn(
         'pointer-events-auto relative flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-popover/90 px-2.5 text-2xs font-medium shadow-pill backdrop-blur-md transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring data-[state=open]:bg-muted',
         "after:absolute after:-inset-2 after:content-[''] pointer-coarse:after:-inset-y-2.5"

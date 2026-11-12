@@ -66,6 +66,15 @@ pub(crate) struct ClosingSession {
     pub cleared_commands: Option<BackgroundCommandList>,
 }
 
+/// What `dispose_session` leaves the caller to resolve or announce.
+pub(crate) struct DisposedSession {
+    pub permissions: Vec<PendingPermission>,
+    pub questions: Vec<PendingQuestion>,
+    pub elicitations: Vec<PendingElicitation>,
+    /// The session's emptied command list, when it listed any.
+    pub cleared_commands: Option<BackgroundCommandList>,
+}
+
 /// A structured question (issue #411) awaiting the user's answer.
 ///
 /// The `responder` completes the agent's in-flight `_session/question` extension
@@ -563,19 +572,30 @@ impl DriverState {
 
     /// Begin closing a session: report whether it was ephemeral — captured
     /// BEFORE the marks are cleared, since the CloseSession arm's
-    /// finalization gate depends on the pre-removal value — then forget the
-    /// workspace root + marks, finish any active turn, and return the pending
+    /// finalization gate depends on the pre-removal value — then finish any
+    /// active turn, forget the workspace root + marks, and return the pending
     /// permissions to resolve as cancelled.
     pub(crate) fn begin_close_session(&mut self, session_id: &str) -> ClosingSession {
         let was_ephemeral = self.is_ephemeral(session_id);
-        let cleared_commands = self.background_commands.forget(session_id);
-        self.remove_session_root(session_id);
-        let pending = self.finish_turn(session_id);
+        let (pending, cleared_commands) = self.release_session(session_id);
         ClosingSession {
             was_ephemeral,
             pending,
             cleared_commands,
         }
+    }
+
+    /// Finish the session's turn, then forget its commands and root. The
+    /// turn's drained permissions note their calls on the command tracker,
+    /// so the forget comes after them.
+    fn release_session(
+        &mut self,
+        session_id: &str,
+    ) -> (Vec<PendingPermission>, Option<BackgroundCommandList>) {
+        let pending = self.finish_turn(session_id);
+        let cleared_commands = self.background_commands.forget(session_id);
+        self.remove_session_root(session_id);
+        (pending, cleared_commands)
     }
 
     /// Forget a session's workspace root (on explicit close).
@@ -591,8 +611,7 @@ impl DriverState {
         self.subagent_records.forget_root(session_id);
         // A closed or deleted session no longer works. A close tells clients
         // with `session_closed`; a delete reports `agent_working` itself.
-        // Both take the command list from `begin_close_session` first; this
-        // forget covers a disposed ephemeral session.
+        // Close, delete and dispose take the command list first.
         self.unprompted.end(session_id);
         self.background_commands.forget(session_id);
     }
@@ -914,19 +933,14 @@ impl DriverState {
         self.drain_session_elicitations(session_id)
     }
 
-    pub(crate) fn dispose_session(
-        &mut self,
-        session_id: &str,
-    ) -> (
-        Vec<PendingPermission>,
-        Vec<PendingQuestion>,
-        Vec<PendingElicitation>,
-    ) {
-        self.remove_session_root(session_id);
-        let permissions = self.finish_turn(session_id);
-        let questions = self.finish_turn_questions(session_id);
-        let elicitations = self.finish_turn_elicitations(session_id);
-        (permissions, questions, elicitations)
+    pub(crate) fn dispose_session(&mut self, session_id: &str) -> DisposedSession {
+        let (permissions, cleared_commands) = self.release_session(session_id);
+        DisposedSession {
+            permissions,
+            questions: self.finish_turn_questions(session_id),
+            elicitations: self.finish_turn_elicitations(session_id),
+            cleared_commands,
+        }
     }
 
     /// Activity evidence for the idle reaper. `running_terminals` comes from

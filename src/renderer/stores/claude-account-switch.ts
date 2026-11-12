@@ -94,8 +94,10 @@ async function stopOldAgent(agentId: string, reason: string): Promise<void> {
 
 /**
  * Resolves once the chat has no turn, replay, queue, pending request or
- * running background subagent; `false` if it closed. `ignoreBackground` does
- * not wait for background subagents.
+ * running background subagent or command; `false` if it closed.
+ * `ignoreBackground` does not wait for background subagents or commands: a
+ * chat that continues after a limit must not wait on a command that may never
+ * end, and `applyProjectClaudeAccount` awaits that continue.
  */
 function waitUntilIdle(sessionId: string, ignoreBackground: boolean): Promise<boolean> {
   const check = (state: AcpState): boolean | null => {

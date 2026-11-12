@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import type { BackgroundCommand } from '@/lib/acp-api'
+import type { BackgroundCommand, ToolCall } from '@/lib/acp-api'
+import { subagentToolCall } from '@/lib/test-utils/subagent'
 import { useAcpStore } from '@/stores/acp-store'
 import type { AcpSession, ChatMessage } from '@/stores/acp-store/types'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
@@ -64,10 +65,16 @@ function seed(
   })
 }
 
-function renderPill(): void {
+function renderPill(toolCalls: ToolCall[] = []): void {
   render(
     <TooltipProvider>
-      <ChatStatusPill sessionId="s1" cwd="" toolCalls={[]} messages={[user]} turnActive={false} />
+      <ChatStatusPill
+        sessionId="s1"
+        cwd=""
+        toolCalls={toolCalls}
+        messages={[user]}
+        turnActive={false}
+      />
     </TooltipProvider>
   )
 }
@@ -92,6 +99,19 @@ describe('ChatStatusPill background commands', () => {
     expect(pill()).toHaveTextContent('1 running·1 ended')
     expect(pill()).toHaveAccessibleName('Session status: background commands 1 running, 1 ended')
     expect(pill()).toHaveAttribute('title', '1 command running in the background')
+  })
+
+  it('announces and titles a background subagent wait and running commands together', () => {
+    seed([watch])
+    renderPill([
+      subagentToolCall(
+        { title: 'Audit code', background: true },
+        { toolCallId: 'a1', seq: 2, status: 'completed', timestamp: NOW }
+      )
+    ])
+    const text = 'Waiting on 1 background subagent. 1 command running in the background'
+    expect(pill()).toHaveAttribute('title', text)
+    expect(document.querySelector('[aria-live="polite"]')).toHaveTextContent(text)
   })
 
   it('lists each command with its state and elapsed time, and a footnote while one runs', () => {

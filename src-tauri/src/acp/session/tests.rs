@@ -113,10 +113,10 @@ fn ephemeral_sessions_are_authoritative_and_disposed_with_roots() {
     assert!(state.session_root("temp").is_some());
     assert!(state.is_turn_active("temp"));
     state.finish_turn("temp");
-    let (permissions, questions, elicitations) = state.dispose_session("temp");
-    assert!(permissions.is_empty());
-    assert!(questions.is_empty());
-    assert!(elicitations.is_empty());
+    let disposed = state.dispose_session("temp");
+    assert!(disposed.permissions.is_empty());
+    assert!(disposed.questions.is_empty());
+    assert!(disposed.elicitations.is_empty());
     assert!(!state.is_ephemeral("temp"));
     assert!(state.session_root("temp").is_none());
 }

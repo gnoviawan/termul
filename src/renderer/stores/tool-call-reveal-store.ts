@@ -34,9 +34,12 @@ export const useToolCallRevealStore = create<ToolCallRevealState>((set, get) => 
   }
 }))
 
-/** The nonce of a pending request whose tool call `matches`, else null. */
-export function useToolCallReveal(matches: (toolCallId: string) => boolean): number | null {
+/** The nonce of a pending request in `sessionId` whose tool call `matches`, else null. */
+export function useToolCallReveal(
+  sessionId: string | null,
+  matches: (toolCallId: string) => boolean
+): number | null {
   return useToolCallRevealStore((s) =>
-    s.target && matches(s.target.toolCallId) ? s.target.nonce : null
+    s.target?.sessionId === sessionId && matches(s.target.toolCallId) ? s.target.nonce : null
   )
 }

@@ -1048,6 +1048,8 @@ pub(super) async fn run_command_loop(
                 let task_slot = slot.clone();
                 let dispose_state = driver_state.clone();
                 let dispose_plan_server = host_plan_server.clone();
+                let dispose_sinks = sinks.clone();
+                let dispose_agent_id = agent_id.clone();
                 let close_cx = cx.clone();
                 spawn_request(&cx, slot, async move {
                     if let Some(waiter) = waiter {
@@ -1114,7 +1116,7 @@ pub(super) async fn run_command_loop(
                         }
                     }
 
-                    let (permissions, questions, elicitations) = {
+                    let disposed = {
                         let mut state = dispose_state.lock();
                         if state.is_turn_active(&session_id.0) {
                             send_reply(
@@ -1130,18 +1132,26 @@ pub(super) async fn run_command_loop(
                         }
                         state.dispose_session(&session_id.0)
                     };
-                    for permission in permissions {
+                    if let Some(cleared) = disposed.cleared_commands {
+                        crate::acp::events::emit_background_commands(
+                            &dispose_sinks,
+                            &dispose_agent_id,
+                            &session_id.0,
+                            cleared,
+                        );
+                    }
+                    for permission in disposed.permissions {
                         let _ = permission.responder.respond(RequestPermissionResponse::new(
                             RequestPermissionOutcome::Cancelled,
                         ));
                     }
-                    for question in questions {
+                    for question in disposed.questions {
                         let _ = question.responder.respond(serde_json::json!({
                             "questionId": question.question_id,
                             "cancelled": true,
                         }));
                     }
-                    for elicitation in elicitations {
+                    for elicitation in disposed.elicitations {
                         cancel_elicitation(elicitation);
                     }
                     // A promotable warm-pool session carries the injected plan
@@ -1419,7 +1429,20 @@ pub(super) async fn run_command_loop(
                 outcome,
                 reply,
             } => {
-                let pending = driver_state.lock().take_permission(&request_id);
+                let pending = {
+                    let mut state = driver_state.lock();
+                    let pending = state.take_permission(&request_id);
+                    // A cancelled permission's call never runs.
+                    if let Some(permission) = pending
+                        .as_ref()
+                        .filter(|_| matches!(outcome, RequestPermissionOutcome::Cancelled))
+                    {
+                        state
+                            .background_commands()
+                            .permission_cancelled(&permission.session_id, &permission.tool_call_id);
+                    }
+                    pending
+                };
                 match pending {
                     Some(permission) => {
                         let result = permission

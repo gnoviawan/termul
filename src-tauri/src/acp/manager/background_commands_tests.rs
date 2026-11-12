@@ -199,3 +199,24 @@ async fn deleting_or_closing_a_session_forgets_its_commands() {
         .sessions
         .is_empty());
 }
+
+#[tokio::test]
+async fn disposing_an_ephemeral_session_returns_its_emptied_list() {
+    let driver = Driver::new();
+    driver.state.lock().mark_ephemeral("sess-1".to_string());
+    assert!(driver.state.lock().try_begin_turn("sess-1").is_some());
+    driver
+        .update(json!({"sessionUpdate":"tool_call","toolCallId":"exec-1","kind":"execute","title":"npm run watch","status":"in_progress","_meta":{"terminal_info":{"terminal_id":"exec-1"}}}))
+        .await;
+    let listed = driver.end_turn().expect("the turn end lists the command");
+
+    let cleared = driver
+        .state
+        .lock()
+        .dispose_session("sess-1")
+        .cleared_commands
+        .expect("the dispose clears the list");
+    assert!(cleared.commands.is_empty());
+    assert!(cleared.revision > listed.revision);
+    assert_eq!(driver.running(), 0);
+}

@@ -10,6 +10,7 @@ import { CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
 import type { TimelineItem } from './chat-timeline'
 import { RowReveal } from './RowReveal'
+import { useSubagentSurface } from './subagent-surface-context'
 import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
 import type { ToolActivitySummary } from './tool-call-summary'
@@ -53,9 +54,10 @@ interface WorkRunGroupProps {
 
 /**
  * One nested disclosure rolling up a run of thoughts and tool calls between
- * two narration messages; expanding lists them in order. Always starts
- * collapsed, live or failed, so narration stays adjacent; a failed run
- * flags itself in red instead of opening.
+ * two narration messages; expanding lists them in order. Starts collapsed,
+ * live or failed, so narration stays adjacent; a failed run flags itself in
+ * red instead of opening. Only a Background row asking to show one of its
+ * cards opens it.
  */
 function WorkRunGroupComponent({
   items,
@@ -67,7 +69,8 @@ function WorkRunGroupComponent({
 }: WorkRunGroupProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   const [open, setOpen] = useState(false)
-  const revealNonce = useToolCallReveal((id) =>
+  const { sessionId } = useSubagentSurface()
+  const revealNonce = useToolCallReveal(sessionId, (id) =>
     items.some((item) => item.kind === 'tool' && item.tool.toolCallId === id)
   )
   useEffect(() => {
