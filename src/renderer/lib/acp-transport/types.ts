@@ -399,8 +399,31 @@ export interface AcpTransport {
     sessionId: SessionId,
     options?: CommandCallOptions
   ): Promise<void>
-  listSessions(agentId: AgentId, cwd?: string, cursor?: string): Promise<ListSessionsResponse>
+  listSessions(
+    agentId: AgentId,
+    cwd?: string,
+    cursor?: string,
+    projectId?: string
+  ): Promise<ListSessionsResponse>
   registerDiscoveredSession(
+    input: {
+      sessionId: SessionId
+      agentId: AgentId
+      cwd: string
+      title?: string | null
+      updatedAt?: number
+      projectId?: string
+    },
+    options?: CommandCallOptions
+  ): Promise<PersistedSessionSummary>
+  /**
+   * Copy a session another client created (for example a Claude Code chat)
+   * into the durable chat history: the host registers it, captures the
+   * history the agent replays and closes the agent session. WS:
+   * `import_agent_session`. Rejects with code `duplicate` when the session is
+   * already in the history.
+   */
+  importAgentSession(
     input: {
       sessionId: SessionId
       agentId: AgentId

@@ -7,7 +7,7 @@ import type { IpcResult } from '@shared/types/ipc.types'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
-import { AlertCircle, Hand, KeyRound, Loader2, Trash2 } from '@/components/icons'
+import { AlertCircle, Hand, KeyRound, Loader2, Pencil, Trash2 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { Switch } from '@/components/ui/switch'
@@ -22,7 +22,6 @@ import {
 } from '@/lib/automation-api'
 import { cn } from '@/lib/utils'
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
-import { AutomationDiagram } from './AutomationDiagram'
 import { AutomationSecretsDialog } from './AutomationSecretsDialog'
 import {
   automationState,
@@ -33,6 +32,7 @@ import {
   runStatusPresentation,
   STATE_PRESENTATION
 } from './automation-format'
+import { AutomationCanvas } from './canvas/AutomationCanvas'
 import { RunPolicyCard } from './RunPolicyCard'
 
 interface AutomationDetailProps {
@@ -43,6 +43,8 @@ interface AutomationDetailProps {
   onOpenRun: (runId: RunId) => void
   onDeleted: () => void
   onChanged: () => void
+  /** Opens the canvas editor; absent when this client may not write. */
+  onEdit?: () => void
 }
 
 type Busy = 'approve' | 'run' | 'enable' | 'delete' | null
@@ -54,7 +56,8 @@ export function AutomationDetail({
   isVisible,
   onOpenRun,
   onDeleted,
-  onChanged
+  onChanged,
+  onEdit
 }: AutomationDetailProps): React.JSX.Element {
   const { automation, issues, policy } = detail
   const gated = !useServerAdmitsRemoteWrites()
@@ -226,10 +229,24 @@ export function AutomationDetail({
       />
 
       <section aria-labelledby="automation-diagram-title" className="flex flex-col gap-2">
-        <h3 id="automation-diagram-title" className="text-xs font-medium text-muted-foreground">
-          Diagram
-        </h3>
-        <AutomationDiagram graph={automation.graph} trigger={automation.trigger} narrow={narrow} />
+        <div className="flex items-center gap-2">
+          <h3 id="automation-diagram-title" className="text-xs font-medium text-muted-foreground">
+            Diagram
+          </h3>
+          {/* A read-only server gets no Edit entry at all: the canvas stays in view mode. */}
+          {!gated && onEdit && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-auto pointer-coarse:h-11"
+              onClick={onEdit}
+            >
+              <Pencil size={14} />
+              Edit
+            </Button>
+          )}
+        </div>
+        <AutomationCanvas automation={automation} issues={issues} phone={narrow} />
       </section>
 
       <section aria-labelledby="automation-runs-title" className="flex flex-col gap-2">

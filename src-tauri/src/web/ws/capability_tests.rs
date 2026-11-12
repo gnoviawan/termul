@@ -21,6 +21,7 @@ const MUTATIONS: &[&str] = &[
     "dispose_ephemeral_session",
     "promote_session",
     "register_discovered_session",
+    "import_agent_session",
     "delete_session",
     "send_prompt",
     "cancel_prompt",

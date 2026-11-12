@@ -3,10 +3,12 @@ import { useEffect, useState } from 'react'
 import { ArrowLeft, Workflow } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { AutomationDetail } from './AutomationDetail'
 import { AutomationList, AutomationListEmpty } from './AutomationList'
 import { AutomationRunDetail } from './AutomationRunDetail'
 import { useAutomationFocus } from './automation-focus'
+import { AutomationEditor } from './canvas/AutomationEditor'
 import { SuggestedAutomations } from './SuggestedAutomations'
 import { useAutomationDetail, useAutomationList, useAutomationRuns } from './use-automations'
 
@@ -26,6 +28,10 @@ export function AutomationsPanel({
   const phone = useMobileWebShell()
   const [chosenId, setSelectedId] = useState<AutomationId | null>(null)
   const [runId, setRunId] = useState<RunId | null>(null)
+  const [editingId, setEditingId] = useState<AutomationId | null>(null)
+  // Another automation asked for the pane while the editor is open: the editor confirms first.
+  const [leaveFor, setLeaveFor] = useState<{ id: AutomationId; nonce: number } | null>(null)
+  const writable = useServerAdmitsRemoteWrites()
   const list = useAutomationList(projectId)
   // A choice deleted elsewhere (another device, an agent) counts as no choice.
   const chosen =
@@ -43,10 +49,19 @@ export function AutomationsPanel({
   const requested = useAutomationFocus((s) => s.requests[projectId])
   useEffect(() => {
     if (!requested) return
+    useAutomationFocus.getState().clear(projectId)
+    // Switching away would unmount the editor and its draft; let the editor ask first.
+    if (editingId !== null && requested !== editingId) {
+      setLeaveFor({ id: requested, nonce: Date.now() })
+      return
+    }
     setSelectedId(requested)
     setRunId(null)
-    useAutomationFocus.getState().clear(projectId)
-  }, [requested, projectId])
+  }, [requested, projectId, editingId])
+  // An editor belongs to the automation it opened on: once that leaves the pane, so does the editor.
+  useEffect(() => {
+    if (editingId !== null && editingId !== selectedId) setEditingId(null)
+  }, [editingId, selectedId])
   const reloadAll = (): void => {
     list.reload()
     detail.reload()
@@ -78,8 +93,35 @@ export function AutomationsPanel({
         onOpenRun={setRunId}
         onDeleted={() => select(null)}
         onChanged={reloadAll}
+        onEdit={() => {
+          // Pin the selection: on desktop it may only be "the first in the list", which can change.
+          setSelectedId(selectedId)
+          setEditingId(selectedId)
+        }}
       />
     )
+
+  // The editor takes the whole pane, on the phone too.
+  if (writable && editingId !== null && editingId === selectedId && detail.data) {
+    return (
+      <AutomationEditor
+        key={editingId}
+        detail={detail.data}
+        phone={phone}
+        onClose={() => {
+          setEditingId(null)
+          if (leaveFor) {
+            setSelectedId(leaveFor.id)
+            setRunId(null)
+          }
+          setLeaveFor(null)
+        }}
+        onChanged={reloadAll}
+        leave={leaveFor}
+        onStay={() => setLeaveFor(null)}
+      />
+    )
+  }
 
   const runView = run ? <AutomationRunDetail run={run} onChanged={runs.reload} /> : null
 

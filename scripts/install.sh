@@ -2,7 +2,7 @@
 set -euo pipefail
 
 OWNER="gnoviawan"
-REPO="termul"
+REPO="troupe"
 BASE_URL="https://github.com/${OWNER}/${REPO}"
 
 die() {

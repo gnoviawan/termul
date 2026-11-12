@@ -25,9 +25,9 @@ RUN set -eu; \
 		*) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
 	esac; \
 	if [ "$TROUPE_RELEASE" = latest ]; then \
-		base=https://github.com/gnoviawan/termul/releases/latest/download; \
+		base=https://github.com/gnoviawan/troupe/releases/latest/download; \
 	else \
-		base="https://github.com/gnoviawan/termul/releases/download/$TROUPE_RELEASE"; \
+		base="https://github.com/gnoviawan/troupe/releases/download/$TROUPE_RELEASE"; \
 	fi; \
 	for asset in "troupe-server$suffix" "termul-server$suffix"; do \
 		if curl -fsSL --proto '=https' --retry 3 -o troupe-server "$base/$asset"; then break; fi; \
@@ -50,7 +50,7 @@ ARG TROUPE_GID=${TERMUL_GID}
 
 LABEL org.opencontainers.image.title="troupe-server" \
 	org.opencontainers.image.description="Standalone Troupe server: browser terminals, git, and ACP agents over HTTP and WebSocket" \
-	org.opencontainers.image.source="https://github.com/gnoviawan/termul" \
+	org.opencontainers.image.source="https://github.com/gnoviawan/troupe" \
 	org.opencontainers.image.licenses="MIT" \
 	org.opencontainers.image.version="${TROUPE_RELEASE}"
 

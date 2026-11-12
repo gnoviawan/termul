@@ -67,6 +67,7 @@ mod chat_reads;
 mod claude_accounts;
 mod commands;
 mod dispatch;
+mod import_session;
 mod lifecycle;
 mod mcp_catalog;
 mod projects;
@@ -88,6 +89,7 @@ use chat_reads::*;
 use claude_accounts::*;
 use commands::*;
 use dispatch::*;
+use import_session::*;
 use lifecycle::*;
 use projects::*;
 use prompts::*;
@@ -834,6 +836,8 @@ mod provider_error_tests;
 mod registry_check_tests;
 #[cfg(test)]
 mod spawn_rejection_tests;
+#[cfg(test)]
+mod list_sessions_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

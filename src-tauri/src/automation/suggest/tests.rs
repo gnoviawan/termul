@@ -54,7 +54,7 @@ fn weekday_prs() -> Vec<Prompt> {
 #[test]
 fn tokens_keep_the_words_and_drop_the_details() {
     let set = tokens(
-        "Please summarize PR #1571 at https://github.com/gnoviawan/termul/pull/1571 \
+        "Please summarize PR #1571 at https://github.com/gnoviawan/troupe/pull/1571 \
          from src/main.rs, id 3f9a2b7c1d and 2026-10-26.",
     );
     assert_eq!(

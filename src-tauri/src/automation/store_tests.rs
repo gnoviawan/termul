@@ -1,8 +1,8 @@
 use serde_json::{json, Value};
 
 use super::model::{
-    Automation, IssueCode, LastRun, Parked, Run, RunId, RunStatus, RunTrigger, SettledStatus, Step,
-    StepStatus,
+    Automation, IssueCode, LastRun, Layout, NodePosition, Parked, Run, RunId, RunStatus,
+    RunTrigger, SettledStatus, Step, StepStatus,
 };
 use super::store::{AutomationStore, ClaimOutcome, ParkEnd, SettleOutcome, StoreError};
 use super::test_support::{apply, node_id, sample_automation};
@@ -61,7 +61,7 @@ fn migrates_once_and_reopens_with_data() {
         .unwrap()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
 }
 
 #[test]
@@ -672,4 +672,134 @@ fn runs_list_the_one_in_flight_first_then_newest() {
         .map(|r| r.id.to_string())
         .collect();
     assert_eq!(ids, vec!["parked", "skip2", "skip1"]);
+}
+
+fn layout(entries: &[(&str, f64, f64)]) -> Layout {
+    Layout(
+        entries
+            .iter()
+            .map(|(key, x, y)| (key.to_string(), NodePosition { x: *x, y: *y }))
+            .collect(),
+    )
+}
+
+#[test]
+fn schema_5_keeps_the_rows_of_a_schema_4_database_with_an_empty_layout() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("automations.sqlite");
+    {
+        let db = rusqlite::Connection::open(&path).unwrap();
+        for sql in &super::store::MIGRATIONS[..4] {
+            db.execute_batch(sql).unwrap();
+        }
+        db.pragma_update(None, "user_version", 4).unwrap();
+        db.execute_batch(
+            r#"INSERT INTO automation (id, project_id, name, revision, approved_revision, enabled,
+                   trigger_json, graph_json, isolation, created_at, updated_at)
+               VALUES ('auto-old', 'p1', 'Old', 3, 3, 1, '{"kind":"manual"}',
+                   '{"nodes":[],"edges":[]}', 'shared_in_root', 1, 2);"#,
+        )
+        .unwrap();
+    }
+
+    let store = AutomationStore::open(&path).unwrap();
+    let old = store.get(&"auto-old".to_string().into()).unwrap().unwrap();
+    assert_eq!(
+        (
+            old.name.as_str(),
+            old.revision,
+            old.approved_revision,
+            old.layout
+        ),
+        ("Old", 3, Some(3), Layout::default())
+    );
+}
+
+#[test]
+fn set_layout_writes_only_the_layout_column() {
+    let store = AutomationStore::open_in_memory().unwrap();
+    let a = approved(&store, &every_minute());
+    let before = store.get(&a.id).unwrap().unwrap();
+
+    let saved = store
+        .set_layout(
+            &a.id,
+            layout(&[("trigger", 10.0, 20.5), ("fetch", -4.0, 0.0)]),
+        )
+        .unwrap();
+
+    let after = store.get(&a.id).unwrap().unwrap();
+    assert_eq!(after, saved);
+    assert_eq!(
+        after.layout,
+        layout(&[("trigger", 10.0, 20.5), ("fetch", -4.0, 0.0)])
+    );
+    assert_eq!(
+        Automation {
+            layout: Layout::default(),
+            ..after
+        },
+        before,
+        "every other field, updated_at and next_run_at included, is unchanged"
+    );
+}
+
+#[test]
+fn set_layout_drops_keys_that_are_not_the_trigger_or_a_stored_node() {
+    let store = AutomationStore::open_in_memory().unwrap();
+    let a = approved(&store, &every_minute());
+    let saved = store
+        .set_layout(
+            &a.id,
+            layout(&[
+                ("trigger", 1.0, 2.0),
+                ("extract", 3.0, 4.0),
+                ("ghost", 5.0, 6.0),
+                ("", 7.0, 8.0),
+            ]),
+        )
+        .unwrap();
+    assert_eq!(
+        saved.layout,
+        layout(&[("trigger", 1.0, 2.0), ("extract", 3.0, 4.0)])
+    );
+    assert_eq!(store.get(&a.id).unwrap().unwrap().layout, saved.layout);
+}
+
+#[test]
+fn set_layout_of_a_missing_automation_is_not_found() {
+    let store = AutomationStore::open_in_memory().unwrap();
+    let missing = "nope".to_string().into();
+    assert!(matches!(
+        store.set_layout(&missing, Layout::default()),
+        Err(StoreError::NotFound(id)) if id == "nope"
+    ));
+}
+
+#[test]
+fn save_keeps_the_stored_layout_and_prunes_the_nodes_it_removed() {
+    let store = AutomationStore::open_in_memory().unwrap();
+    let a = approved(&store, &every_minute());
+    store
+        .set_layout(
+            &a.id,
+            layout(&[
+                ("trigger", 1.0, 2.0),
+                ("post", 3.0, 4.0),
+                ("alert", 5.0, 6.0),
+            ]),
+        )
+        .unwrap();
+
+    let without_post = apply(&a, json!([{ "op": "remove_node", "id": "post" }]));
+    let mut stale = without_post.clone();
+    stale.layout = Layout::default();
+    let saved = store.save(&stale, a.revision, NOW).unwrap();
+
+    let expected = layout(&[("trigger", 1.0, 2.0), ("alert", 5.0, 6.0)]);
+    assert_eq!(
+        saved.layout, expected,
+        "the caller's copy is not the layout's source"
+    );
+    assert_eq!(store.get(&a.id).unwrap().unwrap().layout, expected);
 }

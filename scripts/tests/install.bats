@@ -54,7 +54,7 @@ stub_curl_release_flow() {
 printf 'curl %s\\n' \"\$*\" >>\"\$TERMUL_TEST_LOG\"
 args=\" \$* \"
 if [[ \"\$args\" == *'/releases/latest'* ]]; then
-  printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
+  printf '%s\\n' 'https://github.com/gnoviawan/troupe/releases/tag/v1.2.3'
   exit 0
 fi
 out=''
@@ -165,7 +165,7 @@ command chmod \"\$@\"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *".exe or .msi"* ]]
-  [[ "$output" == *"https://github.com/gnoviawan/termul/releases"* ]]
+  [[ "$output" == *"https://github.com/gnoviawan/troupe/releases"* ]]
   ! grep -q "^curl " "$TERMUL_TEST_LOG"
 }
 
@@ -209,7 +209,7 @@ command chmod \"\$@\"
 @test "resolve_version parses latest redirect without api.github.com" {
   stub_cmd curl "
 printf '%s\\n' \"\$*\" >>\"\$TERMUL_TEST_LOG\"
-printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
+printf '%s\\n' 'https://github.com/gnoviawan/troupe/releases/tag/v1.2.3'
 "
   load_install
 
@@ -218,7 +218,7 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   [ "$status" -eq 0 ]
   [ "$output" = "v1.2.3" ]
   ! grep -q "api.github.com" "$TERMUL_TEST_LOG"
-  grep -q "https://github.com/gnoviawan/termul/releases/latest" "$TERMUL_TEST_LOG"
+  grep -q "https://github.com/gnoviawan/troupe/releases/latest" "$TERMUL_TEST_LOG"
 }
 
 @test "verify_sha256 succeeds for matching fixture" {

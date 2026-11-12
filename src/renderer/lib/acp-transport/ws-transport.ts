@@ -1357,9 +1357,15 @@ export class WsAcpTransport implements AcpTransport {
   async listSessions(
     agentId: AgentId,
     cwd?: string,
-    cursor?: string
+    cursor?: string,
+    projectId?: string
   ): Promise<ListSessionsResponse> {
-    return this.request<ListSessionsResponse>('list_sessions', { agentId, cwd, cursor })
+    return this.request<ListSessionsResponse>('list_sessions', {
+      agentId,
+      cwd,
+      cursor,
+      projectId
+    })
   }
 
   async registerDiscoveredSession(
@@ -1379,6 +1385,20 @@ export class WsAcpTransport implements AcpTransport {
       undefined,
       options
     )
+  }
+
+  async importAgentSession(
+    input: {
+      sessionId: SessionId
+      agentId: AgentId
+      cwd: string
+      title?: string | null
+      updatedAt?: number
+      projectId?: string
+    },
+    options?: CommandCallOptions
+  ): Promise<PersistedSessionSummary> {
+    return this.request<PersistedSessionSummary>('import_agent_session', input, undefined, options)
   }
 
   // CAP-2 (spec-in-chat-agent-switch): durable agent-switch marker — the

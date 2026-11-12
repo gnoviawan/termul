@@ -20,6 +20,8 @@ pub mod template;
 #[cfg(test)]
 mod agents_tests;
 #[cfg(test)]
+mod graph_fixture_tests;
+#[cfg(test)]
 mod graph_tests;
 #[cfg(test)]
 mod model_tests;
@@ -31,6 +33,8 @@ mod schedule_tests;
 mod schema_tests;
 #[cfg(test)]
 mod secrets_tests;
+#[cfg(test)]
+mod service_layout_tests;
 #[cfg(test)]
 mod service_mcp_tests;
 #[cfg(test)]

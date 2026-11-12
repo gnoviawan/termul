@@ -30,6 +30,7 @@ def chunk(text):
 
 hung = None
 auth = None
+elicit_prompt = None
 for line in sys.stdin:
     line = line.strip()
     if not line:
@@ -47,6 +48,10 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": auth, "error": {
                 "code": -32800, "message": "device code sign-in was cancelled"}})
         auth = None
+    elif method is None and rid == 960:
+        chunk("elicitation " + str(msg.get("result", {}).get("action")))
+        send({"jsonrpc": "2.0", "id": elicit_prompt, "result": {"stopReason": "end_turn"}})
+        elicit_prompt = None
     elif method == "authenticate":
         auth = rid
         send({"jsonrpc": "2.0", "id": 950, "method": "elicitation/create", "params": {
@@ -117,6 +122,10 @@ for line in sys.stdin:
         elif text == "rpcfail":
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32000, "message": "mock failure"}})
+        elif text == "leaky":
+            send({"jsonrpc": "2.0", "id": rid,
+                  "error": {"code": -32603, "message": "Internal error",
+                            "data": {"headers": {"authorization": "Bearer sk-test"}}}})
         elif text == "providerlimit":
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32603,
@@ -126,6 +135,11 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32603, "message": "Internal error",
                             "data": {"status": 400}}})
+        elif text.startswith("elicit-url:"):
+            elicit_prompt = rid
+            send({"jsonrpc": "2.0", "id": 960, "method": "elicitation/create", "params": {
+                "sessionId": "mock-1", "mode": "url", "elicitationId": "e-1",
+                "url": text[len("elicit-url:"):], "message": "Open this link"}})
         elif text == "browser":
             subprocess.run([os.environ["BROWSER"], "https://auth.example.com/login?state=mock"],
                            check=True)
@@ -577,6 +591,18 @@ async fn rpc_error_turn_emits_one_error_terminator_and_releases_the_claim() {
     assert_eq!(terminators(&events)[0]["turnId"], "t1");
 
     assert_eq!(h.run("ok", "t2").await.unwrap(), StopReason::EndTurn);
+    h.finish().await;
+}
+
+/// The raw JSON-RPC `data` of a failed prompt (here a bearer token) never
+/// reaches the client that sent the prompt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_prompt_reply_omits_the_error_data() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let error = h.run("leaky", "t1").await.unwrap_err();
+    assert_eq!(error, "Internal error");
     h.finish().await;
 }
 
@@ -1587,3 +1613,6 @@ async fn idle_agent_driver_thread_stays_parked() {
 
 #[path = "real_loop_sign_in_tests.rs"]
 mod sign_in;
+
+#[path = "real_loop_elicitation_tests.rs"]
+mod elicitation;

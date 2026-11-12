@@ -183,8 +183,8 @@ fn an_assignee_login_with_search_syntax_is_refused() {
 
 /// Trimmed `search` response from gnoviawan/termul (2026-10-30).
 const SEARCH_DATA: &str = r#"{"rateLimit":{"limit":5000,"remaining":4944,"resetAt":"2026-10-31T00:24:08Z"},"search":{"nodes":[
-{"__typename":"PullRequest","number":1578,"title":"feat(context-window): usage bar","state":"OPEN","isDraft":false,"merged":false,"url":"https://github.com/gnoviawan/termul/pull/1578","updatedAt":"2026-10-30T22:56:40Z","author":{"login":"julianromli"},"labels":{"nodes":[]},"assignees":{"nodes":[]},"comments":{"totalCount":1},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}},
-{"__typename":"Issue","number":1580,"title":"Upgrading the .deb deletes /usr/bin/rg","state":"OPEN","url":"https://github.com/gnoviawan/termul/issues/1580","updatedAt":"2026-10-30T20:45:44Z","author":{"login":"gnoviawan"},"labels":{"nodes":[{"name":"bug","color":"d73a4a"}]},"assignees":{"nodes":[{"login":"gnoviawan"}]},"comments":{"totalCount":0}},
+{"__typename":"PullRequest","number":1578,"title":"feat(context-window): usage bar","state":"OPEN","isDraft":false,"merged":false,"url":"https://github.com/gnoviawan/troupe/pull/1578","updatedAt":"2026-10-30T22:56:40Z","author":{"login":"julianromli"},"labels":{"nodes":[]},"assignees":{"nodes":[]},"comments":{"totalCount":1},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}},
+{"__typename":"Issue","number":1580,"title":"Upgrading the .deb deletes /usr/bin/rg","state":"OPEN","url":"https://github.com/gnoviawan/troupe/issues/1580","updatedAt":"2026-10-30T20:45:44Z","author":{"login":"gnoviawan"},"labels":{"nodes":[{"name":"bug","color":"d73a4a"}]},"assignees":{"nodes":[{"login":"gnoviawan"}]},"comments":{"totalCount":0}},
 {"__typename":"PullRequest","number":1574,"title":"draft","state":"OPEN","isDraft":true,"merged":false,"url":"u","updatedAt":"t","author":null,"labels":{"nodes":[]},"assignees":{"nodes":[]},"comments":{"totalCount":0},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}},
 {"__typename":"PullRequest","number":1576,"title":"merged","state":"MERGED","isDraft":false,"merged":true,"url":"u","updatedAt":"t","author":{"login":"a"},"labels":{"nodes":[]},"assignees":{"nodes":[]},"comments":{"totalCount":3},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"ERROR"}}}]}},
 {}
@@ -209,7 +209,7 @@ fn search_nodes_map_to_list_items() {
             assignees: vec!["gnoviawan".into()],
             comment_count: 0,
             updated_at: "2026-10-30T20:45:44Z".into(),
-            url: "https://github.com/gnoviawan/termul/issues/1580".into(),
+            url: "https://github.com/gnoviawan/troupe/issues/1580".into(),
             checks: None,
         }
     );
@@ -254,17 +254,17 @@ fn search_nodes_map_to_list_items() {
 /// Trimmed detail response for PR #1579 (2026-10-30).
 const PR_DETAIL_DATA: &str = r#"{"rateLimit":{"limit":5000,"remaining":4822,"resetAt":"2026-10-30T23:42:15Z"},"repository":{"issueOrPullRequest":{
 "__typename":"PullRequest","number":1579,"title":"ci(nightly): prune","state":"OPEN","isDraft":false,"merged":false,
-"url":"https://github.com/gnoviawan/termul/pull/1579","updatedAt":"2026-10-30T17:51:34Z","createdAt":"2026-10-30T17:30:10Z",
+"url":"https://github.com/gnoviawan/troupe/pull/1579","updatedAt":"2026-10-30T17:51:34Z","createdAt":"2026-10-30T17:30:10Z",
 "body":"Fixes #1508.","author":{"login":"davidgrldo"},"labels":{"nodes":[]},"assignees":{"nodes":[]},
 "comments":{"totalCount":2,"nodes":[
- {"id":"IC_1","body":"first","createdAt":"2026-10-30T17:30:28Z","url":"https://github.com/gnoviawan/termul/pull/1579#issuecomment-1","author":{"login":"coderabbitai","__typename":"Bot"}},
- {"id":"IC_2","body":"second","createdAt":"2026-10-30T17:39:59Z","url":"https://github.com/gnoviawan/termul/pull/1579#issuecomment-2","author":null}]},
+ {"id":"IC_1","body":"first","createdAt":"2026-10-30T17:30:28Z","url":"https://github.com/gnoviawan/troupe/pull/1579#issuecomment-1","author":{"login":"coderabbitai","__typename":"Bot"}},
+ {"id":"IC_2","body":"second","createdAt":"2026-10-30T17:39:59Z","url":"https://github.com/gnoviawan/troupe/pull/1579#issuecomment-2","author":null}]},
 "headRefName":"ci/nightly-prune-assets-1508","headRefOid":"8f1ec978ddffdf581c36068d2abde9458d7a4266","baseRefName":"dev",
 "isCrossRepository":true,"maintainerCanModify":true,"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","autoMergeRequest":null,
 "additions":27,"deletions":0,"changedFiles":1,
 "commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]},
 "reviewThreads":{"nodes":[{"id":"PRRT_1","isResolved":false,"isOutdated":false,"path":".github/workflows/nightly.yml","line":492,
- "comments":{"nodes":[{"id":"PRRC_1","body":"nit","createdAt":"2026-10-30T17:51:27Z","url":"https://github.com/gnoviawan/termul/pull/1579#discussion_r1","author":{"login":"gnoviawan","__typename":"User"}}]}}]},
+ "comments":{"nodes":[{"id":"PRRC_1","body":"nit","createdAt":"2026-10-30T17:51:27Z","url":"https://github.com/gnoviawan/troupe/pull/1579#discussion_r1","author":{"login":"gnoviawan","__typename":"User"}}]}}]},
 "timelineItems":{"nodes":[
  {"__typename":"LabeledEvent","id":"LE_1","createdAt":"2026-10-30T17:31:00Z","actor":{"login":"gnoviawan"},"label":{"name":"ci","color":"0e8a16"}},
  {"__typename":"AssignedEvent","id":"AE_1","createdAt":"2026-10-30T17:32:00Z","actor":{"login":"gnoviawan"},"assignee":{"login":"davidgrldo"}},
@@ -305,7 +305,7 @@ fn pr_detail_maps_merge_state_threads_and_comments() {
                     is_bot: false,
                     body: "nit".into(),
                     created_at: "2026-10-30T17:51:27Z".into(),
-                    url: "https://github.com/gnoviawan/termul/pull/1579#discussion_r1".into(),
+                    url: "https://github.com/gnoviawan/troupe/pull/1579#discussion_r1".into(),
                 }],
             }],
         }

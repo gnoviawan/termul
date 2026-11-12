@@ -87,3 +87,49 @@ export function formatChatCreatedTime(ms: number | undefined, now: number = Date
       : { year: 'numeric', month: 'short', day: 'numeric' }
   )
 }
+
+/**
+ * Format when a chat was last active with its clock time on every day, for a
+ * row that has no title to tell it apart: "Today, 14:05", "Yesterday, 09:10",
+ * "Oct 28, 14:05" (with the year when it is not this year). A missing, zero or
+ * non-finite timestamp yields an empty string.
+ */
+export function formatChatFullTime(ms: number | undefined, now: number = Date.now()): string {
+  if (ms === undefined || !Number.isFinite(ms) || ms <= 0) return ''
+  const created = new Date(ms)
+  const clock = created.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (ms >= startOfToday(now)) return `Today, ${clock}`
+  if (ms >= startOfYesterday(now)) return `Yesterday, ${clock}`
+  const thisYear = created.getFullYear() === new Date(now).getFullYear()
+  const date = created.toLocaleDateString(
+    undefined,
+    thisYear
+      ? { month: 'short', day: 'numeric' }
+      : { year: 'numeric', month: 'short', day: 'numeric' }
+  )
+  return `${date}, ${clock}`
+}
+
+/**
+ * Format when a titled chat was last active, short enough to leave its title
+ * room on a phone: "Just now", "9m ago", "3h ago" for today, "Yesterday", then
+ * a short date ("Nov 8", with the year when it is not this year). A missing,
+ * zero or non-finite timestamp yields an empty string.
+ */
+export function formatChatShortTime(ms: number | undefined, now: number = Date.now()): string {
+  if (ms === undefined || !Number.isFinite(ms) || ms <= 0) return ''
+  if (ms >= startOfToday(now)) {
+    const minutes = Math.max(0, Math.floor((now - ms) / 60_000))
+    if (minutes < 1) return 'Just now'
+    if (minutes < 60) return `${minutes}m ago`
+    return `${Math.floor(minutes / 60)}h ago`
+  }
+  if (ms >= startOfYesterday(now)) return 'Yesterday'
+  const date = new Date(ms)
+  return date.toLocaleDateString(
+    undefined,
+    date.getFullYear() === new Date(now).getFullYear()
+      ? { month: 'short', day: 'numeric' }
+      : { year: 'numeric', month: 'short', day: 'numeric' }
+  )
+}

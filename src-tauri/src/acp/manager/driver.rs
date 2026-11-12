@@ -311,8 +311,23 @@ pub(super) async fn handle_session_notification(
     // calls). The persisted JSONL log stays the sole history source. Session
     // state updates (plan, commands, mode, config, usage, session info) are
     // not history and still fan out.
-    if is_replayed_history(&notification.update) && state.lock().note_replayed_update(&session_id) {
-        return Ok(());
+    if is_replayed_history(&notification.update) {
+        let imported = {
+            let mut state = state.lock();
+            if state.is_import_window(&session_id) {
+                state.import_push(&session_id, notification.update.clone())
+            } else if state.note_replayed_update(&session_id) {
+                return Ok(());
+            } else {
+                None
+            }
+        };
+        if let Some(steps) = imported {
+            let failed =
+                super::import_steps::record_import_steps(sinks, agent_id, &session_id, steps);
+            state.lock().note_import_failures(&session_id, failed);
+            return Ok(());
+        }
     }
     let paths = |locations: &[agent_client_protocol::schema::v1::ToolCallLocation]| {
         locations.iter().map(|l| l.path.clone()).collect::<Vec<_>>()
@@ -899,6 +914,16 @@ pub(super) async fn drive_connection(
                         ("form".to_string(), None, fields, dropped)
                     }
                     ElicitationMode::Url(url_mode) => {
+                        if let Err(refused) = crate::acp::safe_url::check_safe_url(
+                            &url_mode.url,
+                            crate::acp::safe_url::Opener::Remote,
+                        ) {
+                            log::warn!("[acp] url elicitation cancelled: {refused}");
+                            let _ = responder.respond(CreateElicitationResponse::new(
+                                ElicitationAction::Cancel,
+                            ));
+                            return Ok(());
+                        }
                         ("url".to_string(), Some(url_mode.url.clone()), Vec::new(), 0)
                     }
                     ElicitationMode::Other(_) | _ => {

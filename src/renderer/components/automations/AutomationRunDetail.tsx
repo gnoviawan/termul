@@ -1,5 +1,4 @@
 import type {
-  AutomationNode,
   AutomationRun,
   AutomationStep,
   NodeKind,
@@ -26,7 +25,7 @@ import {
   runStatusPresentation,
   STATUS_PRESENTATION
 } from './automation-format'
-import { layoutGraph } from './automation-layout'
+import { stepOrder } from './canvas/layout'
 import { useRunSteps } from './use-automations'
 
 const TRIGGER_LABEL: Record<RunTrigger, string> = {
@@ -34,8 +33,6 @@ const TRIGGER_LABEL: Record<RunTrigger, string> = {
   catch_up: 'Catch-up',
   manual: 'Manual'
 }
-
-const ORDER_METRICS = { nodeWidth: 1, nodeHeight: 1, gapX: 0, gapY: 0 }
 
 export function AutomationRunDetail({
   run,
@@ -47,15 +44,8 @@ export function AutomationRunDetail({
   const { data: steps, error, reload } = useRunSteps(run)
   const [cancelling, setCancelling] = useState(false)
   const gated = !useServerAdmitsRemoteWrites()
-  // Steps in graph order (by rank, then row position) of the run's own snapshot.
-  const nodes = useMemo(() => {
-    const placed = layoutGraph(run.graph, ORDER_METRICS).nodes
-    const byId = new Map<string, AutomationNode>(run.graph.nodes.map((node) => [node.id, node]))
-    return placed
-      .slice()
-      .sort((a, b) => a.rank - b.rank || a.order - b.order)
-      .flatMap((p) => byId.get(p.id) ?? [])
-  }, [run.graph])
+  // Steps in the order they first run, from the run's own graph snapshot.
+  const nodes = useMemo(() => stepOrder(run.graph), [run.graph])
   const stepsOf = groupSteps(steps ?? [])
   const approval = parkedApproval(run)
 

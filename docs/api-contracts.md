@@ -173,6 +173,8 @@ Tauri commands take camelCase arguments and run only from the `main` webview. Ot
 | `automation_get` | `GET /api/automations/{id}` | `id` | `AutomationDetail` (`{automation, issues, policy}`) |
 | `automation_create` | `POST /api/automations` | `projectId`, `name` | `Automation` |
 | `automation_apply_ops` | `POST /api/automations/{id}/ops` | `id`, `baseRevision`, `ops` | `ApplyOpsResult` (`{automation, issues}`) |
+| `automation_preview_ops` | `POST /api/automations/{id}/ops/preview` | `id`, `baseRevision`, `ops` | `AutomationDetail`. A dry run of `automation_apply_ops` that saves and announces nothing. The automation is what a save would store: the next revision, so an approval of `baseRevision` no longer arms it and `next_run_at` is null. A stale `baseRevision` is the same `revision_conflict`. |
+| `automation_set_layout` | `POST /api/automations/{id}/layout` | `id`, `layout` | `Automation`. Saves canvas node positions (`{ [nodeId or "trigger"]: {x, y} }`) without a new revision, so an approval stands. A NaN or infinite coordinate under any key is `invalid_input` and nothing is saved. Otherwise keys that are not `trigger` or a node are dropped, and removing a node drops its position. |
 | `automation_delete` | `DELETE /api/automations/{id}` | `id` | `null` |
 | `automation_set_enabled` | `POST /api/automations/{id}/enabled` | `id`, `enabled` | `Automation` |
 | `automation_approve` | `POST /api/automations/{id}/approve` | `id`, `revision` | `Automation` |
@@ -190,7 +192,7 @@ Tauri commands take camelCase arguments and run only from the `main` webview. Ot
 
 Secret values go in and never come back out. The host stores them in the OS keychain. A host whose keychain does not answer at startup, such as `troupe-server` on headless Linux, stores them instead in `automation-secrets.json` in its data directory: an owner-only (`0600`) JSON object keyed like the keychain entries, `automation:<project_id>:<NAME>`. A host that already has that file keeps using it. The log names the backend once at startup and never carries a value.
 
-The `/api/automation` prefix is bearer-gated. A host without a token gate serves only loopback peers. Every `POST`, `PUT` and `DELETE` except `preview-schedule` passes the remote-write guard: the desktop shared-live host refuses them, and `troupe-server` admits a non-loopback peer only with `--allow-remote-writes`.
+The `/api/automation` prefix is bearer-gated. A host without a token gate serves only loopback peers. Every `POST`, `PUT` and `DELETE` except `preview-schedule` and `ops/preview` passes the remote-write guard: the desktop shared-live host refuses them, and `troupe-server` admits a non-loopback peer only with `--allow-remote-writes`.
 
 A failure carries the service's code. On HTTP it also sets the status:
 
@@ -548,8 +550,9 @@ The class column is the request's command class, defined in `src-tauri/src/web/c
 | `load_session` | command | Reopens an agent session with ACP `session/load`. |
 | `resume_session` | command | Reopens an agent session with ACP `session/resume`. The reply carries `replaySnapshot: null`, because history comes from `get_session_payload` and `recover_session_snapshot`. |
 | `close_session` | command | Closes a session and leaves the agent running. A running turn is cancelled first. |
-| `list_sessions` | read | Lists the sessions the agent reports (`session/list`), with optional `cwd` and `cursor`. |
+| `list_sessions` | read | Lists the sessions the agent reports (`session/list`). Optional `projectId`, `cwd` and `cursor`. On the web `/ws` carrier (including view-only peers) a supplied `cwd` is canonicalized — it must exist; `..` and symlinks cannot walk out — and is accepted only when the resolved path sits inside a registered project's canonical root (both sides are canonicalized and compared component-wise). With `projectId`, that project only; without `projectId`, any registered project. If `cwd` is omitted, the host uses the named project or the host default. Desktop IPC still takes `cwd` as the listing folder. |
 | `register_discovered_session` | command | Persists metadata for an agent-owned session that `list_sessions` returned. |
+| `import_agent_session` | command | Imports a session another client created, such as a Claude Code chat. Payload: `agentId`, `sessionId`, `cwd`, optional `title`, `updatedAt` (ms) and `projectId`. The host registers the session, captures the history that ACP `session/load` replays into the durable log, then closes the agent session. The reply carries the session metadata. Errors: `duplicate` when the id is already in the chat history or an import of it is running; `unsupported` when the request is invalid, the agent replays no history or the session cannot be saved; any other agent error (such as `not_implemented`, `not_found` or `agent_auth_required`) keeps its mapped code. Open the imported chat with `resume_session`, or with `load_session` for an agent without `session/resume`. |
 | `delete_agent_session` | idempotent | Asks the agent to delete one of its sessions. |
 | `dispose_ephemeral_session` | command | Disposes a backend-ephemeral session, such as a warm-pool or utility session. |
 | `promote_session` | command | Turns an ephemeral session into a durable one, so its first real prompt persists. |

@@ -115,7 +115,7 @@ export function PrivacyPage() {
         <LegalList>
           <li>
             In the app source (<LegalLink href={GITHUB_REPO_URL}>
-              github.com/gnoviawan/termul
+              github.com/gnoviawan/troupe
             </LegalLink>) we did not find analytics, telemetry, or crash
             reporting libraries.
           </li>

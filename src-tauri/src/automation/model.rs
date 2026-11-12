@@ -3,6 +3,7 @@
 //! `src/shared/types/automation.types.ts` mirrors every type here; the shared
 //! fixture `src/shared/types/__fixtures__/automation.json` pins both sides.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -158,6 +159,9 @@ pub struct Automation {
     pub enabled: bool,
     pub trigger: Trigger,
     pub graph: Graph,
+    /// Canvas node positions. Not part of the revision: saving one neither
+    /// bumps `revision` nor touches the approval.
+    pub layout: Layout,
     pub isolation: Isolation,
     pub next_run_at: Option<i64>,
     pub consecutive_errors: u32,
@@ -180,6 +184,7 @@ impl Automation {
             enabled: true,
             trigger: Trigger::Manual,
             graph: Graph::default(),
+            layout: Layout::default(),
             isolation: Isolation::SharedInRoot,
             next_run_at: None,
             consecutive_errors: 0,
@@ -201,6 +206,35 @@ impl Automation {
             Trigger::Manual => None,
             Trigger::Schedule { schedule } => Some(schedule),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NodePosition {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Keys are node ids plus `"trigger"`; stored keys name only those that exist.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct Layout(pub BTreeMap<String, NodePosition>);
+
+impl Layout {
+    /// Drops every key that is neither `"trigger"` nor a node of `graph`.
+    pub fn retain_nodes(&mut self, graph: &Graph) {
+        self.0.retain(|key, _| {
+            key == TRIGGER_SOURCE || graph.nodes.iter().any(|n| n.id.as_str() == key)
+        });
+    }
+
+    /// The first key whose position is NaN or infinite, which JSON cannot
+    /// carry and a canvas cannot draw.
+    pub fn non_finite_key(&self) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(_, p)| !p.x.is_finite() || !p.y.is_finite())
+            .map(|(key, _)| key.as_str())
     }
 }
 

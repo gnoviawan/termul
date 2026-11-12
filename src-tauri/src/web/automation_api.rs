@@ -41,7 +41,7 @@ use crate::automation::model::{
 };
 use crate::automation::service::{AutomationService, ServiceError, ServiceResult};
 use crate::commands::automation::{
-    decide_approval, delete_secret, list_suggestions, match_suggestion, parse_ops,
+    decide_approval, delete_secret, list_suggestions, match_suggestion, parse_layout, parse_ops,
     preview_schedule, set_secret, UNAVAILABLE,
 };
 use crate::web::auth::BearerVerified;
@@ -68,6 +68,8 @@ const AUTOMATIONS: &str = "/api/automations";
 const PREVIEW: &str = "/api/automations/preview-schedule";
 const AUTOMATION: &str = "/api/automations/{id}";
 const OPS: &str = "/api/automations/{id}/ops";
+const OPS_PREVIEW: &str = "/api/automations/{id}/ops/preview";
+const LAYOUT: &str = "/api/automations/{id}/layout";
 const ENABLED: &str = "/api/automations/{id}/enabled";
 const APPROVE: &str = "/api/automations/{id}/approve";
 const RUN: &str = "/api/automations/{id}/run";
@@ -89,6 +91,8 @@ pub fn automation_router<S>(state: AutomationRouteState) -> Router<S> {
         .route(PREVIEW, post(preview))
         .route(AUTOMATION, get(get_one).delete(delete_one))
         .route(OPS, post(apply_ops))
+        .route(OPS_PREVIEW, post(preview_ops))
+        .route(LAYOUT, post(set_layout))
         .route(ENABLED, post(set_enabled))
         .route(APPROVE, post(approve))
         .route(RUN, post(run_now))
@@ -269,6 +273,13 @@ pub(crate) struct OpsBody {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct LayoutBody {
+    // Parsed into a `Layout` by the command; the spec documents that shape.
+    #[schemars(with = "crate::automation::model::Layout")]
+    layout: Value,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub(crate) struct EnabledBody {
     enabled: bool,
 }
@@ -389,6 +400,35 @@ async fn apply_ops(
     let result = parse_ops(body.ops)
         .and_then(|ops| service.apply_ops(&AutomationId::from(id), body.base_revision, &ops));
     reply(OPS, result)
+}
+
+/// Read class, like `preview-schedule`: a dry run stores and announces nothing.
+async fn preview_ops(
+    State(state): State<AutomationRouteState>,
+    ConnectInfo(peer): Peer,
+    parts: Parts,
+    Path(id): Path<String>,
+    body: Body<OpsBody>,
+) -> Reply {
+    let service = admit(&state, &parts, peer, OPS_PREVIEW, false)?;
+    let Json(body) = body.map_err(|e| invalid_body(OPS_PREVIEW, &e))?;
+    let result = parse_ops(body.ops)
+        .and_then(|ops| service.preview_ops(&AutomationId::from(id), body.base_revision, &ops));
+    reply(OPS_PREVIEW, result)
+}
+
+async fn set_layout(
+    State(state): State<AutomationRouteState>,
+    ConnectInfo(peer): Peer,
+    parts: Parts,
+    Path(id): Path<String>,
+    body: Body<LayoutBody>,
+) -> Reply {
+    let service = admit(&state, &parts, peer, LAYOUT, true)?;
+    let Json(body) = body.map_err(|e| invalid_body(LAYOUT, &e))?;
+    let result = parse_layout(body.layout)
+        .and_then(|layout| service.set_layout(&AutomationId::from(id), layout));
+    reply(LAYOUT, result)
 }
 
 async fn set_enabled(

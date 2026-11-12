@@ -97,18 +97,21 @@ pub const ACP_RESOURCE_NOT_FOUND_PREFIX: &str = "ACP_RESOURCE_NOT_FOUND";
 /// tag, `ErrorCode::ResourceNotFound` the [`ACP_RESOURCE_NOT_FOUND_PREFIX`]
 /// tag, a recognized provider failure gets its `ACP_PROVIDER_*` tag
 /// ([`tag_provider_error`](crate::acp::provider_errors::tag_provider_error));
-/// every other error stringifies verbatim.
+/// every other error carries its client-safe message. The message never
+/// includes the error's raw `data`.
 pub(super) fn acp_err_wire_string(error: agent_client_protocol::Error) -> String {
+    let detail = events::AcpErrorDetail::from(&error);
     match error.code {
         agent_client_protocol::ErrorCode::AuthRequired => {
-            format!("{ACP_AUTH_REQUIRED_PREFIX}: {error}")
+            format!("{ACP_AUTH_REQUIRED_PREFIX}: {}", detail.client_message())
         }
         agent_client_protocol::ErrorCode::ResourceNotFound => {
-            format!("{ACP_RESOURCE_NOT_FOUND_PREFIX}: {error}")
+            format!(
+                "{ACP_RESOURCE_NOT_FOUND_PREFIX}: {}",
+                detail.client_message()
+            )
         }
-        _ => {
-            crate::acp::provider_errors::tag_provider_error(&events::AcpErrorDetail::from(&error))
-        }
+        _ => crate::acp::provider_errors::tag_provider_error(&detail),
     }
 }
 

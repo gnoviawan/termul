@@ -26,9 +26,9 @@ const toast = vi.hoisted(() => ({ error: vi.fn(), info: vi.fn() }))
 vi.mock('sonner', () => ({ toast }))
 
 import { AutomationDetail } from './AutomationDetail'
-import { AutomationDiagram } from './AutomationDiagram'
 import { AutomationRunDetail } from './AutomationRunDetail'
 import { formatDateTime } from './automation-format'
+import { AutomationCanvas } from './canvas/AutomationCanvas'
 
 const ok = <T,>(data: T) => ({ success: true as const, data })
 
@@ -315,7 +315,12 @@ describe('the automation of a run parked on an approval', () => {
   })
 
   it('draws an approval node with its message as the key detail', () => {
-    render(<AutomationDiagram graph={graph} trigger={{ kind: 'manual' }} />)
+    render(
+      <AutomationCanvas
+        automation={{ graph, trigger: { kind: 'manual' }, layout: {} }}
+        phone={false}
+      />
+    )
 
     const steps = within(screen.getByRole('list', { name: 'Automation steps' }))
     expect(steps.getAllByRole('listitem').map((item) => item.textContent)).toEqual([

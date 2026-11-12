@@ -109,7 +109,7 @@ const TRAY_ID: &str = "termul-tray";
 const TRAY_MENU_SHOW: &str = "tray-show";
 const TRAY_MENU_QUIT: &str = "tray-quit";
 const TRAY_QUIT_REQUESTED_EVENT: &str = "tray:quit-requested";
-const LEARN_MORE_URL: &str = "https://github.com/gnoviawan/termul";
+const LEARN_MORE_URL: &str = "https://github.com/gnoviawan/troupe";
 const DEFAULT_ZOOM_FACTOR: f64 = 1.0;
 const MIN_ZOOM_FACTOR: f64 = 0.5;
 const MAX_ZOOM_FACTOR: f64 = 3.0;
@@ -2105,6 +2105,8 @@ pub fn run() {
             commands::automation_get,
             commands::automation_create,
             commands::automation_apply_ops,
+            commands::automation_preview_ops,
+            commands::automation_set_layout,
             commands::automation_delete,
             commands::automation_set_enabled,
             commands::automation_approve,
