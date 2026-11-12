@@ -1,6 +1,5 @@
 import type { NodeKind } from '@shared/types/automation.types'
 import { useState } from 'react'
-import { Search } from '@/components/icons'
 import { MENU_CONTENT_CLASS, MENU_LABEL_CLASS } from '@/components/ui/menu-styles'
 import {
   MobileSheetContent,
@@ -9,6 +8,7 @@ import {
   SheetSearchField
 } from '@/components/ui/mobile-sheet'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
+import { PopoverSearchBand } from '@/components/ui/popover-search-band'
 import { Sheet } from '@/components/ui/sheet'
 import { cn } from '@/lib/utils'
 import { NODE_KIND_PRESENTATION } from '../../automation-format'
@@ -114,19 +114,15 @@ export function AddNodeMenu({
           }
         }}
       >
-        <label className="flex items-center gap-2 border-b border-border px-3 py-2">
-          <Search size={14} className="shrink-0 text-muted-foreground" />
-          <input
-            // The menu opens on purpose; typing filters at once.
-            // biome-ignore lint/a11y/noAutofocus: the menu was just opened to pick a step
-            autoFocus
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search steps"
-            aria-label="Search steps"
-            className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
-          />
-        </label>
+        <PopoverSearchBand
+          // The menu opens on purpose; typing filters at once.
+          autoFocus
+          value={query}
+          onChange={setQuery}
+          placeholder="Search steps"
+          ariaLabel="Search steps"
+          inputClassName="text-sm"
+        />
         <div className="max-h-80 overflow-y-auto p-1">
           {groups.length === 0 && (
             <p className="px-2 py-3 text-xs text-muted-foreground">No step matches.</p>
