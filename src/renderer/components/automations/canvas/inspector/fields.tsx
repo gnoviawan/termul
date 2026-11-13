@@ -3,7 +3,7 @@ import { ChevronDown } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { MENU_CONTENT_CLASS } from '@/components/ui/menu-styles'
-import { FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
+import { FIELD_FOCUS_CLASS, FIELD_SURFACE_CLASS } from '@/components/ui/panel-styles'
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { PopoverSearchBand } from '@/components/ui/popover-search-band'
 import {
@@ -628,7 +628,8 @@ export function PickerField({
             aria-haspopup="listbox"
             className={cn(
               FIELD_HEIGHT,
-              'flex w-full items-center justify-between gap-2 rounded-lg border border-field-border bg-background px-3 text-left text-sm transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-50',
+              'flex w-full items-center justify-between gap-2 rounded-lg px-3 text-left text-sm transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-50',
+              FIELD_SURFACE_CLASS,
               FIELD_FOCUS_CLASS
             )}
             {...describedBy(id, error, help)}

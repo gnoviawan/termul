@@ -1,6 +1,10 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { type FocusEvent, type KeyboardEvent, useId, useState } from 'react'
-import { BAND_FOCUS_CLASS, INNER_FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
+import {
+  BAND_FOCUS_CLASS,
+  FIELD_SURFACE_CLASS,
+  INNER_FIELD_FOCUS_CLASS
+} from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 
 interface GoToLineWidgetProps {
@@ -65,7 +69,8 @@ export function GoToLineWidget({
     >
       <div
         className={cn(
-          'flex h-7 min-w-0 items-center rounded-lg border border-field-border bg-background pl-2 transition-colors duration-150 ease-out',
+          'flex h-7 min-w-0 items-center rounded-lg pl-2 transition-colors duration-150 ease-out',
+          FIELD_SURFACE_CLASS,
           BAND_FOCUS_CLASS
         )}
       >

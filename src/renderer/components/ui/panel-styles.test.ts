@@ -39,9 +39,14 @@ describe('panel-styles', () => {
     expect(flexButton).not.toContain('inline-flex')
   })
 
-  it('panel field uses the card fill, the 3:1 field edge and a neutral focus border', () => {
+  it('panel field uses the card fill, a quiet edge that steps up on hover, and a neutral focus border', () => {
     expect(classes(PANEL_FIELD_CLASS)).toEqual(
-      expect.arrayContaining(['bg-card', 'border-field-border', 'focus-visible:border-focus-ring'])
+      expect.arrayContaining([
+        'bg-card',
+        'border-border/60',
+        'not-disabled:hover:border-field-border',
+        'focus-visible:border-focus-ring'
+      ])
     )
   })
 

@@ -13,6 +13,7 @@ import { Input } from './input'
 import {
   BAND_FOCUS_CLASS,
   FIELD_FOCUS_CLASS,
+  FIELD_SURFACE_CLASS,
   FOCUS_RING_CLASS,
   INNER_FIELD_FOCUS_CLASS,
   PANEL_FIELD_CLASS
@@ -54,7 +55,7 @@ describe('field focus constants', () => {
 
   it('panel field takes the bordered field focus', () => {
     expect(classes(PANEL_FIELD_CLASS)).toEqual(
-      expect.arrayContaining(['border-field-border', ...classes(FIELD_FOCUS_CLASS)])
+      expect.arrayContaining([...classes(FIELD_SURFACE_CLASS), ...classes(FIELD_FOCUS_CLASS)])
     )
     expect(classes(PANEL_FIELD_CLASS)).not.toContain('outline-none')
   })

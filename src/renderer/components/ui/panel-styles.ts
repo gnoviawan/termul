@@ -31,6 +31,14 @@ export const FIELD_FOCUS_CLASS =
   'focus-visible:outline-hidden focus-visible:border-focus-ring focus-visible:ring-1 focus-visible:ring-focus-ring'
 
 /**
+ * Text field or select at rest, the composer's look: a quiet hairline on the
+ * card fill. Hover steps the edge up to `--field-border`; focus adds
+ * {@link FIELD_FOCUS_CLASS} (or {@link BAND_FOCUS_CLASS} on a wrapper).
+ */
+export const FIELD_SURFACE_CLASS =
+  'border border-border/60 bg-card not-disabled:hover:border-field-border'
+
+/**
  * Focus for a field whose wrapper draws the edge, such as a search band: the
  * field adds no edge of its own. Pair the wrapper with {@link BAND_FOCUS_CLASS}.
  */
@@ -48,8 +56,8 @@ export const PANEL_ICON_BUTTON_CLASS = `${QUIET_ICON_BUTTON_CLASS} size-7`
 /** 40px panel header: `.label-panel` at the start, icon buttons at the end. */
 export const PANEL_HEADER_CLASS = 'flex h-10 shrink-0 items-center justify-between pl-4 pr-1.5'
 
-/** Panel text field: card fill, 3:1 field edge, neutral focus border. */
-export const PANEL_FIELD_CLASS = `rounded-lg border border-field-border bg-card text-xs pointer-coarse:text-base text-foreground transition-colors duration-150 ease-out placeholder:text-muted-foreground ${FIELD_FOCUS_CLASS}`
+/** Panel text field: the field surface, neutral focus border. */
+export const PANEL_FIELD_CLASS = `rounded-lg ${FIELD_SURFACE_CLASS} text-xs pointer-coarse:text-base text-foreground transition-colors duration-150 ease-out placeholder:text-muted-foreground ${FIELD_FOCUS_CLASS}`
 
 /** 13px search glyph inside a `relative` wrapper around a panel field. */
 export const PANEL_FIELD_ICON_CLASS =

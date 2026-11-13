@@ -15,6 +15,7 @@ import {
 import { withShortcut } from '@/components/shell/use-shortcut-label'
 import {
   BAND_FOCUS_CLASS,
+  FIELD_SURFACE_CLASS,
   FOCUS_RING_CLASS,
   INNER_FIELD_FOCUS_CLASS,
   QUIET_ICON_BUTTON_CLASS
@@ -83,7 +84,8 @@ const OPTION_TOGGLES: ReadonlyArray<{
 ]
 
 const FIELD_BAND_CLASS = cn(
-  'flex h-7 min-w-0 items-center gap-0.5 rounded-lg border border-field-border bg-background pl-2 transition-colors duration-150 ease-out',
+  'flex h-7 min-w-0 items-center gap-0.5 rounded-lg pl-2 transition-colors duration-150 ease-out',
+  FIELD_SURFACE_CLASS,
   BAND_FOCUS_CLASS
 )
 
