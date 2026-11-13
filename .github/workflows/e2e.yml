@@ -6,10 +6,11 @@ name: E2E
 # recovery and reconnect without a network LLM or credentials.
 #
 # It runs the ACP lifecycle specs (agent-survival, crash-recovery, elicitation,
-# switch-responsiveness, web-reopen-live-turn-tool-cards) on pull requests that
-# change ACP, relay or e2e files, and daily for every other change. Dispatch it by
-# hand with a `specs` input to run other specs. The mobile layout specs fail on
-# CI today and stay out of the default list (issue #1343).
+# switch-responsiveness, web-reopen-live-turn-tool-cards) and the automation
+# canvas specs (automation-canvas-edit, automation-run-overlay) on pull requests
+# that change ACP, relay, automation or e2e files, and daily for every other
+# change. Dispatch it by hand with a `specs` input to run other specs. The mobile
+# layout specs fail on CI today and stay out of the default list (issue #1343).
 
 on:
   pull_request:
@@ -26,6 +27,10 @@ on:
       - 'src/renderer/stores/acp-store/**'
       - 'src/renderer/stores/acp-store.ts'
       - 'src/renderer/components/chat/**'
+      - 'src/renderer/components/automations/**'
+      - 'src-tauri/src/automation/**'
+      - 'src/shared/types/automation.types.ts'
+      - 'src/renderer/lib/automation-*'
       - 'src-tauri/src/server_main.rs'
       - 'src-tauri/build.rs'
       - 'canvas/figcraft.pin'
@@ -110,7 +115,7 @@ jobs:
 
       - name: Run e2e suite
         env:
-          E2E_SPECS: ${{ inputs.specs || 'agent-survival crash-recovery elicitation switch-responsiveness web-reopen-live-turn-tool-cards composer-at-menu subagent-history' }}
+          E2E_SPECS: ${{ inputs.specs || 'agent-survival crash-recovery elicitation switch-responsiveness web-reopen-live-turn-tool-cards composer-at-menu subagent-history automation-canvas-edit automation-run-overlay' }}
           # These seven tests fail on dev for reasons outside the harness. In four of
           # them a project switch opens the Project Settings dialog, which then
           # covers the New chat button. The other three fail or flake on chat tab and

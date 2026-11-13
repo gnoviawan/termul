@@ -135,7 +135,9 @@ export function AutomationEditor({
     const { ops, layout } = addGesture(graph, draft.layout, node, chainPort(kind), placement)
     if (apply(ops, layout)) {
       setFocus({ id: node.id, nonce: Date.now() })
-      setInspected(node.id)
+      // On the phone the sheet would cover half the canvas just as the user goes to connect
+      // the new step: it stays selected, and a tap on it opens the sheet.
+      setInspected(phone ? null : node.id)
     }
   }
 

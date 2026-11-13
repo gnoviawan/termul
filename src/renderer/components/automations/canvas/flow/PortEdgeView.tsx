@@ -6,10 +6,17 @@ import { CARD, INPUT_PORT_Y, PORT_PRESENTATION } from '../ports'
 import { useEdgeHover, useFlowEdit } from './flow-edit'
 import type { PortEdge } from './flow-graph'
 
+/** How a run marks an edge: heavier when it fired, blue into live work, faint when it did not fire. */
+const RUN_LOOK = {
+  taken: '[stroke-width:2.25]',
+  live: 'text-primary [stroke-dasharray:6_5] [stroke-width:2.25]',
+  not_taken: 'opacity-30'
+} as const
+
 /**
  * An edge in its port's colour, dashed for `error`, named mid-edge when the
  * port says so. While editing, a hovered or selected edge offers "+" at its
- * middle to insert a step there.
+ * middle to insert a step there. On a run, it says whether it fired.
  */
 export function PortEdgeView({
   id,
@@ -28,6 +35,7 @@ export function PortEdgeView({
   const { hoveredEdge, hoverEdge } = useEdgeHover()
   const port = data?.port ?? 'out'
   const look = PORT_PRESENTATION[port]
+  const run = data?.run ? RUN_LOOK[data.run] : null
   const [path, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
@@ -47,7 +55,8 @@ export function PortEdgeView({
           'stroke-current',
           look.tone,
           look.dashed && '[stroke-dasharray:5_4]',
-          selected && '[stroke-width:2.5]'
+          selected && '[stroke-width:2.5]',
+          run
         )}
       />
       {look.label === 'edge' && !offerInsert && (
@@ -57,7 +66,8 @@ export function PortEdgeView({
             data-testid={`edge-label-${id}`}
             className={cn(
               'pointer-events-none absolute rounded-sm bg-background px-1 text-xs leading-4',
-              look.tone
+              look.tone,
+              data?.run === 'not_taken' && 'opacity-30'
             )}
             style={placed}
           >

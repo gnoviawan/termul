@@ -14,9 +14,11 @@ import {
   type Viewport
 } from '@xyflow/react'
 import { logFrontendError } from '@/lib/log-api'
-import { type CanvasNodeId, drawableEdges, placeNodes } from '../layout'
+import type { FiredBy } from '../../automation-format'
+import { type CanvasNodeId, drawableEdges, edgeKey, placeNodes } from '../layout'
 import type { CardData } from '../nodes/NodeCard'
 import {
+  ADD_STUB_REACH,
   CARD,
   HANDLE_LABEL_WIDTH,
   HANDLE_SIZE,
@@ -28,9 +30,18 @@ import {
   SLOT_DEPTH,
   TRIGGER
 } from '../ports'
+import type { CardRun, EdgeRun } from '../run/run-overlay'
 
 export type CardNode = Node<CardData, 'card'>
-export type PortEdge = Edge<{ port: Port }, 'port'>
+export type PortEdge = Edge<{ port: Port; run?: EdgeRun }, 'port'>
+
+/** A run drawn over its graph: each card's status and how each edge took part. */
+export type RunMarks = {
+  /** What started the run; the trigger card says this instead of the automation's trigger. */
+  fired: FiredBy
+  cards: ReadonlyMap<string, CardRun>
+  edges: ReadonlyMap<string, EdgeRun>
+}
 
 /** Handle boxes relative to the card, so edges draw before the DOM is measured. */
 function handlesOf(data: CardData): NodeHandle[] {
@@ -54,7 +65,6 @@ function handlesOf(data: CardData): NodeHandle[] {
   ]
 }
 
-const edgeKey = (edge: AutomationEdge): string => `${edge.from}:${edge.port}->${edge.to}`
 const warned = new Set<string>()
 
 /** Each undrawable edge is logged once per session, not on every host refresh. */
@@ -124,7 +134,11 @@ function cardProblems(issues: readonly Issue[]): Map<string, string> {
 
 export function toFlow(
   automation: Pick<Automation, 'graph' | 'trigger' | 'layout'>,
-  { issues = [], editing = false }: { issues?: readonly Issue[]; editing?: boolean } = {}
+  {
+    issues = [],
+    editing = false,
+    run
+  }: { issues?: readonly Issue[]; editing?: boolean; run?: RunMarks } = {}
 ): {
   nodes: CardNode[]
   edges: PortEdge[]
@@ -144,7 +158,9 @@ export function toFlow(
         kind: TRIGGER,
         trigger,
         issues: counts.get(TRIGGER) ?? 0,
-        open: open(TRIGGER, OUTPUT_PORTS.trigger)
+        open: open(TRIGGER, OUTPUT_PORTS.trigger),
+        run: run?.cards.get(TRIGGER),
+        fired: run?.fired
       }
     ],
     ...graph.nodes.map((node): [CanvasNodeId, CardData] => [
@@ -154,7 +170,8 @@ export function toFlow(
         node,
         issues: counts.get(node.id) ?? 0,
         problem: problems.get(node.id),
-        open: open(node.id, OUTPUT_PORTS[node.spec.kind])
+        open: open(node.id, OUTPUT_PORTS[node.spec.kind]),
+        run: run?.cards.get(node.id)
       }
     ])
   ]
@@ -182,7 +199,7 @@ export function toFlow(
       targetHandle: 'in',
       selectable: editing,
       deletable: editing,
-      data: { port: edge.port }
+      data: { port: edge.port, run: run?.edges.get(edgeKey(edge)) }
     })
   )
   return { nodes, edges }
@@ -213,10 +230,18 @@ export function reuseUnchanged<T extends CardNode | PortEdge>(prev: T[], next: T
   return same ? prev : out
 }
 
+/** How far past its right edge a card draws: an `error` label beside its handle, or a "+" on an open output. */
+function rightReach(data: CardData): number {
+  const ports = OUTPUT_PORTS[data.kind === TRIGGER ? TRIGGER : data.node.spec.kind]
+  const labelled = ports.some((port) => PORT_PRESENTATION[port].label === 'handle')
+  return Math.max(labelled ? HANDLE_LABEL_WIDTH : 0, data.open.length > 0 ? ADD_STUB_REACH : 0)
+}
+
 /**
  * The viewport that centres `card` in the part of a `width` x `height` canvas
- * left of `rightInset`, or null when the card (and the config slots an agent
- * or MCP tool card hangs below it) is already fully there.
+ * left of `rightInset`, or null when the card is already fully there: with
+ * the config slots an agent or MCP tool card hangs below it, and what it
+ * draws right of itself, so a new step's "+" is never under the inspector.
  */
 export function panToShow(
   card: Pick<CardNode, 'position' | 'data'>,
@@ -232,14 +257,32 @@ export function panToShow(
   if (
     left >= 0 &&
     top >= 0 &&
-    left + CARD.width * zoom <= free &&
+    left + (CARD.width + rightReach(card.data)) * zoom <= free &&
     top + tall * zoom <= size.height
   ) {
     return null
   }
+  return centreOn(card, zoom, size)
+}
+
+/**
+ * The viewport that centres `card` in the canvas left of `rightInset`, with
+ * what it draws right of itself (`rightReach`) and its slots. When that does
+ * not fit across the free area at `zoom`, it zooms out until it does.
+ */
+export function centreOn(
+  card: Pick<CardNode, 'position' | 'data'>,
+  zoom: number,
+  size: { width: number; height: number; rightInset: number }
+): Viewport {
+  const tall =
+    CARD.height + (card.data.kind === 'step' && hasSlots(card.data.node.spec) ? SLOT_DEPTH : 0)
+  const wide = CARD.width + rightReach(card.data)
+  const free = size.width - size.rightInset
+  const fit = free > 0 ? Math.min(zoom, free / wide) : zoom
   return {
-    zoom,
-    x: free / 2 - (card.position.x + CARD.width / 2) * zoom,
-    y: size.height / 2 - (card.position.y + tall / 2) * zoom
+    zoom: fit,
+    x: free / 2 - (card.position.x + wide / 2) * fit,
+    y: size.height / 2 - (card.position.y + tall / 2) * fit
   }
 }

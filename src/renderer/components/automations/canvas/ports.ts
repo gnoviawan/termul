@@ -49,6 +49,12 @@ export const PORT_PRESENTATION: Record<
 export const HANDLE_SIZE = 10
 /** Room a port name drawn beside its handle takes right of the card. */
 export const HANDLE_LABEL_WIDTH = 40
+/**
+ * How far an open output's dangling "+" reaches right of its card
+ * (`CardNodeView`): a 5 px gap, the 12 px stub (`w-3`), then the button,
+ * 28 px on a touch screen (`pointer-coarse:size-7`), 18 px otherwise.
+ */
+export const ADD_STUB_REACH = 5 + 12 + 28
 const PORT_PITCH = 18
 const LAST_PORT_CENTRE = 49
 

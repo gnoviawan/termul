@@ -92,9 +92,13 @@ If the machine was off or Troupe was closed when a run was due, Troupe runs the 
 
 The **Runs** list shows each run with its status, start time and duration. A run in progress is listed first, then the others, newest first. A run is **Running**, **Waiting for approval**, **Succeeded**, **Failed**, **Cancelled** or **Skipped**. Click a run to open it.
 
-The run shows how it was started (**Scheduled**, **Catch-up** or **Manual**), when it started, how long it took and which revision ran. Below that is each step in order with its status. A step that did not run shows **Not reached**. Steps inside a **For each** are grouped by item. A paused **Wait** step shows **Waiting until** and the time it resumes. If a step failed, its error is shown under it. Click **Output** to see what a step produced.
+The run opens on its diagram. The top line shows how it was started (**Scheduled**, **Catch-up** or **Manual**), when it started, how long it took and which revision ran. Each step on the diagram shows its status: **Succeeded**, **Failed**, **Skipped**, **Waiting**, **Cancelled**, or a blue spinner while it runs. A step that has not run yet has no status mark. Lines the run took are drawn heavier, and lines it did not take are faint. While the run is in progress, the statuses update on their own.
 
-While a run is in progress or waiting for approval, click **Cancel run** to stop it. To go back, click **Back to automation**. On a phone, tap **Automation** at the top.
+Under the diagram, **Steps** lists each step in order with its status and how long it took. Click a step, in the list or on the diagram, to open it on the right. On a phone, it opens at the bottom of the screen. It shows the step's status, when it started, how long it took, its error if it failed, and its **Output**. Click **Copy** to copy the output, or click **Output** to fold it away.
+
+A **For each** step shows how many times its loop ran so far, and how many of those times failed. Open the **For each** step, or a step inside its loop, and pick a number under **Iteration** to see that time through the loop. The steps inside the loop then show their status for that iteration. A paused **Wait** step shows **Waiting until** and the time it resumes.
+
+While a run is in progress or waiting for approval, click **Cancel run** to stop it. To go back to the automation, click the arrow at the top left.
 
 ## Approve a waiting run
 
@@ -105,8 +109,8 @@ Only you can approve or reject. An agent can add an approval step to an automati
 When a run reaches an approval step, the run shows **Waiting for approval**, and the automation shows "A run is waiting for your approval." To decide:
 
 1. Open the automation in the **Automations** tab. This works in the desktop app, in a browser and on a phone.
-2. Click **Review**, or click the waiting run in the **Runs** list.
-3. Read the message. The card also shows when the approval expires.
+2. Click **Review**, or click the waiting run in the **Runs** list. The run opens on the approval step.
+3. Read the message. The card also shows when the approval expires. If you closed the step, click the approval step to open it again.
 4. Click **Approve** or **Reject**.
 
 What happens next:
@@ -117,9 +121,9 @@ What happens next:
 
 Each approval step has its own time limit, from 1 minute to 7 days. A time limit outside that range is listed as an issue, and you cannot approve the automation until the agent fixes it.
 
-An approval step inside a loop asks once for each item. Each item's message can name that item.
+An approval step inside a loop asks once for each item. Each item's message can name that item. **Approve** and **Reject** show when the iteration that waits is picked.
 
-If someone already decided on another device, Troupe says that the run is no longer waiting and shows the decision. After a decision, the approval step shows **Approved**, **Rejected** or **Timed out**, and when that happened.
+If someone already decided on another device, Troupe says that the run is no longer waiting and shows the decision. After a decision, the opened approval step shows **Approved**, **Rejected** or **Timed out**, and when that happened.
 
 A waiting run still counts as in progress, so a scheduled run that comes due while it waits is recorded as **Skipped**. A waiting run keeps waiting when Troupe or the machine restarts. If the approval expired while Troupe was closed, it times out when Troupe starts again. To stop a waiting run, click **Cancel run**. A server that does not accept changes from your device shows the approval buttons turned off.
 
