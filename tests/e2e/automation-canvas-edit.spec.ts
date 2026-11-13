@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
 import type { Locator, Page, TestInfo } from 'playwright/test'
 import { expect, request, test } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
+import { AUTH, freshAutomation, signIn } from './automation-helpers'
+import { E2E_BASE_URL } from './helpers'
 
 /**
  * Automation canvas editor (#1591, PR3) on the browser build: build a
@@ -18,44 +17,11 @@ import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
 
 test.setTimeout(120_000)
 
-const AUTH = { Authorization: `Bearer ${E2E_TOKEN}`, 'content-type': 'application/json' }
-
 type Saved = {
   automation: {
     revision: number
     graph: { nodes: { id: string; spec: { kind: string } }[]; edges: unknown[] }
     layout: Record<string, unknown>
-  }
-}
-
-async function freshAutomation(name: string): Promise<{ projectId: string; id: string }> {
-  const root = process.env.E2E_WORKSPACE_ROOT
-  if (!root) throw new Error('E2E_WORKSPACE_ROOT not set (global-setup)')
-  const project = `proj-canvas-${randomUUID().slice(0, 8)}`
-  const projectId = `e2e-${project}`
-  await mkdir(join(root, project), { recursive: true })
-  const api = await request.newContext()
-  try {
-    const registered = await api.post(`${E2E_BASE_URL}/projects`, {
-      headers: AUTH,
-      data: { id: projectId, name: project, path: join(root, project), color: 'blue' }
-    })
-    expect(registered.ok(), `project registration: ${registered.status()}`).toBe(true)
-    const created = await api.post(`${E2E_BASE_URL}/api/automations`, {
-      headers: AUTH,
-      data: { project_id: projectId, name }
-    })
-    expect(created.ok(), `automation create: ${created.status()}`).toBe(true)
-    const body = (await created.json()) as { data?: { id: string }; id?: string }
-    const id = body.data?.id ?? body.id
-    if (!id) throw new Error(`no automation id in ${JSON.stringify(body)}`)
-    await wsRequest(E2E_BASE_URL, 'store_write', {
-      key: storeKey('active-project'),
-      value: { _version: 1, data: projectId }
-    })
-    return { projectId, id }
-  } finally {
-    await api.dispose()
   }
 }
 
@@ -69,16 +35,6 @@ async function fetchAutomation(id: string): Promise<Saved> {
   } finally {
     await api.dispose()
   }
-}
-
-async function signIn(page: Page): Promise<void> {
-  await page.goto(`${E2E_BASE_URL}/#token=${E2E_TOKEN}`)
-  await page.waitForFunction(
-    (token) => localStorage.getItem('termul.webAuthToken') === token,
-    E2E_TOKEN,
-    { timeout: 60_000 }
-  )
-  await page.goto(`${E2E_BASE_URL}/#/`)
 }
 
 function card(scope: Page | Locator, id: string): Locator {
@@ -258,6 +214,8 @@ test.describe('phone', () => {
     await expect(sheet).toBeHidden()
     await expect(card(editor, 'wait')).toBeVisible()
 
+    // A new step is centred, so on a narrow phone earlier steps can sit off-screen: fit, as a user would.
+    await editor.getByRole('button', { name: 'Fit to view' }).tap()
     await handle(editor, 'transform', 'out').tap()
     const banner = editor.getByRole('status')
     await expect(banner).toContainText('Tap a node to connect')

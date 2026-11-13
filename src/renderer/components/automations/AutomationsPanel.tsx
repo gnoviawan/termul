@@ -19,7 +19,8 @@ interface AutomationsPanelProps {
 
 /**
  * The project's automations: a list beside the selected automation on
- * desktop, a list → detail → run stack on the phone shell.
+ * desktop, a list → detail stack on the phone shell. A run and the editor
+ * take the whole pane.
  */
 export function AutomationsPanel({
   projectId,
@@ -123,26 +124,32 @@ export function AutomationsPanel({
     )
   }
 
-  const runView = run ? <AutomationRunDetail run={run} onChanged={runs.reload} /> : null
+  if (run) {
+    return (
+      <AutomationRunDetail
+        key={run.id}
+        run={run}
+        automation={detail.data?.automation ?? null}
+        phone={phone}
+        onClose={() => setRunId(null)}
+        onChanged={runs.reload}
+      />
+    )
+  }
 
   if (phone) {
-    const level = runView ? 'run' : selectedId ? 'detail' : 'list'
     return (
       <div className="flex h-full min-h-0 flex-col bg-background">
-        {level !== 'list' && (
+        {selectedId && (
           <div className="flex shrink-0 items-center border-b border-border px-1">
-            <Button
-              variant="ghost"
-              size="touch"
-              onClick={() => (level === 'run' ? setRunId(null) : select(null))}
-            >
+            <Button variant="ghost" size="touch" onClick={() => select(null)}>
               <ArrowLeft size={16} />
-              {level === 'run' ? 'Automation' : 'Automations'}
+              Automations
             </Button>
           </div>
         )}
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {level === 'list' ? listView : <div className="p-4">{runView ?? detailView}</div>}
+          {selectedId ? <div className="p-4">{detailView}</div> : listView}
         </div>
       </div>
     )
@@ -169,24 +176,7 @@ export function AutomationsPanel({
         <div className="min-h-0 flex-1 overflow-y-auto">{listView}</div>
       </aside>
       <main className="min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex max-w-3xl flex-col gap-4 p-6">
-          {runView ? (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="self-start"
-                onClick={() => setRunId(null)}
-              >
-                <ArrowLeft size={14} />
-                Back to automation
-              </Button>
-              {runView}
-            </>
-          ) : (
-            detailView
-          )}
-        </div>
+        <div className="mx-auto flex max-w-3xl flex-col gap-4 p-6">{detailView}</div>
       </main>
     </div>
   )

@@ -36,9 +36,11 @@ import { FlowToolbar, type Tool } from './FlowToolbar'
 import { type ConnectFrom, EdgeHoverContext, type FlowEdit, FlowEditContext } from './flow-edit'
 import {
   type CardNode,
+  centreOn,
   contentBounds,
   type PortEdge,
   panToShow,
+  type RunMarks,
   reuseUnchanged,
   toFlow
 } from './flow-graph'
@@ -100,9 +102,19 @@ function ReadableStart({ phone }: { phone: boolean }): null {
   return null
 }
 
-/** Centres and selects the card an issue points at. */
-function FocusCard({ focus }: { focus: { id: string; nonce: number } | null }): null {
+/**
+ * Selects the card an issue, a new step or a step list row points at, and
+ * centres it in the canvas the floating inspector leaves free.
+ */
+function FocusCard({
+  focus,
+  rightInset
+}: {
+  focus: { id: string; nonce: number } | null
+  rightInset: number
+}): null {
   const flow = useReactFlow<CardNode, PortEdge>()
+  const store = useStoreApi<CardNode, PortEdge>()
   // A step just added reaches React Flow a render later: wait for its card.
   const present = useStore((s) => (focus ? s.nodeLookup.has(focus.id) : false))
   const done = useRef<number | null>(null)
@@ -112,12 +124,12 @@ function FocusCard({ focus }: { focus: { id: string; nonce: number } | null }): 
     if (!node) return
     done.current = focus.nonce
     flow.setNodes((nodes) => nodes.map((n) => ({ ...n, selected: n.id === focus.id })))
-    void flow.setCenter(
-      node.position.x + (node.width ?? 0) / 2,
-      node.position.y + (node.height ?? 0) / 2,
-      { zoom: Math.max(flow.getZoom(), 0.9), duration: 200 }
+    const { width, height } = store.getState()
+    void flow.setViewport(
+      centreOn(node, Math.max(flow.getZoom(), 0.9), { width, height, rightInset }),
+      { duration: 200 }
     )
-  }, [flow, focus, present])
+  }, [flow, store, focus, present, rightInset])
   return null
 }
 
@@ -135,6 +147,22 @@ function KeepInView({ id, rightInset }: { id: string | null; rightInset: number 
     if (!node || width === 0 || height === 0) return
     const next = panToShow(node, flow.getViewport(), { width, height, rightInset })
     if (next) void flow.setViewport(next, { duration: 200 })
+  }, [flow, id, width, height, rightInset])
+  return null
+}
+
+/** Once `id` is known, pans its card into view if the first view left it out. */
+function OpenOn({ id, rightInset }: { id: string | null; rightInset: number }): null {
+  const flow = useReactFlow<CardNode, PortEdge>()
+  const width = useStore((s) => s.width)
+  const height = useStore((s) => s.height)
+  const done = useRef(false)
+  useEffect(() => {
+    const node = id ? flow.getNode(id) : undefined
+    if (done.current || !node || width === 0 || height === 0) return
+    done.current = true
+    const next = panToShow(node, flow.getViewport(), { width, height, rightInset })
+    if (next) void flow.setViewport(next)
   }, [flow, id, width, height, rightInset])
   return null
 }
@@ -185,6 +213,10 @@ interface FlowProps {
   issues?: readonly Issue[]
   /** Present in edit mode; absent, the canvas is view-only. */
   edit?: FlowEdit
+  /** A run drawn over the graph; the canvas then fills its pane, like the editor. */
+  run?: RunMarks
+  /** The card to bring into view once known, after the first view; null waits. */
+  openOn?: string | null
   focus?: { id: string; nonce: number } | null
   /**
    * The card the inspector shows (`trigger` or a step id). A click on a card
@@ -201,6 +233,8 @@ function Flow({
   phone,
   issues,
   edit,
+  run,
+  openOn = null,
   focus = null,
   inspect,
   rightInset = 0
@@ -208,9 +242,11 @@ function Flow({
   const { graph, trigger, layout } = automation
   const editing = edit !== undefined
   const live = editing && !edit.locked
+  // The editor and the run view own their pane: gestures move the canvas, not the page.
+  const owned = editing || run !== undefined
   const next = useMemo(
-    () => toFlow({ graph, trigger, layout }, { issues, editing }),
-    [graph, trigger, layout, issues, editing]
+    () => toFlow({ graph, trigger, layout }, { issues, editing, run }),
+    [graph, trigger, layout, issues, editing, run]
   )
   const [nodes, setNodes] = useState<CardNode[]>(next.nodes)
   const [edges, setEdges] = useState<PortEdge[]>(next.edges)
@@ -286,13 +322,14 @@ function Flow({
 
   const onNodesChange: OnNodesChange<CardNode> = (changes) => {
     // View mode: only selection and measurement may change a card, never its existence or
-    // position. Edit mode also moves cards; the draft owns removal (`onBeforeDelete`).
+    // position; `replace` comes only from `FocusCard` selecting one. Edit mode also moves
+    // cards; the draft owns removal (`onBeforeDelete`).
     setNodes((prev) =>
       applyNodeChanges(
         changes.filter((change) =>
           editing
             ? change.type !== 'remove'
-            : change.type === 'select' || change.type === 'dimensions'
+            : change.type === 'select' || change.type === 'dimensions' || change.type === 'replace'
         ),
         prev
       )
@@ -377,13 +414,13 @@ function Flow({
         {/* Phone view mode: one finger scrolls the page (`touch-action: pan-y` in
           flow.css), so React Flow only sees a touch once a second finger lands,
           and two fingers pinch and pan like an embedded map. The phone editor
-          is full screen, so there one finger pans the canvas. */}
+          and run view are full screen, so there one finger pans the canvas. */}
         <div
           role="group"
           aria-label="Automation canvas"
           className="size-full"
           onTouchStartCapture={
-            phone && !editing
+            phone && !owned
               ? (event) => {
                   if (event.touches.length < 2) event.stopPropagation()
                 }
@@ -542,16 +579,16 @@ function Flow({
             onEdgeMouseLeave={editing ? () => hoverEdge(null) : undefined}
             selectionOnDrag={editing && !phone && tool === 'select'}
             panOnDrag={editing && !phone && tool === 'select' ? [1, 2] : true}
-            panOnScroll={editing && !phone}
+            panOnScroll={owned && !phone}
             // The detail page scrolls; the wheel scrolls it. Pinch and the buttons zoom.
             zoomOnScroll={false}
-            preventScrolling={editing}
+            preventScrolling={owned}
             minZoom={0.2}
             maxZoom={2}
             attributionPosition="bottom-left"
             className={cn(
               'automation-flow bg-background',
-              phone && !editing && 'automation-flow-touch'
+              phone && !owned && 'automation-flow-touch'
             )}
           >
             <Background
@@ -569,7 +606,8 @@ function Flow({
               />
             )}
             <ReadableStart phone={phone} />
-            <FocusCard focus={focus} />
+            <OpenOn id={openOn} rightInset={rightInset} />
+            <FocusCard focus={focus} rightInset={rightInset} />
             <KeepInView id={inspect?.id ?? null} rightInset={rightInset} />
           </ReactFlow>
         </div>

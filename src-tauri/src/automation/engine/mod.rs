@@ -482,12 +482,13 @@ fn forget(active: &mut HashMap<AutomationId, ActiveRun>, run: &Run) {
 }
 
 /// A server's tools changed: every automation of the project with an
-/// `mcp_tool` node on it has new issues, so its open screens read it again.
+/// `mcp_tool` node on it, by its id or an alias, has new issues, so its open
+/// screens read it again, once per automation.
 fn listing_changed(
     store: Arc<AutomationStore>,
     changes: broadcast::Sender<AutomationChanged>,
 ) -> OnListingChanged {
-    Arc::new(move |project_id, server_id| {
+    Arc::new(move |project_id, server_ids| {
         let automations = match store.list(Some(project_id)) {
             Ok(automations) => automations,
             Err(error) => {
@@ -497,7 +498,7 @@ fn listing_changed(
         };
         let uses_server = |a: &Automation| {
             a.graph.nodes.iter().any(|n| {
-                matches!(&n.spec, NodeSpec::McpTool { server_id: id, .. } if id == server_id)
+                matches!(&n.spec, NodeSpec::McpTool { server_id, .. } if server_ids.contains(server_id))
             })
         };
         for automation in automations.iter().filter(|a| uses_server(a)) {

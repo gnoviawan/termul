@@ -14,8 +14,8 @@ use super::agents::{self, AgentRegistry, KnownAgent};
 use super::engine::{Engine, EngineDeps, HttpConfig, ProjectRoots, SystemClock};
 use super::graph::{self, OpError};
 use super::mcp::{
-    literal_argument, Literal, Lookup, McpFailure, McpServerEntry, ProjectMcpServers, RmcpClient,
-    ToolSchema,
+    find_server, literal_argument, Literal, Lookup, McpFailure, McpServerEntry, ProjectMcpServers,
+    RmcpClient, ToolSchema,
 };
 use super::model::{
     ApplyOpsResult, Automation, AutomationChanged, AutomationId, Issue, IssueCode, Layout,
@@ -470,12 +470,7 @@ impl AutomationService {
     }
 
     fn policy_with(&self, automation: &Automation, servers: &[McpServerEntry]) -> RunPolicy {
-        let server_name = |id: &str| {
-            servers
-                .iter()
-                .find(|s| s.server_id == id)
-                .map(|s| s.name.clone())
-        };
+        let server_name = |id: &str| find_server(servers, id).map(|s| s.name.clone());
         policy::run_policy(automation, self.engine.now_ms(), &server_name)
     }
 
