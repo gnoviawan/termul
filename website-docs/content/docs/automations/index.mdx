@@ -33,7 +33,7 @@ Troupe gives the agent tools to build the automation. The agent may ask you ques
 
 The agent cannot approve, enable or run an automation. Only you can.
 
-To change an automation later, ask an agent in a chat. Every change makes a new revision, and the automation needs your approval again. Until you approve the new revision, the automation does not run, not even with **Run now**.
+To change an automation later, ask an agent in a chat, or edit the steps on the canvas (see [Edit the steps on the canvas](#edit-the-steps-on-the-canvas)). A change to the steps or their settings makes a new revision, and the automation needs your approval again. Until you approve the new revision, the automation does not run, not even with **Run now**.
 
 ## Suggestions from repeated asks
 
@@ -67,7 +67,9 @@ If the automation has problems, they are listed above the card under a heading s
 
 When everything looks right, click **Approve and arm**. The automation turns **Armed** and runs on its schedule. If the automation is switched off, the button says **Approve** instead: approving does not turn it on, so it stays **Disabled** until you turn on **Enabled**.
 
-Below the card, **Diagram** shows the automation's steps and how they connect. A step can:
+Below the card, **Diagram** shows the automation's steps on a canvas, left to right, and how they connect. The first card is the trigger: **Manual** or **Schedule**. Each step card shows its name, its kind and a short detail. An **Agent** card also shows the **Model** and **Tools** under it, and an **MCP tool** card shows the **Server** and **Tool**.
+
+A step can:
 
 - make a web request (HTTP);
 - run an AI agent (Agent);
@@ -79,6 +81,82 @@ Below the card, **Diagram** shows the automation's steps and how they connect. A
 - pause the run for a set time, up to 7 days (Wait). The run picks up on time, even after Troupe or the machine restarts;
 - stop the run with an error (Fail);
 - wait for you to approve or reject (Approval). See [Approve a waiting run](#approve-a-waiting-run).
+
+The diagram itself is for viewing: you can select a card, but you cannot move or delete steps there. To change the steps, click **Edit** (see [Edit the steps on the canvas](#edit-the-steps-on-the-canvas)) or ask an agent in a chat.
+
+On a computer or in a browser, drag the background to pan. Click **Zoom in**, **Zoom out** or **Fit to view** at the bottom of the diagram, or pinch to zoom. The mouse wheel still scrolls the page. A small overview in the corner also lets you pan the view. If the whole automation does not fit at a readable size, the first view shows the start of it.
+
+On a phone, the diagram is shorter and has no overview. A one-finger swipe on the canvas scrolls the page. Pinch or drag with two fingers to zoom or move the canvas. The zoom buttons are larger.
+
+Lines between steps can be labeled. The usual next step has no label. An error path is labeled **error** next to the step, as a dashed line. A **Condition** step's paths are labeled **true** and **false** on the lines. A **For each** loop's body is labeled **item** on the line.
+
+Screen readers hear an **Automation steps** list of the same steps and branches, in the order they run.
+
+### Edit the steps on the canvas
+
+Click **Edit** next to **Diagram** to open the canvas editor. It fills the pane, on a phone too. If the server you are connected to is read-only, there is no **Edit** button.
+
+Your changes stay in a draft until you click **Save**. The header shows how many changes are not saved yet, for example **Draft · 2 unsaved changes** (on a phone, **2 unsaved**). A live automation keeps running its approved version while you edit. **Discard** throws the draft away. If you close the editor with unsaved changes, it asks you to confirm **Discard** first.
+
+In the editor you can:
+
+- add a step: click **Add a step** in the toolbar at the bottom, click **+** on a step's open output, drag from a step's output and let go on an empty spot of the canvas, or click **Insert a step here** on a line to put a step between two others. Type in the menu to filter the step kinds; on a computer, Enter picks the first match. A new step starts with default settings;
+- connect two steps: drag from a step's output to another step. Lines that would repeat a connection or make a loop are refused, and while you drag, a banner says **Connecting from …** and dims the steps that cannot take the line. Press Escape to cancel;
+- move a step: drag its card. Moving only changes the layout, not the automation;
+- delete a step or line: select it and press Delete or Backspace, or click **Delete selected**;
+- undo and redo with **Undo** and **Redo** in the toolbar, or Ctrl+Z and Ctrl+Shift+Z (Cmd on macOS). Ctrl+Y also redoes.
+
+On a computer, the toolbar also has **Select** and **Pan** tools, **Fit to view**, **Zoom in** and **Zoom out**. On a phone, it has **Fit to view** instead of those tools: pinch to zoom, and drag with one finger to move the canvas.
+
+While you edit, Troupe checks the draft. Steps with problems get a badge, and **Issues** at the bottom lists them; click **Show** next to an issue to jump to its step. Fix the issues before you approve.
+
+When you click **Save**, changes to the steps or how they connect are saved as a new revision. Moving cards only saves their positions: the revision and the current approval stay the same. If an agent or another person saved the automation while you were editing, a banner says **Updated by … while you edited**. Your edits are moved onto the latest version, and any edit that no longer applies is listed. Review them, then click **Save** again.
+
+A new revision still needs approval: **Approve and arm** (or **Approve**) in the editor header works only once the draft is saved and has no issues.
+
+On a phone, tap a step's output, then tap the step to connect to. A banner says **Tap a node to connect** and names the step you started from, with **Cancel**. **Add a step** opens as a sheet from the bottom.
+
+### Change a step's settings
+
+Select a step or the trigger card in the editor to open its inspector. On a computer and in the browser, it floats on the right of the canvas; on a phone, it opens as a sheet from the bottom. On a computer and in the browser, a step you just added opens in the inspector too. On a phone, it is only selected so the sheet does not cover the canvas; tap it to open the sheet. The header shows the step's name and kind, with **Delete step** and **Close**.
+
+A change to a one-line field is saved to the draft when you press Enter or leave the field. In a field with several lines, such as **Body** or **Message**, Enter adds a new line; the change is saved when you leave the field or press Ctrl+Enter (Cmd+Enter on macOS). A choice is saved when you pick it. Each change is one step you can undo. Press Escape in a field to put back its saved value. While a save is running, the editor keeps what you typed and says **Saving. Try that again once it finishes.**
+
+What you can change depends on the step kind:
+
+- **HTTP**: **Method**, **URL**, **Allowed hosts**, **Headers** and **Body**. If the URL points at a host that is not allowed, a button such as **Allow api.example.com** adds it;
+- **Condition**: **Value**, **Check** (equals, does not equal, contains, is greater than, is less than, exists) and **Compared with**;
+- **For each**: **Items**, a list from an earlier step, and **Max iterations**;
+- **Merge**: **Continue** when any branch arrives or when every branch arrives;
+- **Wait**: **Wait for**, how long the run parks before it continues;
+- **Approval**: **Message**, what the person deciding reads, and **Time out after**;
+- **Transform**: **Fields**, each one a key of the step's output;
+- **Fail**: **Message**, the failure message the run stops with.
+
+Every step also has a **Label**.
+
+An **Agent** step has these settings:
+
+- **Agent** and **Model**. The list shows agents you have started at least once in a chat, and **Model** lists the models that agent last reported, plus **Default**. Changing the agent sets the model back to **Default**;
+- **Prompt**, what the agent should do. Type `{{` to insert a value from an earlier step;
+- **Output schema**, what the agent must answer with. Pick a **Kind**; for an object, add **Fields**, each with a name, a kind and whether it is required, and for an array, pick what **Each item** is. **As JSON** shows the whole schema and also sets an enum, a description and nested fields. A schema the app would refuse shows why above the editor;
+- **Tools**, one switch each for read files, search, edit files, run commands (full access), fetch from the network, and MCP and other tools;
+- **Timeout**, from 1 to 900 seconds, and **Max attempts**, from 1 to 3.
+
+The tool switches follow the rules described under **Agents** in [Review and approve](#review-and-approve). When a switch breaks a rule, a red note under the switches names the tools the agent may not use together with what is already on; turn those tools off to fix it. An amber note appears when the agent reads web content or an MCP tool result and a later step sends data out or calls a tool; it is a reminder to check those steps before you approve.
+
+An **MCP tool** step has these settings:
+
+- **Server**, one of the MCP servers that are turned on in your [MCP settings](/docs/agent-setup/mcp-servers). If the step names a server that is missing or turned off, the field and the step card say **Server not configured**;
+- **Tool**, picked from the tools the server lists, with a search box when it lists many. If the tool is gone, the field and the card say **Tool not found**. If the server could not list its tools, press **List again**;
+- **Arguments**. When the tool describes its input, each argument gets its own field in that order, with a **Required** mark and the tool's description as help: a text box for text and numbers, a list for a fixed set of choices (and **Not set**, **true** or **false** for a yes/no argument), and a JSON box for anything else. Arguments the tool does not describe stay under **Other arguments**. A tool that does not describe its input gets plain name and value rows. A value that is a single `{{ }}` reference keeps the type of what it reads. A value with no reference is sent in the type the tool gives for that argument, so `true` goes as a yes/no value and `5` as a number, not as text. A value that does not fit that type, such as `five` for a number, shows an issue on the step, and the step fails before it calls the tool. If the server cannot list its tools when the step runs, these values go as text;
+- **Timeout**.
+
+In a field that takes references, type `{{` to insert one. The list offers only what the step can read when it runs: the trigger, the output of steps that run before it, and, inside a **For each** loop, the current item and its index. It does not list [secrets](#secrets); in an HTTP step, type `{{ secrets.NAME }}` yourself.
+
+The inspector checks fields, such as required fields, allowed ranges, the URL and reference syntax, and shows problems under each field. Reference syntax is checked as you type; the other checks run when the change is saved to the draft. **Issues on this step** at the bottom lists the draft's issues for that step.
+
+For the trigger, **Runs** is **When you run it** or **On a schedule**. A schedule is a **Cron** expression with a **Time zone**, **Every interval**, or **Once** at the time in **Run at**. **Next runs** shows when it will run next.
 
 ## Run, pause or delete an automation
 
