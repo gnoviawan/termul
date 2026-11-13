@@ -2215,7 +2215,7 @@ describe('ChatInputBar mobile dock', () => {
   it('collapses the queue by default on mobile and keeps it expanded on desktop', () => {
     const props = { queue, onRemoveQueued: vi.fn(), onSendQueuedNow: vi.fn() }
     const mobile = render(bar(props))
-    expect(screen.getByRole('button', { name: '2 Queued' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: '2 queued' })).toHaveAttribute(
       'aria-expanded',
       'false'
     )
@@ -2223,10 +2223,23 @@ describe('ChatInputBar mobile dock', () => {
 
     mobileRef.current = false
     render(bar(props))
-    expect(screen.getByRole('button', { name: '2 Queued' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: '2 queued' })).toHaveAttribute(
       'aria-expanded',
       'true'
     )
+  })
+
+  it('docks the queue inside the composer card and edits a prompt back into the draft', async () => {
+    mobileRef.current = false
+    const onRemoveQueued = vi.fn()
+    render(
+      bar({ queue, onRemoveQueued, onSendQueuedNow: vi.fn(), seedText: 'my draft', seedNonce: 1 })
+    )
+    expect(composerCard()).toContainElement(screen.getByTestId('prompt-queue'))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0])
+    expect(onRemoveQueued).toHaveBeenCalledWith('q1')
+    await waitFor(() => expect(composerCard()).toHaveTextContent('my draft'))
+    expect(composerCard()).toHaveTextContent('first queued')
   })
 
   it('renders the embedded permission options at touch size', () => {

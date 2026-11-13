@@ -244,6 +244,8 @@ export function AgentChatPanel({
   const cancelPrompt = useAcpStore((s) => s.cancelPrompt)
   const removeQueuedPrompt = useAcpStore((s) => s.removeQueuedPrompt)
   const sendQueuedPromptNow = useAcpStore((s) => s.sendQueuedPromptNow)
+  const moveQueuedPrompt = useAcpStore((s) => s.moveQueuedPrompt)
+  const clearQueuedPrompts = useAcpStore((s) => s.clearQueuedPrompts)
   const retryCrashedSession = useAcpStore((s) => s.retryCrashedSession)
   // A turn error (auth required, timeout) can retire the chat's agent while
   // the chat itself stays live with its error banner.
@@ -414,6 +416,15 @@ export function AgentChatPanel({
       removeQueuedPrompt(sessionId, queueId)
     },
     [removeQueuedPrompt, sessionId]
+  )
+
+  const handleMoveQueued = useCallback(
+    (queueId: string, toIndex: number) => moveQueuedPrompt(sessionId, queueId, toIndex),
+    [moveQueuedPrompt, sessionId]
+  )
+  const handleClearQueued = useCallback(
+    () => clearQueuedPrompts(sessionId),
+    [clearQueuedPrompts, sessionId]
   )
 
   const handleSendQueuedNow = useCallback(
@@ -1084,6 +1095,8 @@ export function AgentChatPanel({
             permission={pendingPermission && !isClosed ? pendingPermission : null}
             onRemoveQueued={handleRemoveQueued}
             onSendQueuedNow={handleSendQueuedNow}
+            onMoveQueued={handleMoveQueued}
+            onClearQueued={handleClearQueued}
             commands={commands}
             configOptions={armedOptions ? armedOptions.configOptions : session.configOptions}
             modes={armedOptions ? armedOptions.modes : session.modes}

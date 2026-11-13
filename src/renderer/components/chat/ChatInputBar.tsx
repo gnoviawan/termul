@@ -135,6 +135,10 @@ interface ChatInputBarProps {
   disabledPlaceholder?: string
   onRemoveQueued?: (queueId: string) => void
   onSendQueuedNow?: (queueId: string) => void
+  /** Move a queued prompt to `toIndex`; gives each row a drag handle. */
+  onMoveQueued?: (queueId: string, toIndex: number) => void
+  /** Drop every queued prompt; gives the queue header a Clear action. */
+  onClearQueued?: () => void
   /**
    * Whether the host chat panel's tab is the pane's active tab. While false,
    * the per-flush `useAcpMessages` re-render is frozen (same render gate as
@@ -180,6 +184,8 @@ export function ChatInputBar({
   disabledPlaceholder = 'Composer unavailable',
   onRemoveQueued,
   onSendQueuedNow,
+  onMoveQueued,
+  onClearQueued,
   isVisible = true,
   onDraftStart
 }: ChatInputBarProps): React.JSX.Element {
@@ -446,6 +452,18 @@ export function ChatInputBar({
     // throws against a destroyed editor.
     scheduleRestoreCaret(next.length)
   }, [seedNonce, scheduleRestoreCaret, updateMentionsStable, setValue])
+  // Edit a queued prompt: its text goes back into the composer, after any
+  // draft (the draft is kept), and the prompt leaves the queue.
+  const editQueued = useCallback(
+    (item: QueuedPrompt, text: string) => {
+      const next = value.trim() ? `${value.replace(/\s+$/, '')}\n${text}` : text
+      setValue(next)
+      updateMentionsStable(next, next.length)
+      scheduleRestoreCaret(next.length)
+      onRemoveQueued?.(item.id)
+    },
+    [value, setValue, updateMentionsStable, scheduleRestoreCaret, onRemoveQueued]
+  )
   useSelectionContextInsertRequest(editorRef, selectionContextInsert, disabled)
 
   // Story 5.3 (T2.3): on mobile web, scroll the editor into view once per
@@ -559,14 +577,6 @@ export function ChatInputBar({
     >
       <div className="relative mx-auto w-full max-w-3xl">
         {statusRow}
-        {queue.length > 0 && onRemoveQueued && onSendQueuedNow && (
-          <PromptQueuePanel
-            items={queue}
-            onRemove={onRemoveQueued}
-            onSendNow={onSendQueuedNow}
-            defaultOpen={!isMobileShell}
-          />
-        )}
         {slashOpen && (
           <SlashCommandMenu
             ref={slashMenuRef}
@@ -610,6 +620,17 @@ export function ChatInputBar({
               </div>
             )}
             {notice}
+            {queue.length > 0 && onRemoveQueued && onSendQueuedNow && (
+              <PromptQueuePanel
+                items={queue}
+                onRemove={onRemoveQueued}
+                onSendNow={onSendQueuedNow}
+                onMove={onMoveQueued}
+                onClear={onClearQueued}
+                onEdit={disabled ? undefined : editQueued}
+                defaultOpen={!isMobileShell}
+              />
+            )}
             {permission && <PermissionPrompt permission={permission} isVisible={isVisible} />}
             {!notice && !controlsDisabled && <ClaudeLimitWarning sessionId={session.id} />}
             <AttachmentPreviewGroup
