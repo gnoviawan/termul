@@ -129,6 +129,8 @@ interface ChatInputBarProps {
    * limit). It replaces the near-limit warning while it shows.
    */
   notice?: React.ReactNode
+  /** Row above the card (the status chips); it sits above the queue too. */
+  statusRow?: React.ReactNode
   /** Placeholder while `disabled` (default "Composer unavailable"). */
   disabledPlaceholder?: string
   onRemoveQueued?: (queueId: string) => void
@@ -174,6 +176,7 @@ export function ChatInputBar({
   queue = [],
   permission,
   notice = null,
+  statusRow = null,
   disabledPlaceholder = 'Composer unavailable',
   onRemoveQueued,
   onSendQueuedNow,
@@ -555,6 +558,7 @@ export function ChatInputBar({
       )}
     >
       <div className="relative mx-auto w-full max-w-3xl">
+        {statusRow}
         {queue.length > 0 && onRemoveQueued && onSendQueuedNow && (
           <PromptQueuePanel
             items={queue}

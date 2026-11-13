@@ -6,27 +6,6 @@ import { useToolCallRevealStore } from '@/stores/tool-call-reveal-store'
 import { SubagentStatusIcon } from './SubagentRow'
 import { BackgroundCommandElapsed } from './subagent-time'
 
-/** "1 running · 2 ended": the non-zero counts. Running takes the warning tone. */
-export function BackgroundCommandCountParts({
-  running,
-  ended
-}: {
-  running: number
-  ended: number
-}): React.JSX.Element {
-  return (
-    <>
-      {running > 0 && <span className="text-warning">{running} running</span>}
-      {running > 0 && ended > 0 && (
-        <span aria-hidden="true" className="text-muted-foreground">
-          ·
-        </span>
-      )}
-      {ended > 0 && <span className="text-muted-foreground">{ended} ended</span>}
-    </>
-  )
-}
-
 interface BackgroundCommandRowProps {
   sessionId: string
   command: BackgroundCommand

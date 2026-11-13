@@ -10,6 +10,7 @@ import { BrowserAgentIndicator } from '@/components/browser/BrowserAgentStop'
 import { armModelPick } from '@/components/chat/agent-model-selector/use-agent-switch'
 import { MODEL_CATEGORY } from '@/components/chat/chat-input-bar-config'
 import { SkillFilesProvider } from '@/components/chat/skill-file-links'
+import { openChangesTab } from '@/components/shell/column-tab-focus'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
@@ -54,7 +55,7 @@ import { BrowserConsentCard } from './BrowserConsentCard'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
-import { ChatStatusPill } from './ChatStatusPill'
+import { ChatStatusChips } from './ChatStatusChips'
 import { ChatStoppedNotice } from './ChatStoppedNotice'
 import { CHAT_GUTTER_X, COMPOSER_CARD_CLASS } from './chat-layout'
 import { ChatStarters } from './chat-start'
@@ -666,7 +667,7 @@ export function AgentChatPanel({
   // Desktop + web parity: the open-in-editor chain is transport-agnostic —
   // where `/fs/info` is loopback-guarded on remote peers, resolution falls
   // back to the deliberately unguarded `/fs/read` open path (the same one
-  // the changed-files list in ChatStatusPill uses).
+  // the changed-files list in ChatStatusChips uses).
   const projects = useProjectStore((state) => state.projects)
   const filePathContext = useMemo(
     () => ({
@@ -741,6 +742,24 @@ export function AgentChatPanel({
   // layout (the starters' `flex-1`) is unchanged. The hook is also above the
   // early returns: the wrapper may mount long after the first render.
   const dockRef = useDockClearance(isMobileShell && isVisible)
+  // Status chips (subagents, background commands, changes) above the
+  // composer card, or above the question card while one shows.
+  const renderStatusChips = (className?: string): React.ReactNode =>
+    session ? (
+      <ChatStatusChips
+        className={className}
+        sessionId={session.id}
+        cwd={session.cwd}
+        toolCalls={toolCalls}
+        messages={messages}
+        turnActive={session.activeTurn}
+        onOpenGitChanges={(opener) =>
+          isMobileShell ? openGitSheet(session.cwd, opener) : openChangesTab(session.projectId)
+        }
+        hidden={(isMobileShell && osk.isOskOpen) || showTransportOverlay}
+        isVisible={isVisible}
+      />
+    ) : null
   const dockClassName = isMobileShell ? 'flex shrink-0 flex-col' : 'contents'
 
   // An automatic resume keeps the composer (and the draft being typed)
@@ -963,22 +982,6 @@ export function AgentChatPanel({
             onRetry={canOfferRetry ? handleRetry : undefined}
           />
         </SkillFilesProvider>
-        {/* Top-right status slot: floats over the transcript (clear of the
-            scrollbar gutter) so status items take no layout height. */}
-        <div className="pointer-events-none absolute right-4 top-3.5 z-20 flex items-center gap-1.5">
-          <ChatStatusPill
-            sessionId={session.id}
-            cwd={session.cwd}
-            toolCalls={toolCalls}
-            messages={messages}
-            turnActive={session.activeTurn}
-            onOpenGitChanges={
-              isMobileShell ? (opener) => openGitSheet(session.cwd, opener) : undefined
-            }
-            hidden={(isMobileShell && osk.isOskOpen) || showTransportOverlay}
-            isVisible={isVisible}
-          />
-        </div>
       </div>
       <ReloadChatConfirmDialog sessionId={sessionId} />
       {showPromptReconcile && promptCommand && session.activeTurn && (
@@ -1022,6 +1025,9 @@ export function AgentChatPanel({
           hide until the prompt resolves. */}
       {!isClosed && (pendingElicitation || pendingQuestion) ? (
         <div ref={dockRef} data-chat-dock="true" className={dockClassName}>
+          <div className={CHAT_GUTTER_X}>
+            <div className="mx-auto w-full max-w-3xl">{renderStatusChips('pt-3 pb-0')}</div>
+          </div>
           {activeError && !atClaudeLimit && (
             <div className={`${CHAT_GUTTER_X} pt-3`}>
               <div className={`mx-auto w-full max-w-3xl overflow-hidden ${COMPOSER_CARD_CLASS}`}>
@@ -1063,6 +1069,7 @@ export function AgentChatPanel({
             busy={sessionTurnBusy(session)}
             disabled={isClosed && !isResumableStop}
             notice={composerNotice}
+            statusRow={renderStatusChips()}
             disabledPlaceholder={
               showStoppedNotice && !codexSignedOut ? 'Resume the chat to send a message' : undefined
             }

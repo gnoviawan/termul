@@ -435,6 +435,7 @@ vi.mock('./ChatInputBar', () => ({
     chatInputBarPropsRef.current.push(props)
     return (
       <div data-chat-composer="true" tabIndex={-1} data-testid="composer-stub">
+        {props.statusRow}
         {props.notice}
         {props.permission ? (
           <section data-approval-prompt={`permission:${props.permission.requestId}`}>
@@ -1286,10 +1287,10 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
       }
       try {
         const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
-        const pill = screen.getByRole('button', { name: /^Session status:/ })
-        // jsdom never finishes framer's exit spring, so read the pill's live
-        // region, which follows whether the pill is shown.
-        const liveRegion = pill.closest('.absolute')?.querySelector('[aria-live]')
+        const chip = screen.getByRole('button', { name: /^Subagents:/ })
+        // The chips' live region sits just before the row and follows whether
+        // the chips are shown.
+        const liveRegion = chip.closest('[role="group"]')?.previousElementSibling
         expect(liveRegion).toHaveTextContent('Subagents: 1 done')
 
         transportReconnectingRef.current = true
@@ -2534,10 +2535,10 @@ describe('AgentChatPanel mobile dock wiring', () => {
       render(<AgentChatPanel sessionId="s1" isVisible />)
 
       expect(lastPlan()).toMatchObject({ defaultCollapsed: true, forceCollapsed: false })
-      const pill = screen.getByRole('button', { name: /^Session status:/ })
+      const pill = screen.getByRole('button', { name: /^Changes:/ })
       fireEvent.click(pill)
-      fireEvent.click(screen.getByRole('button', { name: 'Open Git changes' }))
-      // The pill is the opener, so the Git sheet returns focus to it.
+      fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+      // The chip is the opener, so the Git sheet returns focus to it.
       expect(openGitSheetRef.current).toHaveBeenCalledTimes(1)
       expect(openGitSheetRef.current).toHaveBeenCalledWith('/repo/.worktrees/a', pill)
     })
@@ -2550,9 +2551,11 @@ describe('AgentChatPanel mobile dock wiring', () => {
       render(<AgentChatPanel sessionId="s1" isVisible />)
 
       expect(lastPlan()).toMatchObject({ defaultCollapsed: false, forceCollapsed: false })
-      fireEvent.click(screen.getByRole('button', { name: /^Session status:/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^Changes:/ }))
       expect(screen.getByRole('dialog', { name: 'Changed files' })).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Open Git changes' })).toBeNull()
+      // Desktop: Review changes opens the Changes tab, not the Git sheet.
+      fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+      expect(openGitSheetRef.current).not.toHaveBeenCalled()
     })
   })
 
