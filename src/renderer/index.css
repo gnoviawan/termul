@@ -809,6 +809,13 @@
   }
 }
 
+/* A popup trigger (menu, popover, select, sheet: every element with
+   aria-haspopup) does not squeeze on press, even when its own classes ask
+   for it (Button's active:scale). Unlayered, so it wins over utilities. */
+[aria-haspopup]:active {
+  scale: none;
+}
+
 /* The model menu drives open and close with a transition. */
 [data-radix-popper-content-wrapper] > .termul-popover-transition {
   animation: none;

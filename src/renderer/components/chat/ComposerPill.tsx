@@ -2,7 +2,7 @@ import { Slot } from '@radix-ui/react-slot'
 import { cva, type VariantProps } from 'class-variance-authority'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import * as React from 'react'
-import { ChevronDown, ChevronUp } from '@/components/icons'
+import { ChevronDown } from '@/components/icons'
 
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
@@ -19,7 +19,7 @@ import { iconPop } from './chat-motion'
  * triggers; non-interactive containers opt out via `interactive={false}`.
  */
 const composerPillVariants = cva(
-  "relative inline-flex h-8 min-h-8 min-w-0 items-center gap-1 px-2 text-xs text-muted-foreground after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] @[400px]:after:-inset-y-1",
+  "group/pill relative inline-flex h-8 min-h-8 min-w-0 items-center gap-1 px-2 text-xs text-muted-foreground after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] @[400px]:after:-inset-y-1",
   {
     variants: {
       interactive: {
@@ -42,10 +42,12 @@ export interface ComposerPillProps
   type?: 'button' | 'submit' | 'reset'
   /** Disabled state — only applied when rendering a `<button>`. */
   disabled?: boolean
-  /** Append the standardized trailing chevron used by popover-trigger controls. */
+  /**
+   * Append the standardized trailing chevron used by popover-trigger controls.
+   * It points down while closed and turns up while the trigger is open
+   * (`data-state="open"`, set by the Radix trigger).
+   */
   chevron?: boolean
-  /** Menus that open upward use an up chevron. Default is down. */
-  chevronDirection?: 'up' | 'down'
   /**
    * When true with `chevron`, swap the trailing chevron for a spinner while an
    * async selection is in flight (model / reasoning / Fast / mode switches).
@@ -55,12 +57,10 @@ export interface ComposerPillProps
 
 function TrailingAffordance({
   chevron,
-  pending,
-  chevronDirection = 'down'
+  pending
 }: {
   chevron?: boolean
   pending?: boolean
-  chevronDirection?: 'up' | 'down'
 }): React.JSX.Element | null {
   const reduced = useReducedMotion() ?? false
   if (!chevron) return null
@@ -89,15 +89,11 @@ function TrailingAffordance({
             exit={pop.exit}
             transition={pop.transition}
           >
-            {chevronDirection === 'up' ? (
-              <ChevronUp size={12} className="shrink-0 text-muted-foreground" aria-hidden="true" />
-            ) : (
-              <ChevronDown
-                size={12}
-                className="shrink-0 text-muted-foreground"
-                aria-hidden="true"
-              />
-            )}
+            <ChevronDown
+              size={12}
+              className="shrink-0 text-muted-foreground transition-transform duration-150 ease-out group-data-[state=open]/pill:rotate-180 motion-reduce:transition-none"
+              aria-hidden="true"
+            />
           </motion.span>
         )}
       </AnimatePresence>
@@ -115,7 +111,6 @@ export const ComposerPill = React.forwardRef<HTMLButtonElement, ComposerPillProp
       type,
       disabled,
       chevron,
-      chevronDirection,
       pending,
       children,
       ...props
@@ -123,9 +118,7 @@ export const ComposerPill = React.forwardRef<HTMLButtonElement, ComposerPillProp
     ref
   ) => {
     const classes = cn(composerPillVariants({ interactive }), className)
-    const trailing = (
-      <TrailingAffordance chevron={chevron} chevronDirection={chevronDirection} pending={pending} />
-    )
+    const trailing = <TrailingAffordance chevron={chevron} pending={pending} />
 
     if (asChild) {
       return (
