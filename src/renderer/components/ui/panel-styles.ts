@@ -34,9 +34,11 @@ export const FIELD_FOCUS_CLASS =
  * Text field or select at rest, the composer's look: a quiet hairline on the
  * card fill. Hover steps the edge up to `--field-border`; focus adds
  * {@link FIELD_FOCUS_CLASS} (or {@link BAND_FOCUS_CLASS} on a wrapper).
+ * Disabled keeps a full `--border` edge under 60% opacity, so the field
+ * still reads as a field.
  */
 export const FIELD_SURFACE_CLASS =
-  'border border-border/60 bg-card not-disabled:hover:border-field-border'
+  'border border-border/60 bg-card not-disabled:hover:border-field-border disabled:border-border disabled:opacity-60'
 
 /**
  * Focus for a field whose wrapper draws the edge, such as a search band: the

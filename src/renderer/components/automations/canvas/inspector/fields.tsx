@@ -628,7 +628,7 @@ export function PickerField({
             aria-haspopup="listbox"
             className={cn(
               FIELD_HEIGHT,
-              'flex w-full items-center justify-between gap-2 rounded-lg px-3 text-left text-sm transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-50',
+              'flex w-full items-center justify-between gap-2 rounded-lg px-3 text-left text-sm transition-colors duration-150 ease-out disabled:cursor-not-allowed',
               FIELD_SURFACE_CLASS,
               FIELD_FOCUS_CLASS
             )}
