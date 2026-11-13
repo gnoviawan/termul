@@ -1,4 +1,4 @@
-import { memo, useRef, useState } from 'react'
+import { memo, useCallback, useRef, useState } from 'react'
 import { QueueItemFile, QueueItemImage } from '@/components/ai-elements/queue'
 import { ChevronDown, Edit2, GripVertical, Trash2, X } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
@@ -210,46 +210,54 @@ export function PromptQueuePanel({
   const [announcement, setAnnouncement] = useState('')
   const isMobileShell = useMobileWebShell()
   const listRef = useRef<HTMLOListElement>(null)
-  if (items.length === 0) return null
+  const count = items.length
 
-  const move = (queueId: string, toIndex: number) => {
-    if (!onMove || toIndex < 0 || toIndex >= items.length) return
-    onMove(queueId, toIndex)
-    setAnnouncement(`Moved to place ${toIndex + 1} of ${items.length}`)
-  }
+  // Stable across renders, so the memoized rows do not re-render on each one.
+  const move = useCallback(
+    (queueId: string, toIndex: number) => {
+      if (!onMove || toIndex < 0 || toIndex >= count) return
+      onMove(queueId, toIndex)
+      setAnnouncement(`Moved to place ${toIndex + 1} of ${count}`)
+    },
+    [onMove, count]
+  )
 
   // Pointer drag on the handle: the row takes the slot under the pointer as
   // it passes each row's middle. No motion while dragging.
-  const startDrag = (event: React.PointerEvent, queueId: string) => {
-    if (event.button !== 0) return
-    event.preventDefault()
-    const handle = event.currentTarget as HTMLElement
-    handle.setPointerCapture(event.pointerId)
-    setDragId(queueId)
-    const onPointerMove = (moveEvent: PointerEvent) => {
-      const rows = Array.from(listRef.current?.querySelectorAll('[data-queue-row]') ?? [])
-      const from = rows.findIndex((row) => row.getAttribute('data-queue-row') === queueId)
-      if (from === -1) return
-      let slot = rows.findIndex((row) => {
-        const box = row.getBoundingClientRect()
-        return moveEvent.clientY < box.top + box.height / 2
-      })
-      if (slot === -1) slot = rows.length
-      const to = slot > from ? slot - 1 : slot
-      if (to !== from) move(queueId, to)
-    }
-    const onPointerEnd = () => {
-      handle.removeEventListener('pointermove', onPointerMove)
-      handle.removeEventListener('pointerup', onPointerEnd)
-      handle.removeEventListener('pointercancel', onPointerEnd)
-      setDragId(null)
-    }
-    handle.addEventListener('pointermove', onPointerMove)
-    handle.addEventListener('pointerup', onPointerEnd)
-    handle.addEventListener('pointercancel', onPointerEnd)
-  }
+  const startDrag = useCallback(
+    (event: React.PointerEvent, queueId: string) => {
+      if (event.button !== 0) return
+      event.preventDefault()
+      const handle = event.currentTarget as HTMLElement
+      handle.setPointerCapture(event.pointerId)
+      setDragId(queueId)
+      const onPointerMove = (moveEvent: PointerEvent) => {
+        const rows = Array.from(listRef.current?.querySelectorAll('[data-queue-row]') ?? [])
+        const from = rows.findIndex((row) => row.getAttribute('data-queue-row') === queueId)
+        if (from === -1) return
+        let slot = rows.findIndex((row) => {
+          const box = row.getBoundingClientRect()
+          return moveEvent.clientY < box.top + box.height / 2
+        })
+        if (slot === -1) slot = rows.length
+        const to = slot > from ? slot - 1 : slot
+        if (to !== from) move(queueId, to)
+      }
+      const onPointerEnd = () => {
+        handle.removeEventListener('pointermove', onPointerMove)
+        handle.removeEventListener('pointerup', onPointerEnd)
+        handle.removeEventListener('pointercancel', onPointerEnd)
+        setDragId(null)
+      }
+      handle.addEventListener('pointermove', onPointerMove)
+      handle.addEventListener('pointerup', onPointerEnd)
+      handle.addEventListener('pointercancel', onPointerEnd)
+    },
+    [move]
+  )
 
-  const countLabel = `${items.length} queued`
+  if (count === 0) return null
+  const countLabel = `${count} queued`
 
   return (
     <section

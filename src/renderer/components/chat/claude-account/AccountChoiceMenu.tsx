@@ -1,9 +1,5 @@
 import { ExternalLink } from '@/components/icons'
-import {
-  type AccountTone,
-  StatusDot,
-  UsageBar
-} from '@/components/settings/provider/account-status'
+import { StatusDot, UsageBar } from '@/components/settings/provider/account-status'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,26 +12,14 @@ import { MENU_ACTIVE_ROW_CLASS } from '@/components/ui/menu-styles'
 import { type UsageTone, usageTone } from '@/lib/claude-usage-format'
 import { cn } from '@/lib/utils'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
+import { choiceDotTone, choicePercent } from './account-choice'
 import type { AccountChoice } from './use-project-claude-account'
-
-const DOT_TONE: Record<UsageTone, AccountTone> = {
-  normal: 'ok',
-  warning: 'warning',
-  critical: 'critical'
-}
 
 const PERCENT_TONE: Record<UsageTone, string> = {
   normal: 'text-muted-foreground',
   warning: 'text-warning',
   critical: 'text-destructive'
 }
-
-/** Dot tone for an Account choice, from its most-used window. */
-export const choiceDotTone = (choice: AccountChoice): AccountTone =>
-  DOT_TONE[usageTone(choice.window?.percent ?? 0)]
-
-export const choicePercent = (choice: AccountChoice): number | null =>
-  choice.window ? Math.round(choice.window.percent) : null
 
 interface AccountChoiceMenuProps {
   /** Accounts with room, best first. */
