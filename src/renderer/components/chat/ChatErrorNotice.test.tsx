@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ChatErrorNotice } from './ChatErrorNotice'
 
 describe('ChatErrorNotice', () => {
-  it('gh-821: shows the JSON-RPC code and pretty-printed data under Technical details', () => {
+  it('gh-821: shows the JSON-RPC code and pretty-printed data under Details', () => {
     render(
       <ChatErrorNotice
         message="Internal error"
@@ -15,7 +15,7 @@ describe('ChatErrorNotice', () => {
     const code = screen.getByText('Code -32603')
     expect(code).not.toBeVisible()
 
-    fireEvent.click(screen.getByText('Technical details'))
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }))
 
     expect(code).toBeVisible()
     expect(screen.getByTestId('chat-error-data').textContent).toBe(
@@ -29,9 +29,9 @@ describe('ChatErrorNotice', () => {
     expect(screen.queryByTestId('chat-error-data')).not.toBeInTheDocument()
   })
 
-  it('has no Technical details for a plain error', () => {
+  it('has no Details for a plain error', () => {
     render(<ChatErrorNotice message="boom" onDismiss={vi.fn()} />)
     expect(screen.getByText('boom')).toBeInTheDocument()
-    expect(screen.queryByText('Technical details')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Details' })).not.toBeInTheDocument()
   })
 })

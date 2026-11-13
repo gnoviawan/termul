@@ -124,6 +124,13 @@ interface ChatInputBarProps {
   queue?: QueuedPrompt[]
   /** Approval request currently waiting for the user. */
   permission?: PendingPermission | null
+  /**
+   * Composer dock at the top of the card (turn error, stopped chat, usage
+   * limit). It replaces the near-limit warning while it shows.
+   */
+  notice?: React.ReactNode
+  /** Placeholder while `disabled` (default "Composer unavailable"). */
+  disabledPlaceholder?: string
   onRemoveQueued?: (queueId: string) => void
   onSendQueuedNow?: (queueId: string) => void
   /**
@@ -166,6 +173,8 @@ export function ChatInputBar({
   selectionContextInsert,
   queue = [],
   permission,
+  notice = null,
+  disabledPlaceholder = 'Composer unavailable',
   onRemoveQueued,
   onSendQueuedNow,
   isVisible = true,
@@ -546,14 +555,6 @@ export function ChatInputBar({
       )}
     >
       <div className="relative mx-auto w-full max-w-3xl">
-        {disabled && (
-          <div
-            role="status"
-            className="mb-2 rounded-lg border border-border/60 bg-secondary px-3 py-1.5 text-xs text-muted-foreground"
-          >
-            Session closed
-          </div>
-        )}
         {queue.length > 0 && onRemoveQueued && onSendQueuedNow && (
           <PromptQueuePanel
             items={queue}
@@ -604,8 +605,9 @@ export function ChatInputBar({
                 </span>
               </div>
             )}
+            {notice}
             {permission && <PermissionPrompt permission={permission} isVisible={isVisible} />}
-            {!controlsDisabled && <ClaudeLimitWarning sessionId={session.id} atTop={!permission} />}
+            {!notice && !controlsDisabled && <ClaudeLimitWarning sessionId={session.id} />}
             <AttachmentPreviewGroup
               attachments={attachments}
               onRemove={removeAttachment}
@@ -640,7 +642,7 @@ export function ChatInputBar({
                   maxHeight={78} /* 3 lines: 3 × 26px, then scroll */
                   placeholder={
                     disabled
-                      ? 'Composer unavailable'
+                      ? disabledPlaceholder
                       : hasCommandToken
                         ? 'Add a message (optional)…'
                         : 'Ask anything… (/ for commands, @ for files and chats)'

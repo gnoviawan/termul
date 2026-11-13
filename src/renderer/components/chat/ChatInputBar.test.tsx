@@ -195,10 +195,8 @@ vi.mock('sonner', () => ({
 // place in the composer card matters.
 const { limitWarningRef } = vi.hoisted(() => ({ limitWarningRef: { current: false } }))
 vi.mock('@/components/chat/claude-account/ClaudeLimitWarning', () => ({
-  ClaudeLimitWarning: ({ atTop }: { atTop: boolean }) =>
-    limitWarningRef.current ? (
-      <div data-testid="claude-limit-warning-stub" data-at-top={String(atTop)} />
-    ) : null
+  ClaudeLimitWarning: () =>
+    limitWarningRef.current ? <div data-testid="claude-limit-warning-stub" /> : null
 }))
 
 vi.mock('@/hooks/use-agent-skills', async () => {
@@ -1088,7 +1086,7 @@ describe('ChatInputBar Claude limit warning', () => {
     const composer = container.querySelector('[data-chat-composer="true"]')
     const warning = screen.getByTestId('claude-limit-warning-stub')
     expect(composer).toContainElement(warning)
-    expect(warning).toHaveAttribute('data-at-top', 'true')
+    expect(composer?.firstElementChild).toBe(warning)
   })
 
   it('puts the warning below a pending permission prompt', () => {
@@ -1104,7 +1102,6 @@ describe('ChatInputBar Claude limit warning', () => {
     const prompt = screen.getByTestId('permission-prompt')
     const warning = screen.getByTestId('claude-limit-warning-stub')
     expect(prompt.compareDocumentPosition(warning) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(warning).toHaveAttribute('data-at-top', 'false')
   })
 
   it('hides the warning while the chat is closed', () => {
@@ -1769,12 +1766,19 @@ describe('ChatInputBar draft start', () => {
     expect(onDraftStart).not.toHaveBeenCalled()
   })
 
-  it('shows the Session closed pill only while disabled', () => {
-    const { unmount } = renderInputBar({ disabled: true })
-    expect(screen.getByText('Session closed')).toBeInTheDocument()
-    unmount()
-    renderInputBar({ disabled: false })
-    expect(screen.queryByText('Session closed')).not.toBeInTheDocument()
+  it('shows a notice in the composer dock and hides the limit warning for it', () => {
+    limitWarningRef.current = true
+    try {
+      const { container } = renderInputBar({
+        notice: <div data-testid="dock-notice">This chat stopped.</div>
+      })
+      const composer = container.querySelector('[data-chat-composer="true"]')
+      expect(composer?.firstElementChild).toBe(screen.getByTestId('dock-notice'))
+      expect(screen.queryByTestId('claude-limit-warning-stub')).not.toBeInTheDocument()
+      expect(screen.queryByText('Session closed')).not.toBeInTheDocument()
+    } finally {
+      limitWarningRef.current = false
+    }
   })
 })
 

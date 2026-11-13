@@ -55,11 +55,13 @@ import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
 import { ChatStatusPill } from './ChatStatusPill'
-import { CHAT_GUTTER_X } from './chat-layout'
+import { ChatStoppedNotice } from './ChatStoppedNotice'
+import { CHAT_GUTTER_X, COMPOSER_CARD_CLASS } from './chat-layout'
 import { ChatStarters } from './chat-start'
 import { buildTimeline, consolidateThoughtGroups, spliceReloadMarker } from './chat-timeline'
 import { ClaudeLimitNotice } from './claude-account/ClaudeLimitNotice'
 import { ClaudeSignInAction } from './claude-account/ClaudeSignInAction'
+import { isAtLimit, useClaudeLimit } from './claude-account/use-claude-limit'
 import type { SelectionContextInsertRequest } from './composer/insert-selection-context'
 import { ElicitationPrompt } from './ElicitationPrompt'
 import { PendingRestartBanner } from './PendingRestartBanner'
@@ -395,6 +397,9 @@ export function AgentChatPanel({
   // Composer seed (edit a message / pick a starter prompt) + dismissed-error tracking.
   const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null)
   const [dismissedError, setDismissedError] = useState<string | null>(null)
+  // At the usage limit, the limit dock replaces the provider's quota error.
+  const claudeLimit = useClaudeLimit(sessionId)
+  const atClaudeLimit = claudeLimit !== null && isAtLimit(claudeLimit.limit)
   const seedComposer = useCallback((text: string) => setSeed({ text, nonce: Date.now() }), [])
   const [contextInsert, setContextInsert] = useState<SelectionContextInsertRequest>()
   const addSelectionContext = useCallback(
@@ -828,6 +833,53 @@ export function AgentChatPanel({
     const pane = findPaneContainingTab(workspace.root, agentChatTabId(session.id))
     if (pane) workspace.showAgentLauncher(pane.id)
   }
+  // The composer dock shows one notice at a time: a stopped chat (with the
+  // failed resume as its reason), else the usage limit, else a turn error.
+  const showStoppedNotice =
+    isClosed &&
+    !isResumableStop &&
+    !isOpeningHistory &&
+    !isLaunchingSession &&
+    !discoveredReopenContext &&
+    (hasHistoryEntry || codexSignedOut)
+  const errorNotice = (
+    <ChatErrorNotice
+      message={atClaudeLimit ? null : activeError}
+      title={isClosed ? 'This chat stopped.' : undefined}
+      code={session.lastErrorCode}
+      data={session.lastErrorData}
+      onRetry={canOfferNoticeRetry ? handleRetry : undefined}
+      retryLabel={
+        !session.launchConfigId && (session.status === 'error' || session.status === 'closed')
+          ? 'Resume chat'
+          : 'Retry'
+      }
+      onDismiss={() => setDismissedError(session.lastError)}
+    />
+  )
+  const composerNotice = showStoppedNotice ? (
+    <ChatStoppedNotice
+      reason={codexSignedOut ? CODEX_CLI_SIGNED_OUT_MESSAGE : activeError}
+      actionLabel={codexSignedOut ? 'Sign in' : 'Resume chat'}
+      onAction={() => {
+        if (codexSignedOut) {
+          openCodexSignIn()
+          return
+        }
+        if (isClosedResumeFailure && activeError) {
+          handleRetry()
+          return
+        }
+        resumeStoppedChat()
+      }}
+      onNewChat={codexSignedOut ? undefined : openCodexSignIn}
+      extraAction={codexSignedOut ? undefined : <ClaudeSignInAction sessionId={sessionId} />}
+    />
+  ) : atClaudeLimit && !isClosed ? (
+    <ClaudeLimitNotice sessionId={sessionId} />
+  ) : (
+    errorNotice
+  )
 
   const chat = (
     // biome-ignore lint/a11y/noStaticElementInteractions: onFocus / onBlur only observe bubbled focus to track approval prompts; the root is not itself interactive
@@ -877,30 +929,6 @@ export function AgentChatPanel({
             </button>
           </div>
         )}
-      {isClosed &&
-        !isResumableStop &&
-        !isOpeningHistory &&
-        !isLaunchingSession &&
-        !discoveredReopenContext &&
-        (hasHistoryEntry || codexSignedOut) && (
-          <div className="flex items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
-            <span>{codexSignedOut ? CODEX_CLI_SIGNED_OUT_MESSAGE : 'This chat stopped.'}</span>
-            {!codexSignedOut && <ClaudeSignInAction sessionId={sessionId} />}
-            <button
-              type="button"
-              onClick={() => {
-                if (codexSignedOut) {
-                  openCodexSignIn()
-                  return
-                }
-                resumeStoppedChat()
-              }}
-              className="inline-flex min-h-11 items-center rounded-md border border-warning/40 px-3 text-xs font-medium transition-colors hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
-            >
-              {codexSignedOut ? 'Sign in' : 'Resume chat'}
-            </button>
-          </div>
-        )}
       {showTransportOverlay && (
         <div
           className="pointer-events-none absolute right-2 top-2 z-20 flex items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-2 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm"
@@ -917,18 +945,6 @@ export function AgentChatPanel({
           <span>{hostOffline ? 'Host offline' : 'Reconnecting…'}</span>
         </div>
       )}
-      <ChatErrorNotice
-        message={activeError}
-        code={session.lastErrorCode}
-        data={session.lastErrorData}
-        onRetry={canOfferNoticeRetry ? handleRetry : undefined}
-        retryLabel={
-          !session.launchConfigId && (session.status === 'error' || session.status === 'closed')
-            ? 'Resume chat'
-            : 'Retry'
-        }
-        onDismiss={() => setDismissedError(session.lastError)}
-      />
       <PlanPanel
         key={`plan-${session.id}`}
         entries={plan}
@@ -1006,6 +1022,13 @@ export function AgentChatPanel({
           hide until the prompt resolves. */}
       {!isClosed && (pendingElicitation || pendingQuestion) ? (
         <div ref={dockRef} data-chat-dock="true" className={dockClassName}>
+          {activeError && !atClaudeLimit && (
+            <div className={`${CHAT_GUTTER_X} pt-3`}>
+              <div className={`mx-auto w-full max-w-3xl overflow-hidden ${COMPOSER_CARD_CLASS}`}>
+                {errorNotice}
+              </div>
+            </div>
+          )}
           {pendingElicitation && (
             <ElicitationPrompt
               key={pendingElicitation.requestId}
@@ -1034,18 +1057,15 @@ export function AgentChatPanel({
         </div>
       ) : (
         <div ref={dockRef} data-chat-dock="true" className={dockClassName}>
-          {!isClosed && (
-            <div className={CHAT_GUTTER_X}>
-              <div className="mx-auto w-full max-w-3xl">
-                <ClaudeLimitNotice sessionId={sessionId} />
-              </div>
-            </div>
-          )}
           <ChatInputBar
             session={composerSession ?? session}
             projectRoot={skillsProjectRoot}
             busy={sessionTurnBusy(session)}
             disabled={isClosed && !isResumableStop}
+            notice={composerNotice}
+            disabledPlaceholder={
+              showStoppedNotice && !codexSignedOut ? 'Resume the chat to send a message' : undefined
+            }
             controlsDisabled={isClosed}
             onDraftStart={isResumableStop ? startAutoResume : undefined}
             imageCapable={imageCapable}
