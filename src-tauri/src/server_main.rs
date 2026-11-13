@@ -376,6 +376,9 @@ fn main() -> ExitCode {
         let claude_agent = Arc::new(termul_manager_lib::ClaudeAgentService::system(
             acp_install_dir.clone(),
         ));
+        let codex_agent = Arc::new(termul_manager_lib::CodexAgentService::system(
+            acp_install_dir.clone(),
+        ));
         let acp_install = match AcpInstallService::open(
             acp_install_dir,
             std::sync::Arc::clone(acp_catalog.as_ref().expect("catalog opened above")),
@@ -394,10 +397,11 @@ fn main() -> ExitCode {
                     Duration::from_secs(cfg.receipt_retention_secs),
                 )),
         );
-        let acp = Arc::new(AcpManager::with_persistence_and_claude_agent(
+        let acp = Arc::new(AcpManager::with_persistence_and_host_agents(
             vec![ws_relay.clone()],
             persistence,
             claude_agent,
+            codex_agent,
         ));
         // Attach the permission and question rendezvous. The relay snapshots
         // `acp:permission_request` and `acp:question_request` events into them

@@ -58,13 +58,16 @@ pub async fn codex_cli_auth_status(codex_home: Option<String>) -> CodexCliAuthSt
     }
 }
 
-enum CodexLoginProbe {
+pub(crate) enum CodexLoginProbe {
     SignedIn,
     SignedOut,
     Unavailable,
 }
 
-async fn codex_login_status(codex_home: Option<String>) -> CodexLoginProbe {
+/// `codex login status` for one home. `None` uses the host default (`~/.codex`).
+/// Exit 0 is signed in, exit 1 is signed out, and every other result is
+/// unavailable. The command's output is discarded and never logged.
+pub(crate) async fn codex_login_status(codex_home: Option<String>) -> CodexLoginProbe {
     let resolved = crate::pty::manager::resolve_spawn_program("codex")
         .unwrap_or_else(|_| crate::pty::manager::ResolvedProgram::new("codex".to_string()));
     let mut command = tokio::process::Command::new(&resolved.program);

@@ -722,6 +722,9 @@ export const WS_ERROR_CODES = {
   // Project or as the default (nothing changed), or starting a managed Claude
   // agent on it. The message names the Account and where to sign in.
   CLAUDE_ACCOUNT_SIGNED_OUT: 'claude_account_signed_out',
+  // The Codex Account a managed Codex spawn needs is not signed in. The
+  // message names the Account or the project `CODEX_HOME`.
+  CODEX_ACCOUNT_SIGNED_OUT: 'codex_account_signed_out',
   // `finish_claude_link_login` got a code the Claude CLI calls incomplete.
   // The sign-in still waits for the whole code.
   CLAUDE_LOGIN_CODE_INCOMPLETE: 'claude_login_code_incomplete',

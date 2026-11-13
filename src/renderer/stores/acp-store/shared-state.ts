@@ -385,10 +385,10 @@ const definiteSpawnRejections = new Map<string, string>()
 const liveAgentSignatures = new Map<AgentId, string>()
 
 /**
- * Credential epoch per `configId\0projectId`. The host binds a Claude account
- * to an agent process when it spawns it, so after a Project's account changes
- * every agent spawned before is on the old account: it may finish what it
- * serves, but it must never take a new chat or a warm session.
+ * Credential epoch per `configId\0projectId`. The host binds a Claude or Codex
+ * account to an agent process when it spawns it, so after a Project's account
+ * changes every agent spawned before is on the old account: it may finish what
+ * it serves, but it must never take a new chat or a warm session.
  */
 const credentialEpochs = new Map<string, number>()
 

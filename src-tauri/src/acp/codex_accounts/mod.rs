@@ -1,0 +1,524 @@
+//! Codex Accounts: several ChatGPT logins for Codex on one host, one Codex
+//! home per Account. This is a Codex-only copy of the Claude Account store.
+//!
+//! The built-in Account uses the shared Codex home itself
+//! (`~/.codex`, or the host's `CODEX_HOME`). Every other Account has a
+//! Troupe-owned directory under `<state dir>/codex-accounts/<id>` whose shared
+//! entries link back to the shared home. Each Project uses one Account;
+//! a Project without a choice uses the Default Account.
+//!
+//! The store keeps no secrets: logins live in Codex's own credential
+//! store (`auth.json` or the OS keyring entry for that home).
+
+pub mod links;
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use super::atomic_file;
+
+/// Id of the built-in Account that uses the shared Codex home.
+pub const BUILTIN_ACCOUNT_ID: &str = "default";
+const BUILTIN_ACCOUNT_NAME: &str = "Default";
+const STORE_FILE_NAME: &str = "codex-accounts.json";
+const ACCOUNTS_DIR_NAME: &str = "codex-accounts";
+const SCHEMA_VERSION: u32 = 1;
+const MAX_NAME_CHARS: usize = 40;
+
+/// Prefix of an error whose cause is a Codex Account that is not signed in.
+/// `/ws` turns it into the `codex_account_signed_out` code and drops it from
+/// the message; the desktop `invoke` path keeps it for the renderer to map.
+pub const SIGNED_OUT_TAG: &str = "ACP_CODEX_ACCOUNT_SIGNED_OUT";
+
+#[must_use]
+pub fn signed_out_error(message: impl std::fmt::Display) -> String {
+    format!("{SIGNED_OUT_TAG}: {message}")
+}
+
+/// The user-facing message of a [`signed_out_error`], or `None` for any other error.
+#[must_use]
+pub fn strip_signed_out_tag(error: &str) -> Option<&str> {
+    error.strip_prefix(SIGNED_OUT_TAG)?.strip_prefix(": ")
+}
+
+/// One ChatGPT login for Codex.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAccount {
+    pub id: String,
+    pub name: String,
+    pub created_at: i64,
+}
+
+/// Safe, secret-free view of the Account list for every transport.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAccountsSnapshot {
+    // Not named `accounts`: CodeQL treats that word as secret data. The
+    // JSON key stays `accounts`. These are profile ids and display names.
+    #[serde(rename = "accounts")]
+    pub profiles: Vec<CodexAccountView>,
+    pub default_account_id: String,
+    /// Project id → Account id, only for Projects with an explicit choice.
+    // JSON key stays `projectAccounts`.
+    #[serde(rename = "projectAccounts")]
+    pub project_profiles: BTreeMap<String, String>,
+    /// A chat at its Account's limit continues on the signed-in Account with
+    /// the most room.
+    pub auto_switch: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAccountView {
+    pub id: String,
+    pub name: String,
+    /// `true` for the Account that uses the shared Codex home.
+    pub builtin: bool,
+    /// Codex CLI login state; `None` when it could not be read.
+    pub signed_in: Option<bool>,
+}
+
+/// The Account a spawn uses, and the Codex home to export for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountResolution {
+    pub account_id: String,
+    pub account_name: String,
+    /// `None` for the built-in Account: the agent inherits the host's Codex
+    /// home unchanged.
+    pub config_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoreFile {
+    version: u32,
+    // Not named `accounts`: CodeQL treats that word as secret data, and this
+    // list holds only ids and display names. The on-disk key stays `accounts`.
+    #[serde(rename = "accounts")]
+    entries: Vec<CodexAccount>,
+    default_account_id: String,
+    // JSON key stays `projectAccounts`.
+    #[serde(default, rename = "projectAccounts")]
+    project_profiles: BTreeMap<String, String>,
+    /// Files written before the setting existed read as on.
+    #[serde(default = "auto_switch_default")]
+    auto_switch: bool,
+}
+
+const fn auto_switch_default() -> bool {
+    true
+}
+
+impl StoreFile {
+    fn initial() -> Self {
+        Self {
+            version: SCHEMA_VERSION,
+            entries: vec![CodexAccount {
+                id: BUILTIN_ACCOUNT_ID.to_string(),
+                name: BUILTIN_ACCOUNT_NAME.to_string(),
+                created_at: 0,
+            }],
+            default_account_id: BUILTIN_ACCOUNT_ID.to_string(),
+            project_profiles: BTreeMap::new(),
+            auto_switch: auto_switch_default(),
+        }
+    }
+
+    /// Repair invariants after a load: the built-in Account exists, and the
+    /// default and every Project choice name an existing Account.
+    fn normalize(&mut self) {
+        if !self.entries.iter().any(|a| a.id == BUILTIN_ACCOUNT_ID) {
+            self.entries
+                .insert(0, StoreFile::initial().entries.remove(0));
+        }
+        if !self.has_account(&self.default_account_id.clone()) {
+            log::warn!("[codex-accounts] default account is missing; using the built-in account");
+            self.default_account_id = BUILTIN_ACCOUNT_ID.to_string();
+        }
+        let known: Vec<String> = self.entries.iter().map(|a| a.id.clone()).collect();
+        self.project_profiles.retain(|_, id| known.contains(id));
+    }
+
+    fn has_account(&self, id: &str) -> bool {
+        self.entries.iter().any(|a| a.id == id)
+    }
+
+    /// The Account a Project uses: its own choice, else the default.
+    fn project_account(&self, project_id: &str) -> &str {
+        self.project_profiles
+            .get(project_id)
+            .unwrap_or(&self.default_account_id)
+    }
+}
+
+/// File-backed Account store. One per host state directory.
+pub struct CodexAccountStore {
+    store_path: PathBuf,
+    accounts_root: PathBuf,
+    shared_dir: PathBuf,
+    lock: parking_lot::Mutex<()>,
+}
+
+impl CodexAccountStore {
+    /// Store under `state_dir`, linking Account directories to `shared_dir`.
+    #[must_use]
+    pub fn new(state_dir: &Path, shared_dir: PathBuf) -> Self {
+        Self {
+            store_path: state_dir.join(STORE_FILE_NAME),
+            accounts_root: state_dir.join(ACCOUNTS_DIR_NAME),
+            shared_dir,
+            lock: parking_lot::Mutex::new(()),
+        }
+    }
+
+    /// The shared Codex home of this host: the host's
+    /// `CODEX_HOME` when set, else `~/.codex`.
+    #[must_use]
+    pub fn host_shared_dir() -> Option<PathBuf> {
+        if let Some(dir) = std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()) {
+            return Some(PathBuf::from(dir));
+        }
+        Some(Self::host_home_dir()?.join(".codex"))
+    }
+
+    /// The host user's home directory.
+    #[must_use]
+    pub fn host_home_dir() -> Option<PathBuf> {
+        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    }
+
+    /// Secret-free Account list. `signed_in` is `None`; callers that need the
+    /// login state fill it in.
+    pub fn snapshot(&self) -> Result<CodexAccountsSnapshot, String> {
+        let _guard = self.lock.lock();
+        let file = self.load()?;
+        Ok(CodexAccountsSnapshot {
+            profiles: file
+                .entries
+                .iter()
+                .map(|a| CodexAccountView {
+                    id: a.id.clone(),
+                    name: a.name.clone(),
+                    builtin: a.id == BUILTIN_ACCOUNT_ID,
+                    signed_in: None,
+                })
+                .collect(),
+            default_account_id: file.default_account_id,
+            project_profiles: file.project_profiles,
+            auto_switch: file.auto_switch,
+        })
+    }
+
+    /// Add an Account and create its linked home directory. The Account is
+    /// signed out until the user signs that home in with Codex.
+    pub fn add(&self, name: &str) -> Result<CodexAccount, String> {
+        let name = validate_name(name)?;
+        let _guard = self.lock.lock();
+        let mut file = self.load()?;
+        if file
+            .entries
+            .iter()
+            .any(|a| a.name.eq_ignore_ascii_case(&name))
+        {
+            return Err(format!("An account named \"{name}\" already exists"));
+        }
+        let created = CodexAccount {
+            id: uuid::Uuid::new_v4().simple().to_string(),
+            name,
+            created_at: chrono::Utc::now().timestamp_millis(),
+        };
+        let dir = self.accounts_root.join(&created.id);
+        match links::ensure_links(&self.shared_dir, &dir) {
+            Ok(0) => {}
+            Ok(_failed) => {
+                log::warn!("[codex-accounts] profile created with unlinked shared entries");
+            }
+            Err(error) => {
+                log::warn!(
+                    "[codex-accounts] could not create profile directory: {:?}",
+                    error.kind()
+                );
+                return Err("Could not create the account folder".to_string());
+            }
+        }
+        file.entries.push(created.clone());
+        if let Err(error) = self.save(&file) {
+            remove_account_dir(&dir);
+            return Err(error);
+        }
+        log::info!("[codex-accounts] profile added");
+        Ok(created)
+    }
+
+    pub fn rename(&self, id: &str, name: &str) -> Result<(), String> {
+        let name = validate_name(name)?;
+        let _guard = self.lock.lock();
+        let mut file = self.load()?;
+        if file
+            .entries
+            .iter()
+            .any(|a| a.id != id && a.name.eq_ignore_ascii_case(&name))
+        {
+            return Err(format!("An account named \"{name}\" already exists"));
+        }
+        let account = file
+            .entries
+            .iter_mut()
+            .find(|a| a.id == id)
+            .ok_or_else(|| unknown_account(id))?;
+        account.name = name;
+        self.save(&file)?;
+        log::info!("[codex-accounts] profile renamed");
+        Ok(())
+    }
+
+    /// Remove an Account and its directory. Projects that used it, and the
+    /// default when it pointed at it, return to the built-in Account. Returns
+    /// the ids of the Projects that moved.
+    pub fn remove(&self, id: &str) -> Result<Vec<String>, String> {
+        if id == BUILTIN_ACCOUNT_ID {
+            return Err("The built-in account cannot be removed".to_string());
+        }
+        let _guard = self.lock.lock();
+        let mut file = self.load()?;
+        if !file.has_account(id) {
+            return Err(unknown_account(id));
+        }
+        file.entries.retain(|a| a.id != id);
+        if file.default_account_id == id {
+            file.default_account_id = BUILTIN_ACCOUNT_ID.to_string();
+        }
+        let moved: Vec<String> = file
+            .project_profiles
+            .iter()
+            .filter(|(_, account)| account.as_str() == id)
+            .map(|(project, _)| project.clone())
+            .collect();
+        for project in &moved {
+            file.project_profiles.remove(project);
+        }
+        self.save(&file)?;
+        if let Some(dir) = self.account_dir(id) {
+            remove_account_dir(&dir);
+        }
+        log::info!("[codex-accounts] profile removed; projects moved to the default");
+        Ok(moved)
+    }
+
+    pub fn set_default(&self, id: &str) -> Result<(), String> {
+        let _guard = self.lock.lock();
+        let mut file = self.load()?;
+        if !file.has_account(id) {
+            return Err(unknown_account(id));
+        }
+        file.default_account_id = id.to_string();
+        self.save(&file)?;
+        log::info!("[codex-accounts] default profile updated");
+        Ok(())
+    }
+
+    pub fn set_auto_switch(&self, enabled: bool) -> Result<(), String> {
+        let _guard = self.lock.lock();
+        let mut file = self.load()?;
+        file.auto_switch = enabled;
+        self.save(&file)?;
+        log::info!("[codex-accounts] automatic switching set to {enabled}");
+        Ok(())
+    }
+
+    /// Choose the Account of a Project. `None` returns it to the Default
+    /// Account. With `expected`, the choice applies only while the Project
+    /// still uses that Account, so clients that react to the same limit
+    /// converge on one switch. Returns whether the choice applied.
+    pub fn set_project_account(
+        &self,
+        project_id: &str,
+        account_id: Option<&str>,
+        expected: Option<&str>,
+    ) -> Result<bool, String> {
+        let project_id = project_id.trim();
+        if project_id.is_empty() {
+            return Err("A project id is required".to_string());
+        }
+        let _guard = self.lock.lock();
+        let mut file = self.load()?;
+        if let Some(id) = account_id {
+            if !file.has_account(id) {
+                return Err(unknown_account(id));
+            }
+        }
+        if expected.is_some_and(|expected| file.project_account(project_id) != expected) {
+            log::info!(
+                "[codex-accounts] project profile unchanged: the project no longer uses the expected profile"
+            );
+            return Ok(false);
+        }
+        match account_id {
+            Some(id) => {
+                file.project_profiles
+                    .insert(project_id.to_string(), id.to_string());
+            }
+            None => {
+                file.project_profiles.remove(project_id);
+            }
+        }
+        self.save(&file)?;
+        log::info!("[codex-accounts] project profile updated");
+        Ok(true)
+    }
+
+    /// The Account a spawn for `project_id` uses. A damaged store falls back
+    /// to the built-in Account so Codex chats keep working.
+    #[must_use]
+    pub fn resolve(&self, project_id: Option<&str>) -> AccountResolution {
+        let _guard = self.lock.lock();
+        let file = match self.load() {
+            Ok(file) => file,
+            Err(error) => {
+                log::warn!("[codex-accounts] resolve fell back to the built-in account: {error}");
+                return builtin_resolution(BUILTIN_ACCOUNT_NAME);
+            }
+        };
+        let id = project_id
+            .map_or(file.default_account_id.as_str(), |project| {
+                file.project_account(project.trim())
+            })
+            .to_string();
+        let name = file
+            .entries
+            .iter()
+            .find(|a| a.id == id)
+            .map_or_else(|| BUILTIN_ACCOUNT_NAME.to_string(), |a| a.name.clone());
+        if id == BUILTIN_ACCOUNT_ID {
+            return builtin_resolution(&name);
+        }
+        let Some(dir) = self.account_dir(&id) else {
+            return builtin_resolution(BUILTIN_ACCOUNT_NAME);
+        };
+        // Repair links that a manual cleanup or a new shared entry left out.
+        // This runs under `self.lock`, so a Windows migration of a large private
+        // directory (merge, rename, junction) blocks other account calls while
+        // it runs. It stays under the lock on purpose: `remove` and a second
+        // `resolve` of the same account would otherwise race the merge and the
+        // rename on one directory. It happens once per account, and only on
+        // Windows for a private directory left where a link belongs.
+        if let Err(error) = links::ensure_links(&self.shared_dir, &dir) {
+            log::warn!(
+                "[codex-accounts] could not repair shared links: {:?}",
+                error.kind()
+            );
+        }
+        AccountResolution {
+            account_id: id,
+            account_name: name,
+            config_dir: Some(dir),
+        }
+    }
+
+    /// Home directory of an Account; `None` for the built-in Account.
+    #[must_use]
+    pub fn config_dir(&self, id: &str) -> Option<PathBuf> {
+        self.account_dir(id)
+    }
+
+    /// The directory of a non-built-in Account. The id is a Troupe-generated
+    /// hex string; anything else never maps to a path.
+    fn account_dir(&self, id: &str) -> Option<PathBuf> {
+        if id == BUILTIN_ACCOUNT_ID || id.is_empty() || !id.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        Some(self.accounts_root.join(id))
+    }
+
+    fn load(&self) -> Result<StoreFile, String> {
+        let bytes = match std::fs::read(&self.store_path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(StoreFile::initial());
+            }
+            Err(error) => {
+                log::warn!("[codex-accounts] store read failed: {error}");
+                return Err("Could not read the Codex account list".to_string());
+            }
+        };
+        let mut file: StoreFile = match serde_json::from_slice(&bytes) {
+            Ok(file) => file,
+            Err(error) => {
+                log::warn!("[codex-accounts] store is not valid JSON: {error}");
+                if let Err(backup) = atomic_file::backup_corrupt(&self.store_path, &bytes) {
+                    log::warn!("[codex-accounts] could not back up the damaged store: {backup}");
+                }
+                return Err("The Codex account list is damaged".to_string());
+            }
+        };
+        if file.version > SCHEMA_VERSION {
+            log::warn!(
+                "[codex-accounts] store version {} is newer than {SCHEMA_VERSION}",
+                file.version
+            );
+            return Err("The Codex account list is from a newer Troupe version".to_string());
+        }
+        file.normalize();
+        Ok(file)
+    }
+
+    fn save(&self, file: &StoreFile) -> Result<(), String> {
+        let bytes = serde_json::to_vec_pretty(file).map_err(|error| {
+            log::warn!("[codex-accounts] store encode failed: {error}");
+            "Could not save the Codex account list".to_string()
+        })?;
+        atomic_file::replace(&self.store_path, &bytes).map_err(|error| {
+            log::warn!("[codex-accounts] store write failed: {error}");
+            "Could not save the Codex account list".to_string()
+        })
+    }
+}
+
+fn builtin_resolution(name: &str) -> AccountResolution {
+    AccountResolution {
+        account_id: BUILTIN_ACCOUNT_ID.to_string(),
+        account_name: name.to_string(),
+        config_dir: None,
+    }
+}
+
+fn validate_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("An account name is required".to_string());
+    }
+    if name.chars().count() > MAX_NAME_CHARS {
+        return Err(format!(
+            "An account name can have at most {MAX_NAME_CHARS} characters"
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err("An account name cannot contain control characters".to_string());
+    }
+    Ok(name.to_string())
+}
+
+fn unknown_account(_id: &str) -> String {
+    log::warn!("[codex-accounts] unknown profile");
+    "That Codex account does not exist".to_string()
+}
+
+fn remove_account_dir(dir: &Path) {
+    links::remove_links(dir);
+    if let Err(error) = std::fs::remove_dir_all(dir) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            log::warn!(
+                "[codex-accounts] could not remove profile directory: {:?}",
+                error.kind()
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -476,6 +476,9 @@ pub enum WsErrorCode {
     /// a Project or as the default, or starting a managed Claude agent on it.
     /// The message names the Account and where to sign in.
     ClaudeAccountSignedOut,
+    /// The Codex Account a managed `acp-registry:codex-acp` spawn needs is not
+    /// signed in. The message names the Account or the project `CODEX_HOME`.
+    CodexAccountSignedOut,
     /// `finish_claude_link_login` got a code the Claude CLI calls incomplete.
     /// The sign-in still waits for the whole code.
     ClaudeLoginCodeIncomplete,
@@ -516,6 +519,7 @@ impl WsErrorCode {
             Self::CommandConflict => "command_conflict",
             Self::InvalidCommandId => "invalid_command_id",
             Self::ClaudeAccountSignedOut => "claude_account_signed_out",
+            Self::CodexAccountSignedOut => "codex_account_signed_out",
             Self::ClaudeLoginCodeIncomplete => "claude_login_code_incomplete",
             Self::ClaudeLoginBusy => "claude_login_busy",
         }
@@ -774,6 +778,9 @@ pub(super) fn acp_err_to_reply(id: String, err: String) -> WsReply {
     }
     if let Some(message) = crate::acp::claude_accounts::strip_signed_out_tag(&err) {
         return WsReply::err(id, WsErrorCode::ClaudeAccountSignedOut, message.to_string());
+    }
+    if let Some(message) = crate::acp::codex_accounts::strip_signed_out_tag(&err) {
+        return WsReply::err(id, WsErrorCode::CodexAccountSignedOut, message.to_string());
     }
     // Issue #837 split-brain guard: the manager tags a rejected reopen with
     // `ACP_SESSION_OWNED_BY_OTHER` when the session belongs to a different

@@ -204,9 +204,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
 })
 
 describe('web-protocol.types — error codes (AC2)', () => {
-  it('exports exactly 29 stable error codes', () => {
+  it('exports exactly 30 stable error codes', () => {
     const codes = new Set(Object.values(WS_ERROR_CODES))
-    expect(codes.size).toBe(29)
+    expect(codes.size).toBe(30)
     const expected = [
       'not_found',
       'unauthorized',
@@ -241,6 +241,8 @@ describe('web-protocol.types — error codes (AC2)', () => {
       'invalid_command_id',
       // A Claude Account that is not signed in.
       'claude_account_signed_out',
+      // A Codex Account that is not signed in.
+      'codex_account_signed_out',
       // A pasted Claude sign-in code the CLI calls incomplete.
       'claude_login_code_incomplete',
       // A pasted Claude sign-in code while the CLI still checks the last one.
