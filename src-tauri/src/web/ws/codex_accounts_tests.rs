@@ -28,14 +28,14 @@ async fn set_default_and_project_account_persist_on_the_host() {
     let (root, acp) = manager_with_account(&[]);
     let reply =
         handle_set_default_codex_account("1".into(), &json!({ "accountId": "ab12" }), &acp).await;
-    assert!(reply.ok, "{reply:?}");
+    assert!(reply.ok);
     let reply = handle_set_project_codex_account(
         "2".into(),
         &json!({ "projectId": "office", "accountId": "ab12" }),
         &acp,
     )
     .await;
-    assert!(reply.ok, "{reply:?}");
+    assert!(reply.ok);
     let file = stored(&root);
     assert_eq!(file["defaultAccountId"], "ab12");
     assert_eq!(file["projectAccounts"]["office"], "ab12");
@@ -124,7 +124,7 @@ async fn a_signed_out_account_is_refused_with_its_code_and_the_choice_stays() {
 async fn add_rename_and_remove_round_trip() {
     let (root, acp) = manager_with_account(&[]);
     let added = handle_add_codex_account("1".into(), &json!({ "name": "Side" }), &acp).await;
-    assert!(added.ok, "{added:?}");
+    assert!(added.ok);
     let id = added.payload.unwrap()["id"].as_str().unwrap().to_string();
     let renamed = handle_rename_codex_account(
         "2".into(),
@@ -190,7 +190,7 @@ async fn a_sign_in_spawn_refuses_a_non_codex_config_before_a_process_starts() {
         None,
     )
     .await;
-    assert!(!reply.ok, "{reply:?}");
+    assert!(!reply.ok);
     assert!(reply.err.unwrap().message.contains("Codex agent"));
 }
 

@@ -91,7 +91,7 @@ pub(super) async fn handle_set_default_codex_account(
         .await
     {
         Ok(()) => {
-            info!(account = %parsed.account_id, "default Codex account set over ws");
+            info!("default Codex profile set over ws");
             WsReply::ok(id, Some(json!({})))
         }
         Err(error) => choice_refused(id, error),
@@ -128,12 +128,7 @@ pub(super) async fn handle_set_project_codex_account(
         .await
     {
         Ok(applied) => {
-            info!(
-                project = %parsed.project_id,
-                account = parsed.account_id.as_deref().unwrap_or("default"),
-                applied,
-                "project Codex account set over ws"
-            );
+            info!(applied, "project Codex profile set over ws");
             WsReply::ok(id, Some(json!({ "applied": applied })))
         }
         Err(error) => choice_refused(id, error),
@@ -189,9 +184,9 @@ pub(super) async fn handle_add_codex_account(
         }
     };
     match acp.codex_agent().add_account(&parsed.name) {
-        Ok(account) => {
-            info!(account = %account.id, "Codex account added over ws");
-            ok_with_payload(id, &account)
+        Ok(created) => {
+            info!("Codex profile added over ws");
+            ok_with_payload(id, &created)
         }
         Err(error) => {
             warn!(error = %error, "add_codex_account failed");
@@ -221,11 +216,11 @@ pub(super) async fn handle_rename_codex_account(
         .rename_account(&parsed.account_id, &parsed.name)
     {
         Ok(()) => {
-            info!(account = %parsed.account_id, "Codex account renamed over ws");
+            info!("Codex profile renamed over ws");
             WsReply::ok(id, Some(json!({})))
         }
         Err(error) => {
-            warn!(account = %parsed.account_id, error = %error, "rename_codex_account failed");
+            warn!(error = %error, "rename_codex_account failed");
             WsReply::err(id, WsErrorCode::Unsupported, error)
         }
     }
@@ -249,19 +244,19 @@ pub(super) async fn handle_remove_codex_account(
             )
         }
     };
-    let account = parsed.account_id;
+    let profile_id = parsed.account_id;
     let service = acp.codex_agent();
-    match service.remove_account(&account).await {
+    match service.remove_account(&profile_id).await {
         Ok(moved) => {
-            info!(account = %account, moved = moved.len(), "Codex account removed over ws");
+            info!(moved = moved.len(), "Codex profile removed over ws");
             WsReply::ok(id, Some(json!({ "movedProjectIds": moved })))
         }
-        Err(_) if matches!(service.has_account(&account), Ok(false)) => {
-            info!(account = %account, "Codex account already removed");
+        Err(_) if matches!(service.has_account(&profile_id), Ok(false)) => {
+            info!("Codex profile already removed");
             WsReply::ok(id, Some(json!({ "movedProjectIds": [] })))
         }
         Err(error) => {
-            warn!(account = %account, error = %error, "remove_codex_account failed");
+            warn!(error = %error, "remove_codex_account failed");
             WsReply::err(id, WsErrorCode::Unsupported, error)
         }
     }
@@ -296,11 +291,11 @@ pub(super) async fn handle_start_codex_account_login(
         .await
     {
         Ok(outcome) => {
-            info!(account = %parsed.account_id, "Codex account sign-in spawn started over ws");
+            info!("Codex profile sign-in spawn started over ws");
             ok_with_payload(id, &outcome)
         }
         Err(error) => {
-            warn!(account = %parsed.account_id, error = %error, "start_codex_account_login failed");
+            warn!("start_codex_account_login failed");
             acp_err_to_reply(id, error)
         }
     }
