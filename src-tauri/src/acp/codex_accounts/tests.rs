@@ -286,6 +286,9 @@ fn merge_dir_copies_new_files_keeping_the_relative_layout() {
         fs::read(dst.join("sub").join("deep.jsonl")).unwrap(),
         b"deep"
     );
+    // The canonical name is published by rename. The temporary sibling is gone.
+    assert!(!dst.join("top.jsonl.partial").exists());
+    assert!(!dst.join("sub").join("deep.jsonl.partial").exists());
     // merge_dir copies; the caller removes the private dir afterwards.
     assert!(src.join("top.jsonl").is_file());
 }

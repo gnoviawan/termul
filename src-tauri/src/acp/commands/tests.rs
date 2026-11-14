@@ -1,4 +1,19 @@
+use std::fs;
+use std::io::Write as _;
+
 use super::*;
+
+fn executable_file(path: &std::path::Path, bytes: &[u8]) {
+    let mut file = fs::File::create(path).unwrap();
+    file.write_all(bytes).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = file.metadata().unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+}
 
 /// Zero is meaningless for the three strictly-positive timeouts and must
 /// be rejected at the IPC boundary (the resolvers also filter it
@@ -37,4 +52,45 @@ fn host_opened_authorization_url_allows_https_and_loopback_http() {
             .ok(),
         Some("http://127.0.0.1:4100/authorize".to_string())
     );
+}
+
+#[test]
+fn a_bare_codex_name_resolves_on_the_project_path() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let codex = bin.join("codex");
+    executable_file(&codex, b"#!/bin/sh\nexit 0\n");
+
+    let resolved = resolve_codex_probe_program("codex", bin.to_str().unwrap());
+
+    assert_eq!(resolved.program, codex.to_string_lossy());
+}
+
+#[test]
+fn an_explicit_codex_path_is_not_replaced_by_the_search_path() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    executable_file(&bin.join("codex"), b"");
+    let explicit = root.path().join("real-codex");
+    executable_file(&explicit, b"");
+
+    let resolved = resolve_codex_probe_program(explicit.to_str().unwrap(), bin.to_str().unwrap());
+
+    assert_eq!(resolved.program, explicit.to_string_lossy());
+}
+
+#[test]
+fn the_probe_search_path_keeps_a_project_path() {
+    let project = "/opt/project-codex-bin";
+    let search = codex_probe_search_path(Some(project));
+    let delimiter = if cfg!(windows) { ';' } else { ':' };
+    assert!(
+        search.split(delimiter).any(|segment| segment == project),
+        "{search}"
+    );
+    assert!(codex_probe_search_path(Some("  "))
+        .split(delimiter)
+        .all(|segment| segment != "  "));
 }

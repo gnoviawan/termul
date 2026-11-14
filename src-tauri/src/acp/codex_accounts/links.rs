@@ -418,10 +418,25 @@ pub(crate) fn merge_dir(src: &Path, dst: &Path) -> io::Result<()> {
             fs::create_dir_all(&to)?;
             merge_dir(&from, &to)?;
         } else if !to.exists() {
-            fs::copy(&from, &to)?;
+            copy_file_into_place(&from, &to)?;
         } else {
             keep_conflicting_file(&from, &to)?;
         }
+    }
+    Ok(())
+}
+
+/// Copy `from` to a sibling of `to`, then rename that sibling onto `to`.
+/// The canonical name appears only after the copy finishes. A failed copy or
+/// rename removes the sibling and returns the error, so a later migration
+/// does not treat a partial file as the shared version.
+fn copy_file_into_place(from: &Path, to: &Path) -> io::Result<()> {
+    let mut partial_name = to.file_name().unwrap_or_default().to_os_string();
+    partial_name.push(".partial");
+    let partial = to.with_file_name(partial_name);
+    if let Err(error) = fs::copy(from, &partial).and_then(|_| fs::rename(&partial, to)) {
+        let _ = fs::remove_file(&partial);
+        return Err(error);
     }
     Ok(())
 }
