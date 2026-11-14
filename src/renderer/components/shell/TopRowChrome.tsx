@@ -1,23 +1,34 @@
 import { useEffect, useState } from 'react'
 import { Copy, Minus, Square, X } from '@/components/icons'
+import { TOOL_STRIP_WIDTH } from '@/components/shell/tool-strip/ToolStrip'
 import { TRAFFIC_LIGHT_CLEARANCE_PX } from '@/components/shell/traffic-light-inset'
 import { windowApi } from '@/lib/api'
+import { cn } from '@/lib/utils'
 
 /** Marks the controls non-draggable so they stay clickable inside a drag-region row. */
 const titlebarNoDragStyle = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 
-const windowControlClass =
-  'h-full px-3 hover:bg-secondary/80 inline-flex items-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-inset cursor-pointer'
+/** Three 40px buttons. */
+export const WINDOW_CONTROLS_WIDTH = 120
+
+/** What the controls take from the top row left of the tool strip. */
+export const WINDOW_CONTROLS_INSET_PX = WINDOW_CONTROLS_WIDTH - TOOL_STRIP_WIDTH
+
+const WINDOW_CONTROL_BASE =
+  'h-full w-10 inline-flex items-center justify-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-inset cursor-pointer'
+const windowControlClass = `${WINDOW_CONTROL_BASE} hover:bg-secondary/80`
 
 /**
- * Windows/Linux window controls (minimize, maximize or restore, close): the
- * only place the shell renders them, in whichever top row surface owns them.
- * Renders nothing unless `windowControls`.
+ * Windows/Linux window controls (minimize, maximize or restore, close). The
+ * shell renders them once, in the window's top-right corner above the tool
+ * strip (`ShellFrame`). Renders nothing unless `windowControls`.
  */
 export function WindowControls({
-  windowControls
+  windowControls,
+  className
 }: {
   windowControls: boolean
+  className?: string
 }): React.JSX.Element | null {
   const [isMaximized, setIsMaximized] = useState(false)
 
@@ -32,8 +43,8 @@ export function WindowControls({
 
   return (
     <div
-      className="relative z-[100] flex h-full shrink-0 items-center"
-      style={titlebarNoDragStyle}
+      className={cn('relative z-[100] flex h-full shrink-0 items-center', className)}
+      style={{ ...titlebarNoDragStyle, width: WINDOW_CONTROLS_WIDTH }}
       data-testid="window-controls"
     >
       <button
@@ -72,13 +83,34 @@ export function WindowControls({
           e.stopPropagation()
           void windowApi.close()
         }}
-        className="h-full px-3 hover:bg-destructive-fill hover:text-destructive-foreground inline-flex items-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-inset cursor-pointer"
+        className={`${WINDOW_CONTROL_BASE} hover:bg-destructive-fill hover:text-destructive-foreground`}
         title="Close"
         aria-label="Close window"
       >
         <X size={16} />
       </button>
     </div>
+  )
+}
+
+/**
+ * End of the top row surface next to the window controls: a drag-region
+ * spacer as wide as the part of the controls left of the tool strip
+ * ({@link WINDOW_CONTROLS_INSET_PX}). Renders nothing unless `windowControls`.
+ */
+export function WindowControlsInset({
+  windowControls
+}: {
+  windowControls: boolean
+}): React.JSX.Element | null {
+  if (!windowControls) return null
+  return (
+    <div
+      className="h-full shrink-0"
+      style={{ width: WINDOW_CONTROLS_INSET_PX }}
+      data-testid="window-controls-inset"
+      data-tauri-drag-region
+    />
   )
 }
 

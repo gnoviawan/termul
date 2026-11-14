@@ -75,8 +75,8 @@ This preserves a browser/dev/test path while keeping the Tauri-specific app as t
 Core shell files:
 
 - `WorkspaceLayout.tsx`
-- `components/shell/ShellFrame.tsx` (Rail, Side panel and main area)
-- `StatusBar.tsx`
+- `components/shell/ShellFrame.tsx` (Rail, main area, right Side panel and tool strip; on Windows and Linux the window controls sit in the top-right corner above the tool strip, and `selectTopRowRoles` in `lib/top-row.ts` picks the top row surface that leaves room for them)
+- the Rail owns project navigation: the project row menu switches the worktree (`components/shell/rail/worktree-switcher.tsx`), the `+` menu imports chats, and the command palette searches the open project's chats. There is no status bar.
 - route pages such as `ProjectSettings.tsx`, `AppPreferences.tsx`, and `WorkspaceSnapshots.tsx`
 
 Responsibilities:

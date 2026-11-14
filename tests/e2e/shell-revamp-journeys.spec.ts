@@ -6,14 +6,15 @@ import { chatTab, openWorkspace, selectProject } from './ui'
  * Shell-revamp journeys E2E on termul-server (story 30, CAP-18 / AD-15 / E6).
  *
  * These two specs walk Journey 1 and Journey 2 of EXPERIENCE.md
- * (ux-termul-2026-10-10) on the only desktop shell: Rail | Side panel | main.
+ * (ux-termul-2026-10-10) on the only desktop shell: Rail | main | right panel |
+ * tool strip (Sidebar V2).
  * The suite passing is also the proof that the classic shell is gone (no
  * "Global actions" navigation).
  *
  * Fixtures: `proj-w` (`e2e-proj-w`) is a git repo whose `global-setup` leaves
  * two uncommitted files behind (`notes.txt` modified, `scratch.txt` untracked:
  * `+4 -1`, 2 changed files). The fake long-run agent (fake-longrun-agent.ts)
- * answers every chat; its turns run for minutes, so a chat card reads
+ * answers every chat; its turns run for minutes, so a Rail chat row reads
  * "Running" for the whole spec.
  *
  * Steps that need a real LLM, a real connection failure or a model list are
@@ -91,32 +92,38 @@ async function listWorktrees(page: Page): Promise<ListedWorktree[]> {
 
 const railNav = (page: Page): Locator => page.getByRole('navigation', { name: 'Projects' })
 const paneContents = (page: Page): Locator => page.locator('[data-pane-content]')
-const chatCard = (page: Page, title: string): Locator =>
-  page.locator(`button[data-chat-card-index][aria-label^="${title}"]`)
-const columnTab = (page: Page, name: RegExp): Locator => page.getByRole('tab', { name })
-const workspaceSwitcherTrigger = (page: Page): Locator =>
-  page.locator('button[aria-haspopup="dialog"][title]:has(> span.label-panel)')
+const toolStrip = (page: Page): Locator => page.getByRole('toolbar', { name: 'Tools' })
+/** The active project's chats in the Rail. */
+const railChats = (page: Page): Locator =>
+  railNav(page).getByRole('list', { name: `Chats in ${PROJECT}` })
 
-/** Opacity the user sees: the element's own times every ancestor's. */
-function effectiveOpacity(element: Element): number {
-  let opacity = 1
-  for (let node: Element | null = element; node; node = node.parentElement) {
-    opacity *= Number(getComputedStyle(node).opacity)
-  }
-  return opacity
+/** A Rail chat row by title (its name may end with a status word). */
+const railChat = (page: Page, title: string): Locator =>
+  railChats(page).getByRole('button', { name: new RegExp(`^${title}`) })
+
+/** Opens the worktree switcher from the project row menu (Sidebar V2 P4). */
+async function openWorktreeSwitcher(page: Page): Promise<Locator> {
+  await railNav(page)
+    .getByRole('button', { name: new RegExp(`^Project: ${PROJECT}`) })
+    .click({ button: 'right' })
+  await page.getByRole('menuitem', { name: /Switch worktree/ }).click()
+  const list = page.getByRole('listbox', { name: 'Working copies' })
+  await expect(list).toBeVisible()
+  return list
 }
 
+const stripButton = (page: Page, name: string): Locator =>
+  toolStrip(page).getByRole('button', { name, exact: true })
+
 /**
- * The collapsed Rail keeps its toggle slid out of the 36px mark slot at
- * opacity 0 until the pointer is over the Rail, so hover the Rail the way a
- * pointer user does and click only once the toggle is fully shown.
+ * Expands or collapses the Rail. Expanded, the toggle follows the mark in the
+ * Rail header; collapsed, it opens the tab bar next to the Rail (right of the
+ * macOS traffic lights). Exactly one shows.
  */
 async function clickRailToggle(page: Page): Promise<void> {
-  const toggle = railNav(page).getByRole('button', { name: RAIL_TOGGLE })
-  await railNav(page).hover()
-  await expect(toggle).toBeVisible()
+  const toggle = page.getByRole('button', { name: RAIL_TOGGLE })
+  await expect(toggle).toHaveCount(1)
   await expect(toggle).toBeInViewport({ ratio: 1 })
-  await expect.poll(() => toggle.evaluate(effectiveOpacity)).toBe(1)
   await toggle.click()
 }
 
@@ -135,7 +142,7 @@ async function openRevampWorkspace(page: Page): Promise<void> {
 }
 
 /**
- * Start a NEW chat from the Side panel's New chat button (the launcher opens
+ * Start a NEW chat from the Rail's New chat row (the launcher opens
  * over the active pane). `workspace` drives the launcher's Workspace chip.
  * Resolves once the chat tab exists.
  */
@@ -174,19 +181,35 @@ async function launchRevampChat(
     await page.getByRole('button', { name: 'Start agent chat' }).click()
     await tab.waitFor({ state: 'visible' })
   }
-  // Let the session settle (its card lands in Chats, the launcher closes)
+  // Let the session settle (its row lands in the Rail, the launcher closes)
   // before the next launch: a New chat click while the previous session is
   // still being created is swallowed.
-  await expect(chatCard(page, prompt)).toBeVisible()
+  await expect(railChat(page, prompt)).toBeVisible()
   await expect(page.getByRole('dialog', { name: 'Agent launcher' })).toHaveCount(0)
 }
 
 /**
- * Drag a Chats-list card onto one edge of a pane with the real mouse: the
- * pane's drop-zone overlay only exists while a drag is in flight, so the
- * zone is located after the drag has started.
+ * Searches the command palette (opened from the Rail "Search" row) and
+ * returns its "Chats" group (Sidebar V2 P4).
  */
-async function dragCardToPaneEdge(
+async function searchPaletteChats(page: Page, query: string): Promise<Locator> {
+  await railNav(page).getByRole('button', { name: 'Search' }).click()
+  const input = page.getByPlaceholder('Search commands, projects, chats…')
+  await expect(input).toBeVisible()
+  await input.fill(query)
+  const group = page.locator('[cmdk-group]').filter({
+    has: page.locator('[cmdk-group-heading]', { hasText: /^Chats$/ })
+  })
+  await expect(group).toBeVisible()
+  return group
+}
+
+/**
+ * Drag a chat tab onto one edge of a pane with the real mouse: the pane's
+ * drop-zone overlay only exists while a drag is in flight, so the zone is
+ * located after the drag has started.
+ */
+async function dragTabToPaneEdge(
   page: Page,
   card: Locator,
   pane: Locator,
@@ -197,7 +220,7 @@ async function dragCardToPaneEdge(
       ? 'div[class*="right-0"][class*="w-1/4"]'
       : 'div[class*="bottom-0"][class*="h-1/4"]'
   const cardBox = await card.boundingBox()
-  if (!cardBox) throw new Error('chat card has no bounding box')
+  if (!cardBox) throw new Error('chat tab has no bounding box')
   const startX = cardBox.x + cardBox.width / 2
   const startY = cardBox.y + cardBox.height / 2
   await page.mouse.move(startX, startY)
@@ -240,31 +263,42 @@ test('Journey 1: three chats on one project, side by side, next to the diff', as
     await expect(stat).toBeVisible()
     await expect(stat).toContainText('+4')
     await expect(stat).toContainText('−1')
-    await expect(columnTab(page, /^Chats/)).toHaveAttribute('aria-selected', 'true')
+    // Sidebar V2: the main screen opens without the right panel; the strip's
+    // Changes button carries the changed-file count.
+    await expect(page.getByTestId('right-panel')).toHaveCount(0)
+    await expect(page.getByTestId('tool-strip-changes-badge')).toHaveText('2')
   })
 
-  await test.step('2. Chats list: one card per chat with its agent, status, title and branch', async () => {
+  await test.step('2. Rail: one row per chat under the project, with its title and status', async () => {
     await launchRevampChat(page, CHAT_ONE)
     await launchRevampChat(page, CHAT_TWO)
     await launchRevampChat(page, CHAT_THREE)
     for (const title of [CHAT_ONE, CHAT_TWO, CHAT_THREE]) {
-      const card = chatCard(page, title)
-      await expect(card).toBeVisible()
-      await expect(card).toContainText(title)
-      await expect(card).toContainText('Fake Longrun')
-      // The project folder's current branch is the card's branch line.
-      await expect(card).toContainText('main')
-      // Same signal as the tab: a running turn reads "Running".
-      await expect(card).toHaveAttribute('aria-label', /Running/)
+      const row = railChat(page, title)
+      await expect(row).toBeVisible()
+      await expect(row).toContainText(title)
+      // Same signal as the tab: a running turn reads "Running" (the trail spinner).
+      await expect(row).toHaveAttribute('aria-label', /Running/)
+      await expect(row.getByRole('status', { name: 'Running' })).toBeVisible()
     }
+    // The palette Chats group matches the agent and shows it with the branch.
+    const chats = await searchPaletteChats(page, 'Fake Longrun')
+    for (const title of [CHAT_ONE, CHAT_TWO, CHAT_THREE]) {
+      const item = chats.getByRole('option').filter({ hasText: title })
+      await expect(item).toContainText('Fake Longrun')
+      // The project folder's current branch.
+      await expect(item).toContainText('main')
+    }
+    await page.keyboard.press('Escape')
+    await expect(page.getByPlaceholder('Search commands, projects, chats…')).toHaveCount(0)
   })
 
-  await test.step('3. Dragging a card onto a pane edge splits the pane', async () => {
+  await test.step('3. Dragging a chat tab onto a pane edge splits the pane', async () => {
     await expect(paneContents(page)).toHaveCount(1)
-    await dragCardToPaneEdge(page, chatCard(page, CHAT_TWO), paneContents(page).first(), 'right')
+    await dragTabToPaneEdge(page, chatTab(page, CHAT_TWO), paneContents(page).first(), 'right')
     await expect(paneContents(page)).toHaveCount(2)
 
-    await dragCardToPaneEdge(page, chatCard(page, CHAT_THREE), paneContents(page).last(), 'bottom')
+    await dragTabToPaneEdge(page, chatTab(page, CHAT_THREE), paneContents(page).last(), 'bottom')
     await expect(paneContents(page)).toHaveCount(3)
 
     // Every chat keeps its own tab, in its own pane, and keeps running.
@@ -278,14 +312,15 @@ test('Journey 1: three chats on one project, side by side, next to the diff', as
     'a real agent connection failure cannot be produced with the fake agent'
   )
   await skipStep(
-    '3c. cards show the agent AND the model',
+    '3c. the palette Chats group shows the agent AND the model',
     'the fake agent advertises no model list; only the agent name is asserted in step 2'
   )
 
   await test.step('4. Changes: the changed files and the docked Graph', async () => {
-    await columnTab(page, /^Changes/).click()
-    await expect(columnTab(page, /^Changes/)).toHaveAttribute('aria-selected', 'true')
-    await expect(page.getByTestId('column-tab-changes-badge')).toHaveText('2')
+    await stripButton(page, 'Changes').click()
+    await expect(stripButton(page, 'Changes')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('right-panel')).toBeVisible()
+    await expect(page.getByTestId('tool-strip-changes-badge')).toHaveText('2')
 
     const graph = page.getByRole('region', { name: 'Git graph' })
     await expect(graph).toBeVisible()
@@ -307,18 +342,25 @@ test('Journey 1: three chats on one project, side by side, next to the diff', as
     'a screenshot turn needs a real vision-capable model; the fake agent only streams text'
   )
 
-  await test.step('6. Collapse the Rail, switch projects from the Project switcher, browse Explorer', async () => {
+  await test.step('6. Collapse the Rail to its 1:1 icons, switch projects, peek and expand', async () => {
     try {
       await clickRailToggle(page)
       await expect(railNav(page)).toHaveAttribute('data-expanded', 'false')
+      // Sidebar V2: the collapsed Rail is the expanded one without labels.
+      await expect(railNav(page).getByRole('button', { name: 'Search' })).toBeVisible()
+      await expect(railNav(page).getByText(PROJECT, { exact: true })).toHaveCount(0)
+      // The old icon stack and project switcher are gone.
+      await expect(railNav(page).getByRole('button', { name: /^Switch project/ })).toHaveCount(0)
 
-      const switcher = railNav(page).getByRole('button', { name: /^Switch project/ })
-      await expect(switcher).toHaveAttribute('aria-label', `Switch project (${PROJECT})`)
-      await switcher.click()
-      await page.getByRole('dialog', { name: 'Switch project' }).waitFor({ state: 'visible' })
-      await page.getByRole('option', { name: /proj-b/ }).click()
+      // Hovering a project icon opens its card next to the Rail.
+      const projB = railNav(page).getByRole('button', { name: 'Project: proj-b' })
+      await projB.hover()
+      await expect(page.getByTestId('rail-project-card')).toContainText('proj-b')
+
+      // A click on the icon switches project.
+      await projB.click()
       await expect(
-        railNav(page).getByRole('button', { name: 'Switch project (proj-b)' })
+        railNav(page).getByRole('button', { name: 'Project: proj-b (active)' })
       ).toBeVisible()
 
       // #903: the main area shows exactly the selected project's own tabs.
@@ -327,38 +369,29 @@ test('Journey 1: three chats on one project, side by side, next to the diff', as
 
       // Back on termul's project: its three chat panes are restored.
       await railNav(page)
-        .getByRole('button', { name: /^Switch project/ })
+        .getByRole('button', { name: `Project: ${PROJECT}` })
         .click()
-      await page.getByRole('dialog', { name: 'Switch project' }).waitFor({ state: 'visible' })
-      await page.getByRole('option', { name: new RegExp(PROJECT) }).click()
       await expect(
-        railNav(page).getByRole('button', { name: `Switch project (${PROJECT})` })
+        railNav(page).getByRole('button', { name: `Project: ${PROJECT} (active)` })
       ).toBeVisible()
       for (const title of [CHAT_ONE, CHAT_TWO, CHAT_THREE]) {
         await expect(chatTab(page, title)).toBeVisible()
       }
       await expect(paneContents(page)).toHaveCount(3)
 
-      // With the Side panel shown, it keeps its own tab bar and the
-      // collapsed Rail shows no column icons.
-      const railTabs = page.getByTestId('rail-column-tab-track')
-      await expect(page.getByRole('tablist', { name: 'Side panel' })).toBeVisible()
-      await expect(railTabs).toHaveCount(0)
+      // Hovering a chat icon opens the chat peek; a click there opens the chat.
+      const chatIcon = railNav(page).getByRole('button', { name: new RegExp(`^${CHAT_TWO}`) })
+      await chatIcon.hover()
+      const peek = page.getByTestId('rail-chat-peek')
+      await expect(peek).toContainText(PROJECT)
+      await expect(peek).toContainText(CHAT_ONE)
+      await peek.getByRole('button', { name: new RegExp(`^${CHAT_ONE}`) }).click()
+      await expect(peek).toHaveCount(0)
 
-      // Everything collapsed: Explorer, picked from the Rail's column icons,
-      // shows the Side panel on that tab, and the tabs move back into it.
-      await page.getByRole('button', { name: 'Hide side panel' }).click()
-      await railTabs.getByRole('button', { name: 'Explorer', exact: true }).click()
-      const explorer = page.getByRole('tabpanel', { name: 'Explorer' })
-      await expect(explorer).toBeVisible()
-      // Focus moves to the panel's Explorer tab.
-      await expect(columnTab(page, /^Explorer/)).toBeFocused()
-      await expect(explorer).toContainText('notes.txt')
-      // #1725: the Rail keeps its tabs while the pointer is still on it, so the
-      // buttons below them do not move under the pointer; they go once it leaves.
-      await expect(railTabs).toHaveCount(1)
-      await page.mouse.move(800, 400)
-      await expect(railTabs).toHaveCount(0)
+      // Expand again from the top row toggle (not in the Rail any more).
+      await expect(railNav(page).getByRole('button', { name: RAIL_TOGGLE })).toHaveCount(0)
+      await clickRailToggle(page)
+      await expect(railNav(page)).toHaveAttribute('data-expanded', 'true')
     } finally {
       // The Rail state is a persisted setting shared with later specs.
       if ((await railNav(page).getAttribute('data-expanded')) === 'false') {
@@ -375,8 +408,6 @@ test('Journey 2: two fixes at once, one in a new worktree', async ({ page }) => 
   const spawns = trackTerminals.get(page)
   if (!spawns) throw new Error('terminal spawn tracker missing')
   await selectProject(page, PROJECT)
-  await columnTab(page, /^Chats/).click()
-  await expect(columnTab(page, /^Chats/)).toHaveAttribute('aria-selected', 'true')
 
   const before = new Set((await listWorktrees(page)).map((w) => w.path))
   let worktree: ListedWorktree | undefined
@@ -422,32 +453,30 @@ test('Journey 2: two fixes at once, one in a new worktree', async ({ page }) => 
   if (!worktree) throw new Error('worktree was not created')
   const created: ListedWorktree = worktree
 
-  await test.step('2. The chat lands in Chats, on the worktree branch, in the worktree folder', async () => {
-    const card = chatCard(page, CHAT_WORKTREE)
-    await expect(card).toBeVisible()
-    await expect(card).toContainText(created.branch)
-    await expect(card).toHaveAttribute('aria-label', /Running/)
-    // The card's terminal action names the chat's working directory.
-    const terminal = page.getByRole('button', {
-      name: `Open terminal for chat ${CHAT_WORKTREE}`
-    })
-    await expect
-      .poll(async () => norm((await terminal.getAttribute('title')) ?? ''))
-      .toContain(norm(created.path))
+  await test.step('2. The chat lands in the Rail, on the worktree branch', async () => {
+    const row = railChat(page, CHAT_WORKTREE)
+    await expect(row).toBeVisible()
+    await expect(row).toHaveAttribute('aria-label', /Running/)
+    // The palette Chats group shows the chat's branch: the worktree's.
+    const chats = await searchPaletteChats(page, CHAT_WORKTREE)
+    await expect(chats.getByRole('option').filter({ hasText: CHAT_WORKTREE })).toContainText(
+      created.branch
+    )
+    await page.keyboard.press('Escape')
   })
 
   await test.step('3. A second chat on the current checkout', async () => {
     await launchRevampChat(page, CHAT_CHECKOUT, 'Current checkout')
-    const card = chatCard(page, CHAT_CHECKOUT)
-    await expect(card).toBeVisible()
-    await expect(card).toContainText('main')
-    await expect(card).not.toContainText(created.branch)
+    await expect(railChat(page, CHAT_CHECKOUT)).toBeVisible()
+    const chats = await searchPaletteChats(page, CHAT_CHECKOUT)
+    const item = chats.getByRole('option').filter({ hasText: CHAT_CHECKOUT })
+    await expect(item).toContainText('main')
+    await expect(item).not.toContainText(created.branch)
+    await page.keyboard.press('Escape')
   })
 
-  await test.step('4. Workspace switcher lists both copies; picking the worktree narrows Chats', async () => {
-    await workspaceSwitcherTrigger(page).click()
-    const list = page.getByRole('listbox', { name: 'Working copies' })
-    await expect(list).toBeVisible()
+  await test.step('4. The project row menu switches to the worktree; the Rail chats narrow and the chip shows it', async () => {
+    const list = await openWorktreeSwitcher(page)
     const worktreeRow = list.getByRole('option', { name: new RegExp(created.branch) })
     await expect(worktreeRow).toBeVisible()
     // The worktree's only open tab is its chat.
@@ -458,33 +487,27 @@ test('Journey 2: two fixes at once, one in a new worktree', async ({ page }) => 
     await worktreeRow.click()
     await expect(list).toHaveCount(0)
 
-    await expect(chatCard(page, CHAT_WORKTREE)).toBeVisible()
-    await expect(chatCard(page, CHAT_CHECKOUT)).toHaveCount(0)
-    await expect(chatCard(page, CHAT_ONE)).toHaveCount(0)
-    await expect(workspaceSwitcherTrigger(page)).toContainText(created.branch)
+    await expect(railChat(page, CHAT_WORKTREE)).toBeVisible()
+    await expect(railChat(page, CHAT_CHECKOUT)).toHaveCount(0)
+    await expect(railChat(page, CHAT_ONE)).toHaveCount(0)
+    await expect(page.getByTestId(`rail-worktree-chip-${PROJECT_ID}`)).toContainText(created.branch)
   })
 
-  await test.step('5. Status bar shows the worktree branch and its Terminal button opens a shell there', async () => {
+  await test.step('5. The tool strip Terminal opens a new terminal tab in the worktree folder', async () => {
     await chatTab(page, CHAT_WORKTREE).click()
-    const statusBar = page.locator('[data-status-bar]')
-    await expect(statusBar).toContainText(created.branch)
-
-    const terminalButton = statusBar.getByRole('button', { name: /^Open terminal at / })
-    await expect
-      .poll(async () => norm((await terminalButton.getAttribute('aria-label')) ?? ''))
-      .toContain(norm(created.path))
-
-    const spawnedBefore = spawns.cwds().length
-    await terminalButton.click()
-    await expect.poll(() => spawns.cwds().length).toBeGreaterThan(spawnedBefore)
-    expect(norm(spawns.cwds().at(-1) ?? '')).toBe(norm(created.path))
+    for (let click = 1; click <= 2; click += 1) {
+      const spawnedBefore = spawns.cwds().length
+      await stripButton(page, 'New terminal').click()
+      // A new tab on every click, at the active tab's working copy.
+      await expect.poll(() => spawns.cwds().length).toBeGreaterThan(spawnedBefore)
+      expect(norm(spawns.cwds().at(-1) ?? '')).toBe(norm(created.path))
+      await chatTab(page, CHAT_WORKTREE).click()
+    }
   })
 
   await test.step('6. The switcher row terminal action opens a terminal whose cwd is the worktree folder', async () => {
     const spawnedBefore = spawns.cwds().length
-    await workspaceSwitcherTrigger(page).click()
-    const list = page.getByRole('listbox', { name: 'Working copies' })
-    await expect(list).toBeVisible()
+    const list = await openWorktreeSwitcher(page)
     // The action sits beside its option and shows on hover.
     await list.getByRole('option', { name: new RegExp(created.branch) }).hover()
     // Keyboard activation: the popover closes in the click handler, which makes
@@ -503,12 +526,11 @@ test('Journey 2: two fixes at once, one in a new worktree', async ({ page }) => 
     'the suggested name comes from a real model turn; the fake agent suggests nothing'
   )
 
-  await test.step('cleanup: back to the project folder so Chats shows every chat again', async () => {
-    await workspaceSwitcherTrigger(page).click()
-    const list = page.getByRole('listbox', { name: 'Working copies' })
-    await expect(list).toBeVisible()
+  await test.step('cleanup: back to the project folder so the Rail shows every chat again', async () => {
+    const list = await openWorktreeSwitcher(page)
     await list.getByRole('option').first().click()
-    await expect(chatCard(page, CHAT_CHECKOUT)).toBeVisible()
-    await expect(chatCard(page, CHAT_WORKTREE)).toBeVisible()
+    await expect(railChat(page, CHAT_CHECKOUT)).toBeVisible()
+    await expect(railChat(page, CHAT_WORKTREE)).toBeVisible()
+    await expect(page.getByTestId(`rail-worktree-chip-${PROJECT_ID}`)).toHaveCount(0)
   })
 })

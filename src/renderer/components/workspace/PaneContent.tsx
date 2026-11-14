@@ -1,4 +1,3 @@
-import type { ShellInfo } from '@shared/types/ipc.types'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // Import useShallow for selective re-rendering
@@ -9,7 +8,7 @@ import {
   LAUNCHER_EXIT_REDUCED_MS,
   LAUNCHER_EXIT_WINDOW_MS
 } from '@/components/agents/launcher/launcher-motion'
-import { ShowSidePanelSlot } from '@/components/shell/SidePanelVisibilityButtons'
+import { TopRowStartSlot, useTopRowStartSlotVisible } from '@/components/shell/TopRowStartSlot'
 import { usePaneTopRow } from '@/components/shell/top-row-context'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
@@ -72,27 +71,21 @@ function PaneSkeleton(): React.JSX.Element {
 
 interface PaneContentProps {
   pane: LeafNode
-  onAddTerminal?: (paneId: string, shell?: ShellInfo) => void
-  onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   onCloseTabs?: (tabs: WorkspaceTab[]) => void
   closingTerminalIds?: string[]
-  defaultShell?: string
 }
 
 /** One pane: tab bar, every mounted tab's content, drop-zone, and the agent launcher surfaces (empty-pane + overlay) with their handoff keep-alive. */
 export function PaneContent({
   pane,
-  onAddTerminal,
-  onAddBrowserTab,
   onCloseTerminal,
   onRenameTerminal,
   onCloseEditorTab,
   onCloseTabs,
-  closingTerminalIds = [],
-  defaultShell
+  closingTerminalIds = []
 }: PaneContentProps): React.JSX.Element {
   // CRITICAL FIX: Get terminal IDs from this pane's tabs
   const terminalIdsInPane = useMemo(
@@ -126,6 +119,7 @@ export function PaneContent({
 
   // Flagged shell only: this pane's part of the window top row (null otherwise).
   const topRow = usePaneTopRow(pane.id)
+  const startSlotVisible = useTopRowStartSlotVisible()
 
   const hasMultiplePanes = usePaneTree((tree) => getAllLeafPanes(tree.root).length > 1)
 
@@ -246,15 +240,6 @@ export function PaneContent({
             ? '-translate-y-2'
             : ''
 
-  const handleAddTerminalForPane = useMemo(
-    () => (onAddTerminal ? (shell?: ShellInfo) => onAddTerminal(pane.id, shell) : undefined),
-    [onAddTerminal, pane.id]
-  )
-  const handleAddBrowserTabForPane = useMemo(
-    () => (onAddBrowserTab ? () => onAddBrowserTab(pane.id) : undefined),
-    [onAddBrowserTab, pane.id]
-  )
-
   return (
     <div
       data-pane-content={pane.id}
@@ -279,15 +264,12 @@ export function PaneContent({
           tabs={pane.tabs}
           activeTabId={pane.activeTabId}
           closingTerminalIds={closingTerminalIds}
-          onAddTerminal={handleAddTerminalForPane}
-          onAddBrowserTab={handleAddBrowserTabForPane}
           onCloseTerminal={onCloseTerminal}
           onRenameTerminal={onRenameTerminal}
           onCloseEditorTab={onCloseEditorTab}
           onCloseTabs={onCloseTabs}
-          defaultShell={defaultShell}
           topRow={topRow ?? undefined}
-          leading={topRow?.leftEdge ? <ShowSidePanelSlot /> : undefined}
+          leading={topRow?.leftEdge && startSlotVisible ? <TopRowStartSlot /> : undefined}
         />
       )}
 
@@ -669,7 +651,7 @@ export function PaneContent({
               'pointer-events-none absolute z-30 flex flex-col',
               // A top-edge pane keeps its whole top row (tabs, drag space,
               // window controls) uncovered.
-              topRow?.topEdge ? 'inset-x-0 bottom-0 top-10' : 'inset-0'
+              topRow?.topEdge ? 'inset-x-0 bottom-0 top-11' : 'inset-0'
             )}
             role="dialog"
             aria-modal="true"

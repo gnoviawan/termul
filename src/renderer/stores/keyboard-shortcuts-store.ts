@@ -198,6 +198,21 @@ export function matchesShortcut(e: KeyboardEvent, shortcutKey: string): boolean 
   if (isMac && e.ctrlKey && !e.metaKey) return false
 
   const normalized = normalizeKeyEvent(e)
+  if (matchesNormalized(normalized, shortcutKey)) return true
+
+  // macOS Option turns a letter into a symbol (⌘⌥B gives `e.key` "∫"), so
+  // with Alt held a letter key also matches by its physical key (`e.code`).
+  const letter = /^Key([A-Z])$/.exec(e.code ?? '')?.[1]?.toLowerCase()
+  if (e.altKey && letter) {
+    const parts = normalized.split('+')
+    parts[parts.length - 1] = letter
+    return matchesNormalized(parts.join('+'), shortcutKey)
+  }
+
+  return false
+}
+
+function matchesNormalized(normalized: string, shortcutKey: string): boolean {
   if (shortcutsEqual(normalized, shortcutKey)) return true
 
   // macOS cross-modifier alias: 'cmd+x' matches 'ctrl+x' config and vice-versa.

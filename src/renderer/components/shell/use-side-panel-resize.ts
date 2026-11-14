@@ -16,15 +16,15 @@ interface SidePanelResize {
 }
 
 /**
- * Side panel width with pointer drag and keyboard resize for a panel against
- * the left edge (dragging right widens it). The width lives in the shell-layout
+ * Right panel width with pointer drag and keyboard resize from its left edge
+ * (dragging left widens it). The width lives in the shell-layout
  * store, which clamps to its bounds and ignores writes until hydrated.
  */
 export function useSidePanelResize(): SidePanelResize {
   const width = useSidePanelWidth()
   const { onDragStart, onKeyDown } = useResizeHandle({
     axis: 'x',
-    direction: 1,
+    direction: -1,
     min: MIN_WIDTH,
     max: MAX_WIDTH,
     read: () => useShellLayoutStore.getState().sidePanelWidth,

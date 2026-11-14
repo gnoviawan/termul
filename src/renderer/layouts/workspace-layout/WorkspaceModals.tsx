@@ -176,6 +176,9 @@ export function WorkspaceModals({
             }))}
             getShortcutLabel={getShortcutLabel}
             getProjectShortcutLabel={getProjectShortcutLabel}
+            chatsProject={
+              isMobileWebShell ? undefined : projects.find((p) => p.id === activeProjectId)
+            }
           />
         </Suspense>
       )}

@@ -1,4 +1,3 @@
-import type { ShellInfo } from '@shared/types/ipc.types'
 import { memo, useCallback, useEffect, useRef } from 'react'
 import type { ImperativePanelGroupHandle } from 'react-resizable-panels'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -12,93 +11,72 @@ import { PaneContent } from './PaneContent'
 
 interface PaneRendererProps {
   node: PaneNode
-  onAddTerminal?: (paneId: string, shell?: ShellInfo) => void
-  onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   onCloseTabs?: (tabs: WorkspaceTab[]) => void
   closingTerminalIds?: string[]
-  defaultShell?: string
 }
 
 export function PaneRenderer({
   node,
-  onAddTerminal,
-  onAddBrowserTab,
   onCloseTerminal,
   onRenameTerminal,
   onCloseEditorTab,
   onCloseTabs,
-  closingTerminalIds,
-  defaultShell
+  closingTerminalIds
 }: PaneRendererProps): React.JSX.Element {
   if (node.type === 'leaf') {
     return (
       <PaneLeafRenderer
         pane={node}
-        onAddTerminal={onAddTerminal}
-        onAddBrowserTab={onAddBrowserTab}
         onCloseTerminal={onCloseTerminal}
         onRenameTerminal={onRenameTerminal}
         onCloseEditorTab={onCloseEditorTab}
         onCloseTabs={onCloseTabs}
         closingTerminalIds={closingTerminalIds}
-        defaultShell={defaultShell}
       />
     )
   }
   return (
     <PaneSplitRenderer
       node={node}
-      onAddTerminal={onAddTerminal}
-      onAddBrowserTab={onAddBrowserTab}
       onCloseTerminal={onCloseTerminal}
       onRenameTerminal={onRenameTerminal}
       onCloseEditorTab={onCloseEditorTab}
       onCloseTabs={onCloseTabs}
       closingTerminalIds={closingTerminalIds}
-      defaultShell={defaultShell}
     />
   )
 }
 
 interface PaneLeafRendererProps {
   pane: LeafNode
-  onAddTerminal?: (paneId: string, shell?: ShellInfo) => void
-  onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   onCloseTabs?: (tabs: WorkspaceTab[]) => void
   closingTerminalIds?: string[]
-  defaultShell?: string
 }
 
 const PaneLeafRenderer = memo(
   ({
     pane,
-    onAddTerminal,
-    onAddBrowserTab,
     onCloseTerminal,
     onRenameTerminal,
     onCloseEditorTab,
     onCloseTabs,
-    closingTerminalIds,
-    defaultShell
+    closingTerminalIds
   }: PaneLeafRendererProps): React.JSX.Element => {
     return (
       <ErrorBoundary context="Terminal Pane">
         <PaneContent
           pane={pane}
-          onAddTerminal={onAddTerminal}
-          onAddBrowserTab={onAddBrowserTab}
           onCloseTerminal={onCloseTerminal}
           onRenameTerminal={onRenameTerminal}
           onCloseEditorTab={onCloseEditorTab}
           onCloseTabs={onCloseTabs}
           closingTerminalIds={closingTerminalIds}
-          defaultShell={defaultShell}
         />
       </ErrorBoundary>
     )
@@ -107,27 +85,21 @@ const PaneLeafRenderer = memo(
 
 interface PaneSplitRendererProps {
   node: SplitNode
-  onAddTerminal?: (paneId: string, shell?: ShellInfo) => void
-  onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   onCloseTabs?: (tabs: WorkspaceTab[]) => void
   closingTerminalIds?: string[]
-  defaultShell?: string
 }
 
 const PaneSplitRenderer = memo(
   ({
     node,
-    onAddTerminal,
-    onAddBrowserTab,
     onCloseTerminal,
     onRenameTerminal,
     onCloseEditorTab,
     onCloseTabs,
-    closingTerminalIds,
-    defaultShell
+    closingTerminalIds
   }: PaneSplitRendererProps): React.JSX.Element => {
     const updatePaneSizes = useWorkspaceStore((state) => state.updatePaneSizes)
     // Resizes of a hidden-but-mounted tree must land in that project's tree.
@@ -203,14 +175,11 @@ const PaneSplitRenderer = memo(
             defaultSize={node.sizes[index] ?? 50}
             isLast={index === node.children.length - 1}
             onDragging={handleDragging}
-            onAddTerminal={onAddTerminal}
-            onAddBrowserTab={onAddBrowserTab}
             onCloseTerminal={onCloseTerminal}
             onRenameTerminal={onRenameTerminal}
             onCloseEditorTab={onCloseEditorTab}
             onCloseTabs={onCloseTabs}
             closingTerminalIds={closingTerminalIds}
-            defaultShell={defaultShell}
           />
         ))}
       </ResizablePanelGroup>
@@ -224,14 +193,11 @@ interface PaneRendererPanelProps {
   defaultSize: number
   isLast: boolean
   onDragging: (isDragging: boolean) => void
-  onAddTerminal?: (paneId: string, shell?: ShellInfo) => void
-  onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   onCloseTabs?: (tabs: WorkspaceTab[]) => void
   closingTerminalIds?: string[]
-  defaultShell?: string
 }
 
 const PaneRendererPanel = memo(
@@ -241,28 +207,22 @@ const PaneRendererPanel = memo(
     defaultSize,
     isLast,
     onDragging,
-    onAddTerminal,
-    onAddBrowserTab,
     onCloseTerminal,
     onRenameTerminal,
     onCloseEditorTab,
     onCloseTabs,
-    closingTerminalIds,
-    defaultShell
+    closingTerminalIds
   }: PaneRendererPanelProps): React.JSX.Element => {
     return (
       <>
         <ResizablePanel id={child.id} order={panelOrder} defaultSize={defaultSize} minSize={10}>
           <PaneRenderer
             node={child}
-            onAddTerminal={onAddTerminal}
-            onAddBrowserTab={onAddBrowserTab}
             onCloseTerminal={onCloseTerminal}
             onRenameTerminal={onRenameTerminal}
             onCloseEditorTab={onCloseEditorTab}
             onCloseTabs={onCloseTabs}
             closingTerminalIds={closingTerminalIds}
-            defaultShell={defaultShell}
           />
         </ResizablePanel>
         {!isLast && <ResizableHandle onDragging={onDragging} />}

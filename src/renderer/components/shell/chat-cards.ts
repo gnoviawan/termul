@@ -1,6 +1,7 @@
 /**
- * Pure data for the Side panel Chats list (shell revamp CAP-3): scope by the
- * worktree pick, newest-first order, the branch line and the search filter.
+ * Pure data for the chat cards of the Rail and the command palette Chats
+ * group: scope by the worktree pick, newest-first order, the branch line and
+ * the search filter.
  * No React, no stores: callers pass the index, the project and the pick.
  */
 import type { ProjectChatEntry } from '@/components/sidebar/project-chat-row'
@@ -106,7 +107,7 @@ export function buildChatCards({
 }
 
 /**
- * The text the card's first line shows when there is no live session model:
+ * The model line of a card when there is no live session model:
  * the host-recorded model, else the agent name, else the generic fallback.
  */
 export function modelLineOf(card: Pick<ChatCardData, 'indexModel' | 'agentName'>): string {

@@ -1,29 +1,24 @@
-import { COLLAPSED_WIDTH, SHELL_GAP } from '@/components/shell/rail-layout'
-import { useTopRowPlatform } from '@/components/shell/top-row-context'
 import type { TopRowPlatform } from '@/lib/top-row'
-import { useSidebarVisible } from '@/stores/sidebar-store'
 
-/** Width the native macOS traffic lights need from the window edge (they end near x=66). */
-export const TRAFFIC_LIGHT_CLEARANCE_PX = 80
+/**
+ * Width the native macOS traffic lights need from the window edge: they sit
+ * at x = 14 and end at x = 66, then the 10px gap of Paper's rail header.
+ */
+export const TRAFFIC_LIGHT_CLEARANCE_PX = 76
 
 /**
  * Where the shell steps aside for the macOS traffic lights while the Rail is
- * collapsed. The collapsed Rail (48px) and the shell gap (8px) already sit
- * under the lights, so the bar at the start of the shell row only adds the
- * rest: 80 - 48 - 8 = 24px of start padding. The Side panel header and the
- * main card stay at the top; nothing moves down.
+ * collapsed. The collapsed Rail (48px) sits under the lights, so the main
+ * area's top row only pads its start by 24px (Paper 2.3: tab bar
+ * `padding-left: 24`), which puts the expand-Rail toggle at x = 72, just
+ * right of the lights. Nothing moves down.
  */
 export interface TrafficLightInset {
-  /**
-   * Start padding of the bar that touches the Rail: the Side panel header, or
-   * the main card's top row while no Side panel column shows.
-   */
-  panelHeaderStartPx: number
+  /** Start padding of the main area's top row (the bar that touches the Rail). */
+  mainStartPx: number
 }
 
-const INSET: TrafficLightInset = {
-  panelHeaderStartPx: TRAFFIC_LIGHT_CLEARANCE_PX - COLLAPSED_WIDTH - SHELL_GAP
-}
+const INSET: TrafficLightInset = { mainStartPx: 24 }
 
 /**
  * The one place that decides the inset: `null` unless the traffic lights are
@@ -35,9 +30,4 @@ export function getTrafficLightInset(
   railExpanded: boolean
 ): TrafficLightInset | null {
   return platform.trafficLights && !railExpanded ? INSET : null
-}
-
-/** {@link getTrafficLightInset} for the current platform and Rail state. */
-export function useTrafficLightInset(): TrafficLightInset | null {
-  return getTrafficLightInset(useTopRowPlatform(), useSidebarVisible())
 }

@@ -15,9 +15,9 @@ describe('getTrafficLightInset', () => {
     expect(getTrafficLightInset(platform(false), false)).toBeNull()
   })
 
-  it('derives the header padding from the clearance, the collapsed Rail and the shell gap', () => {
-    expect(TRAFFIC_LIGHT_CLEARANCE_PX).toBe(80)
-    // 80 - 48 (collapsed Rail) - 8 (shell gap)
-    expect(getTrafficLightInset(platform(true), false)?.panelHeaderStartPx).toBe(24)
+  it('pads the main top row by 24px so the expand toggle lands at x = 72 (Paper 2.3)', () => {
+    expect(TRAFFIC_LIGHT_CLEARANCE_PX).toBe(76)
+    // 48 (collapsed Rail) + 24 = 72
+    expect(getTrafficLightInset(platform(true), false)?.mainStartPx).toBe(24)
   })
 })

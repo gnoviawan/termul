@@ -53,7 +53,7 @@ vi.mock('@/components/workspace/WorkspaceTabBar', () => ({
     <div
       data-testid="tabbar-stub"
       data-top-row={topRow ? `${topRow.dragRegion}/${topRow.windowControls}` : 'none'}
-      data-leading={leading ? 'show-side-panel-slot' : 'none'}
+      data-leading={leading ? 'top-row-start-slot' : 'none'}
     />
   )
 }))
@@ -96,13 +96,13 @@ beforeEach(() => {
 })
 
 describe('PaneContent top row', () => {
-  it('starts the overlay below the 40px top row on a top-edge pane', () => {
+  it('starts the overlay below the 44px top row on a top-edge pane', () => {
     render(
       <TopRowProvider roles={roles(['pane-1'], 'pane-1')} platform={desktop}>
         <PaneContent pane={pane} />
       </TopRowProvider>
     )
-    expect(overlay()).toHaveClass('inset-x-0', 'bottom-0', 'top-10')
+    expect(overlay()).toHaveClass('inset-x-0', 'bottom-0', 'top-11')
     expect(overlay()).not.toHaveClass('inset-0')
   })
 
@@ -113,13 +113,13 @@ describe('PaneContent top row', () => {
       </TopRowProvider>
     )
     expect(overlay()).toHaveClass('inset-0')
-    expect(overlay()).not.toHaveClass('top-10')
+    expect(overlay()).not.toHaveClass('top-11')
   })
 
   it('keeps the full-pane overlay in the classic shell (no provider)', () => {
     render(<PaneContent pane={pane} />)
     expect(overlay()).toHaveClass('inset-0')
-    expect(overlay()).not.toHaveClass('top-10')
+    expect(overlay()).not.toHaveClass('top-11')
   })
 
   it('hands the tab bar its role, and nothing without a provider', () => {
@@ -144,20 +144,34 @@ describe('PaneContent top row', () => {
     expect(screen.getByTestId('tabbar-stub')).toHaveAttribute('data-top-row', 'none')
   })
 
-  it('gives only the leftmost top-edge pane the Show side panel slot', () => {
-    const { unmount } = render(
+  it('gives only the leftmost top-edge pane the start slot, while the Rail is collapsed', () => {
+    const { unmount: unmountExpanded } = render(
       <TopRowProvider roles={roles(['pane-1', 'pane-2'], 'pane-2')} platform={desktop}>
         <PaneContent pane={pane} />
       </TopRowProvider>
     )
-    expect(screen.getByTestId('tabbar-stub')).toHaveAttribute(
-      'data-leading',
-      'show-side-panel-slot'
+    // Rail expanded, no traffic-light inset: the slot would be empty.
+    expect(screen.getByTestId('tabbar-stub')).toHaveAttribute('data-leading', 'none')
+    unmountExpanded()
+
+    const { unmount } = render(
+      <TopRowProvider
+        roles={roles(['pane-1', 'pane-2'], 'pane-2')}
+        platform={desktop}
+        railToggleInMain
+      >
+        <PaneContent pane={pane} />
+      </TopRowProvider>
     )
+    expect(screen.getByTestId('tabbar-stub')).toHaveAttribute('data-leading', 'top-row-start-slot')
     unmount()
 
     const { unmount: unmount2 } = render(
-      <TopRowProvider roles={roles(['pane-0', 'pane-1'], 'pane-1')} platform={desktop}>
+      <TopRowProvider
+        roles={roles(['pane-0', 'pane-1'], 'pane-1')}
+        platform={desktop}
+        railToggleInMain
+      >
         <PaneContent pane={pane} />
       </TopRowProvider>
     )

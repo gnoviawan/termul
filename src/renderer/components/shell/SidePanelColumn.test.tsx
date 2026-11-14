@@ -1,25 +1,14 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import * as appSettingsHooks from '@/hooks/use-app-settings'
 import type { TopRowPlatform, TopRowRoles } from '@/lib/top-row'
-import { useAcpStore } from '@/stores/acp-store'
-import { useGitStatusStore } from '@/stores/git-status-store'
 import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 import { SidePanelColumn } from './SidePanelColumn'
 import { TopRowProvider } from './top-row-context'
 
 vi.mock('@/components/file-explorer/FileExplorer', () => ({
   FileExplorer: () => <div data-testid="file-explorer" />
-}))
-
-vi.mock('./WorkspaceSwitcher', () => ({
-  WorkspaceSwitcher: ({ project }: { project: { id: string } }) => (
-    <button type="button" data-testid="workspace-switcher" data-project={project.id}>
-      Workspace
-    </button>
-  )
 }))
 
 vi.mock('@/components/github/GithubPanel', () => ({
@@ -32,7 +21,7 @@ vi.mock('./ChangesPanel', () => ({
   ChangesPanel: ({ cwd }: { cwd: string }) => <div data-testid="changes-panel" data-cwd={cwd} />
 }))
 
-const mocks = vi.hoisted(() => ({ showAgentLauncher: vi.fn() }))
+const updatePanelVisibility = vi.fn(() => Promise.resolve())
 
 const makeProject = (overrides: Partial<Project> = {}): Project =>
   ({
@@ -40,7 +29,6 @@ const makeProject = (overrides: Partial<Project> = {}): Project =>
     name: 'One',
     path: '/repo',
     color: 'blue',
-    gitBranch: 'main',
     isGitRepo: true,
     worktrees: [
       {
@@ -54,154 +42,54 @@ const makeProject = (overrides: Partial<Project> = {}): Project =>
     ...overrides
   }) as Project
 
-function LocationProbe(): React.JSX.Element {
-  return <div data-testid="location">{useLocation().pathname}</div>
-}
-
-function renderPanel(project: Project, initialPath = '/') {
-  const view = (p: Project) => (
-    <MemoryRouter initialEntries={[initialPath]}>
-      <Routes>
-        <Route path="*" element={<SidePanelColumn activeProject={p} />} />
-      </Routes>
-      <LocationProbe />
-    </MemoryRouter>
-  )
-  const result = render(view(project))
-  return { ...result, rerenderProject: (p: Project) => result.rerender(view(p)) }
-}
-
 beforeEach(() => {
-  mocks.showAgentLauncher.mockReset()
+  vi.clearAllMocks()
   resetShellLayoutStoreForTests()
-  useShellLayoutStore.setState({ status: 'ready' })
-  useAcpStore.setState({ sessionIndex: [], sessions: {}, agentConfigs: [] })
-  useGitStatusStore.setState({ statuses: {} })
-  useWorkspaceStore.setState({
-    activePaneId: 'pane-1',
-    showAgentLauncher: mocks.showAgentLauncher
-  })
+  useShellLayoutStore.setState({ status: 'ready', sidePanelVisible: true })
+  vi.spyOn(appSettingsHooks, 'useUpdatePanelVisibility').mockReturnValue(updatePanelVisibility)
 })
 
 describe('SidePanelColumn', () => {
-  it('renders the header, the four tabs and the Chats list by default', () => {
-    renderPanel(makeProject())
-    expect(screen.getByTestId('workspace-switcher')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'New chat' })).toBeInTheDocument()
-    expect(
-      screen.getAllByRole('tab').map((t) => t.getAttribute('aria-label') ?? t.textContent)
-    ).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
-    expect(screen.getByRole('tab', { name: 'Chats' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByLabelText('Search chats')).toBeInTheDocument()
-  })
-
-  it('mounts the Workspace switcher for the active project in the header', () => {
-    renderPanel(makeProject())
-    expect(screen.getByTestId('workspace-switcher')).toHaveAttribute('data-project', 'p1')
-  })
-
-  it('keeps the same switcher instance across a project prop update', () => {
-    const { rerenderProject } = renderPanel(makeProject())
-    const before = screen.getByTestId('workspace-switcher')
-    rerenderProject(makeProject({ gitBranch: 'dev' }))
-    expect(screen.getByTestId('workspace-switcher')).toBe(before)
-  })
-
-  it('opens the launcher from New chat', () => {
-    renderPanel(makeProject())
-    fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
-    expect(mocks.showAgentLauncher).toHaveBeenCalledWith('pane-1')
-  })
-
-  it('navigates to the workspace route before opening the launcher', async () => {
-    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
-      cb(0)
-      return 0
-    })
-    renderPanel(makeProject(), '/settings')
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
-    })
-    expect(screen.getByTestId('location')).toHaveTextContent('/')
-    expect(mocks.showAgentLauncher).toHaveBeenCalledWith('pane-1')
-    vi.restoreAllMocks()
-  })
-
-  it('remembers the last tab per project', async () => {
-    const p1 = makeProject()
-    const p2 = makeProject({ id: 'p2', name: 'Two', path: '/two', worktrees: [] })
-    const { rerenderProject } = renderPanel(p1)
-
-    fireEvent.click(screen.getByRole('tab', { name: 'Explorer' }))
+  it('shows Explorer by default, with no tab track and no Workspace switcher', async () => {
+    render(<SidePanelColumn activeProject={makeProject()} />)
     expect(await screen.findByTestId('file-explorer')).toBeInTheDocument()
-    expect(useShellLayoutStore.getState().lastColumnTabByProject).toEqual({ p1: 'explorer' })
+    expect(screen.queryByRole('tablist')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'New chat' })).toBeNull()
+  })
 
-    rerenderProject(p2)
-    expect(screen.getByRole('tab', { name: 'Chats' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.queryByTestId('file-explorer')).toBeNull()
-
-    rerenderProject(p1)
-    expect(screen.getByRole('tab', { name: 'Explorer' })).toHaveAttribute('aria-selected', 'true')
+  it('renders the view the strip picked, under its 44px Paper header', async () => {
+    useShellLayoutStore.setState({ lastColumnTabByProject: { p1: 'github' } })
+    render(<SidePanelColumn activeProject={makeProject()} />)
+    const header = screen.getByTestId('side-panel-header')
+    expect(header).toHaveClass('h-11', 'border-b-[0.5px]', 'border-border', 'pl-3', 'pr-2')
+    expect(within(header).getByRole('heading', { name: 'GitHub' })).toHaveClass(
+      'text-2xs',
+      'font-medium',
+      'text-foreground'
+    )
+    expect(await screen.findByTestId('github-panel')).toHaveAttribute('data-cwd', '/repo')
   })
 
   it('renders the Changes panel for the picked working copy', () => {
     useShellLayoutStore.setState({
+      lastColumnTabByProject: { p1: 'changes' },
       worktreePickByProject: { p1: '/repo/.termul/worktrees/feature' }
     })
-    useGitStatusStore.setState({
-      statuses: {
-        '/repo/.termul/worktrees/feature': [
-          { path: 'a.ts' },
-          { path: 'b.ts' },
-          { path: 'a.ts' }
-        ] as never
-      }
-    })
-    renderPanel(makeProject())
-    expect(screen.getByTestId('column-tab-changes-badge')).toHaveTextContent('2')
-
-    fireEvent.click(screen.getByRole('tab', { name: /Changes/ }))
+    render(<SidePanelColumn activeProject={makeProject()} />)
+    expect(screen.getByRole('heading', { name: 'Changes' })).toBeInTheDocument()
     expect(screen.getByTestId('changes-panel')).toHaveAttribute(
       'data-cwd',
       '/repo/.termul/worktrees/feature'
     )
   })
 
-  it('replaces the body with the GitHub panel for the picked working copy', async () => {
-    useShellLayoutStore.setState({
-      worktreePickByProject: { p1: '/repo/.termul/worktrees/feature' }
-    })
-    renderPanel(makeProject())
-    fireEvent.click(screen.getByRole('tab', { name: 'GitHub' }))
-
-    expect(useShellLayoutStore.getState().lastColumnTabByProject).toEqual({ p1: 'github' })
-    expect(screen.queryByLabelText('Search chats')).toBeNull()
-    expect(await screen.findByTestId('github-panel')).toHaveAttribute(
-      'data-cwd',
-      '/repo/.termul/worktrees/feature'
-    )
-    expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'side-panel-panel-github')
-  })
-
-  it('uses the project path for Changes when nothing is picked', () => {
-    renderPanel(makeProject())
-    fireEvent.click(screen.getByRole('tab', { name: /Changes/ }))
-    expect(screen.getByTestId('changes-panel')).toHaveAttribute('data-cwd', '/repo')
-  })
-
-  it('sizes the column from the store and exposes a resize separator', () => {
-    useShellLayoutStore.setState({ sidePanelWidth: 300 })
-    const { container } = renderPanel(makeProject())
-    // 300px panel + the 8px gutter the column owns before the main container.
-    expect((container.firstElementChild as HTMLElement).style.width).toBe('308px')
-    expect(container.firstElementChild).toHaveClass('pr-2')
-    const separator = screen.getByRole('separator', { name: 'Resize side panel' })
-    expect(separator).toHaveAttribute('aria-valuenow', '300')
-    // The handle covers the gutter, ending on the main container's border.
-    expect(separator).toHaveClass('right-0', 'w-2')
-    expect(separator.parentElement).toBe(container.firstElementChild)
-    fireEvent.keyDown(separator, { key: 'ArrowRight' })
-    expect(useShellLayoutStore.getState().sidePanelWidth).toBe(316)
+  it('closes the panel from the header Close button', () => {
+    useShellLayoutStore.setState({ lastColumnTabByProject: { p1: 'changes' } })
+    render(<SidePanelColumn activeProject={makeProject()} />)
+    const close = screen.getByRole('button', { name: 'Close panel' })
+    expect(close.getAttribute('title')).toMatch(/^Close panel \(.*B\)$/)
+    fireEvent.click(close)
+    expect(updatePanelVisibility).toHaveBeenCalledWith('fileExplorerVisible', false)
   })
 
   describe('top row', () => {
@@ -212,89 +100,40 @@ describe('SidePanelColumn', () => {
       controlsOwner: 'pane',
       showPanelOwner: 'pane'
     }
-    const web: TopRowPlatform = { dragRegions: false, windowControls: false, trafficLights: false }
-    const desktop: TopRowPlatform = {
-      dragRegions: true,
-      windowControls: true,
-      trafficLights: false
-    }
-    const mac: TopRowPlatform = { dragRegions: true, windowControls: false, trafficLights: true }
-
-    const renderOn = (platform: TopRowPlatform | null) => {
-      const panel = (
-        <MemoryRouter>
+    const renderWith = (platform: TopRowPlatform, owner: TopRowRoles['controlsOwner'] = 'pane') => {
+      useShellLayoutStore.setState({ lastColumnTabByProject: { p1: 'changes' } })
+      render(
+        <TopRowProvider roles={{ ...roles, controlsOwner: owner }} platform={platform}>
           <SidePanelColumn activeProject={makeProject()} />
-        </MemoryRouter>
+        </TopRowProvider>
       )
-      return render(
-        platform ? (
-          <TopRowProvider roles={roles} platform={platform}>
-            {panel}
-          </TopRowProvider>
-        ) : (
-          panel
-        )
-      )
+      return screen.getByTestId('side-panel-header')
     }
-    const header = (): HTMLElement =>
-      screen.getByTestId('workspace-switcher').parentElement as HTMLElement
 
-    it('is not a drag region on web or without a provider', () => {
-      const { unmount } = renderOn(web)
-      expect(document.querySelector('[data-tauri-drag-region]')).toBeNull()
-      unmount()
-
-      renderOn(null)
-      expect(document.querySelector('[data-tauri-drag-region]')).toBeNull()
-    })
-
-    it('marks the header root on desktop, never the switcher or the New chat button', () => {
-      renderOn(desktop)
-      const switcher = screen.getByTestId('workspace-switcher')
-      expect(header()).toHaveAttribute('data-tauri-drag-region')
-      expect(switcher).not.toHaveAttribute('data-tauri-drag-region')
-      expect(screen.getByRole('button', { name: 'New chat' })).not.toHaveAttribute(
+    it('marks the header as a drag region on desktop, never the Close button', () => {
+      const header = renderWith({ dragRegions: true, windowControls: false, trafficLights: true })
+      expect(header).toHaveAttribute('data-tauri-drag-region')
+      expect(screen.getByRole('button', { name: 'Close panel' })).not.toHaveAttribute(
         'data-tauri-drag-region'
       )
-      expect(document.querySelectorAll('[data-tauri-drag-region]')).toHaveLength(1)
     })
 
-    it('stays a drag region in both Rail states', () => {
-      useShellLayoutStore.setState({ railExpanded: false })
-      renderOn(desktop)
-      expect(header()).toHaveAttribute('data-tauri-drag-region')
+    it('has no drag region on web', () => {
+      const header = renderWith({ dragRegions: false, windowControls: false, trafficLights: false })
+      expect(header).not.toHaveAttribute('data-tauri-drag-region')
     })
 
-    it('adds the traffic-light inset only with the Rail collapsed on macOS', () => {
-      useShellLayoutStore.setState({ railExpanded: false })
-      const collapsedMac = renderOn(mac)
-      expect(header().style.paddingLeft).toBe('24px')
-      collapsedMac.unmount()
-
-      renderOn(desktop)
-      expect(header().style.paddingLeft).toBe('')
+    it('ends with the window controls spacer on Windows/Linux while it owns them', () => {
+      const windows = { dragRegions: true, windowControls: true, trafficLights: false }
+      const header = renderWith(windows, 'right-panel')
+      const spacer = screen.getByTestId('window-controls-inset')
+      expect(header.lastElementChild).toBe(spacer)
+      expect(screen.queryByTestId('window-controls')).toBeNull()
     })
 
-    it('adds no inset with the Rail expanded, even on macOS', () => {
-      renderOn(mac)
-      expect(header().style.paddingLeft).toBe('')
-    })
-
-    it('keeps the Column tabs and aria-labelledby in both Rail states', () => {
-      for (const railExpanded of [true, false]) {
-        useShellLayoutStore.setState({ railExpanded })
-        const view = renderOn(null)
-        expect(screen.getAllByRole('tab').map((t) => t.getAttribute('aria-label'))).toEqual([
-          'Chats',
-          'Explorer',
-          'Changes',
-          'GitHub'
-        ])
-        const panel = screen.getByRole('tabpanel')
-        expect(panel).toHaveAttribute('aria-labelledby', 'side-panel-tab-chats')
-        expect(panel).not.toHaveAttribute('aria-label')
-        view.unmount()
-      }
+    it('has no spacer while the main area owns the controls, or on macOS', () => {
+      renderWith({ dragRegions: true, windowControls: true, trafficLights: false }, 'pane')
+      expect(screen.queryByTestId('window-controls-inset')).toBeNull()
     })
   })
 })

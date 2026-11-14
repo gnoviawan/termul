@@ -14,15 +14,11 @@ Status colour is a role, not a hue. Pair it with a label or icon — never colou
 
 SSH (`components/ssh/ssh-host-status.tsx`, the one source for the lamp and the state word): idle and disconnected → muted lamp; connecting → `warning` spinner; needs input → `warning`; connected → `success`; failed → `destructive`. An idle host shows no word. Do not split reconnecting onto `project-orange`.
 
-StatusBar is quiet: `h-7 border-t border-border bg-card text-2xs text-muted-foreground`. Do not use `bg-status-bar*`, `bg-project-*` or `text-primary-foreground` on the bar. The project colour is in the 14px project glyph only.
+The desktop shell has no status bar (Sidebar V2 P3). Its tools sit in the tool strip at the right edge (`components/shell/tool-strip/`): Terminal, Browser and Remote access in the bottom group.
 
-- Use the constants in `components/status-bar-hit.ts`. Do not copy the class strings.
-- Text items: `STATUS_BAR_ITEM_CLASS` (`h-6 rounded-md px-2`) with `STATUS_BAR_HOVER_CLASS` (`hover:bg-foreground/[0.03] hover:text-foreground`). An item with no action (the project label) has no hover and `cursor-default`.
-- Icon buttons and popover triggers: `STATUS_BAR_HIT_TARGET` (`h-5 w-5`, 20px on fine pointers, 44px box on coarse pointers) with the glyph in `STATUS_BAR_HIT_GLYPH`.
-- Open trigger (branch picker, popovers): `STATUS_BAR_OPEN_CLASS` (`bg-foreground/[0.06]`). Focus: `ring-1 ring-focus-ring`.
-- Git counts: `diff-modified` (pencil), `diff-added` (plus), muted (untracked). Numbers use `tabular-nums`.
-- Exit code: `Check` / `X` icon and "Exit N" in bar ink. No status colour.
-- Remote access on: `Monitor` icon in `text-connection`. Web connection lamp: status tone (`connection` / `warning` / `destructive`).
+- Remote access on: `Monitor` icon in `text-connection` on the strip button. The web client shows its connection lamp in that slot: status tone (`connection` / `warning` / `destructive`).
+- Git change count: the blue `CountBadge` on the strip's Changes button.
+- `components/status-bar-hit.ts` still sizes the remaining compact triggers (the branch picker, the connection lamp). Do not copy the class strings.
 - A chat that needs you: `rounded-md bg-warning/10 text-warning font-medium` pill with a 6px `bg-warning` dot.
 - No blue (`primary`) on the bar. The bar has no live-work signal.
 

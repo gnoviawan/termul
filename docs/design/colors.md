@@ -6,7 +6,7 @@ Tokens are OKLCH `"L C H"` on `:root`. Tailwind maps `oklch(var(--token) / <alph
 
 1. Semantic roles: `background`, `foreground`, `card`, `popover`, `primary`, `primary-fill`, `secondary`, `muted`, `accent`, `destructive`, `destructive-fill`, `success`, `success-fill`, `warning`, `connection`, `border`, `input`, `field-border`, `ring`, `focus-ring`, `overlay`.
 2. Product identity: `project-{blue,purple,green,yellow,red,cyan,pink,orange,gray}` — chips, graph lanes, pickers only.
-3. Chrome bar (legacy): `status-bar` and `status-bar-{color}`. The StatusBar does not use them now. The tokens stay for back-compat (`statusBarColors` in `lib/colors.ts`). Do not use them in new UI.
+3. Chrome bar (legacy): `status-bar` and `status-bar-{color}`. The StatusBar is removed (Sidebar V2). The tokens stay for back-compat (`statusBarColors` in `lib/colors.ts`). Do not use them in new UI.
 4. Diff: `diff-added`, `diff-modified` (changed files, not a warning). Deletions use `destructive`.
 5. Terminal grid: `terminal-bg` / `terminal-fg`. `terminal-bg` equals `background`. xterm `theme.background` must use the same hex. Do not leave the xterm viewport at `#000`.
 
@@ -68,9 +68,9 @@ Terminal ANSI colors and selection do not follow `--primary`. Troupe pins them i
 | Active segment in a track | `.keycap` | `bg-foreground/10` |
 | Focus | `focus-ring` (dim, 4:1) | `focus-ring` (dim, 4:1) |
 
-The Rail paints `bg-sidebar`. Keycaps inside it (`[data-rail-surface]`) fill with `--rail-keycap`: `muted` in dark themes, `muted` plus 6% `foreground` in light themes. `--row-hover-solid` is flattened over `--sidebar-background`.
+The Rail paints `bg-background`, like the main area, the right panel and the tool strip (Sidebar V2, Paper 2.2); 0.5px `border` hairlines split the columns. Keycaps inside it (`[data-rail-surface]`) fill with `--rail-keycap`: `muted` in dark themes, `muted` plus 6% `foreground` in light themes. `--row-hover-solid` is flattened over `--background`. The open project row is plain; only the open chat row under it takes the keycap.
 
-Blue (`primary`, `primary-fill`) has three jobs only: live work (a running agent, a working spinner, a drop target), the one primary button in a view, and count badges that ask for attention (`CountBadge` in `components/ui/count-badge.tsx`: the Git change count on the activity rail and the Git Changes tab, `bg-primary-fill text-primary-foreground`). Focus, selection and hover stay neutral.
+Blue (`primary`, `primary-fill`) has three jobs only: live work (a running agent, a working spinner, a drop target), the one primary button in a view, and count badges that ask for attention (`CountBadge` in `components/ui/count-badge.tsx`: the Git change count on the tool strip Changes button and the Git Changes tab, `bg-primary-fill text-primary-foreground`). Focus, selection and hover stay neutral.
 
 ## Background
 
@@ -93,8 +93,6 @@ On background / card / popover?
  ├── Disabled copy (custom chrome) → text-disabled-foreground
  └── On a solid primary / destructive / success fill → matching *-foreground
 ```
-
-The StatusBar is quiet: `bg-card`, `border-t border-border`, ink `text-muted-foreground`. Labels use `text-secondary-foreground`. The project colour is in the project glyph (`ProjectIcon`), not in the bar fill. Never `text-white` or `text-primary-foreground` on the bar.
 
 ## Syntax
 

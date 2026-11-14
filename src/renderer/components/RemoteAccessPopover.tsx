@@ -1,7 +1,7 @@
 import { QRCodeSVG } from 'qrcode.react'
 import { useEffect, useState } from 'react'
 import { AlertCircle, Check, Copy, Monitor, ShieldAlert } from '@/components/icons'
-import { STATUS_BAR_HIT_GLYPH, STATUS_BAR_HIT_TARGET } from '@/components/status-bar-hit'
+import { ToolStrip } from '@/components/shell/tool-strip/ToolStrip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { remoteServerApi } from '@/lib/api'
@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
 import { useRemoteStatus, useRemoteStatusStore } from '@/stores/remote-status-store'
 
 /**
- * StatusBar popover for remote agent access.
+ * Tool strip popover for remote agent access (desktop shared-live host only).
  *
  * Enabling starts the in-process localhost web server + a built-in cloudflared
  * quick-tunnel, producing an ephemeral `https://*.trycloudflare.com` URL the
@@ -71,19 +71,16 @@ export function RemoteAccessPopover(): React.JSX.Element {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={STATUS_BAR_HIT_TARGET}
+        <ToolStrip.Button
+          label="Remote access"
           aria-label="Remote terminal access"
           aria-pressed={isRunning}
-        >
-          <span className={STATUS_BAR_HIT_GLYPH}>
-            <Monitor size={12} className={cn('shrink-0', isRunning && 'text-connection')} />
-          </span>
-          {isRunning && <span className="sr-only">Remote access enabled</span>}
-        </button>
+          className="data-[state=open]:bg-foreground/[0.06] data-[state=open]:text-foreground"
+          icon={<Monitor size={14} aria-hidden className={cn(isRunning && 'text-connection')} />}
+          badge={isRunning ? <span className="sr-only">Remote access enabled</span> : undefined}
+        />
       </PopoverTrigger>
-      <PopoverContent side="top" align="end" className="w-72 p-4">
+      <PopoverContent side="left" align="end" className="w-72 p-4">
         <div className="space-y-3">
           <div>
             <h4 className="font-medium text-sm text-foreground">Remote Agent Access</h4>

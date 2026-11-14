@@ -1,12 +1,12 @@
-import type { ShellInfo } from '@shared/types/ipc.types'
 import { AnimatePresence, useReducedMotion } from 'framer-motion'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { Maximize2, Minimize2 } from '@/components/icons'
-import { WindowControls } from '@/components/shell/TopRowChrome'
+import { WindowControlsInset } from '@/components/shell/TopRowChrome'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { clipboardApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
+import { cn } from '@/lib/utils'
 import { closeWorkspaceTab } from '@/lib/workspace-tab-close'
 import { reportUnknownTabKind } from '@/lib/workspace-tab-kinds'
 import { useEditorStore } from '@/stores/editor-store'
@@ -21,7 +21,6 @@ import {
 import type { Terminal } from '@/types/project'
 import type { TabReorderPosition } from '@/types/workspace.types'
 import { EditorTab } from './EditorTab'
-import { NewTabMenu } from './NewTabMenu'
 import type { TabBulkMenuProps } from './tab-context-menu'
 import { AgentChatTabInline } from './tabs/agent-chat-tab'
 import { AutomationsTabInline } from './tabs/automations-tab'
@@ -40,8 +39,6 @@ interface WorkspaceTabBarProps {
   tabs: WorkspaceTab[]
   activeTabId: string | null
   closingTerminalIds?: string[]
-  onAddTerminal?: (shell?: ShellInfo) => void
-  onAddBrowserTab?: () => void
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
@@ -52,15 +49,14 @@ interface WorkspaceTabBarProps {
    * each target closes through the per-tab close path instead.
    */
   onCloseTabs?: (tabs: WorkspaceTab[]) => void
-  defaultShell?: string
   /**
    * Flagged shell only: this bar is part of the window top row. `dragRegion`
    * marks the empty space of the bar as a window drag region; `windowControls`
-   * renders the window controls flush at its right end. Unset = classic bar.
+   * ends the bar with the window controls spacer. Unset = classic bar.
    */
   topRow?: { dragRegion: boolean; windowControls: boolean }
   /**
-   * Content at the start of the bar, before the tabs (the Show side panel
+   * Content at the start of the bar, before the tabs (the top row start
    * slot). Unset = the bar starts with tabs.
    */
   leading?: ReactNode
@@ -71,13 +67,10 @@ export function WorkspaceTabBar({
   tabs,
   activeTabId,
   closingTerminalIds = [],
-  onAddTerminal,
-  onAddBrowserTab,
   onCloseTerminal,
   onRenameTerminal,
   onCloseEditorTab,
   onCloseTabs,
-  defaultShell,
   topRow,
   leading
 }: WorkspaceTabBarProps): React.JSX.Element {
@@ -359,7 +352,10 @@ export function WorkspaceTabBar({
   return (
     <TabPaneProvider paneId={paneId}>
       <div
-        className="flex h-10 items-center bg-card"
+        className={cn(
+          'flex h-11 items-center border-b-[0.5px] border-border bg-background',
+          leading ? 'pr-1.5' : 'px-1.5'
+        )}
         data-tauri-drag-region={dragAttr}
         onDragOver={(e) => {
           e.preventDefault()
@@ -634,17 +630,14 @@ export function WorkspaceTabBar({
           </div>
 
           {hasOverflow && (
-            <div className="absolute right-0 top-0 h-full w-8 bg-gradient-to-l from-card to-transparent pointer-events-none" />
+            <div className="absolute right-0 top-0 h-full w-8 bg-gradient-to-l from-background to-transparent pointer-events-none" />
           )}
         </div>
 
-        <div
-          className="ml-auto flex h-full shrink-0 items-center gap-1 px-2"
-          data-tauri-drag-region={dragAttr}
-        >
-          <span aria-hidden className="mr-1 h-5 w-px shrink-0 bg-border/60" />
-          {leafCount > 1 && (
+        {leafCount > 1 && (
+          <div className="flex h-full shrink-0 items-center pl-1" data-tauri-drag-region={dragAttr}>
             <button
+              type="button"
               onClick={() => togglePaneFullscreen(paneId)}
               className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors duration-150 ease-out"
               title={isFullscreenPane ? 'Restore pane layout' : 'Focus pane'}
@@ -652,17 +645,10 @@ export function WorkspaceTabBar({
             >
               {isFullscreenPane ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
             </button>
-          )}
-          {/* One `+` New tab menu covers terminals and browser tabs. */}
-          <NewTabMenu
-            paneId={paneId}
-            onAddTerminal={onAddTerminal}
-            onAddBrowserTab={onAddBrowserTab}
-            defaultShell={defaultShell}
-          />
-        </div>
+          </div>
+        )}
 
-        {topRow?.windowControls && <WindowControls windowControls />}
+        <WindowControlsInset windowControls={Boolean(topRow?.windowControls)} />
       </div>
     </TabPaneProvider>
   )

@@ -32,7 +32,8 @@ describe('keyboard-shortcuts-store', () => {
 
     it('should include sidebar toggle shortcut defaults', () => {
       const { shortcuts } = useKeyboardShortcutsStore.getState()
-      expect(shortcuts.sidebarToggle.defaultKey).toBe('ctrl+shift+b')
+      expect(shortcuts.sidebarToggle.defaultKey).toBe('ctrl+b')
+      expect(shortcuts.toggleFileExplorer.defaultKey).toBe('ctrl+alt+b')
       expect(shortcuts.sidebarToggle.customKey).toBeUndefined()
     })
 

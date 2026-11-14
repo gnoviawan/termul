@@ -1,5 +1,3 @@
-import { CircleDot } from '@/components/icons'
-import { Spinner } from '@/components/ui/spinner'
 import { chatNeedsYou } from '@/lib/agent-chat-attention'
 import { type AcpSession, isEphemeralAcpSession, useAcpStore } from '@/stores/acp-store'
 import { useChatActivityStore } from '@/stores/chat-activity-store'
@@ -7,13 +5,12 @@ import { sessionTurnBusy } from '@/stores/prompt-queue-orchestration'
 
 /**
  * Per-session status signals shared by the desktop `AgentChatTabInline`, the
- * desktop Chats panel `ChatCard` and the mobile drawer rows. Working, the
+ * Rail chat rows (`useChatLiveState`) and the mobile drawer rows. Working, the
  * pending prompts behind Needs you, and New activity come from the host's
  * `chat_activity` record, so a chat this renderer never opened shows the
  * same status as one it is driving. The desktop tab collapses them into a
- * single trailing slot (Needs you, then Working, then New activity); the
- * drawer rows have room for every active status, so they use
- * `agentChatStatusSlots` and `AgentChatStatusGlyphs` below instead.
+ * single trailing slot (Needs you, then Working, then New activity); the Rail
+ * and the drawer rows map them to one live state with `liveStateOf`.
  */
 export interface AgentChatStatusSignals {
   /** This renderer's Session record, when it opened the chat. */
@@ -57,83 +54,4 @@ export function useAgentChatStatusSignals(sessionId: string): AgentChatStatusSig
     turnBusy: Boolean(activity?.busy) || localBusy,
     unread: Boolean(activity?.unread) && !viewing
   }
-}
-
-export interface AgentChatStatusSlotsInput {
-  needsAttention: boolean
-  turnBusy: boolean
-  unread: boolean
-}
-
-export interface AgentChatStatusSlots {
-  showWorking: boolean
-  showUnread: boolean
-  /** Ordered Needs you, Working, New activity. */
-  statuses: string[]
-  /** `statuses.join(', ')`: feeds the aria-label suffix and any live region. */
-  statusText: string
-}
-
-/**
- * Drawer-row slot priority: the running spinner wins over the unread dot.
- * Needs you shows alongside whichever slot is active. (The desktop tab chrome has one trailing slot and pins Needs you
- * over Working and New activity instead; see `agent-chat-tab.tsx`.)
- */
-export function agentChatStatusSlots({
-  needsAttention,
-  turnBusy,
-  unread
-}: AgentChatStatusSlotsInput): AgentChatStatusSlots {
-  const showWorking = turnBusy
-  const showUnread = !turnBusy && unread
-  const statuses: string[] = []
-  if (needsAttention) statuses.push('Needs you')
-  if (showWorking) statuses.push('Working')
-  if (showUnread) statuses.push('New activity')
-  return { showWorking, showUnread, statuses, statusText: statuses.join(', ') }
-}
-
-interface AgentChatStatusGlyphsProps {
-  needsAttention: boolean
-  showWorking: boolean
-  showUnread: boolean
-}
-
-/** The status glyphs (each with `sr-only` text) rendered in slot-priority order. */
-export function AgentChatStatusGlyphs({
-  needsAttention,
-  showWorking,
-  showUnread
-}: AgentChatStatusGlyphsProps): React.JSX.Element {
-  return (
-    <>
-      {needsAttention ? (
-        <span
-          className="inline-flex size-3.5 shrink-0 items-center justify-center text-warning"
-          title="Needs you"
-        >
-          <CircleDot size={12} aria-hidden />
-          <span className="sr-only">Needs you</span>
-        </span>
-      ) : null}
-      {showWorking ? (
-        <span
-          className="inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground"
-          title="Working"
-        >
-          <Spinner size={12} decorative />
-          <span className="sr-only">Working</span>
-        </span>
-      ) : null}
-      {showUnread ? (
-        <span
-          className="inline-flex size-3.5 shrink-0 items-center justify-center"
-          title="New activity"
-        >
-          <span className="h-2 w-2 rounded-full bg-primary-fill" aria-hidden />
-          <span className="sr-only">New activity</span>
-        </span>
-      ) : null}
-    </>
-  )
 }

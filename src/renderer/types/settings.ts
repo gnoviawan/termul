@@ -1,24 +1,5 @@
 ﻿import { MONO_STACK } from '@/lib/font-stacks'
 
-// Context bar visibility settings
-export interface ContextBarSettings {
-  showProjectName: boolean
-  showGitBranch: boolean
-  showGitStatus: boolean
-  showWorkingDirectory: boolean
-  showExitCode: boolean
-}
-
-// Default settings for users with no saved blob: project name and file counts
-// (`showGitStatus`) are hidden; branch, directory and exit code are shown.
-export const DEFAULT_CONTEXT_BAR_SETTINGS: ContextBarSettings = {
-  showProjectName: false,
-  showGitBranch: true,
-  showGitStatus: false,
-  showWorkingDirectory: true,
-  showExitCode: true
-}
-
 // Table of contents panel settings
 export interface TocSettings {
   isVisible: boolean
@@ -400,8 +381,8 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
   sidebarToggle: {
     id: 'sidebarToggle',
     label: 'Toggle Projects',
-    description: 'Expand or collapse projects',
-    defaultKey: 'ctrl+shift+b'
+    description: 'Expand or collapse the projects sidebar',
+    defaultKey: 'ctrl+b'
   },
   closeTab: {
     id: 'closeTab',
@@ -418,8 +399,8 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
   toggleFileExplorer: {
     id: 'toggleFileExplorer',
     label: 'Toggle Side Panel',
-    description: 'Show or hide side panel',
-    defaultKey: 'ctrl+b'
+    description: 'Show or hide the side panel at the right edge',
+    defaultKey: 'ctrl+alt+b'
   },
   fileExplorerRename: {
     id: 'fileExplorerRename',

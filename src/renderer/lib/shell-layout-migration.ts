@@ -45,6 +45,25 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
+/**
+ * Upgrades a raw persisted record older than version 3 before it is
+ * sanitized: a remembered `chats` view (retired in Sidebar V2 P3) becomes
+ * `explorer`, so the project keeps an entry instead of losing it to the
+ * sanitizer. Visibility and width carry over unchanged. Newer or
+ * non-object data is returned as is.
+ */
+export function upgradeShellLayoutRecord(raw: unknown): unknown {
+  if (!isObject(raw) || Array.isArray(raw)) return raw
+  const version = typeof raw.version === 'number' ? raw.version : 0
+  if (version >= 3) return raw
+  const tabs = raw.lastColumnTabByProject
+  if (!isObject(tabs) || Array.isArray(tabs)) return raw
+  const upgraded = Object.fromEntries(
+    Object.entries(tabs).map(([projectId, tab]) => [projectId, tab === 'chats' ? 'explorer' : tab])
+  )
+  return { ...raw, lastColumnTabByProject: upgraded }
+}
+
 function parseLegacyInt(raw: string | null | undefined): number | null {
   if (typeof raw !== 'string') return null
   const parsed = Number.parseInt(raw, 10)

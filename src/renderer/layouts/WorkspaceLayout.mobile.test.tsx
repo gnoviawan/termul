@@ -585,6 +585,20 @@ describe('WorkspaceLayout mobile branch', () => {
     expect(screen.getByRole('button', { name: 'New terminal' })).toBeInTheDocument()
   })
 
+  it('mounts none of the desktop shell: no Rail, tool strip or right panel', async () => {
+    renderLayout()
+
+    await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy(), {
+      timeout: 15000
+    })
+    expect(screen.queryByTestId('shell-row')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('shell-rail')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('rail-project-chats')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tool-strip')).not.toBeInTheDocument()
+    expect(screen.queryByRole('toolbar', { name: 'Tools' })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('right-panel')).not.toBeInTheDocument()
+  })
+
   it('threads the project sheet through the header subtitle, not a header icon', async () => {
     renderLayout()
 
@@ -625,9 +639,8 @@ describe('WorkspaceLayout mobile branch', () => {
       })
     }
   })
-  // The mobile revamp retires the desktop StatusBar on the phone shell:
-  // connection health moved to the drawer footer and ContextBarSettingsPopover
-  // (a StatusBar child) is not mounted. Desktop keeps it (see the breakpoint suite).
+  // The phone shell has no status bar: connection health lives in the drawer
+  // footer.
   describe('terminal ⋯ sheet navigation rows (L-14)', () => {
     beforeEach(() => {
       act(() => {

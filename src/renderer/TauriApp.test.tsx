@@ -1,5 +1,4 @@
-import { PersistenceKeys } from '@shared/types/persistence.types'
-import { render, waitFor } from '@testing-library/react'
+import { render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TauriApp from './TauriApp'
 
@@ -172,14 +171,6 @@ afterEach(() => {
 })
 
 describe('TauriApp', () => {
-  it('loads context bar settings on mount', async () => {
-    render(<TauriApp />)
-
-    await waitFor(() => {
-      expect(mockPersistenceRead).toHaveBeenCalledWith(PersistenceKeys.contextBarSettings)
-    })
-  })
-
   it('wires app visibility tracking at app scope', () => {
     render(<TauriApp />)
     expect(mockUseVisibilityState).toHaveBeenCalledTimes(1)

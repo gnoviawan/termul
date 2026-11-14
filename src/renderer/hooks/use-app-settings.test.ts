@@ -435,7 +435,7 @@ describe('use-app-settings', () => {
     )
   })
 
-  it('reopens all panels through the shell-layout actions when app settings are reset', async () => {
+  it('returns the panels to their defaults through the shell-layout actions on reset', async () => {
     useShellLayoutStore.setState({
       railExpanded: false,
       sidePanelVisible: false,
@@ -448,7 +448,8 @@ describe('use-app-settings', () => {
 
     const layout = useShellLayoutStore.getState()
     expect(layout.railExpanded).toBe(true)
-    expect(layout.sidePanelVisible).toBe(true)
+    // The right panel default is closed (Paper 2.2).
+    expect(layout.sidePanelVisible).toBe(false)
     expect(layout.sshSectionVisible).toBe(true)
     expect(mockPersistenceWrite).toHaveBeenCalledWith(
       PersistenceKeys.appSettings,

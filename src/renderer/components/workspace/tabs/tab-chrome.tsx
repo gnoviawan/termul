@@ -155,8 +155,9 @@ export const TabChrome = forwardRef<HTMLDivElement, TabChromeProps>(function Tab
         'group/tab relative flex h-8 min-w-[100px] max-w-[200px] shrink-0 cursor-pointer select-none items-center rounded-lg px-2.5',
         'transition-colors duration-150 ease-out',
         FOCUS_RING_OVERLAY_CLASS,
+        // Sidebar V2: the open tab label reads secondary-foreground.
         isActive
-          ? 'text-foreground'
+          ? 'text-secondary-foreground'
           : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
         isDragging && 'opacity-50 scale-[0.98]'
       )}

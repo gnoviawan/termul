@@ -254,9 +254,10 @@ export function useResetAppSettings(): () => Promise<void> {
 
   return useCallback(async () => {
     resetToDefaults()
-    // Reset reopens all three panels, through the shell-layout actions.
+    // Reset returns the panels to their defaults through the shell-layout
+    // actions: Rail and SSH section open, right panel closed (Paper 2.2).
     applyPanelVisibility('sidebarVisible', true)
-    applyPanelVisibility('fileExplorerVisible', true)
+    applyPanelVisibility('fileExplorerVisible', false)
     applyPanelVisibility('sshPanelVisible', true)
 
     await persistenceApi.write(PersistenceKeys.appSettings, useAppSettingsStore.getState().settings)

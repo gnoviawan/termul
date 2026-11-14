@@ -3,18 +3,15 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { sharedFake } from '@/lib/__tests__/shared-watch-fake'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
-import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { usePinnedCommandsStore } from '@/stores/pinned-commands-store'
 import { useTocSettingsStore } from '@/stores/toc-settings-store'
 import {
   DEFAULT_APP_SETTINGS,
-  DEFAULT_CONTEXT_BAR_SETTINGS,
   DEFAULT_TOC_SETTINGS,
   getDefaultKeyboardShortcuts
 } from '@/types/settings'
 import { useAppSettingsLoader } from './use-app-settings'
-import { useContextBarSettings } from './use-context-bar-settings'
 import { useKeyboardShortcutsLoader } from './use-keyboard-shortcuts'
 import { usePinnedCommandsLoader } from './use-pinned-commands'
 import { useTocSettings } from './use-toc-settings'
@@ -63,18 +60,6 @@ describe('shared settings keys reach their stores from another device', () => {
 
     expect(useKeyboardShortcutsStore.getState().shortcuts[id].customKey).toBe('Alt+Shift+Q')
     expect(sharedFake.api.writeDebounced).not.toHaveBeenCalled()
-  })
-
-  it('context bar: a remote value is applied with the always-on project name default', async () => {
-    renderHook(() => useContextBarSettings())
-    await waitFor(() => expect(useContextBarSettingsStore.getState().isLoaded).toBe(true))
-
-    sharedFake.remote(PersistenceKeys.contextBarSettings, { showGitBranch: false })
-
-    const settings = useContextBarSettingsStore.getState().settings
-    expect(settings.showGitBranch).toBe(false)
-    expect(settings.showProjectName).toBe(true)
-    expect(settings.showExitCode).toBe(DEFAULT_CONTEXT_BAR_SETTINGS.showExitCode)
   })
 
   it('pinned commands: a remote list is applied, a corrupt one is not', async () => {

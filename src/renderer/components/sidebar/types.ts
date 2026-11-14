@@ -22,4 +22,6 @@ export interface ProjectSidebarProps {
   onSSHConnect?: (profileId: string) => void
   onSelectSSHProfile?: (profileId: string) => void
   activeSSHProfileId?: string | null
+  /** Shown under the active project's row (the Rail puts its chats here). */
+  activeProjectContent?: React.ReactNode
 }

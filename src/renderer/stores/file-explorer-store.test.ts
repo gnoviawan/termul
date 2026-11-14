@@ -544,12 +544,13 @@ describe('file-explorer-store', () => {
   describe('useFileExplorerVisible', () => {
     it('reads through to the shell-layout side panel flag', () => {
       const { result } = renderHook(() => useFileExplorerVisible())
-      expect(result.current).toBe(true)
+      // Closed by default (Paper 2.2).
+      expect(result.current).toBe(false)
 
       act(() => {
-        useShellLayoutStore.getState().setSidePanelVisible(false)
+        useShellLayoutStore.getState().setSidePanelVisible(true)
       })
-      expect(result.current).toBe(false)
+      expect(result.current).toBe(true)
     })
 
     it('no longer keeps visibility state of its own', () => {

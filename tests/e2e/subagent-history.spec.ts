@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { expect, type Page, test } from 'playwright/test'
-import { chatCard, chatTab, launchChat, openWorkspace, selectColumnTab, selectProject } from './ui'
+import { chatTab, launchChat, openWorkspace, railChat, selectProject, showAllRailChats } from './ui'
 
 /**
  * Subagents stay in the chat history. The fake agent's `[SUBAGENTS:4]
@@ -8,7 +8,7 @@ import { chatCard, chatTab, launchChat, openWorkspace, selectColumnTab, selectPr
  * after 4 s and reports each one idle 8 s later; `[SUBAGENTS:3]` sends two
  * legacy Claude background `Agent` calls. In both, the turn folds when it
  * ends, and the subagent group must stay in the transcript, live, after a
- * reload and after a reopen from the Chats list, with the panel's Activity
+ * reload and after a reopen from the Rail chat rows, with the panel's Activity
  * and text restored from the host.
  *
  * Chats live in proj-c, the least contested seeded project (see
@@ -64,8 +64,8 @@ async function reopenFromHistory(page: Page, title: string): Promise<void> {
   await chatTab(page, title).hover()
   await chatTab(page, title).locator('[aria-label="Close tab"]').click()
   await expect(chatTab(page, title)).toBeHidden()
-  await selectColumnTab(page, 'Chats')
-  await chatCard(page, title).click()
+  await showAllRailChats(page)
+  await railChat(page, title).click()
   await expect(chatTab(page, title)).toBeVisible()
 }
 

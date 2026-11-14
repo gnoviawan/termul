@@ -3,12 +3,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { PANEL_HEADER_CLASS, PANEL_ICON_BUTTON_CLASS } from '@/components/ui/panel-styles'
 import { dialogApi, shellApi } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
 import type { Project, ProjectColor, ProjectGroup } from '@/types/project'
 import { ColorPickerPopover } from './ColorPickerPopover'
 import { ConfirmDialog } from './ConfirmDialog'
 import { NewGroupModal } from './NewGroupModal'
 import { NewWorktreeModal } from './NewWorktreeModal'
+import { useRailCollapsed } from './shell/rail/rail-density'
+import { useOpenRailWorktreeSwitcher } from './shell/rail/worktree-switcher'
 import { AddProjectMenu } from './sidebar/add-project-menu'
 import { GroupContextMenuContent } from './sidebar/group-context-menu'
 import {
@@ -17,9 +20,11 @@ import {
 } from './sidebar/project-context-menu'
 import { ProjectList } from './sidebar/project-list'
 import { layoutRailProjects } from './sidebar/rail-project-order'
+import { RailSectionDivider } from './sidebar/rail-section-header'
 import { SSHResizableSection } from './sidebar/ssh-section'
 import type { ColorPickerState, ProjectSidebarProps } from './sidebar/types'
 import { useProjectRail } from './sidebar/use-project-rail'
+import { useRailImportChats } from './sidebar/use-rail-import-chats'
 
 /** Projects header icon button: the panel button plus a 14px glyph. */
 const HEADER_ICON_BUTTON = `${PANEL_ICON_BUTTON_CLASS} cursor-pointer [&_svg]:size-3.5`
@@ -42,8 +47,10 @@ export function ProjectSidebar({
   onReorderProjects,
   onSSHConnect,
   onSelectSSHProfile,
-  activeSSHProfileId
+  activeSSHProfileId,
+  activeProjectContent
 }: ProjectSidebarProps): React.JSX.Element {
+  const collapsed = useRailCollapsed()
   const {
     addProject,
     addGroup,
@@ -88,6 +95,10 @@ export function ProjectSidebar({
   const [colorPicker, setColorPicker] = useState<ColorPickerState | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null)
   const [worktreeProjectId, setWorktreeProjectId] = useState<string | null>(null)
+  const openWorktreeSwitcher = useOpenRailWorktreeSwitcher()
+
+  // Import chats (the `+` menu) into the open project's working copy.
+  const { onImportChats, dialog: importChatsDialog } = useRailImportChats(projects, activeProjectId)
 
   const handleOpenColorPicker = useCallback(
     (targetId: string, targetType: 'project' | 'group'): void => {
@@ -264,6 +275,7 @@ export function ProjectSidebar({
         moveProjectToGroup={moveProjectToGroup}
         onCreateGroupForProject={(projectId) => setNewGroupModal({ projectIdToMove: projectId })}
         onNewWorktree={setWorktreeProjectId}
+        onSwitchWorktree={openWorktreeSwitcher}
         onArchiveProject={onArchiveProject}
         onConfirmDelete={setDeleteTarget}
       />
@@ -275,7 +287,8 @@ export function ProjectSidebar({
       onUpdateProject,
       onArchiveProject,
       groups,
-      moveProjectToGroup
+      moveProjectToGroup,
+      openWorktreeSwitcher
     ]
   )
 
@@ -306,8 +319,7 @@ export function ProjectSidebar({
     return map
   }, [activeProjects])
 
-  // Groups in group order, then the ungrouped projects: the same order the
-  // collapsed Rail's stack reads.
+  // Groups in group order, then the ungrouped projects (both Rail densities).
   const { groups: visibleGroups, ungrouped: ungroupedActiveProjects } = useMemo(
     () => layoutRailProjects(projects, groups),
     [projects, groups]
@@ -320,14 +332,16 @@ export function ProjectSidebar({
 
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col">
-      {/* Header with inline + button */}
-      {!railSections && (
-        <div className={PANEL_HEADER_CLASS}>
+      {/* Header with inline + button. Collapsed Rail: a divider at its y. */}
+      {!railSections && collapsed && <RailSectionDivider data-testid="rail-section-projects" />}
+      {!railSections && !collapsed && (
+        <div className={cn(PANEL_HEADER_CLASS, 'pt-3 pl-4.5')} data-testid="rail-section-projects">
           <span className="label-panel">Projects</span>
           <div className="flex items-center">
             <AddProjectMenu
               onNewProject={onNewProject}
               onNewGroup={() => setNewGroupModal({})}
+              onImportChats={onImportChats}
               buttonClassName={HEADER_ICON_BUTTON}
             />
           </div>
@@ -373,14 +387,18 @@ export function ProjectSidebar({
         railSections={railSections}
         onNewProject={onNewProject}
         onNewGroup={() => setNewGroupModal({})}
+        onImportChats={onImportChats}
+        activeProjectContent={activeProjectContent}
       />
 
-      {/* SSH Connections - Resizable */}
-      <SSHResizableSection
-        onSSHConnect={onSSHConnect}
-        onSelectProfile={onSelectSSHProfile}
-        activeProfileId={activeSSHProfileId}
-      />
+      {/* SSH Connections - Resizable. Hidden on the collapsed Rail. */}
+      {!collapsed && (
+        <SSHResizableSection
+          onSSHConnect={onSSHConnect}
+          onSelectProfile={onSelectSSHProfile}
+          activeProfileId={activeSSHProfileId}
+        />
+      )}
 
       {/* Group Delete Confirmation Dialog */}
       <ConfirmDialog
@@ -427,6 +445,8 @@ export function ProjectSidebar({
         onClose={() => setWorktreeProjectId(null)}
         projectId={worktreeProjectId ?? ''}
       />
+
+      {importChatsDialog}
 
       {/* New Group Modal */}
       <NewGroupModal

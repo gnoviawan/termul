@@ -1,8 +1,8 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { useEffect, useRef } from 'react'
-import { RailCollapsed } from '@/components/shell/RailCollapsed'
-import { RailExpanded } from '@/components/shell/RailExpanded'
-import { COLLAPSED_WIDTH } from '@/components/shell/rail-layout'
+import { RailBody } from '@/components/shell/RailBody'
+import { RailDensityProvider } from '@/components/shell/rail/rail-density'
+import { COLLAPSED_WIDTH, RAIL_HOVER_OPEN_DELAY } from '@/components/shell/rail-layout'
 import { useRailResize } from '@/components/shell/use-rail-resize'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
@@ -13,7 +13,6 @@ import type { Project } from '@/types/project'
 
 export interface ShellRailProps {
   projects: Project[]
-  activeProject: Project | undefined
   activeProjectId: string
   onSelectProject: (id: string) => void
   onNewProject: () => void
@@ -34,13 +33,14 @@ export interface ShellRailProps {
 
 /**
  * Shell frame Rail (shell revamp CAP-1): expanded (persisted width 180-360) or
- * collapsed to 48px of icons, following `railExpanded`. The width animates
- * with the sidebar timings (200ms open, 150ms close) and is instant under
- * reduced motion and while dragging the resize handle.
+ * collapsed to 48px of icons, following `railExpanded`. Both states draw one
+ * `RailBody`; the density context switches its rows to icon-only, 1:1 with
+ * the expanded rows (Sidebar V2). The width animates with the sidebar timings
+ * (200ms open, 150ms close) and is instant under reduced motion and while
+ * dragging the resize handle.
  */
 export function ShellRail({
   projects,
-  activeProject,
   activeProjectId,
   onSelectProject,
   onNewProject,
@@ -74,20 +74,20 @@ export function ShellRail({
   const targetWidth = expanded ? width : COLLAPSED_WIDTH
 
   return (
-    <TooltipProvider delayDuration={400}>
+    <TooltipProvider delayDuration={RAIL_HOVER_OPEN_DELAY}>
       <motion.nav
         aria-label="Projects"
         data-testid="shell-rail"
         data-expanded={expanded}
         data-rail-surface
-        className="group/rail relative h-full shrink-0 overflow-hidden bg-sidebar"
+        className="group/rail relative h-full shrink-0 overflow-hidden bg-background"
         initial={false}
         animate={{ width: targetWidth }}
         transition={{ duration, ease: EASE_OUT }}
       >
         <div className="h-full" style={{ width: targetWidth }}>
-          {expanded ? (
-            <RailExpanded
+          <RailDensityProvider density={expanded ? 'expanded' : 'collapsed'}>
+            <RailBody
               projects={projects}
               activeProjectId={activeProjectId}
               onSelectProject={onSelectProject}
@@ -103,24 +103,7 @@ export function ShellRail({
               isThemePickerOpen={isThemePickerOpen}
               onToggleThemePicker={onToggleThemePicker}
             />
-          ) : (
-            <RailCollapsed
-              projects={projects}
-              activeProject={activeProject}
-              onSelectProject={onSelectProject}
-              onNewProject={onNewProject}
-              onOpenCommandPalette={onOpenCommandPalette}
-              onOpenCanvas={onOpenCanvas}
-              canOpenCanvas={canOpenCanvas}
-              onSSHConnect={onSSHConnect}
-              onSelectSSHProfile={onSelectSSHProfile}
-              activeSSHProfileId={activeSSHProfileId}
-              isShortcutsOpen={isShortcutsOpen}
-              onShortcutsOpenChange={onShortcutsOpenChange}
-              isThemePickerOpen={isThemePickerOpen}
-              onToggleThemePicker={onToggleThemePicker}
-            />
-          )}
+          </RailDensityProvider>
         </div>
 
         {expanded && (

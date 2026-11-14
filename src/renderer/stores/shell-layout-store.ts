@@ -21,7 +21,8 @@ import { logFrontendError } from '@/lib/log-api'
 import {
   buildMigratedShellLayout,
   countLegacyShellLayoutSources,
-  readLegacyShellLayoutSources
+  readLegacyShellLayoutSources,
+  upgradeShellLayoutRecord
 } from '@/lib/shell-layout-migration'
 import {
   clampToBounds,
@@ -169,7 +170,7 @@ async function runHydration(): Promise<void> {
         log('warn', `[shell] unsupported shell-layout version ${version}; layout is not saved`)
         return
       }
-      const record = sanitizeShellLayout(result.data)
+      const record = sanitizeShellLayout(upgradeShellLayoutRecord(result.data))
       // A record older than the current version is saved as the current one.
       const upgraded = typeof version !== 'number' || version < SHELL_LAYOUT_VERSION
       set({ ...record, status: 'ready' })

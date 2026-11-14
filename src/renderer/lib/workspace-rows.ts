@@ -1,5 +1,5 @@
 /**
- * Workspace switcher rows (shell revamp CAP-6): the project folder plus one
+ * Rail worktree switcher rows (shell revamp CAP-6): the project folder plus one
  * row per listed worktree, each with the number of open tabs that live there
  * and a "working" flag.
  *

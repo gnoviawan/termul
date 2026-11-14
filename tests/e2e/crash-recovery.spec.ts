@@ -1,6 +1,6 @@
 import { expect, type Page, test } from 'playwright/test'
 import { armNextAgentCrash } from './helpers'
-import { chatCard, chatTab, launchChat, openWorkspace, selectColumnTab, selectProject } from './ui'
+import { chatTab, launchChat, openWorkspace, railChat, selectProject, showAllRailChats } from './ui'
 
 /**
  * Crash-recovery E2E: a chat whose agent dies mid-turn must not leave a
@@ -98,10 +98,10 @@ test('reopening a crashed chat from history does not resurrect the dead turn', a
   await waitForCrash(page, 'lima survey')
   await closeChatTab(page, 'lima survey')
 
-  // Reopen from the project's history index. The Chats list shows the active
+  // Reopen from the project's history index. The Rail lists the open
   // project's chats (proj-x, selected in beforeEach), closed ones included.
-  await selectColumnTab(page, 'Chats')
-  await chatCard(page, 'lima survey').click()
+  await showAllRailChats(page)
+  await railChat(page, 'lima survey').click()
   await expect(chatTab(page, 'lima survey')).toBeVisible()
 
   // Transcript restored on a fresh agent: Working… may legitimately appear

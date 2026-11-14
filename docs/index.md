@@ -45,6 +45,7 @@ Troupe is a project-aware desktop terminal workspace built with Tauri 2. It comb
 - [Auto Update Release Verification](./auto-update-release-verification.md) - Operational updater and release verification notes
 - [Project Scan Analysis](./project-scan-analysis.json) - Prior scan artifact summarizing repository composition
 - [Claude Agent ACP](./claude-agent-acp.md) - Host install, prerequisites, auth, and headless administration
+- [Sidebar V2 handoff](./design/sidebar-v2-handoff.md) - Shell Rail with chats under the open project, collapsed rail and hover panels, tool strip and right panel; spec and checklist (P1 to P5)
 - [In-Chat Agent Switch](./in-chat-agent-switch.md) - Mid-conversation agent switching with context handoff, busy behavior, and reopen resolution
 - [ADR-0004: Claude accounts use linked config directories](./adr/0004-claude-accounts-linked-config-dirs.md) - Per-account `CLAUDE_CONFIG_DIR` with shared history, settings, and skills; spike results
 - [QA Report 2026-09-15](./qa-report-2026-09-15.md) - termul-server e2e: protocol, ACP UI, persistence (auth/posture findings)

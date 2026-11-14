@@ -355,7 +355,7 @@ describe('ProjectSidebar', () => {
     const onSelectProject = vi.fn()
     renderWithRouter({ onSelectProject })
 
-    fireEvent.click(screen.getByText('Project Two'))
+    fireEvent.click(screen.getByRole('button', { name: 'Project: Project Two' }))
 
     expect(onSelectProject).toHaveBeenCalledWith('2')
   })
@@ -373,30 +373,31 @@ describe('ProjectSidebar', () => {
     )
   })
 
-  it('marks the active project row with keycap and idle rows with a hover wash', () => {
+  it('keeps the active project row plain (Paper 10X5): no keycap, the same hover wash', () => {
     renderWithRouter({ activeProjectId: '1' })
 
-    const activeRow = screen.getByTestId('project-item-1').querySelector('[role="button"]')
-    const idleRow = screen.getByTestId('project-item-2').querySelector('[role="button"]')
-    expect(activeRow).toHaveClass('keycap', 'h-8', 'rounded-lg')
-    expect(activeRow).not.toHaveClass('bg-sidebar-accent')
+    const activeRow = screen.getByTestId('project-item-1').querySelector('[data-project-row]')
+    const idleRow = screen.getByTestId('project-item-2').querySelector('[data-project-row]')
+    expect(activeRow).toHaveClass('h-7.5', 'rounded-md')
+    expect(
+      within(screen.getByTestId('project-item-1')).getByRole('button', { name: /^Project:/ })
+    ).toHaveAttribute('aria-current', 'page')
+    expect(activeRow).not.toHaveClass('keycap')
     expect(idleRow).not.toHaveClass('keycap')
     // The wash shows under the same conditions as the actions it sits under.
-    expect(idleRow).toHaveClass('hover:bg-row-hover', 'focus-within:bg-row-hover')
+    for (const row of [activeRow, idleRow]) {
+      expect(row).toHaveClass('hover:bg-row-hover', 'focus-within:bg-row-hover')
+    }
   })
 
-  it('ends the actions fade in the row surface: keycap when active, the hover wash otherwise', () => {
+  it('ends the actions fade in the hover wash on every row', () => {
     renderWithRouter({ activeProjectId: '1' })
 
-    const activeActions = within(screen.getByTestId('project-item-1')).getByTestId(
-      'project-row-actions'
-    )
-    const idleActions = within(screen.getByTestId('project-item-2')).getByTestId(
-      'project-row-actions'
-    )
-    expect(activeActions).toHaveClass('from-[var(--rail-keycap-fill)]')
-    expect(idleActions).toHaveClass('from-row-hover-solid')
-    expect(idleActions).toHaveClass('group-hover:flex', 'group-focus-within:flex')
+    for (const id of ['project-item-1', 'project-item-2']) {
+      const actions = within(screen.getByTestId(id)).getByTestId('project-row-actions')
+      expect(actions).toHaveClass('from-row-hover-solid')
+      expect(actions).toHaveClass('group-hover:flex', 'group-focus-within:flex')
+    }
   })
 
   it('shows a "Crashed" mark (no pulse) on a project with a crashed terminal', () => {
@@ -447,16 +448,16 @@ describe('ProjectSidebar Name Truncation', () => {
   const longName =
     'A Very Long Project Name That Would Otherwise Wrap Onto A Second Line In The Narrow Sidebar'
 
-  it('truncates a long active project name instead of wrapping', () => {
+  it('clips a long active project name with an end fade instead of wrapping', () => {
     renderWithRouter({
       projects: [{ id: '1', name: longName, color: 'blue', gitBranch: 'main' }],
       activeProjectId: '1'
     })
 
     const nameEl = screen.getByText(longName)
-    // truncate => overflow-hidden + text-ellipsis + whitespace-nowrap;
+    // fade-end => overflow-hidden + nowrap + a 24px end fade (no ellipsis);
     // min-w-0 lets the flex child shrink below its content width so clipping kicks in.
-    expect(nameEl).toHaveClass('truncate', 'min-w-0', 'flex-1')
+    expect(nameEl).toHaveClass('fade-end', 'min-w-0', 'flex-1')
     // Full name remains discoverable on hover.
     expect(nameEl).toHaveAttribute('title', longName)
   })
@@ -498,7 +499,7 @@ describe('ProjectSidebar Project Icons', () => {
     const projectRow = screen.getByTestId('project-item-1')
     const tile = projectRow.querySelector('[data-project-color="blue"]')
     expect(tile).toHaveClass('rounded', 'bg-project-blue')
-    expect(projectRow.querySelector('[role="button"]')).not.toHaveClass('border-l-2')
+    expect(projectRow.querySelector('[data-project-row]')).not.toHaveClass('border-l-2')
   })
 
   it('shows the project identity glyph on archived projects', () => {
@@ -949,11 +950,9 @@ describe('ProjectSidebar: Mono-style alignment and groups', () => {
   it('puts project rows and their icons on the shared Rail column', () => {
     renderWithRouter({ projects: railProjects.slice(0, 2) })
 
-    const row = within(screen.getByTestId('project-item-1')).getByRole('button', {
-      name: /Project: Rail Project 1/
-    })
-    expect(row).toHaveClass('gap-2', 'px-2', 'rounded-lg')
-    const iconColumn = row.querySelector('[data-rail-icon-column]')
+    const row = screen.getByTestId('project-item-1').querySelector('[data-project-row]')
+    expect(row).toHaveClass('gap-2', 'px-3', 'rounded-md')
+    const iconColumn = row?.querySelector('[data-rail-icon-column]')
     expect(iconColumn).toHaveClass('size-4', 'shrink-0')
   })
 
@@ -982,7 +981,7 @@ describe('ProjectSidebar: Mono-style alignment and groups', () => {
     )
     // The shared inset must not override the right padding that keeps the label
     // clear of the absolute-positioned actions button.
-    expect(within(row).getByRole('button', { name: 'My Folder' })).toHaveClass('px-2', 'pr-8')
+    expect(within(row).getByRole('button', { name: 'My Folder' })).toHaveClass('px-3', 'pr-8')
   })
 
   it('shows a neutral folder icon for an empty group', () => {
@@ -1013,10 +1012,8 @@ describe('ProjectSidebar: Mono-style alignment and groups', () => {
     // Children sit in the same icon column; the container gives the grouping, not indentation.
     const groupList = container.querySelector('[data-group-container-id="group-1"]')
     expect(groupList).not.toHaveClass('pl-4')
-    const childRow = within(screen.getByTestId('project-item-1')).getByRole('button', {
-      name: /Project: Rail Project 1/
-    })
-    expect(childRow).toHaveClass('gap-2', 'px-2')
+    const childRow = screen.getByTestId('project-item-1').querySelector('[data-project-row]')
+    expect(childRow).toHaveClass('gap-2', 'px-3')
   })
 
   it('has no container surface on a collapsed group', () => {

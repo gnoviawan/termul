@@ -1,6 +1,11 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { TrafficLightClearance, WindowControls } from './TopRowChrome'
+import {
+  TrafficLightClearance,
+  WINDOW_CONTROLS_INSET_PX,
+  WindowControls,
+  WindowControlsInset
+} from './TopRowChrome'
 
 const { mockWindowApi, maximizeRef } = vi.hoisted(() => ({
   mockWindowApi: {
@@ -36,13 +41,20 @@ describe('WindowControls', () => {
     expect(wrapper).not.toHaveAttribute('data-tauri-drag-region')
     for (const name of ['Minimize window', 'Maximize window', 'Close window']) {
       const button = screen.getByRole('button', { name })
-      expect(button).toHaveClass('h-full', 'px-3')
+      expect(button).toHaveClass('h-full', 'w-10')
       expect(button).not.toHaveAttribute('data-tauri-drag-region')
     }
     expect(screen.getByRole('button', { name: 'Close window' })).toHaveClass(
       'hover:bg-destructive-fill',
       'hover:text-destructive-foreground'
     )
+    // Three 40px buttons: a fixed 120px block the top row can leave room for.
+    expect(wrapper).toHaveStyle({ width: '120px' })
+  })
+
+  it('takes a className for its placement', () => {
+    render(<WindowControls windowControls className="absolute top-0 right-0" />)
+    expect(screen.getByTestId('window-controls')).toHaveClass('absolute', 'top-0', 'right-0')
   })
 
   it('calls the window api', () => {
@@ -73,10 +85,25 @@ describe('TrafficLightClearance', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('is an 80px drag spacer', () => {
+  it('is a 76px drag spacer', () => {
     render(<TrafficLightClearance trafficLights />)
     const spacer = screen.getByTestId('traffic-light-clearance')
-    expect(spacer).toHaveStyle({ width: '80px' })
+    expect(spacer).toHaveStyle({ width: '76px' })
+    expect(spacer).toHaveAttribute('data-tauri-drag-region')
+  })
+})
+
+describe('WindowControlsInset', () => {
+  it('renders nothing unless windowControls is set', () => {
+    const { container } = render(<WindowControlsInset windowControls={false} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('is a drag spacer as wide as the controls part left of the 44px strip', () => {
+    render(<WindowControlsInset windowControls />)
+    const spacer = screen.getByTestId('window-controls-inset')
+    expect(WINDOW_CONTROLS_INSET_PX).toBe(76)
+    expect(spacer).toHaveStyle({ width: '76px' })
     expect(spacer).toHaveAttribute('data-tauri-drag-region')
   })
 })

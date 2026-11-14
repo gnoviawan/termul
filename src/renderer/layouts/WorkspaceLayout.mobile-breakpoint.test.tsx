@@ -3,9 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { MOBILE_WEB_SHELL_MAX_PX } from '@/hooks/use-mobile-web-shell'
-import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
-import { DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
 import type { LeafNode, SplitNode } from '@/types/workspace.types'
 
 // Story 12 (CAP-8, QA finding F3): regression test for the REAL
@@ -474,16 +472,10 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
     gitState.statuses = {}
     gitState.selectedFile = null
     gitState.commitContexts = {}
-    // The project name is hidden by default; show it so the "demo" presence /
-    // absence assertions below stay meaningful.
-    useContextBarSettingsStore.setState({
-      settings: { ...DEFAULT_CONTEXT_BAR_SETTINGS, showProjectName: true }
-    })
     installMatchMediaStub()
   })
 
   afterEach(() => {
-    useContextBarSettingsStore.setState({ settings: { ...DEFAULT_CONTEXT_BAR_SETTINGS } })
     if (originalMatchMedia !== undefined) {
       Object.defineProperty(window, 'matchMedia', originalMatchMedia)
     }
@@ -492,7 +484,7 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
   it('renders the mobile shell — and NO desktop chrome — at the QA repro width 390px', async () => {
     viewportWidthRef.current = 390
     // TooltipProvider mirrors App.tsx / WorkspaceLayout.test.tsx — desktop
-    // chrome (StatusBar, rail buttons) uses Radix tooltips.
+    // chrome (tool strip, rail buttons) uses Radix tooltips.
     render(
       <TooltipProvider>
         <MemoryRouter>
@@ -507,11 +499,8 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
       timeout: 5000
     })
 
-    // Desktop chrome must be absent: the desktop frame and the
-    // StatusBar (which renders the lowercased project name, "demo").
+    // Desktop chrome must be absent.
     expect(screen.queryByTestId('shell-frame')).toBeNull()
-    expect(screen.queryByText('demo')).toBeNull()
-    expect(document.querySelector('[data-status-bar]')).toBeNull()
 
     // The mobile header affordances are present: ☰, the subtitle that opens
     // the project sheet, and ⋯ whose sheet reaches Files.
@@ -586,9 +575,9 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
     expect(document.querySelector('[data-mobile-chat-shell]')).toBeNull()
     expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
 
-    // Desktop chrome present: the desktop frame + StatusBar ("demo").
-    expect(screen.getByText('demo')).toBeInTheDocument()
-    expect(document.querySelector('[data-status-bar]')).toBeTruthy()
+    // Desktop chrome present: the (stubbed) desktop frame; the desktop
+    // status bar is gone (Sidebar V2 P3).
+    expect(document.querySelector('[data-status-bar]')).toBeNull()
   })
 
   // The hook's contract is `(max-width: Npx)` — guard the exact boundary so

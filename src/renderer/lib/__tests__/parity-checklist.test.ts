@@ -2163,13 +2163,22 @@ describe('Host-owned chat activity parity (chat list status on every surface)', 
     )
     expect(signals).toMatch(/useChatActivityStore\(/)
     for (const consumer of [
-      ['components', 'shell', 'ChatCard.tsx'],
-      ['components', 'mobile', 'MobileRecentsList.tsx'],
+      ['components', 'shell', 'use-project-chats.ts'],
       ['components', 'workspace', 'tabs', 'agent-chat-tab.tsx']
     ]) {
       expect(readFileSync(join(LIB_DIR, '..', ...consumer), 'utf-8')).toMatch(
         /useAgentChatStatusSignals\(/
       )
+    }
+    // The desktop Rail chat row and the phone drawer rows read it through
+    // `useChatLiveState` and draw the same `ChatRowTrail`, so they agree.
+    for (const consumer of [
+      ['components', 'shell', 'rail', 'RailProjectChats.tsx'],
+      ['components', 'mobile', 'MobileRecentsList.tsx']
+    ]) {
+      const source = readFileSync(join(LIB_DIR, '..', ...consumer), 'utf-8')
+      expect(source).toMatch(/useChatLiveState\(/)
+      expect(source).toMatch(/<ChatRowTrail\b/)
     }
   })
 })
@@ -3539,13 +3548,65 @@ describe('Agent session import parity', () => {
     )
   })
 
-  it('the chat list offers the import on the desktop Chats tab and the phone drawer', () => {
+  it('the import is offered in the desktop Rail + menu and the phone drawer', () => {
     const components = join(LIB_DIR, '..', 'components')
-    expect(readFileSync(join(components, 'shell', 'ChatsList.tsx'), 'utf-8')).toMatch(
-      /<ImportChatsButton[^>]*variant="icon"/
+    expect(readFileSync(join(components, 'sidebar', 'use-rail-import-chats.tsx'), 'utf-8')).toMatch(
+      /<ImportChatsDialog[^>]*projectId=/
+    )
+    expect(readFileSync(join(components, 'sidebar', 'add-project-menu.tsx'), 'utf-8')).toMatch(
+      /onSelect=\{onImportChats\}/
     )
     expect(readFileSync(join(components, 'mobile', 'MobileRecentsList.tsx'), 'utf-8')).toMatch(
-      /<ImportChatsButton[^>]*variant="row"/
+      /<ImportChatsButton[^>]*projectId=/
     )
+  })
+})
+
+// Sidebar V2 shell (P1 to P5): the browser client at desktop width renders the
+// same Rail, tool strip, palette and Projects menu as the desktop app. Only
+// the native parts are gated, explicitly with `isTauriContext()`; the phone
+// shell mounts none of them (its own drawer, see WorkspaceLayout.mobile).
+describe('Sidebar V2 shell parity (tool strip, palette Chats, Projects menu)', () => {
+  const components = join(LIB_DIR, '..', 'components')
+  const read = (...parts: string[]): string => readFileSync(join(components, ...parts), 'utf-8')
+
+  it('the tool strip gates Remote access and the Browser button to the desktop app', () => {
+    const strip = read('shell', 'tool-strip', 'ShellToolStrip.tsx')
+    expect(strip).toMatch(/const desktop = isTauriContext\(\)/)
+    // Browser tabs are native webviews: no button on the web.
+    expect(strip).toMatch(/\{desktop && \(\s*<ToolStrip\.Button\s+label="New browser tab"/)
+    // The shared-live host is desktop only; the web shows its connection lamp.
+    expect(strip).toMatch(/\{desktop \? \(\s*<RemoteAccessPopover \/>\s*\) : \(/)
+    expect(strip).toMatch(/<ConnectionStatusIndicator \/>/)
+    // The other ways to open a browser tab are gated the same way.
+    expect(read('CommandPalette.tsx')).toMatch(/onNewBrowserTab && isTauriContext\(\)/)
+    expect(
+      readFileSync(
+        join(LIB_DIR, '..', 'layouts', 'workspace-layout', 'use-workspace-keyboard.ts'),
+        'utf-8'
+      )
+    ).toMatch(/if \(!isWorkspaceRoute \|\| !isTauriContext\(\)\) return/)
+  })
+
+  it('the palette Chats group reads the shared session index on every desktop-width surface', () => {
+    const chats = read('CommandPaletteChats.tsx')
+    expect(chats).toMatch(/buildChatCards\(/)
+    expect(chats).not.toMatch(/isTauriContext/)
+    expect(read('CommandPalette.tsx')).toMatch(/<CommandPaletteChats project=\{chatsProject\}/)
+    // The phone palette has no Chats group: the drawer search covers it.
+    expect(
+      readFileSync(
+        join(LIB_DIR, '..', 'layouts', 'workspace-layout', 'WorkspaceModals.tsx'),
+        'utf-8'
+      )
+    ).toMatch(/chatsProject=\{\s*isMobileWebShell \? undefined :/)
+  })
+
+  it('the Projects + menu offers Import chats on every surface, write-gated, not Tauri-gated', () => {
+    const menu = read('sidebar', 'add-project-menu.tsx')
+    expect(menu).toMatch(/data-testid="header-import-chats"/)
+    expect(menu).toMatch(/useServerAdmitsRemoteWrites\(\)/)
+    expect(menu).not.toMatch(/isTauriContext/)
+    expect(read('sidebar', 'use-rail-import-chats.tsx')).not.toMatch(/isTauriContext/)
   })
 })

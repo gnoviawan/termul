@@ -37,6 +37,8 @@ export interface ProjectContextMenuContentProps {
   moveProjectToGroup: (projectId: string, targetGroupId: string | null) => void
   onCreateGroupForProject: (projectId: string) => void
   onNewWorktree: (projectId: string) => void
+  /** Opens the Rail worktree switcher on this project's row. */
+  onSwitchWorktree: (projectId: string) => void
   onArchiveProject: (id: string) => void
   onConfirmDelete: (project: Project) => void
 }
@@ -52,6 +54,7 @@ export function ProjectContextMenuContent({
   moveProjectToGroup,
   onCreateGroupForProject,
   onNewWorktree,
+  onSwitchWorktree,
   onArchiveProject,
   onConfirmDelete
 }: ProjectContextMenuContentProps): React.JSX.Element {
@@ -129,6 +132,9 @@ export function ProjectContextMenuContent({
       </ContextMenuSub>
 
       <ContextMenuSeparator />
+      <ContextMenuItem disabled={!isGitRepo} onSelect={() => onSwitchWorktree(project.id)}>
+        <GitBranch className="mr-2 h-4 w-4" /> Switch worktree…
+      </ContextMenuItem>
       <WriteGate gated={worktreeGated} focusable={false} className="flex w-full">
         <ContextMenuItem
           disabled={!isGitRepo || !admitted}
