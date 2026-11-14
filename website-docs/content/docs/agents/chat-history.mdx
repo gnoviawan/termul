@@ -1,6 +1,6 @@
 ---
 title: Find and reopen chats
-description: Search your chats, pick up an old conversation, open a chat next to another one, or delete it.
+description: Search your chats, pick up an old conversation, import chats from another client, open a chat next to another one, or delete it.
 ---
 
 Troupe saves every chat with its project. The **Chats** tab in the side panel lists them, newest activity first, so you can return to any conversation and carry on where you left off.
@@ -37,6 +37,21 @@ To change how long an idle chat stays open, go to **Settings** > **Agent chats**
 
 Some agents cannot reload an old conversation. With those agents you can read the chat, but you cannot continue it. Start a new chat instead.
 
+## Import chats from outside Troupe
+
+Chats you had with an agent outside Troupe, for example in the Claude Code CLI, can join your chat history. Troupe asks the agent for the chats it keeps for the current folder and copies the ones you pick, with their messages and tool activity.
+
+1. In the **Chats** tab, click the **Import chats** button next to **Search chats…**. On a phone, tap **Import chats** below the chat list in **Recents**.
+2. If you have more than one agent set up, pick one under **Agent**. The dialog starts with Claude Code when you have it.
+3. Check the chats you want, or check the **All … chats** box at the top to take every one. Each row shows the chat's title and when it was last active.
+4. Click **Import**. The button shows how many chats you picked.
+
+Troupe imports the chats one at a time and shows its progress, for example "Importing 2 of 5…". To stop, click **Stop import**. The chat in progress finishes, and no other one starts. If a chat fails, the row says why, and the others still import. Click **Try again** to retry the ones that failed.
+
+An imported chat appears in the list as a closed chat, with the time it was last active in the other client. Open it and send a message to continue it, the same way you [resume a chat](#reopen-and-resume-a-chat). A chat you already imported does not show up in the dialog again.
+
+The dialog lists the chats of the folder the Chats tab shows, so pick a worktree in the menu at the top of the side panel to import its chats. Some agents cannot list and load their chats. For those, the dialog says there is nothing to import. When you use Troupe through a server that does not allow changes from your device, the button is off. Hover it to see why.
+
 ## Open a chat next to another one
 
 Right-click a card and choose **Open in split**. The chat opens in a new pane to the right of the active pane, so you can watch two chats at once. You can also drag a card onto a pane.
@@ -51,12 +66,23 @@ Each chat works in a folder, which is your project folder or a worktree. Hover a
 - **Open in File Explorer**. Shows the folder in your system's file manager. In a browser, Troupe copies the path instead.
 - **Copy Path**. Copies the folder path.
 
+## Let an agent read another chat
+
+To give an agent the history of an earlier chat, even one from another project, copy the chat's reference and paste it into your message.
+
+1. Right-click the chat's card and choose **Copy Chat Reference**.
+2. Paste it into the chat where you want the agent to read it.
+
+The reference is a few lines of plain text: the chat's title, its chat ID, its project and folder, and a hint to read it with the `read_chat` tool. Every agent in Troupe has that tool. It reads the chat as plain text, oldest message first, a page at a time. If the chat switched agents, the agent reads the whole conversation. For each tool call, the agent sees only its kind, the files it changed and its status, not its output.
+
+To copy only the ID, choose **Copy Chat ID** instead. On a phone, long-press a chat in **Recents** and tap **Copy chat reference**.
+
 ## Delete a chat
 
 1. Right-click the card and choose **Delete Chat**.
 2. Click **Delete** to confirm.
 
-Deleting a chat removes it and its history, and closes its tab. You cannot undo it. The files the agent changed stay as they are.
+Deleting a chat removes it and its history, and closes its tab. For a chat that [switched agents](/docs/agents/switch-agents), this deletes the whole conversation, with every agent's part. In the desktop **Chats** list, if the chat switches agents while the confirmation is open, the dialog says the chat changed and asks you to confirm again. You cannot undo it. The files the agent changed stay as they are.
 
 ## Restart a chat's agent
 
