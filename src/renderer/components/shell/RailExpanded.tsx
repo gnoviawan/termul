@@ -2,7 +2,10 @@ import { Edit2, Search, Workflow } from '@/components/icons'
 import { ProjectSidebar } from '@/components/ProjectSidebar'
 import { RailFooter } from '@/components/shell/RailFooter'
 import { RailHeader } from '@/components/shell/RailHeader'
-import { RailRow } from '@/components/shell/RailRow'
+import { RailProjectChats } from '@/components/shell/rail/RailProjectChats'
+import { logRailEvent } from '@/components/shell/rail/rail-log'
+import { RailNav, RailNavRow } from '@/components/shell/rail/rail-nav'
+import { useNewChat } from '@/components/shell/use-new-chat'
 import { useShortcutLabel } from '@/components/shell/use-shortcut-label'
 import { useProjectActions } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -29,8 +32,9 @@ const NEED_PROJECT = 'Open a project first'
 
 /**
  * Expanded Rail body, top to bottom: the header (top row part, ending in the
- * Rail toggle), Search, Canvas, Automations, the Projects section (with the SSH section on
- * desktop), and the icon-only footer. Fills the width its container gives it
+ * Rail toggle), the nav (New chat, Search, Canvas, Automations), the Projects
+ * section with the active project's chats (and the SSH section on desktop),
+ * and the icon-only footer. Fills the width its container gives it
  * and inherits the Rail's sidebar surface.
  */
 export function RailExpanded({
@@ -52,35 +56,45 @@ export function RailExpanded({
   const { updateProject, deleteProject, archiveProject, restoreProject, reorderProjects } =
     useProjectActions()
   const searchShortcut = useShortcutLabel('commandPalette')
+  const newChat = useNewChat()
+  const activeProject = projects.find((project) => project.id === activeProjectId)
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
       <RailHeader />
 
-      <div className="flex shrink-0 flex-col gap-0.5 px-2 pt-2">
-        <RailRow
+      <RailNav>
+        <RailNavRow
+          label="New chat"
+          icon={<Edit2 />}
+          onClick={() => {
+            logRailEvent('new chat')
+            newChat()
+          }}
+        />
+        <RailNavRow
           label="Search"
-          chip={searchShortcut}
-          icon={<Search size={16} />}
+          shortcut={searchShortcut}
+          icon={<Search />}
           onClick={onOpenCommandPalette}
         />
-        <RailRow
+        <RailNavRow
           label="Canvas"
           name="Open canvas"
           hint={canOpenCanvas ? undefined : NEED_PROJECT}
-          icon={<Edit2 size={16} />}
+          icon={<Edit2 />}
           disabled={!canOpenCanvas}
           onClick={onOpenCanvas}
         />
-        <RailRow
+        <RailNavRow
           label="Automations"
           name="Open automations"
           hint={activeProjectId ? undefined : NEED_PROJECT}
-          icon={<Workflow size={16} />}
+          icon={<Workflow />}
           disabled={!activeProjectId}
           onClick={() => useWorkspaceStore.getState().addAutomationsTab(activeProjectId)}
         />
-      </div>
+      </RailNav>
 
       <ProjectSidebar
         projects={projects}
@@ -95,6 +109,9 @@ export function RailExpanded({
         onSSHConnect={onSSHConnect}
         onSelectSSHProfile={onSelectSSHProfile}
         activeSSHProfileId={activeSSHProfileId}
+        activeProjectContent={
+          activeProject ? <RailProjectChats key={activeProject.id} project={activeProject} /> : null
+        }
       />
 
       <RailFooter

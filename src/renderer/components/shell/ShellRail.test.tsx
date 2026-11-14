@@ -6,24 +6,31 @@ import {
   resetNativeWebviewOcclusionForTests,
   useNativeWebviewOccluded
 } from '@/hooks/use-native-webview-occlusion'
+import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
+import { useAcpStore } from '@/stores/acp-store'
 import { useGitStatusStore } from '@/stores/git-status-store'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
 import { useSSHStore } from '@/stores/ssh-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 import { ShellRail, type ShellRailProps } from './ShellRail'
 
-const { mockNavigate, mockToastError, tauriRef, macRef, reconcilerSpy } = vi.hoisted(() => ({
-  mockNavigate: vi.fn(),
-  mockToastError: vi.fn(),
-  tauriRef: { current: true as boolean },
-  macRef: { current: false as boolean },
-  reconcilerSpy: vi.fn()
-}))
+const { mockNavigate, mockToastError, tauriRef, macRef, reconcilerSpy, mockLog } = vi.hoisted(
+  () => ({
+    mockLog: vi.fn(),
+    mockNavigate: vi.fn(),
+    mockToastError: vi.fn(),
+    tauriRef: { current: true as boolean },
+    macRef: { current: false as boolean },
+    reconcilerSpy: vi.fn()
+  })
+)
 
 vi.mock('sonner', () => ({ toast: { error: mockToastError } }))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLog }))
 
 vi.mock('@/lib/tauri-runtime', async () => {
   const actual = await vi.importActual<typeof import('@/lib/tauri-runtime')>('@/lib/tauri-runtime')
@@ -138,10 +145,11 @@ describe('ShellRail', () => {
   })
 
   describe('expanded', () => {
-    it('is a Projects nav with Search, Canvas, the Projects section, SSH and the footer', () => {
+    it('is a Projects nav with New chat, Search, Canvas, the Projects section, SSH and the footer', () => {
       renderRail()
 
       const nav = screen.getByRole('navigation', { name: 'Projects' })
+      expect(within(nav).getByRole('button', { name: 'New chat' })).toBeInTheDocument()
       expect(within(nav).getByRole('button', { name: 'Search' })).toBeInTheDocument()
       expect(within(nav).getByRole('button', { name: 'Open canvas' })).toBeInTheDocument()
       expect(within(nav).getByText('Projects')).toBeInTheDocument()
@@ -154,21 +162,24 @@ describe('ShellRail', () => {
       expect(
         within(nav).getByRole('button', { name: 'Open keyboard shortcuts menu' })
       ).toBeInTheDocument()
-      // Chats do not nest under projects.
-      expect(within(nav).queryByLabelText('Expand chats')).not.toBeInTheDocument()
+      // No chat list when the active project has no chats.
+      expect(within(nav).queryByTestId('rail-project-chats')).not.toBeInTheDocument()
       // The collapsed-only controls are absent.
       expect(within(nav).queryByRole('button', { name: /Switch project/ })).not.toBeInTheDocument()
-      expect(screen.getByTestId('shell-rail')).toHaveStyle({ width: '200px' })
+      expect(screen.getByTestId('shell-rail')).toHaveStyle({ width: '248px' })
     })
 
-    it('shows the resolved command palette shortcut as a chip on the Search row', () => {
+    it('shows no shortcut chip on the nav rows; the shortcut is in the tooltip', async () => {
       renderRail()
-      expect(within(screen.getByRole('button', { name: 'Search' })).getByText('Ctrl+K')).toBe(
-        screen.getByRole('button', { name: 'Search' }).querySelector('kbd')
-      )
+      const search = screen.getByRole('button', { name: 'Search' })
+      expect(search.querySelector('kbd')).toBeNull()
+      expect(screen.getByRole('button', { name: 'New chat' }).querySelector('kbd')).toBeNull()
+      fireEvent.focus(search)
+      const tooltip = await screen.findByRole('tooltip')
+      expect(tooltip).toHaveTextContent('Ctrl+K')
     })
 
-    it('follows a custom command palette binding', () => {
+    it('follows a custom command palette binding', async () => {
       const { shortcuts } = useKeyboardShortcutsStore.getState()
       useKeyboardShortcutsStore.setState({
         shortcuts: {
@@ -177,10 +188,40 @@ describe('ShellRail', () => {
         }
       })
       renderRail()
-      expect(screen.getByRole('button', { name: 'Search' }).querySelector('kbd')).toHaveTextContent(
-        'Ctrl+P'
-      )
+      fireEvent.focus(screen.getByRole('button', { name: 'Search' }))
+      expect(await screen.findByRole('tooltip')).toHaveTextContent('Ctrl+P')
       useKeyboardShortcutsStore.getState().resetShortcut('commandPalette')
+    })
+
+    it('opens the launcher from New chat and logs it once from the Rail', () => {
+      const showAgentLauncher = vi.fn()
+      useWorkspaceStore.setState({ activePaneId: 'pane-1', showAgentLauncher })
+      renderRail()
+      fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+      expect(showAgentLauncher).toHaveBeenCalledWith('pane-1')
+      expect(mockLog).toHaveBeenCalledTimes(1)
+      expect(mockLog).toHaveBeenCalledWith({
+        level: 'info',
+        source: 'Rail',
+        message: '[rail] new chat'
+      })
+    })
+
+    it('nests the chats under the active project only', () => {
+      useAcpStore.setState({
+        sessions: {},
+        agentConfigs: [],
+        sessionIndex: [
+          mockSessionIndexEntry({ id: 'a', title: 'Chat a', projectId: 'p1', cwd: '/repo/alpha' }),
+          mockSessionIndexEntry({ id: 'b', title: 'Chat b', projectId: 'p2', cwd: '/repo/beta' })
+        ]
+      })
+      renderRail()
+      const alpha = screen.getByTestId('project-item-p1').parentElement as HTMLElement
+      expect(within(alpha).getByRole('list', { name: 'Chats in Alpha' })).toBeInTheDocument()
+      expect(within(alpha).getByRole('button', { name: 'Chat a' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Chat b' })).not.toBeInTheDocument()
+      useAcpStore.setState({ sessionIndex: [] })
     })
 
     it('opens the command palette and the canvas from their rows', () => {
@@ -360,16 +401,16 @@ describe('ShellRail', () => {
     it('exposes a separator with the persisted width and resizes by keyboard', () => {
       renderRail()
       const separator = screen.getByRole('separator')
-      expect(separator).toHaveAttribute('aria-valuenow', '200')
+      expect(separator).toHaveAttribute('aria-valuenow', '248')
       expect(separator).toHaveAttribute('aria-valuemin', '180')
       expect(separator).toHaveAttribute('aria-valuemax', '360')
 
       fireEvent.keyDown(separator, { key: 'ArrowRight' })
-      expect(useShellLayoutStore.getState().railWidth).toBe(216)
-      expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '216')
+      expect(useShellLayoutStore.getState().railWidth).toBe(264)
+      expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '264')
 
       fireEvent.keyDown(separator, { key: 'ArrowLeft' })
-      expect(useShellLayoutStore.getState().railWidth).toBe(200)
+      expect(useShellLayoutStore.getState().railWidth).toBe(248)
 
       fireEvent.keyDown(separator, { key: 'Home' })
       expect(useShellLayoutStore.getState().railWidth).toBe(180)
@@ -386,14 +427,14 @@ describe('ShellRail', () => {
       renderRail()
       const separator = screen.getByRole('separator')
 
-      fireEvent.mouseDown(separator, { clientX: 200 })
-      fireEvent.mouseMove(document, { clientX: 250 })
-      expect(useShellLayoutStore.getState().railWidth).toBe(250)
-      expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '250')
+      fireEvent.mouseDown(separator, { clientX: 248 })
+      fireEvent.mouseMove(document, { clientX: 298 })
+      expect(useShellLayoutStore.getState().railWidth).toBe(298)
+      expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '298')
 
       fireEvent.mouseUp(document)
-      fireEvent.mouseMove(document, { clientX: 300 })
-      expect(useShellLayoutStore.getState().railWidth).toBe(250)
+      fireEvent.mouseMove(document, { clientX: 340 })
+      expect(useShellLayoutStore.getState().railWidth).toBe(298)
     })
 
     it('clamps a drag to the store bounds', () => {
@@ -699,7 +740,7 @@ describe('ShellRail', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Expand or collapse projects' }))
       expect(updatePanelVisibility).toHaveBeenLastCalledWith('sidebarVisible', true)
       await waitFor(() => expect(nav).toHaveAttribute('data-expanded', 'true'))
-      expect(useShellLayoutStore.getState().railWidth).toBe(200)
+      expect(useShellLayoutStore.getState().railWidth).toBe(248)
     })
 
     it('toasts when the visibility update fails', async () => {

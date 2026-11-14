@@ -7,28 +7,17 @@ import { SidebarSearchField } from '@/components/sidebar/sidebar-search-field'
 import { conversationDeleteIds } from '@/lib/session-chain'
 import { useAcpStore } from '@/stores/acp-store'
 import { liveSwitchSources } from '@/stores/acp-store/shared-state'
-import { useShellLayoutStore } from '@/stores/shell-layout-store'
-import { findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 import { ChatCard } from './ChatCard'
-import { buildChatCards, filterChatCards } from './chat-cards'
+import { filterChatCards } from './chat-cards'
 import { useChatCardActions } from './use-chat-card-actions'
 import { useColumnWorkingCopy } from './use-column-working-copy'
+import { isOpenChatCard, useProjectChats } from './use-project-chats'
 
 /** First-paint card height; real heights are measured after mount. */
 const ESTIMATED_CARD_HEIGHT = 44
 const CARD_GAP = 2
 const OVERSCAN = 6
-
-/** Session id of the agent chat tab focused in the active pane, if any. */
-function useActiveChatSessionId(): string | null {
-  return useWorkspaceStore((s) => {
-    const pane = findPaneById(s.root, s.activePaneId)
-    if (pane?.type !== 'leaf') return null
-    const tab = pane.tabs.find((t) => t.id === pane.activeTabId)
-    return tab?.type === 'agent-chat' ? tab.sessionId : null
-  })
-}
 
 interface ChatsListProps {
   project: Project
@@ -38,23 +27,14 @@ interface ChatsListProps {
  * Chats tab body: a searchable, virtualised list of the active project's chats,
  * scoped by the worktree pick (never by the active tab). Only the cards in
  * view plus a small overscan are mounted, so a long history needs no pager.
+ *
+ * TODO(P4): not mounted since Sidebar V2 P1 hid the Chats tab (chats list in
+ * the Rail now). Its search and import come back to the Rail in P4.
  */
 export function ChatsList({ project }: ChatsListProps): React.JSX.Element {
-  const sessionIndex = useAcpStore((s) => s.sessionIndex)
-  const agentConfigs = useAcpStore((s) => s.agentConfigs)
-  const pick = useShellLayoutStore((s) => s.worktreePickByProject[project.id])
-  const activeChatSessionId = useActiveChatSessionId()
+  const { cards, openChatId } = useProjectChats(project)
   const { cwd } = useColumnWorkingCopy(project)
   const { onDelete, ...cardActions } = useChatCardActions(project.id)
-
-  const agentNames = useMemo(
-    () => new Map(agentConfigs.map((config) => [config.id, config.name])),
-    [agentConfigs]
-  )
-  const cards = useMemo(
-    () => buildChatCards({ sessionIndex, project, pick, agentNames }),
-    [sessionIndex, project, pick, agentNames]
-  )
 
   const [query, setQuery] = useState('')
   const filtered = useMemo(() => filterChatCards(cards, query), [cards, query])
@@ -142,11 +122,7 @@ export function ChatsList({ project }: ChatsListProps): React.JSX.Element {
                   <ChatCard
                     card={card}
                     index={item.index}
-                    isActive={
-                      card.entry.id === activeChatSessionId ||
-                      (activeChatSessionId !== null &&
-                        (card.entry.chainIds?.includes(activeChatSessionId) ?? false))
-                    }
+                    isActive={isOpenChatCard(card, openChatId)}
                     actions={cardActions}
                     onRequestDelete={requestDelete}
                   />

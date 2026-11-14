@@ -1,4 +1,3 @@
-import { RAIL_ROW_INSET_CLASS } from '@/components/shell/rail-layout'
 import { QUIET_ICON_BUTTON_CLASS } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 
@@ -18,8 +17,9 @@ interface RailSectionHeaderProps {
 
 /**
  * Small muted section label of the shell Rail project list ("Groups",
- * "Projects"). The label starts on the shared Rail icon column and an icon
- * button sits at the end. The row is not focusable; only its button is.
+ * "Projects"): 40px with 12px on top, the label 18px from the Rail edge
+ * (Sidebar V2), an icon button at the end. The row is not focusable; only
+ * its button is.
  */
 export function RailSectionHeader({
   label,
@@ -30,8 +30,7 @@ export function RailSectionHeader({
     <div
       data-testid={`rail-section-${label.toLowerCase()}`}
       className={cn(
-        'flex h-8 w-full select-none items-center justify-between pr-1.5',
-        RAIL_ROW_INSET_CLASS,
+        'flex h-10 w-full select-none items-center justify-between gap-2 pt-3 pr-1.5 pl-2.5',
         className
       )}
     >

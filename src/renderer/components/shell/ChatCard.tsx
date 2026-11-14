@@ -2,11 +2,7 @@ import { ChatEntryIcon } from '@/components/chat/ChatHistoryEntryRow'
 import { sessionModelSnapshot } from '@/components/chat/chat-input-bar-config'
 import { ReloadChatMenuItem } from '@/components/chat/ReloadChatMenuItem'
 import { Columns2, Copy, FolderOpen, GitBranch, Hash, Terminal, Trash2 } from '@/components/icons'
-import {
-  ChatRowTrail,
-  type ProjectChatEntry,
-  type ProjectChatLiveState
-} from '@/components/sidebar/project-chat-row'
+import { ChatRowTrail, type ProjectChatEntry } from '@/components/sidebar/project-chat-row'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -14,19 +10,12 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
-import { useAgentChatStatusSignals } from '@/components/workspace/tabs/agent-chat-status'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { cn } from '@/lib/utils'
 import { findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
 import { type ChatCardData, modelLineOf } from './chat-cards'
 import type { ChatCardActions } from './use-chat-card-actions'
-
-const STATUS_WORD: Record<ProjectChatLiveState, string | null> = {
-  'needs-you': 'Needs you',
-  running: 'Running',
-  done: 'New activity',
-  idle: null
-}
+import { useChatLiveState } from './use-project-chats'
 
 export interface ChatCardProps {
   card: ChatCardData
@@ -52,7 +41,7 @@ export function ChatCard({
 }: ChatCardProps): React.JSX.Element {
   const { entry, branch } = card
   const { startChatDrag } = usePaneDnd()
-  const signals = useAgentChatStatusSignals(entry.id)
+  const { liveState, statusWord, signals } = useChatLiveState(entry.id)
   // A pane's only tab cannot be split off that same pane, so the menu item
   // would do nothing: disable it and say why.
   const soleTabOfActivePane = useWorkspaceStore((s) => {
@@ -61,15 +50,6 @@ export function ChatCard({
     const only = pane.tabs[0]
     return only?.type === 'agent-chat' && only.sessionId === entry.id
   })
-
-  const liveState: ProjectChatLiveState = signals.needsAttention
-    ? 'needs-you'
-    : signals.turnBusy
-      ? 'running'
-      : signals.unread
-        ? 'done'
-        : 'idle'
-  const statusWord = STATUS_WORD[liveState]
 
   // Same precedence as the composer: the model config option, then the native
   // model list. `session.models` alone stays on the session/new value.

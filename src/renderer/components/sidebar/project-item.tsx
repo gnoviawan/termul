@@ -87,7 +87,7 @@ export const ProjectItem = memo(function ProjectItem({
               }
             }}
             className={cn(
-              'group flex h-8 w-full cursor-pointer select-none items-center pr-1.5 text-left text-xs',
+              'group flex h-7.5 w-full cursor-pointer select-none items-center text-left text-xs',
               'rounded-lg',
               RAIL_ROW_INSET_CLASS,
               'transition-colors duration-150 ease-out focus-visible:ring-inset',
@@ -119,8 +119,8 @@ export const ProjectItem = memo(function ProjectItem({
               <span className="relative flex min-w-0 flex-1 items-center gap-2">
                 <span
                   className={cn(
-                    // flex-1 min-w-0 is required for truncate to clip inside a flex row
-                    'min-w-0 flex-1 truncate font-medium transition-colors duration-150 ease-out',
+                    // Fills the row and fades its last 24px instead of an ellipsis.
+                    'fade-end min-w-0 flex-1 font-medium transition-colors duration-150 ease-out',
                     isActive
                       ? 'text-foreground'
                       : 'text-secondary-foreground group-hover:text-foreground'

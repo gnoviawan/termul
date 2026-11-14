@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { PANEL_HEADER_CLASS, PANEL_ICON_BUTTON_CLASS } from '@/components/ui/panel-styles'
 import { dialogApi, shellApi } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
 import type { Project, ProjectColor, ProjectGroup } from '@/types/project'
 import { ColorPickerPopover } from './ColorPickerPopover'
@@ -42,7 +43,8 @@ export function ProjectSidebar({
   onReorderProjects,
   onSSHConnect,
   onSelectSSHProfile,
-  activeSSHProfileId
+  activeSSHProfileId,
+  activeProjectContent
 }: ProjectSidebarProps): React.JSX.Element {
   const {
     addProject,
@@ -322,7 +324,7 @@ export function ProjectSidebar({
     <div className="flex min-h-0 w-full flex-1 flex-col">
       {/* Header with inline + button */}
       {!railSections && (
-        <div className={PANEL_HEADER_CLASS}>
+        <div className={cn(PANEL_HEADER_CLASS, 'pt-3 pl-4.5')}>
           <span className="label-panel">Projects</span>
           <div className="flex items-center">
             <AddProjectMenu
@@ -373,6 +375,7 @@ export function ProjectSidebar({
         railSections={railSections}
         onNewProject={onNewProject}
         onNewGroup={() => setNewGroupModal({})}
+        activeProjectContent={activeProjectContent}
       />
 
       {/* SSH Connections - Resizable */}

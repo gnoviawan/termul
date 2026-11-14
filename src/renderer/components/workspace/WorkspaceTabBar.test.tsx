@@ -389,7 +389,7 @@ describe('WorkspaceTabBar', () => {
 
     const tabEl = screen.getByText('a.ts').closest('[role="tab"]') as HTMLElement
     expect(tabEl).toBeTruthy()
-    expect(tabEl.className).toContain('text-foreground')
+    expect(tabEl.className).toContain('text-secondary-foreground')
     expect(tabEl.className).not.toContain('border-b')
     // The raised surface is its own layer so it can slide between tabs.
     expect(tabEl.querySelector('.keycap')).toBeTruthy()

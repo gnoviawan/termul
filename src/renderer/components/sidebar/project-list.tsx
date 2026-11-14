@@ -68,6 +68,8 @@ export interface ProjectListProps {
   railSections?: boolean
   onNewProject?: () => void
   onNewGroup?: () => void
+  /** Shown under the active project's row, inside its drag item (the Rail's chats). */
+  activeProjectContent?: React.ReactNode
 }
 
 export function ProjectList({
@@ -107,7 +109,8 @@ export function ProjectList({
   renderArchivedProjectContextMenu,
   railSections = false,
   onNewProject,
-  onNewGroup
+  onNewGroup,
+  activeProjectContent
 }: ProjectListProps): React.JSX.Element {
   // One draggable active-project row, shared by grouped and ungrouped lists.
   // Dropping on a folder header or group container moves the project there.
@@ -184,12 +187,13 @@ export function ProjectList({
             useSettingsModalStore.getState().openProject(undefined, project.id)
           }
         />
+        {project.id === activeProjectId && activeProjectContent}
       </Reorder.Item>
     )
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-2 pb-1" data-group-id="root">
+    <div className="flex-1 overflow-y-auto px-2 pt-0.5 pb-1" data-group-id="root">
       {projects.length === 0 ? (
         <div className="flex flex-col items-center justify-center p-6 text-center opacity-60">
           <p className="text-sm text-muted-foreground">No projects yet</p>
@@ -227,7 +231,7 @@ export function ProjectList({
               onReorder={(reordered) => {
                 reorderGroups(reordered.map((gp) => gp.group.id))
               }}
-              className="flex flex-col gap-0.5"
+              className="flex flex-col gap-px"
               data-testid="grouped-projects-container"
             >
               {visibleGroups.map((groupEntry) => {
@@ -243,7 +247,7 @@ export function ProjectList({
                   >
                     <div
                       className={cn(
-                        'flex flex-col gap-0.5',
+                        'flex flex-col gap-px',
                         // Rail: an expanded group and its projects share one
                         // soft surface; the rows keep the shared icon column.
                         !isCollapsed && '-mx-1 rounded-lg bg-foreground/[0.03] px-1 pb-1'
@@ -281,7 +285,7 @@ export function ProjectList({
                               reordered.map((p) => p.id)
                             )
                           }}
-                          className="flex flex-col gap-0.5"
+                          className="flex flex-col gap-px"
                           data-group-container-id={group.id}
                         >
                           {gpProjects.map(renderProjectRow)}
@@ -311,7 +315,7 @@ export function ProjectList({
                 onReorder={(reordered) => {
                   onReorderProjects(reordered.map((p) => p.id))
                 }}
-                className="mt-0.5 flex flex-col gap-0.5"
+                className="flex flex-col gap-px"
                 data-testid="ungrouped-projects-container"
               >
                 {ungroupedActiveProjects.map(renderProjectRow)}

@@ -1,13 +1,18 @@
 import { useRef } from 'react'
-import { FolderTree, GitBranch, Github, MessageSquare, type TermulIcon } from '@/components/icons'
+import { FolderTree, GitBranch, Github, type TermulIcon } from '@/components/icons'
 import { CountBadge } from '@/components/ui/count-badge'
 import { SEGMENTED_TRACK_CLASS, segmentClass } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 import type { ShellLastColumnTab } from '@/stores/shell-layout-store'
+import type { VisibleColumnTab } from './column-tab'
 
-/** Every tab is an equal-width icon; the label is its accessible name and tooltip. */
-const TABS: ReadonlyArray<{ id: ShellLastColumnTab; label: string; Icon: TermulIcon }> = [
-  { id: 'chats', label: 'Chats', Icon: MessageSquare },
+/**
+ * Every tab is an equal-width icon; the label is its accessible name and tooltip.
+ * Sidebar V2 P1 moved chats into the Rail, so the Chats tab is gone. TODO(P4):
+ * chat search and chat import lived in the Chats tab (`ChatsList`) and are
+ * unreachable until P4 brings them back to the Rail.
+ */
+const TABS: ReadonlyArray<{ id: VisibleColumnTab; label: string; Icon: TermulIcon }> = [
   { id: 'explorer', label: 'Explorer', Icon: FolderTree },
   { id: 'changes', label: 'Changes', Icon: GitBranch },
   { id: 'github', label: 'GitHub', Icon: Github }
@@ -22,14 +27,14 @@ export function columnPanelId(tab: ShellLastColumnTab): string {
 }
 
 interface ColumnTabsProps {
-  selected: ShellLastColumnTab
-  onSelect: (tab: ShellLastColumnTab) => void
+  selected: VisibleColumnTab
+  onSelect: (tab: VisibleColumnTab) => void
   /** Changed files of the working copy; the badge shows above 0 (capped at 99+). */
   changedCount: number
 }
 
 /**
- * Side panel Column tabs: Chats, Explorer, Changes, GitHub in a fixed order. A
+ * Side panel Column tabs: Explorer, Changes, GitHub in a fixed order. A
  * `tablist` with a roving tabindex; Left/Right move and select, wrapping.
  */
 export function ColumnTabs({

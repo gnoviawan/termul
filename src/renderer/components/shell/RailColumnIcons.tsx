@@ -32,7 +32,7 @@ function focusPanelTab(tab: ShellLastColumnTab): void {
  * Collapsed Rail's Column tab icons (CAP-2): Chats, Explorer, Changes and GitHub.
  * The Rail shows them only while the Side panel is off screen (see
  * `showsFileColumn`; the panel shows its own tab bar), so none is pressed.
- * Each selects the project's Column tab, shows a hidden Side panel and moves
+ * Chats expands the Rail, where the chats are. Each other icon selects the project's Column tab, shows a hidden Side panel and moves
  * focus to the panel's tab, because this icon unmounts. With the SSH
  * workspace open the tab is never written (the click only shows the column).
  * Every write goes through the shell-layout store.
@@ -73,6 +73,16 @@ export function RailColumnIcons({
     }
   }
 
+  // Sidebar V2 P1: chats list under the project in the expanded Rail, and the
+  // Side panel has no Chats tab, so Chats expands the Rail. TODO(P2): the
+  // collapsed Rail is rebuilt 1:1 with the expanded one.
+  const expandRail = (): void => {
+    if (!projectId) return
+    void updatePanelVisibility('sidebarVisible', true).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : 'Failed to update sidebar visibility')
+    })
+  }
+
   return (
     <>
       <RailButton
@@ -80,7 +90,7 @@ export function RailColumnIcons({
         hint={hasProject ? undefined : NEED_PROJECT}
         aria-label="Chats"
         disabled={!hasProject}
-        onClick={(event) => select('chats', event)}
+        onClick={expandRail}
         badge={
           isRunning ? (
             <span

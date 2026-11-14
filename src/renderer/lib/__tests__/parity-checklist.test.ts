@@ -2163,13 +2163,20 @@ describe('Host-owned chat activity parity (chat list status on every surface)', 
     )
     expect(signals).toMatch(/useChatActivityStore\(/)
     for (const consumer of [
-      ['components', 'shell', 'ChatCard.tsx'],
+      ['components', 'shell', 'use-project-chats.ts'],
       ['components', 'mobile', 'MobileRecentsList.tsx'],
       ['components', 'workspace', 'tabs', 'agent-chat-tab.tsx']
     ]) {
       expect(readFileSync(join(LIB_DIR, '..', ...consumer), 'utf-8')).toMatch(
         /useAgentChatStatusSignals\(/
       )
+    }
+    // The desktop chat card and the Rail chat row read it through `useChatLiveState`.
+    for (const row of [
+      ['components', 'shell', 'ChatCard.tsx'],
+      ['components', 'shell', 'rail', 'RailProjectChats.tsx']
+    ]) {
+      expect(readFileSync(join(LIB_DIR, '..', ...row), 'utf-8')).toMatch(/useChatLiveState\(/)
     }
   })
 })

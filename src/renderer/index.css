@@ -868,6 +868,15 @@
   }
 }
 
+/* One-line label that fades out over its last 24px instead of an ellipsis
+   (Sidebar V2). Give the label the full row width (`min-w-0 flex-1`) so a
+   short label never reaches the fade. Multi-line text keeps line-clamp. */
+@utility fade-end {
+  overflow: hidden;
+  white-space: nowrap;
+  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+}
+
 /* ------------------------------------------------------------
  * Uppercase label scale.
  *

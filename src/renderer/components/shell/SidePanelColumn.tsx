@@ -1,5 +1,4 @@
 import { lazy, Suspense } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
 import { Plus } from '@/components/icons'
 import { PANEL_HEADER_CLASS, PANEL_ICON_BUTTON_CLASS } from '@/components/ui/panel-styles'
 import { ShellSkeleton } from '@/layouts/workspace-layout/ShellSkeleton'
@@ -10,15 +9,15 @@ import {
   useLastColumnTab,
   useShellLayoutStore
 } from '@/stores/shell-layout-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 import { ChangesPanel } from './ChangesPanel'
-import { ChatsList } from './ChatsList'
 import { ColumnTabs, columnPanelId, columnTabId } from './ColumnTabs'
+import { visibleColumnTab } from './column-tab'
 import { SidePanelVisibilityButton } from './SidePanelVisibilityButtons'
 import { useTopRowPlatform } from './top-row-context'
 import { useTrafficLightInset } from './traffic-light-inset'
 import { useColumnWorkingCopy } from './use-column-working-copy'
+import { useNewChat } from './use-new-chat'
 import { useSidePanelResize } from './use-side-panel-resize'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 
@@ -36,8 +35,9 @@ interface SidePanelColumnProps {
 
 /**
  * Shell Side panel: a header with the New chat and Hide panel buttons,
- * the Chats / Explorer / Changes / GitHub Column tabs and the selected tab's body. The
- * last tab is remembered per project. The tabs show in both Rail states; the
+ * the Explorer / Changes / GitHub Column tabs and the selected tab's body. The
+ * last tab is remembered per project. Chats moved to the Rail (Sidebar V2
+ * P1), so a stored `chats` tab shows Explorer. The tabs show in both Rail states; the
  * collapsed Rail shows its own tab icons only while this panel is hidden.
  * Mounted through `ExplorerColumn`'s `sidePanel` slot, never in SSH mode.
  *
@@ -52,26 +52,10 @@ export function SidePanelColumn({ activeProject }: SidePanelColumnProps): React.
   const dragAttr = useTopRowPlatform().dragRegions ? true : undefined
   const trafficLightInset = useTrafficLightInset()
 
-  const selected: ShellLastColumnTab = useLastColumnTab(projectId) ?? 'chats'
+  const selected = visibleColumnTab(useLastColumnTab(projectId))
   const changedCount = useGitStatusStore(selectChangedFileCount(cwd))
   const { width, min, max, onResizeMouseDown, onResizeKeyDown } = useSidePanelResize()
-  const pathname = useLocation().pathname
-  const navigate = useNavigate()
-
-  // Same as the Rail's New chat: the launcher overlay only renders on the
-  // workspace route, so leave any child route first.
-  const handleNewChat = (): void => {
-    const open = (): void => {
-      const paneId = useWorkspaceStore.getState().activePaneId
-      if (paneId) useWorkspaceStore.getState().showAgentLauncher(paneId)
-    }
-    if (pathname !== '/') {
-      navigate('/')
-      requestAnimationFrame(open)
-    } else {
-      open()
-    }
-  }
+  const handleNewChat = useNewChat()
 
   const handleSelectTab = (tab: ShellLastColumnTab): void => {
     useShellLayoutStore.getState().setLastColumnTab(projectId, tab)
@@ -118,7 +102,6 @@ export function SidePanelColumn({ activeProject }: SidePanelColumnProps): React.
           aria-labelledby={columnTabId(selected)}
           className="flex min-h-0 flex-1 flex-col"
         >
-          {selected === 'chats' && <ChatsList project={activeProject} />}
           {selected === 'explorer' && (
             <Suspense fallback={<ShellSkeleton />}>
               <FileExplorer />

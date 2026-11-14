@@ -24,7 +24,7 @@ export interface ShellLayoutBounds {
 }
 
 export const SHELL_LAYOUT_BOUNDS = {
-  railWidth: { min: 180, max: 360, default: 200 },
+  railWidth: { min: 180, max: 360, default: 248 },
   sidePanelWidth: { min: 220, max: 560, default: 260 },
   sshSectionHeight: { min: 48, max: 400, default: 140 },
   gitHistoryDetailWidth: { min: 320, max: 560, default: 400 }

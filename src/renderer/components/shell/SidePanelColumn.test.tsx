@@ -84,15 +84,24 @@ beforeEach(() => {
 })
 
 describe('SidePanelColumn', () => {
-  it('renders the header, the four tabs and the Chats list by default', () => {
+  it('renders the header and the three tabs, Explorer by default (no Chats tab)', async () => {
     renderPanel(makeProject())
     expect(screen.getByTestId('workspace-switcher')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'New chat' })).toBeInTheDocument()
     expect(
       screen.getAllByRole('tab').map((t) => t.getAttribute('aria-label') ?? t.textContent)
-    ).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
-    expect(screen.getByRole('tab', { name: 'Chats' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByLabelText('Search chats')).toBeInTheDocument()
+    ).toEqual(['Explorer', 'Changes', 'GitHub'])
+    expect(screen.getByRole('tab', { name: 'Explorer' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByLabelText('Search chats')).toBeNull()
+    expect(await screen.findByTestId('file-explorer')).toBeInTheDocument()
+  })
+
+  it('shows Explorer for a stored Chats tab without rewriting it', async () => {
+    useShellLayoutStore.setState({ lastColumnTabByProject: { p1: 'chats' } })
+    renderPanel(makeProject())
+    expect(screen.getByRole('tab', { name: 'Explorer' })).toHaveAttribute('aria-selected', 'true')
+    expect(await screen.findByTestId('file-explorer')).toBeInTheDocument()
+    expect(useShellLayoutStore.getState().lastColumnTabByProject).toEqual({ p1: 'chats' })
   })
 
   it('mounts the Workspace switcher for the active project in the header', () => {
@@ -132,16 +141,16 @@ describe('SidePanelColumn', () => {
     const p2 = makeProject({ id: 'p2', name: 'Two', path: '/two', worktrees: [] })
     const { rerenderProject } = renderPanel(p1)
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Explorer' }))
-    expect(await screen.findByTestId('file-explorer')).toBeInTheDocument()
-    expect(useShellLayoutStore.getState().lastColumnTabByProject).toEqual({ p1: 'explorer' })
+    fireEvent.click(screen.getByRole('tab', { name: 'GitHub' }))
+    expect(await screen.findByTestId('github-panel')).toBeInTheDocument()
+    expect(useShellLayoutStore.getState().lastColumnTabByProject).toEqual({ p1: 'github' })
 
     rerenderProject(p2)
-    expect(screen.getByRole('tab', { name: 'Chats' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.queryByTestId('file-explorer')).toBeNull()
+    expect(screen.getByRole('tab', { name: 'Explorer' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByTestId('github-panel')).toBeNull()
 
     rerenderProject(p1)
-    expect(screen.getByRole('tab', { name: 'Explorer' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'GitHub' })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('renders the Changes panel for the picked working copy', () => {
@@ -285,13 +294,12 @@ describe('SidePanelColumn', () => {
         useShellLayoutStore.setState({ railExpanded })
         const view = renderOn(null)
         expect(screen.getAllByRole('tab').map((t) => t.getAttribute('aria-label'))).toEqual([
-          'Chats',
           'Explorer',
           'Changes',
           'GitHub'
         ])
         const panel = screen.getByRole('tabpanel')
-        expect(panel).toHaveAttribute('aria-labelledby', 'side-panel-tab-chats')
+        expect(panel).toHaveAttribute('aria-labelledby', 'side-panel-tab-explorer')
         expect(panel).not.toHaveAttribute('aria-label')
         view.unmount()
       }

@@ -75,7 +75,7 @@ describe('shell-layout-store', () => {
       expect(state()).toMatchObject({
         status: 'idle',
         railExpanded: true,
-        railWidth: 200,
+        railWidth: 248,
         sidePanelVisible: true,
         sidePanelWidth: 260,
         sshSectionVisible: true,
@@ -108,7 +108,7 @@ describe('shell-layout-store', () => {
         railExpanded: 'yes',
         sidePanelVisible: 1
       })
-      expect(record.railWidth).toBe(200)
+      expect(record.railWidth).toBe(248)
       expect(record.sidePanelWidth).toBe(260)
       expect(record.railExpanded).toBe(true)
       expect(record.sidePanelVisible).toBe(true)
@@ -137,7 +137,7 @@ describe('shell-layout-store', () => {
       state().setRailWidth(300)
       state().setLastColumnTab('p1', 'explorer')
       state().setGitHistoryDetailWidth(500)
-      expect(state().railWidth).toBe(200)
+      expect(state().railWidth).toBe(248)
       expect(state().lastColumnTabByProject).toEqual({})
       expect(state().gitHistoryDetailWidth).toBe(400)
       expect(mockWriteDebounced).not.toHaveBeenCalled()
@@ -156,7 +156,7 @@ describe('shell-layout-store', () => {
       const pending = state().hydrate()
       expect(state().status).toBe('hydrating')
       state().setRailWidth(300)
-      expect(state().railWidth).toBe(200)
+      expect(state().railWidth).toBe(248)
       expect(mockWriteDebounced).not.toHaveBeenCalled()
       release({ success: true, data: { railWidth: 250 } })
       await pending
@@ -247,7 +247,7 @@ describe('shell-layout-store', () => {
     it('goes unavailable for a newer version and keeps the saved record untouched', async () => {
       await hydrateWithRecord({ version: 3, railWidth: 333 })
       expect(state().status).toBe('unavailable')
-      expect(state().railWidth).toBe(200)
+      expect(state().railWidth).toBe(248)
       expect(mockLog).toHaveBeenCalledWith(
         expect.objectContaining({ level: 'warn', message: expect.stringContaining('version 3') })
       )
@@ -281,7 +281,7 @@ describe('shell-layout-store', () => {
       expect(mockWrite).toHaveBeenCalledWith(PersistenceKeys.shellLayout, {
         version: 2,
         railExpanded: false,
-        railWidth: 200,
+        railWidth: 248,
         sidePanelVisible: false,
         sidePanelWidth: 400,
         sshSectionVisible: false,

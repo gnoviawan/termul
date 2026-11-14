@@ -39,7 +39,7 @@ describe('ThemePicker anchor', () => {
   it('follows a Rail resize while open', () => {
     render(<ThemePicker />)
     const dialog = openPicker()
-    expect(dialog.style.left).toBe('208px')
+    expect(dialog.style.left).toBe('256px')
 
     act(() => useShellLayoutStore.getState().setRailWidth(300))
     expect(dialog.style.left).toBe('308px')

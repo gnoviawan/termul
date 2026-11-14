@@ -82,6 +82,14 @@ describe('RailColumnIcons', () => {
     expect(useShellLayoutStore.getState().lastColumnTabByProject.p1).toBe('github')
   })
 
+  it('expands the Rail from Chats (chats list in the Rail) and writes no tab', () => {
+    renderIcons()
+    fireEvent.click(button('Chats'))
+    expect(updatePanelVisibility).toHaveBeenCalledWith('sidebarVisible', true)
+    expect(updatePanelVisibility).not.toHaveBeenCalledWith('fileExplorerVisible', true)
+    expect(useShellLayoutStore.getState().lastColumnTabByProject.p1).toBeUndefined()
+  })
+
   it('shows a hidden Side panel through the persisted path, selecting the tab', () => {
     renderIcons()
     fireEvent.click(button('Explorer'))

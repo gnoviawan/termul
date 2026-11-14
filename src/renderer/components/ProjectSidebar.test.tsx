@@ -378,7 +378,7 @@ describe('ProjectSidebar', () => {
 
     const activeRow = screen.getByTestId('project-item-1').querySelector('[role="button"]')
     const idleRow = screen.getByTestId('project-item-2').querySelector('[role="button"]')
-    expect(activeRow).toHaveClass('keycap', 'h-8', 'rounded-lg')
+    expect(activeRow).toHaveClass('keycap', 'h-7.5', 'rounded-lg')
     expect(activeRow).not.toHaveClass('bg-sidebar-accent')
     expect(idleRow).not.toHaveClass('keycap')
     // The wash shows under the same conditions as the actions it sits under.
@@ -447,16 +447,16 @@ describe('ProjectSidebar Name Truncation', () => {
   const longName =
     'A Very Long Project Name That Would Otherwise Wrap Onto A Second Line In The Narrow Sidebar'
 
-  it('truncates a long active project name instead of wrapping', () => {
+  it('clips a long active project name with an end fade instead of wrapping', () => {
     renderWithRouter({
       projects: [{ id: '1', name: longName, color: 'blue', gitBranch: 'main' }],
       activeProjectId: '1'
     })
 
     const nameEl = screen.getByText(longName)
-    // truncate => overflow-hidden + text-ellipsis + whitespace-nowrap;
+    // fade-end => overflow-hidden + nowrap + a 24px end fade (no ellipsis);
     // min-w-0 lets the flex child shrink below its content width so clipping kicks in.
-    expect(nameEl).toHaveClass('truncate', 'min-w-0', 'flex-1')
+    expect(nameEl).toHaveClass('fade-end', 'min-w-0', 'flex-1')
     // Full name remains discoverable on hover.
     expect(nameEl).toHaveAttribute('title', longName)
   })
@@ -952,7 +952,7 @@ describe('ProjectSidebar: Mono-style alignment and groups', () => {
     const row = within(screen.getByTestId('project-item-1')).getByRole('button', {
       name: /Project: Rail Project 1/
     })
-    expect(row).toHaveClass('gap-2', 'px-2', 'rounded-lg')
+    expect(row).toHaveClass('gap-2', 'px-3', 'rounded-lg')
     const iconColumn = row.querySelector('[data-rail-icon-column]')
     expect(iconColumn).toHaveClass('size-4', 'shrink-0')
   })
@@ -982,7 +982,7 @@ describe('ProjectSidebar: Mono-style alignment and groups', () => {
     )
     // The shared inset must not override the right padding that keeps the label
     // clear of the absolute-positioned actions button.
-    expect(within(row).getByRole('button', { name: 'My Folder' })).toHaveClass('px-2', 'pr-8')
+    expect(within(row).getByRole('button', { name: 'My Folder' })).toHaveClass('px-3', 'pr-8')
   })
 
   it('shows a neutral folder icon for an empty group', () => {
@@ -1016,7 +1016,7 @@ describe('ProjectSidebar: Mono-style alignment and groups', () => {
     const childRow = within(screen.getByTestId('project-item-1')).getByRole('button', {
       name: /Project: Rail Project 1/
     })
-    expect(childRow).toHaveClass('gap-2', 'px-2')
+    expect(childRow).toHaveClass('gap-2', 'px-3')
   })
 
   it('has no container surface on a collapsed group', () => {
