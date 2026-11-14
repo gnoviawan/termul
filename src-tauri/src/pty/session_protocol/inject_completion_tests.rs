@@ -477,7 +477,7 @@ fn audit_7_bash_completion_tokenization() {
     ))
     .unwrap();
     let functions = source
-        .split("# Original Termul session protocol helpers.")
+        .split("# Original Troupe session protocol helpers.")
         .nth(1)
         .unwrap()
         .split("# Install at script scope:")

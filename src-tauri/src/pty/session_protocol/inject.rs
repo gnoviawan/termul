@@ -147,7 +147,7 @@ fn write_zsh_shims(
     let script_path = quote_path(script)?;
     let directory_path = quote_path(directory)?;
     for name in [".zshenv", ".zprofile", ".zshrc", ".zlogin"] {
-        let mut shim = String::from("# Original Termul login startup shim.\n");
+        let mut shim = String::from("# Original Troupe login startup shim.\n");
         if name == ".zshenv" {
             shim.push_str("typeset +x __termul_session_id __termul_nonce __termul_user_zdotdir\n__termul_session_id=${TERMUL_SESSION_ID-}\n__termul_nonce=${TERMUL_SESSION_NONCE-}\n__termul_user_zdotdir=${TERMUL_USER_ZDOTDIR-}\nunset TERMUL_SESSION_ID TERMUL_SESSION_NONCE TERMUL_USER_ZDOTDIR\n");
         }

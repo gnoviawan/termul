@@ -1,10 +1,10 @@
-# Original Termul zsh integration; sourced by the final login shim.
+# Original Troupe zsh integration; sourced by the final login shim.
 typeset +x __termul_session_id __termul_nonce
 __termul_session_id=${__termul_session_id-${TERMUL_SESSION_ID-}}
 __termul_nonce=${__termul_nonce-${TERMUL_SESSION_NONCE-}}
 unset TERMUL_SESSION_ID TERMUL_SESSION_NONCE TERMUL_USER_ZDOTDIR
 
-# Original Termul session protocol helpers.
+# Original Troupe session protocol helpers.
 __termul_prompt_generation=0
 __termul_initialized=0
 __termul_generator=0
@@ -264,7 +264,7 @@ __termul_capture() {
         return $result
     }
     _main_complete >/dev/null 2>/dev/null
-    # The capture widget must never let ZLE list or insert, because Termul renders the matches itself.
+    # The capture widget must never let ZLE list or insert, because Troupe renders the matches itself.
     compstate[list]=''
     compstate[insert]=''
     unfunction compadd

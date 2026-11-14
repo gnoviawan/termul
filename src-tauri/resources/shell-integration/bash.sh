@@ -1,4 +1,4 @@
-# Original Termul bash integration (bash >=4.3; older shells stay raw).
+# Original Troupe bash integration (bash >=4.3; older shells stay raw).
 __termul_session_id=${TERMUL_SESSION_ID-}
 __termul_nonce=${TERMUL_SESSION_NONCE-}
 export -n __termul_session_id __termul_nonce
@@ -14,7 +14,7 @@ for __termul_startup_file in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.p
 done
 unset __termul_startup_file
 
-# Original Termul session protocol helpers.
+# Original Troupe session protocol helpers.
 __termul_prompt_generation=0
 __termul_initialized=0
 __termul_generator=0
