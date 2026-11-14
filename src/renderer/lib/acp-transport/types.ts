@@ -12,6 +12,11 @@ import type {
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
 import type {
+  CodexAccount,
+  CodexAccountsSnapshot,
+  CodexAccountUsage
+} from '@shared/types/codex-accounts.types'
+import type {
   McpCatalogIconPayload,
   McpCatalogPage,
   McpCatalogSearchRequest,
@@ -307,6 +312,42 @@ export interface AcpTransport {
   ): Promise<void>
   /** Stop a browser or link sign-in; `false` when none was running. */
   cancelClaudeLogin(accountId: string): Promise<boolean>
+  /** Codex Accounts of the host; secret-free. ChatGPT logins only. */
+  listCodexAccounts(): Promise<CodexAccountsSnapshot>
+  /**
+   * Plan windows of every Codex Account. Cached 5 minutes on the host.
+   * `force` still reuses a read younger than 60 seconds.
+   */
+  listCodexUsage(force?: boolean): Promise<CodexAccountUsage[]>
+  setDefaultCodexAccount(accountId: string): Promise<void>
+  /**
+   * `null` returns the Project to the Default Account. With
+   * `expectedAccountId` the host applies the choice only while the Project
+   * still uses that Account. Resolves whether the choice applied.
+   */
+  setProjectCodexAccount(
+    projectId: string,
+    accountId: string | null,
+    expectedAccountId?: string
+  ): Promise<boolean>
+  setCodexAutoSwitch(enabled: boolean): Promise<void>
+  /** Add a signed-out Account; a same-id resend answers with the first one. */
+  addCodexAccount(name: string, options?: CommandCallOptions): Promise<CodexAccount>
+  renameCodexAccount(accountId: string, name: string): Promise<void>
+  /**
+   * Remove an Account and resolve the ids of the Projects that moved to the
+   * Default Account; `[]` when it was already gone.
+   */
+  removeCodexAccount(accountId: string): Promise<string[]>
+  /**
+   * Spawn the Codex agent with this Account's home. The caller then
+   * authenticates it with `chat-gpt` or `chat-gpt-device-code`.
+   */
+  startCodexAccountLogin(
+    accountId: string,
+    config: AgentConfig,
+    options?: CommandCallOptions
+  ): Promise<SpawnAgentResult>
   /** `projectId` selects the Claude Account of a managed Claude agent. */
   spawnAgent(
     config: AgentConfig,

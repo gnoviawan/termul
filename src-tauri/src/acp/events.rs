@@ -858,6 +858,22 @@ impl From<String> for AcpErrorDetail {
 }
 
 impl AcpErrorDetail {
+    /// A Codex turn that hit a plan limit (`rate_limited` or `quota_exhausted`).
+    /// The message stays generic: the reset time comes from the usage probe.
+    #[must_use]
+    pub(crate) fn codex_plan_limit(kind: &str) -> Self {
+        let message = "Codex reached its usage limit".to_string();
+        let rpc_message_len = u32::try_from(message.len()).ok();
+        Self {
+            message,
+            code: Some(-32603),
+            data: Some(serde_json::json!({ "errorKind": kind })),
+            rpc_message_len,
+            timed_out: false,
+            connection_closed: false,
+        }
+    }
+
     /// Replace the message with a generic one and drop the structured
     /// `code` / `data` (used when failure details must not reach the renderer).
     #[must_use]

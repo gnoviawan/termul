@@ -60,6 +60,7 @@ import { ChatStarters } from './chat-start'
 import { buildTimeline, consolidateThoughtGroups, spliceReloadMarker } from './chat-timeline'
 import { ClaudeLimitNotice } from './claude-account/ClaudeLimitNotice'
 import { ClaudeSignInAction } from './claude-account/ClaudeSignInAction'
+import { CodexLimitNotice } from './codex-account/CodexLimitNotice'
 import type { SelectionContextInsertRequest } from './composer/insert-selection-context'
 import { ElicitationPrompt } from './ElicitationPrompt'
 import { PendingRestartBanner } from './PendingRestartBanner'
@@ -1038,6 +1039,7 @@ export function AgentChatPanel({
             <div className={CHAT_GUTTER_X}>
               <div className="mx-auto w-full max-w-3xl">
                 <ClaudeLimitNotice sessionId={sessionId} />
+                <CodexLimitNotice sessionId={sessionId} />
               </div>
             </div>
           )}

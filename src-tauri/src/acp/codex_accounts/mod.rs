@@ -11,6 +11,7 @@
 //! store (`auth.json` or the OS keyring entry for that home).
 
 pub mod links;
+pub mod usage;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

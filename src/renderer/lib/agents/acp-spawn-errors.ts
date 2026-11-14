@@ -290,9 +290,10 @@ export function claudeAccountSignedOutMessage(raw: unknown): string {
 }
 
 /**
- * The host refused because a Codex Account is not signed in: starting a
- * managed Codex agent on it. `/ws` carries the `codex_account_signed_out`
- * code; the desktop `invoke` path carries the same verdict as a message prefix.
+ * The host refused because a Codex Account is not signed in: choosing it, or
+ * starting or reopening a managed Codex agent on it. `/ws` carries the
+ * `codex_account_signed_out` code; the desktop `invoke` path carries the same
+ * verdict as a message prefix.
  */
 export const CODEX_ACCOUNT_SIGNED_OUT_PREFIX = 'ACP_CODEX_ACCOUNT_SIGNED_OUT'
 

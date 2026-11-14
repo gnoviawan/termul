@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use usage::UsageCache;
+
 use super::codex_accounts::{
     signed_out_error, AccountResolution, CodexAccountStore, BUILTIN_ACCOUNT_ID,
 };
@@ -86,13 +88,19 @@ fn absolute_home(value: &str, home: Option<&Path>) -> Option<PathBuf> {
 }
 
 #[async_trait::async_trait]
-trait CodexLoginStatus: Send + Sync {
+pub(crate) trait CodexLoginStatus: Send + Sync {
     async fn login_status(
         &self,
         codex_home: Option<&Path>,
         codex_bin: Option<&str>,
         project_path: Option<&str>,
     ) -> Result<Option<bool>, String>;
+
+    /// Best-effort `codex logout` for one home. The default does nothing so a
+    /// test probe can ignore sign-out.
+    async fn logout(&self, _codex_home: Option<&Path>) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 struct SystemCodexLoginProbe;
@@ -120,6 +128,17 @@ impl CodexLoginStatus for SystemCodexLoginProbe {
             },
         )
     }
+
+    async fn logout(&self, codex_home: Option<&Path>) -> Result<(), String> {
+        let home = match codex_home {
+            Some(dir) => Some(dir.to_str().ok_or_else(|| {
+                log::warn!("[acp-codex] account home is not valid Unicode");
+                "The Codex account folder path is not supported".to_string()
+            })?),
+            None => None,
+        };
+        super::commands::codex_logout(home.map(str::to_string)).await
+    }
 }
 
 /// Shared host-wide Codex Account service. Spawn preparation is active only
@@ -129,6 +148,8 @@ pub struct CodexAgentService {
     active: bool,
     profile_store: Option<Arc<CodexAccountStore>>,
     login_probe: Arc<dyn CodexLoginStatus>,
+    usage_cache: UsageCache,
+    usage_probe: Arc<dyn usage::CodexUsageProbe>,
 }
 
 impl CodexAgentService {
@@ -145,30 +166,32 @@ impl CodexAgentService {
                 "[codex-accounts] no home directory; only the built-in account is available"
             );
         }
-        Self {
-            active: true,
-            profile_store: store,
-            login_probe: Arc::new(SystemCodexLoginProbe),
-        }
+        Self::assemble(true, store, Arc::new(SystemCodexLoginProbe))
     }
 
     /// A service that does not select a Codex home. Used by unit-test managers.
     #[must_use]
     pub fn without_host_state() -> Self {
+        Self::assemble(false, None, Arc::new(SystemCodexLoginProbe))
+    }
+
+    fn assemble(
+        active: bool,
+        profile_store: Option<Arc<CodexAccountStore>>,
+        login_probe: Arc<dyn CodexLoginStatus>,
+    ) -> Self {
         Self {
-            active: false,
-            profile_store: None,
-            login_probe: Arc::new(SystemCodexLoginProbe),
+            active,
+            profile_store,
+            login_probe,
+            usage_cache: parking_lot::Mutex::new(HashMap::new()),
+            usage_probe: Arc::new(usage::SystemCodexUsageProbe),
         }
     }
 
     #[cfg(test)]
     fn with_probe(store: Arc<CodexAccountStore>, login_probe: Arc<dyn CodexLoginStatus>) -> Self {
-        Self {
-            active: true,
-            profile_store: Some(store),
-            login_probe,
-        }
+        Self::assemble(true, Some(store), login_probe)
     }
 
     fn resolve_account(&self, project_id: Option<&str>) -> AccountResolution {
@@ -297,6 +320,10 @@ fn project_path_override(env: &HashMap<String, String>) -> Option<&str> {
         .map(|(_, value)| value.as_str())
         .filter(|value| !value.trim().is_empty())
 }
+
+mod accounts;
+mod usage;
+pub use accounts::CodexSignInCheck;
 
 #[cfg(test)]
 #[path = "codex_agent/tests.rs"]

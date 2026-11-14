@@ -243,6 +243,8 @@ pub fn ws_requirement(request_type: &str) -> Requirement {
         | "get_mcp_catalog_icon"
         | "list_claude_accounts"
         | "list_claude_usage"
+        | "list_codex_accounts"
+        | "list_codex_usage"
         | "store_read"
         | "mark_chat_read" => Requirement::View,
         "store_write" | "store_delete" => Requirement::DeviceStore,
@@ -267,7 +269,9 @@ pub fn ws_request_permitted(
                 || payload["key"]
                     .as_str()
                     .zip(identity.and_then(|id| device_store_prefix(&id.device_id)))
-                    .is_some_and(|(key, prefix)| key.len() > prefix.len() && key.starts_with(&prefix))
+                    .is_some_and(|(key, prefix)| {
+                        key.len() > prefix.len() && key.starts_with(&prefix)
+                    })
         }
     }
 }

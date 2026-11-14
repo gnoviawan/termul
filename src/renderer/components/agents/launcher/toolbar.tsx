@@ -1,3 +1,4 @@
+import { CODEX_AGENT_CONFIG_ID } from '@shared/types/codex-accounts.types'
 import { toast } from 'sonner'
 import { ModeChip } from '@/components/chat/AgentHeader'
 import {
@@ -7,6 +8,7 @@ import {
 import type { SelectorSource } from '@/components/chat/agent-model-selector/selector-source'
 import type { ComposerToolbarMode } from '@/components/chat/chat-layout'
 import { ProjectClaudeAccountChip } from '@/components/chat/claude-account/ClaudeAccountChip'
+import { ProjectCodexAccountChip } from '@/components/chat/codex-account/CodexAccountChip'
 import { ComposerAddMenu } from '@/components/chat/composer/ComposerAddMenu'
 import {
   type ComposerAddHandle,
@@ -124,6 +126,8 @@ export function LauncherToolbar({
   const termulTools = useTermulTools(activeProjectId || null)
   const claudeProjectId =
     selectedEntry?.configId === CLAUDE_AGENT_CONFIG_ID && activeProjectId ? activeProjectId : null
+  const codexProjectId =
+    selectedEntry?.configId === CODEX_AGENT_CONFIG_ID && activeProjectId ? activeProjectId : null
   const mcpListProps = {
     count: mcpCount,
     servers: mcpServers,
@@ -219,6 +223,7 @@ export function LauncherToolbar({
             compact: null,
             claudeProjectId
           })}
+          {codexProjectId ? <ProjectCodexAccountChip projectId={codexProjectId} /> : null}
           <div className="flex-1" />
           {updateCta}
           {launchButton}
@@ -241,6 +246,7 @@ export function LauncherToolbar({
           termulTools={termulTools}
         />
         {claudeProjectId ? <ProjectClaudeAccountChip projectId={claudeProjectId} /> : null}
+        {codexProjectId ? <ProjectCodexAccountChip projectId={codexProjectId} /> : null}
       </div>
       <div
         className={cn(

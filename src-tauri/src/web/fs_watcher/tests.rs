@@ -491,17 +491,23 @@ async fn a_moved_project_root_re_arms_the_live_watch() {
     });
 
     // Keep touching the new root until the re-armed watcher reports it (the
-    // registry tick re-resolves within a second).
+    // registry tick re-resolves within a second). A move can still emit one
+    // event for the old root; that event is not the re-armed watch.
+    let new_root = new.display().to_string();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let mut seen = None;
     let mut n = 0;
     while seen.is_none() && tokio::time::Instant::now() < deadline {
         n += 1;
         std::fs::write(new.join(format!("f{n}.txt")), "x").expect("write file");
-        seen = next_fs_changed(&mut rx, Duration::from_millis(700)).await;
+        if let Some(payload) = next_fs_changed(&mut rx, Duration::from_millis(700)).await {
+            if payload["root"] == json!(new_root) {
+                seen = Some(payload);
+            }
+        }
     }
     let payload = seen.expect("events from the new root reach the subscription");
-    assert_eq!(payload["root"], json!(new.display().to_string()));
+    assert_eq!(payload["root"], json!(new_root));
     for d in [old, new] {
         let _ = std::fs::remove_dir_all(d);
     }

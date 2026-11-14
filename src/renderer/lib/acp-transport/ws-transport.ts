@@ -15,6 +15,11 @@ import type {
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
 import type {
+  CodexAccount,
+  CodexAccountsSnapshot,
+  CodexAccountUsage
+} from '@shared/types/codex-accounts.types'
+import type {
   McpCatalogIconPayload,
   McpCatalogPage,
   McpCatalogSearchRequest,
@@ -1138,6 +1143,70 @@ export class WsAcpTransport implements AcpTransport {
       accountId
     })
     return reply.cancelled === true
+  }
+
+  async listCodexAccounts(): Promise<CodexAccountsSnapshot> {
+    return this.request<CodexAccountsSnapshot>('list_codex_accounts', {})
+  }
+
+  async listCodexUsage(force = false): Promise<CodexAccountUsage[]> {
+    const reply = await this.request<{ usage: CodexAccountUsage[] }>('list_codex_usage', { force })
+    return reply?.usage ?? []
+  }
+
+  async setDefaultCodexAccount(accountId: string): Promise<void> {
+    await this.request('set_default_codex_account', { accountId })
+  }
+
+  async setProjectCodexAccount(
+    projectId: string,
+    accountId: string | null,
+    expectedAccountId?: string
+  ): Promise<boolean> {
+    const reply = await this.request<{ applied?: boolean }>('set_project_codex_account', {
+      projectId,
+      accountId,
+      ...(expectedAccountId ? { expectedAccountId } : {})
+    })
+    return reply?.applied !== false
+  }
+
+  async setCodexAutoSwitch(enabled: boolean): Promise<void> {
+    await this.request('set_codex_auto_switch', { enabled })
+  }
+
+  async addCodexAccount(name: string, options?: CommandCallOptions): Promise<CodexAccount> {
+    return this.request<CodexAccount>('add_codex_account', { name }, undefined, options)
+  }
+
+  async renameCodexAccount(accountId: string, name: string): Promise<void> {
+    await this.request('rename_codex_account', { accountId, name })
+  }
+
+  async removeCodexAccount(accountId: string): Promise<string[]> {
+    const reply = await this.request<{ movedProjectIds?: unknown }>('remove_codex_account', {
+      accountId
+    })
+    if (!Array.isArray(reply.movedProjectIds)) {
+      throw new AcpTransportError(
+        'protocol',
+        'malformed remove_codex_account reply (missing movedProjectIds)'
+      )
+    }
+    return reply.movedProjectIds.filter((id): id is string => typeof id === 'string')
+  }
+
+  async startCodexAccountLogin(
+    accountId: string,
+    config: AgentConfig,
+    options?: CommandCallOptions
+  ): Promise<SpawnAgentResult> {
+    return this.request<SpawnAgentResult>(
+      'start_codex_account_login',
+      { accountId, config },
+      undefined,
+      options
+    )
   }
 
   async spawnAgent(

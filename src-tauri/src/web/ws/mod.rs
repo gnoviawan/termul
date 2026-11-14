@@ -53,7 +53,7 @@ use crate::acp::{AgentId, SessionId};
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::auth::WebAuth;
-use crate::web::capabilities::{Carrier, CapabilityPolicy};
+use crate::web::capabilities::{CapabilityPolicy, Carrier};
 use crate::web::connection_runtime::ConnectionRuntime;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::sink::{ClientId, EventStream, ReplayResult, StreamItem, WsRelaySink};
@@ -65,6 +65,7 @@ mod canvas;
 pub mod channel;
 mod chat_reads;
 mod claude_accounts;
+mod codex_accounts;
 mod commands;
 mod dispatch;
 mod import_session;
@@ -87,6 +88,7 @@ use agents::*;
 use canvas::*;
 use chat_reads::*;
 use claude_accounts::*;
+use codex_accounts::*;
 use commands::*;
 use dispatch::*;
 use import_session::*;
@@ -95,16 +97,16 @@ use projects::*;
 use prompts::*;
 use relay::*;
 use sessions::*;
-use subagents::*;
 use store::*;
+use subagents::*;
 use subscribe::*;
 use watch::*;
 
 // The wire-contract `pub` surface stays reachable at `web::ws::*`.
-pub use relay::{ws_upgrade, AUTH_REQUIRED_TYPE, WS_BATCH_TYPE, WS_GAP_TYPE, WS_HEARTBEAT_TYPE};
-pub(crate) use relay::{EnqueueOutcome, Outbound, OutboundSender};
 #[cfg(test)]
 pub(crate) use relay::{outbound_channel, OutboundReceiver, OUTBOUND_QUEUE_CAPACITY};
+pub use relay::{ws_upgrade, AUTH_REQUIRED_TYPE, WS_BATCH_TYPE, WS_GAP_TYPE, WS_HEARTBEAT_TYPE};
+pub(crate) use relay::{EnqueueOutcome, Outbound, OutboundSender};
 
 // ---------------------------------------------------------------------------
 // Sequenced event — the wire envelope (AC2 + AC3)
@@ -241,7 +243,9 @@ impl HandshakeRefusal {
 /// no control characters (the host logs ids, so a newline must not forge a
 /// log line). The ids are returned exactly as received (the host never mints
 /// or rewrites).
-pub fn validate_authenticate_handshake(payload: &Value) -> Result<ClientIdentity, HandshakeRefusal> {
+pub fn validate_authenticate_handshake(
+    payload: &Value,
+) -> Result<ClientIdentity, HandshakeRefusal> {
     if payload["protocolVersion"].as_u64() != Some(u64::from(WS_PROTOCOL_VERSION)) {
         return Err(HandshakeRefusal {
             code: WsErrorCode::ProtocolVersionMismatch,
@@ -830,11 +834,15 @@ mod canvas_tests;
 #[cfg(test)]
 mod capability_tests;
 #[cfg(test)]
-mod project_binding_tests;
+pub(crate) mod harness;
 #[cfg(test)]
 mod host_ticket_route_tests;
 #[cfg(test)]
+mod list_sessions_tests;
+#[cfg(test)]
 mod pending_permission_tests;
+#[cfg(test)]
+mod project_binding_tests;
 #[cfg(test)]
 mod project_command_tests;
 #[cfg(test)]
@@ -844,8 +852,4 @@ mod registry_check_tests;
 #[cfg(test)]
 mod spawn_rejection_tests;
 #[cfg(test)]
-mod list_sessions_tests;
-#[cfg(test)]
 mod tests;
-#[cfg(test)]
-pub(crate) mod harness;
