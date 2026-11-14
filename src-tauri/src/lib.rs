@@ -189,6 +189,7 @@ pub use acp::host_mcp;
 // `acp` module is private, so `server_main.rs` reaches `claude_admin::run()`
 // through this path (mirrors how `onboard::run()` is dispatched).
 pub use acp::claude_admin;
+pub use acp::codex_admin;
 // Codex Account store (PR1). The desktop and `troupe-server` reach it through
 // `AcpManager`; this re-export keeps the secret-free types part of the host
 // library surface the same way the Claude Account types are reachable.
@@ -209,17 +210,17 @@ pub mod conformance_support {
         ConsentOption, PermissionRequest, PortFuture, TicketOutcome, TicketRequest,
     };
     pub use crate::browser_automation::core::session_dir;
-    pub use crate::browser_automation::engine::{
-        desktop_engine, BrowserEngine, CapabilityId, EngineError, EngineErrorKind, InputMode, Key, KeyInput,
-        KeyKind, NamedKey, Point, Support,
-    };
-    pub use crate::browser_automation::{
-        budgets, create_tab, dispatch, session_ended, set_browser_host,
-        BrowserCall, DesktopBrowserHost, HostServices,
-    };
     pub use crate::browser_automation::engine::assets::{overlay_state, overlay_visibility};
     pub use crate::browser_automation::engine::events::{NavPolicy, NavVerdict, TabEvents};
     pub use crate::browser_automation::engine::profile::{delete_dir, DataStore};
+    pub use crate::browser_automation::engine::{
+        desktop_engine, BrowserEngine, CapabilityId, EngineError, EngineErrorKind, InputMode, Key,
+        KeyInput, KeyKind, NamedKey, Point, Support,
+    };
+    pub use crate::browser_automation::{
+        budgets, create_tab, dispatch, session_ended, set_browser_host, BrowserCall,
+        DesktopBrowserHost, HostServices,
+    };
     pub use crate::browser_tab_manager::{BrowserBounds, BrowserTabManager};
 }
 pub use pty::PtyManager;
@@ -1708,6 +1709,7 @@ pub fn run() {
             let codex_agent_service = Arc::new(crate::acp::codex_agent::CodexAgentService::system(
                 acp_install_root.clone(),
             ));
+            app.manage(codex_agent_service.clone());
 
             // Create ACP Manager — spawns/owns ACP agent subprocesses.
             //
@@ -2262,6 +2264,10 @@ pub fn run() {
             acp::commands::claude_accounts_set_default,
             acp::commands::claude_accounts_set_project,
             acp::commands::claude_accounts_set_auto_switch,
+            acp::commands::codex_accounts_list,
+            acp::commands::codex_accounts_set_default,
+            acp::commands::codex_accounts_set_project,
+            acp::commands::codex_accounts_set_auto_switch,
             acp::commands::acp_factory_key_status,
             acp::commands::acp_factory_key_save,
             acp::commands::codex_cli_auth_status,

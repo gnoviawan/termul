@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
 import { BrowserAuthDialogHost } from '@/components/agents/BrowserAuthDialog'
 import { BrowserConsentCardHost } from '@/components/agents/BrowserConsentCardHost'
+import { CodexCliAuthSync } from '@/components/agents/CodexCliAuthSync'
 import { ChatRoute } from '@/components/ChatRoute'
 import { useClaudeAutoSwitch } from '@/components/chat/claude-account/auto-switch'
 import { DirectoryPicker } from '@/components/DirectoryPicker'
@@ -309,6 +310,7 @@ const App = () => {
                   dialog (spec-acp-terminal-auth) — auth can be triggered from a
                   chat panel or warm pool, not just the launcher. */}
               <BrowserAuthDialogHost />
+              <CodexCliAuthSync />
               {/* Web MCP OAuth paste-back (spec-mcp-oauth-web-paste-back): the
                   loopback redirect the host registered is unreachable from a
                   browser on another device, so its address is pasted back here.

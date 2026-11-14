@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { toast } from 'sonner'
 import { ClaudeAccountChip } from '@/components/chat/claude-account/ClaudeAccountChip'
 import { ClaudeLimitWarning } from '@/components/chat/claude-account/ClaudeLimitWarning'
+import { CodexAccountChip } from '@/components/chat/codex-account/CodexAccountChip'
 import { Paperclip } from '@/components/icons'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
@@ -698,6 +699,7 @@ export function ChatInputBar({
                       termulTools={termulTools}
                     />
                     <ClaudeAccountChip sessionId={session.id} />
+                    <CodexAccountChip sessionId={session.id} />
                   </div>
                   <div
                     className={cn(

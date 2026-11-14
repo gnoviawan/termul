@@ -86,12 +86,18 @@ fn absolute_home(value: &str, home: Option<&Path>) -> Option<PathBuf> {
 }
 
 #[async_trait::async_trait]
-trait CodexLoginStatus: Send + Sync {
+pub(crate) trait CodexLoginStatus: Send + Sync {
     async fn login_status(
         &self,
         codex_home: Option<&Path>,
         codex_bin: Option<&str>,
     ) -> Result<Option<bool>, String>;
+
+    /// Best-effort `codex logout` for one home. The default does nothing so a
+    /// test probe can ignore sign-out.
+    async fn logout(&self, _codex_home: Option<&Path>) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 struct SystemCodexLoginProbe;
@@ -117,6 +123,17 @@ impl CodexLoginStatus for SystemCodexLoginProbe {
                 CodexLoginState::Unavailable => None,
             },
         )
+    }
+
+    async fn logout(&self, codex_home: Option<&Path>) -> Result<(), String> {
+        let home = match codex_home {
+            Some(dir) => Some(dir.to_str().ok_or_else(|| {
+                log::warn!("[acp-codex] account home is not valid Unicode");
+                "The Codex account folder path is not supported".to_string()
+            })?),
+            None => None,
+        };
+        super::commands::codex_logout(home.map(str::to_string)).await
     }
 }
 
@@ -285,6 +302,9 @@ fn strip_api_credentials(env: &mut HashMap<String, String>) {
     env.remove(OPENAI_API_KEY_ENV);
     env.remove(CODEX_ACCESS_TOKEN_ENV);
 }
+
+mod accounts;
+pub use accounts::CodexSignInCheck;
 
 #[cfg(test)]
 #[path = "codex_agent/tests.rs"]

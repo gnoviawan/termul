@@ -68,7 +68,11 @@ fn the_rust_table_and_the_ts_registries_list_the_same_request_types() {
         .collect();
 
     assert_eq!(rust.len(), WS_COMMAND_CLASSES.len(), "no duplicate rows");
-    assert_eq!(rust, ts_request_types(), "WS_REQUEST_TYPES drifted from the Rust table");
+    assert_eq!(
+        rust,
+        ts_request_types(),
+        "WS_REQUEST_TYPES drifted from the Rust table"
+    );
 }
 
 #[test]
@@ -106,7 +110,10 @@ fn every_routed_request_type_has_a_class() {
     names.insert("send_prompt");
 
     for name in &names {
-        assert!(class_of(name).is_some(), "`{name}` is routed but has no class");
+        assert!(
+            class_of(name).is_some(),
+            "`{name}` is routed but has no class"
+        );
     }
     for (name, _) in WS_COMMAND_CLASSES {
         assert!(names.contains(name), "`{name}` has a class but no route");
@@ -142,9 +149,14 @@ fn only_creates_and_non_prompt_commands_enter_the_ledger() {
             "record_agent_switch",
             "add_claude_account",
             "finish_claude_link_login",
+            "add_codex_account",
+            "start_codex_account_login",
         ])
     );
-    assert!(!class_of("send_prompt").unwrap().1.ledgered(), "TurnWatermark owns prompts");
+    assert!(
+        !class_of("send_prompt").unwrap().1.ledgered(),
+        "TurnWatermark owns prompts"
+    );
 }
 
 #[test]
@@ -172,7 +184,10 @@ fn a_fingerprint_covers_identifying_fields_only() {
 
     assert_eq!(base, reordered);
     assert_ne!(base, other_cwd, "an identifying field differs");
-    assert_ne!(base, other_type, "the request type is part of the fingerprint");
+    assert_ne!(
+        base, other_type,
+        "the request type is part of the fingerprint"
+    );
     assert_eq!(base, extra, "non-identifying fields are not digested");
 }
 
@@ -236,23 +251,40 @@ fn identifying_fields_do_not_bleed_into_each_other() {
 #[test]
 fn identifying_fields_hash_numbers_and_bools_and_keep_types_apart() {
     let print = |value: serde_json::Value| {
-        Fingerprint::of("create_session", &json!({"agentId": "x", "cwd": "/a", "projectId": value}))
+        Fingerprint::of(
+            "create_session",
+            &json!({"agentId": "x", "cwd": "/a", "projectId": value}),
+        )
     };
 
     assert_ne!(print(json!(1)), print(json!(2)));
     assert_ne!(print(json!(true)), print(json!(false)));
-    assert_ne!(print(json!(1)), print(json!("1")), "a number is not its string form");
-    assert_eq!(print(json!(null)), Fingerprint::of("create_session", &json!({"agentId": "x", "cwd": "/a"})));
+    assert_ne!(
+        print(json!(1)),
+        print(json!("1")),
+        "a number is not its string form"
+    );
+    assert_eq!(
+        print(json!(null)),
+        Fingerprint::of("create_session", &json!({"agentId": "x", "cwd": "/a"}))
+    );
 }
 
 #[test]
 fn blank_and_padded_ids_normalize_like_the_handlers_do() {
     let print = |project: serde_json::Value| {
-        Fingerprint::of("create_session", &json!({"agentId": "x", "cwd": "/a", "projectId": project}))
+        Fingerprint::of(
+            "create_session",
+            &json!({"agentId": "x", "cwd": "/a", "projectId": project}),
+        )
     };
     let absent = Fingerprint::of("create_session", &json!({"agentId": "x", "cwd": "/a"}));
 
-    assert_eq!(print(json!("   ")), absent, "a blank projectId is no projectId");
+    assert_eq!(
+        print(json!("   ")),
+        absent,
+        "a blank projectId is no projectId"
+    );
     assert_eq!(print(json!(" p1 ")), print(json!("p1")));
     assert_ne!(print(json!("p1")), print(json!("p2")));
 }
@@ -261,7 +293,12 @@ fn blank_and_padded_ids_normalize_like_the_handlers_do() {
 fn the_mcp_install_commit_is_a_command_kept_out_of_the_ledger() {
     let (_, class) = class_of("commit_mcp_install").unwrap();
     assert_eq!(
-        (class.kind, class.replay, class.ledgered(), class.stores_payload()),
+        (
+            class.kind,
+            class.replay,
+            class.ledgered(),
+            class.stores_payload()
+        ),
         (ClassKind::Command, Some(Replay::Never), false, false)
     );
 }

@@ -637,8 +637,7 @@ impl AcpManager {
         claude_agent: Arc<crate::acp::claude_agent::ClaudeAgentService>,
         codex_agent: Arc<crate::acp::codex_agent::CodexAgentService>,
     ) -> Self {
-        let mut manager =
-            Self::with_persistence_and_claude_agent(sinks, persistence, claude_agent);
+        let mut manager = Self::with_persistence_and_claude_agent(sinks, persistence, claude_agent);
         manager.codex_agent = codex_agent;
         manager
     }
@@ -705,6 +704,37 @@ impl AcpManager {
         &self.claude_agent
     }
 
+    /// The host's Codex Account service.
+    #[must_use]
+    pub fn codex_agent(&self) -> &Arc<crate::acp::codex_agent::CodexAgentService> {
+        &self.codex_agent
+    }
+
+    /// Spawn the Codex ACP agent against one Account's home without the
+    /// signed-out gate. The client then calls `authenticate`. `host_auth_ready`
+    /// is false so that call is not skipped. A resent `command_id` returns the
+    /// agent already stamped with it.
+    pub async fn spawn_codex_sign_in(
+        &self,
+        mut config: AgentConfig,
+        account_id: &str,
+        command_id: Option<String>,
+    ) -> Result<SpawnOutcome, String> {
+        if let Some(command_id) = command_id.as_deref() {
+            if let Some(outcome) = self.spawn_outcome_by_command_id(command_id) {
+                log::info!("[codex-accounts] sign-in spawn reused the agent for this command");
+                return Ok(outcome);
+            }
+        }
+        crate::acp::factory_key::normalize_launch_args(&mut config);
+        crate::acp::factory_key::inject(&mut config)?;
+        self.codex_agent
+            .prepare_sign_in_config(&mut config, account_id)
+            .await?;
+        self.spawn_with_sinks(config, false, self.sinks.clone(), command_id)
+            .await
+    }
+
     /// Spawn an ACP agent: launch the subprocess, complete `initialize`, and
     /// register the agent. Emits `acp:agent_spawned` on success. Returns a
     /// [`SpawnOutcome`] carrying the authoritative capabilities, auth methods,
@@ -744,7 +774,8 @@ impl AcpManager {
         sinks: Vec<Arc<dyn EventSink>>,
     ) -> Result<SpawnOutcome, String> {
         let host_auth_ready = self.prepare_spawn_config(&mut config, project_id).await?;
-        self.spawn_with_sinks(config, host_auth_ready, sinks, None).await
+        self.spawn_with_sinks(config, host_auth_ready, sinks, None)
+            .await
     }
 
     /// Launch-arg normalization, the persisted Factory key, and the managed
@@ -1283,8 +1314,9 @@ impl AcpManager {
         // Resolve the command channel BEFORE a new plan token exists, so an
         // unknown agent returns without leaving a registered token behind.
         let tx = self.command_tx(agent_id)?;
-        let (mcp_servers, plan_token) =
-            self.prepare_reopen_mcp(agent_id, &session_id.0, &caps, mcp_servers).await?;
+        let (mcp_servers, plan_token) = self
+            .prepare_reopen_mcp(agent_id, &session_id.0, &caps, mcp_servers)
+            .await?;
         let outcome = send_command(&tx, |reply| AcpCommand::LoadSession {
             session_id,
             cwd,
@@ -1325,8 +1357,9 @@ impl AcpManager {
         // Resolve the command channel BEFORE a new plan token exists, so an
         // unknown agent returns without leaving a registered token behind.
         let tx = self.command_tx(agent_id)?;
-        let (mcp_servers, plan_token) =
-            self.prepare_reopen_mcp(agent_id, &session_id.0, &caps, mcp_servers).await?;
+        let (mcp_servers, plan_token) = self
+            .prepare_reopen_mcp(agent_id, &session_id.0, &caps, mcp_servers)
+            .await?;
         let outcome = send_command(&tx, |reply| AcpCommand::ResumeSession {
             session_id,
             cwd,
