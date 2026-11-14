@@ -1,0 +1,105 @@
+---
+title: Codex accounts
+description: Sign in to more than one ChatGPT account for Codex, pick one per project, watch your limits, and switch when one runs out.
+---
+
+If you use Codex with more than one ChatGPT account, for example a personal one and a work one, Troupe can keep them all signed in. Each project uses one account for its Codex chats. When an account reaches its limit, Troupe can continue the chat on another account.
+
+Accounts apply to the **Codex** agent that Troupe installs. To set up Codex itself, see [Install an agent](/docs/agent-setup/install-agents). For Claude, see [Claude accounts](/docs/agent-setup/claude-accounts).
+
+## Codex needs a ChatGPT login
+
+Every Codex account is a ChatGPT login. Troupe does not offer API key accounts for Codex, and it does not pass `OPENAI_API_KEY` or `CODEX_ACCESS_TOKEN` to the Codex agent.
+
+Before a Codex chat starts, Troupe checks that the project's account is signed in. If it is not, the chat does not start and Troupe says which login is missing:
+
+- **Default** account: run `codex login` on the computer that runs Troupe, then try again.
+- Any other account: sign it in from **Settings** > **Provider**, as shown below.
+
+## See your accounts
+
+Open Settings with `Ctrl+,` (`Cmd+,` on macOS) and click **Provider**. The **Codex** group lists every account, whether it is signed in, which projects use it, and how much of its limits it has used.
+
+The first account is called **Default**. It is the Codex login on this computer, the one you made with `codex login`. It uses the Codex folder in your home folder (`~/.codex`), or the folder set by `CODEX_HOME`. Troupe shows a name you choose for each account, never its email address.
+
+## Add an account and sign in
+
+1. In **Settings** > **Provider**, find the **Codex** group and click **Add account**.
+2. Type a short name, such as `Work`, and click **Add account**. The account starts signed out.
+3. Troupe asks how to sign in. Pick one:
+   - **Sign in with ChatGPT** opens the ChatGPT sign-in page in your browser.
+   - **Use a device code** shows a code that you can enter on any device, for example a phone. Open the page, enter the code, and finish the sign-in.
+4. Sign in with the ChatGPT account you want to add. When the sign-in finishes, Troupe says the account is signed in and shows its usage.
+
+If the sign-in does not finish, the account stays in the list, signed out. Click **Sign in** in the account's **⋯** menu to try again.
+
+If the server is read-only for remote clients, the browser version shows your accounts but cannot add, sign in, rename or remove them. Use the desktop app, or run `troupe-server codex account` on the host.
+
+Each account has a **⋯** menu with these actions:
+
+- **Make default**: projects that follow the default use this account. Sign in to the account first.
+- **Sign in** or **Sign in again**: repeat the sign-in, for example after the login expires.
+- **Rename**: change the name Troupe shows.
+- **Remove**: sign Codex out of the account on this computer. Its chat history stays. Projects that used it move to the default account, and their open Codex chats start again on it. You cannot remove **Default**.
+
+Every account shares the same Codex chat history, `config.toml`, `AGENTS.md`, prompts, skills and rules with the Default account. Only the login is separate. Because `config.toml` is shared, a login rule in it, for example one that allows only one ChatGPT workspace, applies to every account.
+
+On Windows, sharing a file such as `config.toml` or `AGENTS.md` needs Developer Mode or administrator rights. Without them, Troupe copies the file into the account when it sets the account up, and later changes to the Default account's copy do not reach that account.
+
+## Choose the account for a project
+
+1. Hover over the project in the sidebar and click its settings button.
+2. Click **Accounts**.
+3. Under **Codex**, pick **Follow default**, or pick one signed-in account.
+4. Click **Save changes**.
+
+New Codex chats in the project use the account you pick. Chats that are already open move to it and continue.
+
+You can also change the account from a Codex chat or from the new chat screen. Click the account button in the chat box and pick an account under **Codex account for this project**. Click **Manage accounts** to open **Settings** > **Provider**.
+
+If the project's environment variables set an absolute `CODEX_HOME`, Codex uses that folder instead of the account you picked.
+
+## Watch your usage and limits
+
+ChatGPT plans have a 5-hour limit and a weekly limit for Codex. In **Settings** > **Provider**, each Codex account shows a bar for each limit, how much of it is used, and when it resets.
+
+In a Codex chat, the account button in the chat box shows how much of the 5-hour limit the account has used, for example `5h 42%`. When the weekly limit reaches 80% or more, the button also shows it, for example `5h 42% · Wk 86%`. The number turns yellow at 80% and red at 100%. Open the button to see each account's plan with its 5-hour and weekly use.
+
+Troupe reads these numbers through the Codex CLI on the computer that runs Troupe. It never reads your login token. If Troupe cannot read them, for example because the Codex CLI is missing, the account shows no usage bars.
+
+## Switch accounts when you hit a limit
+
+During a chat, Troupe watches the limit of the account the chat uses.
+
+- When the account gets close to a limit, a yellow bar above the chat box shows how much it has used. If another account has room, the bar has a **Switch to** button with that account's name.
+- When the account reaches its limit, a red box says which limit ran out and when it resets.
+
+In the red box, you can:
+
+- Click **Switch to** _account_ **and continue**. Troupe moves the project to that account and continues the same chat. Troupe suggests the account with the most room left.
+- Click **Other account** to pick a different one.
+- Click **Continue when it resets** when no other account has room. Troupe continues the chat when the limit resets. Click **Cancel** to stop the wait.
+- Click **Add account** to sign in to another account.
+
+### Switch automatically
+
+**Switch accounts automatically** in the **Codex** group of **Settings** > **Provider** is on by default. When a chat reaches its account's limit, Troupe moves the project to the signed-in account with the most room and sends your last message again on it. Turn the switch off to choose yourself in the red box.
+
+## Manage accounts on a server
+
+When Troupe runs as a server for the browser version, the browser can list, add, sign in to, rename, and remove Codex accounts, make one the default, and pick one per project. To manage accounts without a browser, run these commands on the server. If the server uses `--state-dir`, add the same `--state-dir PATH` after `codex`.
+
+```bash
+troupe-server codex account list
+troupe-server codex account add "Work"
+troupe-server codex account login <id>
+troupe-server codex account rename <id> "Office"
+troupe-server codex account default <id>
+troupe-server codex account project <project-id> <id>
+troupe-server codex account project <project-id> default
+troupe-server codex account remove <id>
+```
+
+`list` prints each account's ID, name, and whether it is signed in. `add` prints the `login` command to run next. `login` signs in with a device code in the same terminal.
+
+For more about running the server, see [Browser and phone](/docs/remote).

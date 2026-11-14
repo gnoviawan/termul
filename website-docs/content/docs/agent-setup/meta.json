@@ -5,6 +5,7 @@
     "install-agents",
     "custom-agents",
     "claude-accounts",
+    "codex-accounts",
     "mcp-servers",
     "skills",
     "timeouts"
