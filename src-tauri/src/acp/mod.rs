@@ -17,6 +17,9 @@ pub mod claude_accounts;
 pub mod claude_admin;
 pub mod claude_agent;
 pub mod client;
+pub mod codex_accounts;
+pub mod codex_admin;
+pub mod codex_agent;
 pub mod commands;
 pub mod config;
 pub mod credentials;
@@ -24,8 +27,8 @@ pub mod destructive_guard;
 pub mod events;
 pub mod factory_key;
 pub mod history_import;
-pub mod host_ticket;
 pub mod host_mcp;
+pub mod host_ticket;
 pub mod https_only;
 pub mod install;
 pub mod legacy_models;
@@ -61,6 +64,7 @@ pub use chat_history_store::{
 pub use claude_agent::{
     ClaudeAgentService, ClaudeAuthMode, ClaudeAuthStatus, LinkCodeError, SignInCheck,
 };
+pub use codex_agent::{CodexAgentService, CodexSignInCheck};
 #[allow(unused_imports)]
 pub use config::{AgentConfig, AgentId, SessionId};
 #[allow(unused_imports)]
@@ -72,8 +76,8 @@ pub use install::{
 };
 #[allow(unused_imports)]
 pub use manager::{AcpManager, AgentSummary, SessionCreationContext, SpawnOutcome};
-pub use session::AgentActivity;
 pub use project_registry::{FileProjectRegistry, ProjectRegistryError, RootCheck, VfsRoot};
+pub use session::AgentActivity;
 #[allow(unused_imports)]
 pub use session_persistence::{
     PersistedEventRecord, PersistedSessionStatus, SessionIndexEntry, SessionPersistence,

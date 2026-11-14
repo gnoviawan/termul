@@ -19,6 +19,7 @@ import {
 import { getAcpTransport } from '@/lib/acp-transport'
 import {
   isClaudeAccountSignedOutError,
+  isCodexAccountSignedOutError,
   isDefiniteSpawnRejection
 } from '@/lib/agents/acp-spawn-errors'
 import { __resetCommandEngineForTesting } from '@/lib/command-engine'
@@ -385,10 +386,10 @@ const definiteSpawnRejections = new Map<string, string>()
 const liveAgentSignatures = new Map<AgentId, string>()
 
 /**
- * Credential epoch per `configId\0projectId`. The host binds a Claude account
- * to an agent process when it spawns it, so after a Project's account changes
- * every agent spawned before is on the old account: it may finish what it
- * serves, but it must never take a new chat or a warm session.
+ * Credential epoch per `configId\0projectId`. The host binds a Claude or Codex
+ * account to an agent process when it spawns it, so after a Project's account
+ * changes every agent spawned before is on the old account: it may finish what
+ * it serves, but it must never take a new chat or a warm session.
  */
 const credentialEpochs = new Map<string, number>()
 
@@ -1060,8 +1061,8 @@ function otherProjectHoldsAgent(
 
 /**
  * The spawn's outcome as one caller sees it: a silent caller gets `null` for a
- * failure (except a definite rejection or a signed-out Claude Account, when it
- * asked to surface those); any other caller gets the rejection.
+ * failure (except a definite rejection or a signed-out Claude or Codex
+ * Account, when it asked to surface those); any other caller gets the rejection.
  */
 function asCallerView(
   strict: Promise<AgentId | null>,
@@ -1073,7 +1074,9 @@ function asCallerView(
   return strict.catch((err: unknown) => {
     if (
       options.surfaceDefiniteRejection &&
-      (isDefiniteSpawnRejection(err) || isClaudeAccountSignedOutError(err))
+      (isDefiniteSpawnRejection(err) ||
+        isClaudeAccountSignedOutError(err) ||
+        isCodexAccountSignedOutError(err))
     )
       throw err
     console.warn('[acp] ensureLiveAgent failed for', reuseKey, err)

@@ -290,6 +290,28 @@ export function claudeAccountSignedOutMessage(raw: unknown): string {
 }
 
 /**
+ * The host refused because a Codex Account is not signed in: choosing it, or
+ * starting or reopening a managed Codex agent on it. `/ws` carries the
+ * `codex_account_signed_out` code; the desktop `invoke` path carries the same
+ * verdict as a message prefix.
+ */
+export const CODEX_ACCOUNT_SIGNED_OUT_PREFIX = 'ACP_CODEX_ACCOUNT_SIGNED_OUT'
+
+export function isCodexAccountSignedOutError(raw: unknown): boolean {
+  if (typeof raw === 'object' && raw !== null) {
+    if ((raw as { code?: unknown }).code === WS_ERROR_CODES.CODEX_ACCOUNT_SIGNED_OUT) return true
+  }
+  return rawErrorMessage(raw).startsWith(`${CODEX_ACCOUNT_SIGNED_OUT_PREFIX}: `)
+}
+
+/** The host's sentence for a Codex sign-in refusal, without the transport tag. */
+export function codexAccountSignedOutMessage(raw: unknown): string {
+  const message = rawErrorMessage(raw)
+  const tag = `${CODEX_ACCOUNT_SIGNED_OUT_PREFIX}: `
+  return message.startsWith(tag) ? message.slice(tag.length) : message
+}
+
+/**
  * The host rejected a spawn deterministically (AD-5): the agent binary is
  * missing / cannot start (`agent_unavailable`) or the config is unusable
  * (`invalid_agent_config`). `/ws` carries the stable code; the Tauri `invoke`
@@ -432,6 +454,13 @@ export function classifySetupError(
       category: 'auth',
       label: SETUP_ERROR_LABELS.auth,
       detail: claudeAccountSignedOutMessage(raw)
+    }
+  }
+  if (isCodexAccountSignedOutError(raw)) {
+    return {
+      category: 'auth',
+      label: SETUP_ERROR_LABELS.auth,
+      detail: codexAccountSignedOutMessage(raw)
     }
   }
   // A definite host rejection (AD-5) is authoritative: it is a spawn failure

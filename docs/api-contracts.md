@@ -599,6 +599,15 @@ The class column is the request's command class, defined in `src-tauri/src/web/c
 | `start_claude_link_login` | idempotent | Starts a link sign-in for `{accountId}` and replies `{url}`, the Claude sign-in link. Stops a sign-in already running for the Account. |
 | `finish_claude_link_login` | command | Writes `{code}` from the Claude page to the link sign-in of `{accountId}`. Replies `{}` once the Claude CLI stored the login. Two errors leave the sign-in running: `claude_login_code_incomplete` (it still waits for the whole code) and `claude_login_busy` (the CLI still checks an earlier code, whose sender gets the verdict). Any other error ended the sign-in for this caller, including a code that reaches a newer sign-in still waiting for its link. Receipt-only: the code is never stored or digested. |
 | `cancel_claude_login` | idempotent | Stops the browser or link sign-in of `{accountId}`. Replies `{cancelled}`, `false` when none was running. On one connection it runs after a `start_claude_link_login` of the same Account sent before it, so a cancel sent while the link loads stops that sign-in. |
+| `list_codex_accounts` | read | Returns the Codex Accounts snapshot. ChatGPT logins only. No secrets. |
+| `list_codex_usage` | read | Returns the plan windows of every Codex Account. The host caches reads for 5 minutes. `force` still reuses a read younger than 60 seconds. A failed read keeps the last good windows. |
+| `set_default_codex_account` | idempotent | Chooses the Default Codex Account. The Account must be signed in. |
+| `set_project_codex_account` | idempotent | Chooses a Project's Codex Account, or clears it with `null`. With `expectedAccountId`, applies only while the Project still uses that Account; replies `{ applied }`. |
+| `set_codex_auto_switch` | idempotent | Turns automatic switching at a Codex usage limit on or off (default on). |
+| `add_codex_account` | command | Adds a signed-out Codex Account named `{name}` and replies with it. A resent command replays the first reply. |
+| `rename_codex_account` | idempotent | Renames `{accountId}` to `{name}` and replies `{}`. |
+| `remove_codex_account` | idempotent | Runs `codex logout` for `{accountId}`, removes it and replies `{movedProjectIds}`. An Account that is already gone replies `{movedProjectIds: []}`. The built-in Account is refused. |
+| `start_codex_account_login` | command | Spawns the Codex agent with that Account's home and replies with the spawn outcome. The client then calls `authenticate_agent` with `chat-gpt` or `chat-gpt-device-code`. The config env is not stored in the ledger. |
 | `add_project` | idempotent | Adds a project to the host registry. See "Project registry commands". |
 | `update_project` | idempotent | Changes a project's name, color, archive flag or root. See "Project registry commands". |
 | `remove_project` | idempotent | Removes a project. See "Project registry commands". |

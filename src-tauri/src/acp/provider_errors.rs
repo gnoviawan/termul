@@ -62,8 +62,15 @@ impl ProviderErrorKind {
     }
 }
 
-/// `data.errorKind` values the Claude ACP adapter attaches to provider errors.
-const QUOTA_ERROR_KINDS: [&str; 2] = ["rate_limit", "billing_error"];
+/// `data.errorKind` values a provider adapter attaches to a quota error.
+/// `rate_limit` and `billing_error` come from Claude. `rate_limited` and
+/// `quota_exhausted` come from the Codex adapter.
+const QUOTA_ERROR_KINDS: [&str; 4] = [
+    "rate_limit",
+    "billing_error",
+    "rate_limited",
+    "quota_exhausted",
+];
 const REJECTED_ERROR_KINDS: [&str; 1] = ["invalid_request"];
 
 /// Wording that names a quota, usage, credit or rate limit.
@@ -148,6 +155,15 @@ fn error_kind_of(data: &Value) -> Option<&str> {
     data.get("errorKind").and_then(Value::as_str)
 }
 
+/// Codex app-server names a plan limit on `codexErrorInfo` when the adapter
+/// puts that object on the JSON-RPC error.
+fn codex_plan_limit(data: &Value) -> bool {
+    matches!(
+        data.get("codexErrorInfo").and_then(Value::as_str),
+        Some("usageLimitExceeded" | "rateLimitExceeded")
+    )
+}
+
 /// Classify an agent error as a provider failure, or `None` when it is not
 /// recognizably one.
 ///
@@ -179,6 +195,7 @@ pub fn classify_provider_error(detail: &AcpErrorDetail) -> Option<ProviderErrorK
         return Some(ProviderErrorKind::SessionLimit);
     }
     if kind.is_some_and(|kind| QUOTA_ERROR_KINDS.contains(&kind))
+        || data.is_some_and(codex_plan_limit)
         || matches!(status, Some(402 | 429))
         || (!lower.contains("disk quota") && QUOTA_WORDING.iter().any(|w| lower.contains(w)))
     {

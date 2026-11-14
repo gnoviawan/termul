@@ -29,9 +29,15 @@ const WRITER: Capabilities = Capabilities {
 fn write_decision_matrix() {
     let local = peer([127, 0, 0, 1]);
     let lan = peer([192, 168, 1, 50]);
-    assert_eq!(write_decision(local, flags(false, false)), WriteDecision::Allowed);
     assert_eq!(
-        write_decision(SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 1)), flags(false, false)),
+        write_decision(local, flags(false, false)),
+        WriteDecision::Allowed
+    );
+    assert_eq!(
+        write_decision(
+            SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 1)),
+            flags(false, false)
+        ),
         WriteDecision::Allowed,
         "IPv6 loopback is local"
     );
@@ -60,7 +66,8 @@ fn capabilities_follow_the_write_decision() {
     assert!(Capabilities::resolve(Carrier::Ws, peer([127, 0, 0, 1]), flags(false, false)).write);
     assert!(!Capabilities::resolve(Carrier::Ws, lan, flags(false, false)).write);
     assert!(Capabilities::resolve(Carrier::TerminalWs, lan, flags(true, false)).write);
-    let shared_live = Capabilities::resolve(Carrier::TerminalWs, peer([127, 0, 0, 1]), flags(true, true));
+    let shared_live =
+        Capabilities::resolve(Carrier::TerminalWs, peer([127, 0, 0, 1]), flags(true, true));
     assert!(!shared_live.write);
     assert_eq!(shared_live.carrier, Carrier::TerminalWs);
 }
@@ -90,6 +97,8 @@ fn view_only_may_read_but_not_mutate() {
         "get_mcp_catalog_icon",
         "list_claude_accounts",
         "list_claude_usage",
+        "list_codex_accounts",
+        "list_codex_usage",
         "store_read",
         "mark_chat_read",
     ] {
@@ -123,6 +132,13 @@ fn view_only_may_read_but_not_mutate() {
         "set_default_claude_account",
         "set_project_claude_account",
         "set_claude_auto_switch",
+        "set_default_codex_account",
+        "set_project_codex_account",
+        "set_codex_auto_switch",
+        "add_codex_account",
+        "rename_codex_account",
+        "remove_codex_account",
+        "start_codex_account_login",
         "switch_project",
         "set_catalog_opt_in",
         "plan_mcp_install",
@@ -154,19 +170,29 @@ fn view_only_may_read_but_not_mutate() {
 fn view_only_store_writes_are_confined_to_the_device_namespace() {
     let id = identity("device-a");
     for kind in ["store_write", "store_delete"] {
-        let allowed = |key: &str| {
-            ws_request_permitted(kind, &json!({ "key": key }), VIEW_ONLY, Some(&id))
-        };
+        let allowed =
+            |key: &str| ws_request_permitted(kind, &json!({ "key": key }), VIEW_ONLY, Some(&id));
         assert!(allowed("device/device-a/layout"));
         assert!(allowed("device/device-a/nested/key"));
-        assert!(!allowed("device/device-b/layout"), "another device's namespace");
+        assert!(
+            !allowed("device/device-b/layout"),
+            "another device's namespace"
+        );
         assert!(!allowed("device/device-a"), "the bare prefix is not a key");
         assert!(!allowed("device/device-a/"), "an empty suffix is not a key");
-        assert!(!allowed("device/device-ab/x"), "prefix must end at a path segment");
+        assert!(
+            !allowed("device/device-ab/x"),
+            "prefix must end at a path segment"
+        );
         assert!(!allowed("settings/theme"), "a global key");
         assert!(!allowed("../device/device-a/x"));
         // A payload without a string key, or a connection without identity.
-        assert!(!ws_request_permitted(kind, &json!({}), VIEW_ONLY, Some(&id)));
+        assert!(!ws_request_permitted(
+            kind,
+            &json!({}),
+            VIEW_ONLY,
+            Some(&id)
+        ));
         assert!(!ws_request_permitted(
             kind,
             &json!({ "key": "device/device-a/x" }),

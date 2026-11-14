@@ -155,6 +155,22 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
         CommandClass::command(Replay::ReceiptOnly),
     ),
     ("cancel_claude_login", CommandClass::idempotent()),
+    ("list_codex_accounts", CommandClass::read()),
+    ("list_codex_usage", CommandClass::read()),
+    ("set_default_codex_account", CommandClass::idempotent()),
+    ("set_project_codex_account", CommandClass::idempotent()),
+    ("set_codex_auto_switch", CommandClass::idempotent()),
+    // A resend answers with the Account the first run added.
+    ("add_codex_account", CommandClass::command(Replay::Payload)),
+    ("rename_codex_account", CommandClass::idempotent()),
+    ("remove_codex_account", CommandClass::idempotent()),
+    // The reply is the spawned agent. A resend returns that outcome instead
+    // of starting a second process. The config env is not part of the
+    // fingerprint.
+    (
+        "start_codex_account_login",
+        CommandClass::command(Replay::Payload),
+    ),
     ("kill_agent", CommandClass::idempotent()),
     ("list_agents", CommandClass::read()),
     ("authenticate", CommandClass::read()),
@@ -237,9 +253,16 @@ pub fn class_of(request_type: &str) -> Option<(&'static str, CommandClass)> {
 fn identifying_fields(request_type: &str) -> &'static [&'static str] {
     match request_type {
         "create_session" => &["agentId", "cwd", "projectId"],
-        "spawn_agent" => &["config.name", "config.command", "config.configId", "projectId"],
+        "spawn_agent" => &[
+            "config.name",
+            "config.command",
+            "config.configId",
+            "projectId",
+        ],
         "load_session" | "resume_session" => &["agentId", "sessionId", "cwd"],
-        "close_session" | "dispose_ephemeral_session" | "promote_session"
+        "close_session"
+        | "dispose_ephemeral_session"
+        | "promote_session"
         | "delete_agent_session" => &["agentId", "sessionId"],
         "register_discovered_session" | "import_agent_session" => {
             &["agentId", "sessionId", "cwd", "projectId"]
@@ -255,6 +278,13 @@ fn identifying_fields(request_type: &str) -> &'static [&'static str] {
         }
         "add_claude_account" => &["name"],
         "finish_claude_link_login" => &["accountId"],
+        "add_codex_account" => &["name"],
+        "start_codex_account_login" => &[
+            "accountId",
+            "config.name",
+            "config.command",
+            "config.configId",
+        ],
         _ => &[],
     }
 }

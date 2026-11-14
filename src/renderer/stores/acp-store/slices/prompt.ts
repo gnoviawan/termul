@@ -29,6 +29,7 @@ import { parseBrowserConsentTicket } from '@/lib/browser-consent-api'
 import { COMMAND_RESEND_DELAYS_MS, settleCommand } from '@/lib/command-engine'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
+import { isCodexAccountRestarting } from '@/stores/codex-account-restart'
 import { readOnlyGuardOfSession } from '@/stores/github-chat-links-store'
 import {
   appendQueuedPrompt,
@@ -835,6 +836,9 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   promptCommandStates: {},
 
   sendPrompt: (sessionId, text) => {
+    if (isCodexAccountRestarting(sessionId)) {
+      return Promise.reject(new Error('This chat is switching Codex accounts'))
+    }
     // Staged switch-on-send (CAP-1/CAP-4): an armed switch intercepts the
     // NEXT send — the composer's text becomes the pending draft carried into
     // the handoff instead of a normal turn on the old agent.
@@ -852,6 +856,9 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   },
 
   sendPromptBlocks: (sessionId, blocks, options) => {
+    if (isCodexAccountRestarting(sessionId)) {
+      return Promise.reject(new Error('This chat is switching Codex accounts'))
+    }
     // Staged switch-on-send (CAP-1/CAP-4): the composer already built the
     // wire/display pair — route them straight into the armed switch rather
     // than re-deriving the pending draft from the wire text.

@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { toast } from 'sonner'
 import { ClaudeAccountChip } from '@/components/chat/claude-account/ClaudeAccountChip'
 import { ClaudeLimitWarning } from '@/components/chat/claude-account/ClaudeLimitWarning'
+import { CodexAccountChip } from '@/components/chat/codex-account/CodexAccountChip'
+import { CodexLimitWarning } from '@/components/chat/codex-account/CodexLimitWarning'
 import { Paperclip } from '@/components/icons'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
@@ -29,6 +31,7 @@ import {
   useSessionUsage
 } from '@/stores/acp-store'
 import type { OptionValues } from '@/stores/acp-store/composer-options'
+import { useCodexRestartingStore } from '@/stores/codex-account-restart'
 import { ModeChip } from './AgentHeader'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
 import { AgentModelSelector } from './agent-model-selector/AgentModelSelector'
@@ -148,8 +151,8 @@ export function ChatInputBar({
   session,
   projectRoot,
   busy,
-  disabled,
-  controlsDisabled = disabled,
+  disabled: composerDisabled,
+  controlsDisabled = composerDisabled,
   imageCapable = false,
   embedCapable = false,
   onSend,
@@ -171,6 +174,8 @@ export function ChatInputBar({
   isVisible = true,
   onDraftStart
 }: ChatInputBarProps): React.JSX.Element {
+  const accountRestarting = useCodexRestartingStore((state) => state.ids.includes(session.id))
+  const disabled = composerDisabled || accountRestarting
   const usableConfigOptions = configOptions.filter(
     (option) => option.type === 'boolean' || (option.options?.length ?? 0) > 0
   )
@@ -347,10 +352,13 @@ export function ChatInputBar({
 
     await holdComposer(async () => {
       const contexts = conversationContexts()
-      const send = buildComposerSend(
-        buildPromptParts(contexts ? await contexts : undefined),
-        attachments
-      )
+      const parts = buildPromptParts(contexts ? await contexts : undefined)
+      // A restart can begin while contexts resolve. The send callbacks swallow
+      // the rejection, so leaving here is what keeps the unsent draft.
+      if (useCodexRestartingStore.getState().ids.includes(session.id)) {
+        throw new Error('This chat is switching Codex accounts')
+      }
+      const send = buildComposerSend(parts, attachments)
       if (!send) return
       if (send.kind === 'text') onSend(send.text)
       else if (send.display) onSendBlocks(send.wire, send.display)
@@ -606,6 +614,7 @@ export function ChatInputBar({
             )}
             {permission && <PermissionPrompt permission={permission} isVisible={isVisible} />}
             {!controlsDisabled && <ClaudeLimitWarning sessionId={session.id} atTop={!permission} />}
+            {!controlsDisabled && <CodexLimitWarning sessionId={session.id} atTop={!permission} />}
             <AttachmentPreviewGroup
               attachments={attachments}
               onRemove={removeAttachment}
@@ -698,6 +707,7 @@ export function ChatInputBar({
                       termulTools={termulTools}
                     />
                     <ClaudeAccountChip sessionId={session.id} />
+                    <CodexAccountChip sessionId={session.id} />
                   </div>
                   <div
                     className={cn(

@@ -182,6 +182,18 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "start_claude_link_login" => handle_start_claude_link_login(id, &req.payload, acp).await,
         "finish_claude_link_login" => handle_finish_claude_link_login(id, &req.payload, acp).await,
         "cancel_claude_login" => handle_cancel_claude_login(id, &req.payload, acp).await,
+        // Codex Accounts. New names; the Claude handlers above are unchanged.
+        "list_codex_accounts" => handle_list_codex_accounts(id, acp).await,
+        "list_codex_usage" => handle_list_codex_usage(id, &req.payload, acp).await,
+        "set_default_codex_account" => handle_set_default_codex_account(id, &req.payload, acp).await,
+        "set_project_codex_account" => handle_set_project_codex_account(id, &req.payload, acp).await,
+        "set_codex_auto_switch" => handle_set_codex_auto_switch(id, &req.payload, acp).await,
+        "add_codex_account" => handle_add_codex_account(id, &req.payload, acp).await,
+        "rename_codex_account" => handle_rename_codex_account(id, &req.payload, acp).await,
+        "remove_codex_account" => handle_remove_codex_account(id, &req.payload, acp).await,
+        "start_codex_account_login" => {
+            handle_start_codex_account_login(id, &req.payload, acp, req.command_id.clone()).await
+        }
         // CAP-6 / Story 8: host-owned ACP catalog resolution. The catalog
         // carries the host's OS/arch/runtime availability + per-agent
         // resolved `SupportedAcpAgentStatus`. The web client never probes

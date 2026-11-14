@@ -3,8 +3,10 @@ import { lazy, Suspense, useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
 import { BrowserAuthDialogHost } from '@/components/agents/BrowserAuthDialog'
 import { BrowserConsentCardHost } from '@/components/agents/BrowserConsentCardHost'
+import { CodexCliAuthSync } from '@/components/agents/CodexCliAuthSync'
 import { ChatRoute } from '@/components/ChatRoute'
 import { useClaudeAutoSwitch } from '@/components/chat/claude-account/auto-switch'
+import { useCodexAutoSwitch } from '@/components/chat/codex-account/auto-switch'
 import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
@@ -193,6 +195,7 @@ function AppEffects(): null {
   // A Claude chat at its account's limit continues on another account, even
   // off screen. Mounted on both renderer roots for parity.
   useClaudeAutoSwitch()
+  useCodexAutoSwitch()
   // A chat agent's proposed automation opens for review. Both roots.
   useAutomationProposals()
   useAcpMcp()
@@ -309,6 +312,7 @@ const App = () => {
                   dialog (spec-acp-terminal-auth) — auth can be triggered from a
                   chat panel or warm pool, not just the launcher. */}
               <BrowserAuthDialogHost />
+              <CodexCliAuthSync />
               {/* Web MCP OAuth paste-back (spec-mcp-oauth-web-paste-back): the
                   loopback redirect the host registered is unreachable from a
                   browser on another device, so its address is pasted back here.

@@ -177,7 +177,7 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 // Re-exports for commands
 pub use acp::{
     AcpCatalogService, AcpInstallService, AcpManager, ChatHistoryStore, ClaudeAgentService,
-    ClaudeAuthMode, ClaudeAuthStatus, SessionPersistence,
+    ClaudeAuthMode, ClaudeAuthStatus, CodexAgentService, SessionPersistence,
 };
 // Host-injected `plan` MCP tool: the `--internal-mcp-plan-server`
 // subcommand branch in `main.rs` + `server_main.rs` reaches `host_mcp::CHILD_ARG`
@@ -189,6 +189,11 @@ pub use acp::host_mcp;
 // `acp` module is private, so `server_main.rs` reaches `claude_admin::run()`
 // through this path (mirrors how `onboard::run()` is dispatched).
 pub use acp::claude_admin;
+pub use acp::codex_admin;
+// Codex Account store (PR1). The desktop and `troupe-server` reach it through
+// `AcpManager`; this re-export keeps the secret-free types part of the host
+// library surface the same way the Claude Account types are reachable.
+pub use acp::codex_accounts::{CodexAccount, CodexAccountStore, CodexAccountsSnapshot};
 // Seam for the browser conformance runner (`tests/browser_conformance`), which
 // drives the real automation host from outside the crate. The runner reaches
 // the host only through these names, so a host refactor edits this list and
@@ -205,17 +210,17 @@ pub mod conformance_support {
         ConsentOption, PermissionRequest, PortFuture, TicketOutcome, TicketRequest,
     };
     pub use crate::browser_automation::core::session_dir;
-    pub use crate::browser_automation::engine::{
-        desktop_engine, BrowserEngine, CapabilityId, EngineError, EngineErrorKind, InputMode, Key, KeyInput,
-        KeyKind, NamedKey, Point, Support,
-    };
-    pub use crate::browser_automation::{
-        budgets, create_tab, dispatch, session_ended, set_browser_host,
-        BrowserCall, DesktopBrowserHost, HostServices,
-    };
     pub use crate::browser_automation::engine::assets::{overlay_state, overlay_visibility};
     pub use crate::browser_automation::engine::events::{NavPolicy, NavVerdict, TabEvents};
     pub use crate::browser_automation::engine::profile::{delete_dir, DataStore};
+    pub use crate::browser_automation::engine::{
+        desktop_engine, BrowserEngine, CapabilityId, EngineError, EngineErrorKind, InputMode, Key,
+        KeyInput, KeyKind, NamedKey, Point, Support,
+    };
+    pub use crate::browser_automation::{
+        budgets, create_tab, dispatch, session_ended, set_browser_host, BrowserCall,
+        DesktopBrowserHost, HostServices,
+    };
     pub use crate::browser_tab_manager::{BrowserBounds, BrowserTabManager};
 }
 pub use pty::PtyManager;
@@ -1701,6 +1706,10 @@ pub fn run() {
                 acp_install_root.clone(),
             ));
             app.manage(claude_agent_service.clone());
+            let codex_agent_service = Arc::new(crate::acp::codex_agent::CodexAgentService::system(
+                acp_install_root.clone(),
+            ));
+            app.manage(codex_agent_service.clone());
 
             // Create ACP Manager — spawns/owns ACP agent subprocesses.
             //
@@ -1722,18 +1731,20 @@ pub fn run() {
                         4096,
                         Arc::clone(persistence),
                     ));
-                    let manager = Arc::new(AcpManager::with_persistence_and_claude_agent(
+                    let manager = Arc::new(AcpManager::with_persistence_and_host_agents(
                         vec![relay.clone()],
                         Arc::clone(persistence),
                         Arc::clone(&claude_agent_service),
+                        Arc::clone(&codex_agent_service),
                     ));
                     (relay, manager)
                 }
                 None => {
                     let relay = Arc::new(WsRelaySink::new());
-                    let manager = Arc::new(AcpManager::with_claude_agent(
+                    let manager = Arc::new(AcpManager::with_host_agents(
                         vec![relay.clone()],
                         Arc::clone(&claude_agent_service),
+                        Arc::clone(&codex_agent_service),
                     ));
                     (relay, manager)
                 }
@@ -2253,6 +2264,11 @@ pub fn run() {
             acp::commands::claude_accounts_set_default,
             acp::commands::claude_accounts_set_project,
             acp::commands::claude_accounts_set_auto_switch,
+            acp::commands::codex_accounts_list,
+            acp::commands::codex_accounts_usage,
+            acp::commands::codex_accounts_set_default,
+            acp::commands::codex_accounts_set_project,
+            acp::commands::codex_accounts_set_auto_switch,
             acp::commands::acp_factory_key_status,
             acp::commands::acp_factory_key_save,
             acp::commands::codex_cli_auth_status,

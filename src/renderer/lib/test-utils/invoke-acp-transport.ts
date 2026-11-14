@@ -20,6 +20,11 @@ import type {
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
+import type {
+  CodexAccount,
+  CodexAccountsSnapshot,
+  CodexAccountUsage
+} from '@shared/types/codex-accounts.types'
 import type { IpcResult } from '@shared/types/ipc.types'
 import type {
   McpCatalogIconPayload,
@@ -254,6 +259,29 @@ export function createInvokeAcpTransport(): AcpTransport {
     },
     cancelClaudeLogin: (accountId) =>
       invoke<boolean>('claude_accounts_login_cancel', { accountId }),
+    listCodexAccounts: () => invoke<CodexAccountsSnapshot>('codex_accounts_list'),
+    listCodexUsage: (force = false) =>
+      invoke<CodexAccountUsage[]>('codex_accounts_usage', { force }),
+    setDefaultCodexAccount: async (accountId) => {
+      await invoke('codex_accounts_set_default', { accountId })
+    },
+    setProjectCodexAccount: (projectId, accountId, expectedAccountId) =>
+      invoke<boolean>('codex_accounts_set_project', {
+        projectId,
+        accountId,
+        expectedAccountId: expectedAccountId ?? null
+      }),
+    setCodexAutoSwitch: async (enabled) => {
+      await invoke('codex_accounts_set_auto_switch', { enabled })
+    },
+    addCodexAccount: (name, options) =>
+      invokeCommand<CodexAccount>('codex_accounts_add', { name }, options),
+    renameCodexAccount: async (accountId, name) => {
+      await invoke('codex_accounts_rename', { accountId, name })
+    },
+    removeCodexAccount: (accountId) => invoke<string[]>('codex_accounts_remove', { accountId }),
+    startCodexAccountLogin: (accountId, config, options) =>
+      invokeCommand<SpawnAgentResult>('codex_accounts_start_login', { accountId, config }, options),
     spawnAgent: (config, options, projectId) =>
       invokeCommand<SpawnAgentResult>(
         'acp_spawn_agent',

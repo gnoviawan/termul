@@ -38,6 +38,36 @@ mod bounded_lines;
 
 type DebugCallback = Arc<dyn Fn(&str, LineDirection) + Send + Sync + 'static>;
 
+/// Apply ACP stdio env entries. When the Codex account gate set
+/// [`STRIP_CODEX_API_CREDENTIALS`](crate::acp::codex_agent::STRIP_CODEX_API_CREDENTIALS),
+/// also drop that marker and the two credential names from the child,
+/// including values inherited from this process. The host environment is
+/// left unchanged.
+pub(super) fn apply_stdio_env(
+    command: &mut std::process::Command,
+    env: &[agent_client_protocol::schema::v1::EnvVariable],
+) {
+    let marker = crate::acp::codex_agent::STRIP_CODEX_API_CREDENTIALS;
+    let strip = env.iter().any(|var| var.name == marker && var.value == "1");
+    for env_var in env {
+        if strip && is_stripped_codex_credential(&env_var.name) {
+            continue;
+        }
+        command.env(&env_var.name, &env_var.value);
+    }
+    if strip {
+        command.env_remove(marker);
+        command.env_remove("OPENAI_API_KEY");
+        command.env_remove("CODEX_ACCESS_TOKEN");
+    }
+}
+
+fn is_stripped_codex_credential(name: &str) -> bool {
+    name == "OPENAI_API_KEY"
+        || name == "CODEX_ACCESS_TOKEN"
+        || name == crate::acp::codex_agent::STRIP_CODEX_API_CREDENTIALS
+}
+
 const STDERR_CAPTURE_LIMIT: usize = 64 * 1024;
 const STDERR_READ_BUFFER_SIZE: usize = 8 * 1024;
 const STDERR_LINE_TRUNCATION_MARKER: &str = "… [stderr line truncated]";
@@ -141,9 +171,7 @@ mod process {
         // explicit `env` entry still wins over the cleanup (node/npx agents must
         // resolve host libraries, not the bundled ones — #1435).
         crate::process_util::clean_appimage_env(&mut command);
-        for env_var in &stdio.env {
-            command.env(&env_var.name, &env_var.value);
-        }
+        super::apply_stdio_env(&mut command, &stdio.env);
         command.process_group(0);
         let mut command = tokio::process::Command::from(command);
         command
@@ -180,7 +208,6 @@ mod process {
     use std::os::windows::io::AsRawHandle as _;
 
     use agent_client_protocol::schema::v1::McpServer;
-    use agent_client_protocol::AcpAgent;
 
     use crate::process_util::KillOnCloseJob;
 
@@ -223,8 +250,39 @@ mod process {
     pub(super) fn spawn(
         server: &McpServer,
     ) -> Result<(Stdin, Stdout, Stderr, TreeGuard), agent_client_protocol::Error> {
-        // `spawn_process` keeps `CREATE_NO_WINDOW`.
-        let (stdin, stdout, stderr, child) = AcpAgent::new(server.clone()).spawn_process()?;
+        let McpServer::Stdio(stdio) = server else {
+            return Err(agent_client_protocol::util::internal_error(
+                "ACP agents are spawned over stdio; HTTP and SSE transports are not supported",
+            ));
+        };
+        let mut std_cmd = std::process::Command::new(&stdio.command);
+        std_cmd.args(&stdio.args);
+        super::apply_stdio_env(&mut std_cmd, &stdio.env);
+        let mut cmd = async_process::Command::from(std_cmd);
+        {
+            use async_process::windows::CommandExt as _;
+            // Same flag the ACP crate sets: no console window for a GUI host.
+            cmd.creation_flags(0x0800_0000);
+        }
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = cmd
+            .spawn()
+            .map_err(agent_client_protocol::Error::into_internal_error)?;
+        let child_stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| agent_client_protocol::util::internal_error("Failed to open stdin"))?;
+        let child_stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| agent_client_protocol::util::internal_error("Failed to open stdout"))?;
+        let child_stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| agent_client_protocol::util::internal_error("Failed to open stderr"))?;
+        let (stdin, stdout, stderr, child) = (child_stdin, child_stdout, child_stderr, child);
         let pid = child.id();
         // Assigned immediately after spawn, before the first await, so every
         // exit path (including cancelling the connection) tears the tree down
@@ -572,3 +630,6 @@ mod tests;
 
 #[cfg(all(test, unix))]
 mod unix_tests;
+
+#[cfg(all(test, unix))]
+mod strip_env_tests;

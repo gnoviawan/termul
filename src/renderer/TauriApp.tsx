@@ -6,6 +6,7 @@ import { BrowserConsentCardHost } from '@/components/agents/BrowserConsentCardHo
 import { CodexCliAuthSync } from '@/components/agents/CodexCliAuthSync'
 import { ChatRoute } from '@/components/ChatRoute'
 import { useClaudeAutoSwitch } from '@/components/chat/claude-account/auto-switch'
+import { useCodexAutoSwitch } from '@/components/chat/codex-account/auto-switch'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
@@ -121,6 +122,7 @@ function AppEffects(): null {
   // A Claude chat at its account's limit continues on another account, even
   // off screen. Mounted on both renderer roots for parity.
   useClaudeAutoSwitch()
+  useCodexAutoSwitch()
   // A chat agent's proposed automation opens for review. Both roots.
   useAutomationProposals()
   useAcpMcp()

@@ -11,30 +11,29 @@
 //!
 //! This is a CONSOLE server — do NOT add `windows_subsystem = "windows"`.
 
-use termul_manager_lib::data_lock::StandalonePaths;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
+use termul_manager_lib::data_lock::StandalonePaths;
 
+use termul_manager_lib::brand_env;
 use termul_manager_lib::server_update::{
-    check_and_apply_update, current_version, embedded_public_key, restart_binary,
-    restore_previous, UpdateChannel, UpdateOptions, UpdateOutcome, SERVER_PLATFORM_KEY,
+    check_and_apply_update, current_version, embedded_public_key, restart_binary, restore_previous,
+    UpdateChannel, UpdateOptions, UpdateOutcome, SERVER_PLATFORM_KEY,
 };
 use termul_manager_lib::web::auth::{resolve as resolve_web_auth, WebAuthResolution};
-use termul_manager_lib::brand_env;
 use termul_manager_lib::web::config::{BindMode, ParseCliError};
+use termul_manager_lib::web::project_registry::RootCheck;
 use termul_manager_lib::web::server_config_file;
 use termul_manager_lib::web::setup;
-use termul_manager_lib::web::{
-    serve, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, ServerConfig,
-    WsRelaySink,
-};
-use termul_manager_lib::web::project_registry::RootCheck;
 use termul_manager_lib::web::store::{legacy_manifests_dir, StorePolicy, WebStore};
+use termul_manager_lib::web::{
+    serve, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, ServerConfig, WsRelaySink,
+};
 use termul_manager_lib::{
-    AcpCatalogService, AcpInstallService, AcpManager, CwdTracker, ExitCodeTracker,
-    GitTracker, PtyManager, SessionPersistence, TerminalEventHub,
+    AcpCatalogService, AcpInstallService, AcpManager, CwdTracker, ExitCodeTracker, GitTracker,
+    PtyManager, SessionPersistence, TerminalEventHub,
 };
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -102,6 +101,13 @@ fn main() -> ExitCode {
         return termul_manager_lib::claude_admin::run(&raw_args[1..]);
     }
 
+    // Local-only Codex Account commands (`troupe-server codex account ...`).
+    // Same pre-bind path as the Claude admin CLI. ChatGPT logins only.
+    if raw_args.first().is_some_and(|arg| arg == "codex") {
+        init_tracing();
+        return termul_manager_lib::codex_admin::run(&raw_args[1..]);
+    }
+
     // Parse CLI BEFORE any tokio / app setup (AC2).
     let cfg = match ServerConfig::from_args(raw_args) {
         Ok(cfg) => cfg,
@@ -162,20 +168,17 @@ fn main() -> ExitCode {
     // explicit error (never runs open). A loopback bind with no configured
     // token resolves Ungated (byte-identical legacy behavior; the token file
     // is not even read).
-    let web_auth = match resolve_web_auth(
-        effective_bind_mode,
-        cfg.web_auth_token.clone(),
-        &state_dir,
-    ) {
-        Ok(resolution) => resolution,
-        Err(error) => {
-            // Durable tracing event (stderr is lost for detached services);
-            // the message carries resolution context only — never the token.
-            error!("troupe-server: web auth resolution failed, refusing to start: {error}");
-            eprintln!("troupe-server: {error}");
-            return ExitCode::from(1);
-        }
-    };
+    let web_auth =
+        match resolve_web_auth(effective_bind_mode, cfg.web_auth_token.clone(), &state_dir) {
+            Ok(resolution) => resolution,
+            Err(error) => {
+                // Durable tracing event (stderr is lost for detached services);
+                // the message carries resolution context only — never the token.
+                error!("troupe-server: web auth resolution failed, refusing to start: {error}");
+                eprintln!("troupe-server: {error}");
+                return ExitCode::from(1);
+            }
+        };
     let gate_active = !matches!(web_auth, WebAuthResolution::Ungated);
     // The plaintext-transport warning applies only when bearer traffic
     // actually crosses a network. Loaded/Generated origins imply a public
@@ -333,10 +336,15 @@ fn main() -> ExitCode {
         // held. A newer-schema file (or a legacy file that cannot be backed
         // up before migration) refuses startup visibly instead of degrading;
         // the file is left untouched.
-        let store = match WebStore::open(data_paths.store_file.clone(), StorePolicy::from_config(&cfg)) {
+        let store = match WebStore::open(
+            data_paths.store_file.clone(),
+            StorePolicy::from_config(&cfg),
+        ) {
             // The retired workspace manifests move into the first device that
             // adopts the store (renamed afterwards).
-            Ok(store) => Arc::new(store.with_legacy_manifests(legacy_manifests_dir(&data_paths.state_dir))),
+            Ok(store) => {
+                Arc::new(store.with_legacy_manifests(legacy_manifests_dir(&data_paths.state_dir)))
+            }
             Err(error) => {
                 error!("troupe-server: refusing to start: {error}");
                 eprintln!("troupe-server: {error}");
@@ -376,6 +384,9 @@ fn main() -> ExitCode {
         let claude_agent = Arc::new(termul_manager_lib::ClaudeAgentService::system(
             acp_install_dir.clone(),
         ));
+        let codex_agent = Arc::new(termul_manager_lib::CodexAgentService::system(
+            acp_install_dir.clone(),
+        ));
         let acp_install = match AcpInstallService::open(
             acp_install_dir,
             std::sync::Arc::clone(acp_catalog.as_ref().expect("catalog opened above")),
@@ -394,10 +405,11 @@ fn main() -> ExitCode {
                     Duration::from_secs(cfg.receipt_retention_secs),
                 )),
         );
-        let acp = Arc::new(AcpManager::with_persistence_and_claude_agent(
+        let acp = Arc::new(AcpManager::with_persistence_and_host_agents(
             vec![ws_relay.clone()],
             persistence,
             claude_agent,
+            codex_agent,
         ));
         // Attach the permission and question rendezvous. The relay snapshots
         // `acp:permission_request` and `acp:question_request` events into them

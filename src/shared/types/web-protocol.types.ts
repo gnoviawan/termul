@@ -299,6 +299,30 @@ export const WS_REQUEST_TYPES = [
   'start_claude_link_login',
   'finish_claude_link_login',
   'cancel_claude_login',
+  // Codex Accounts. ChatGPT logins only. `list` → `CodexAccountsSnapshot`.
+  // Choose the Default `{ accountId }` → `{}` or a Project `{ projectId,
+  // accountId | null, expectedAccountId? }` → `{ applied }`.
+  'list_codex_accounts',
+  // `{ force? }` → `{ usage: CodexAccountUsage[] }`. Cached 5 min on the host.
+  // A forced read still reuses one younger than 60 s.
+  'list_codex_usage',
+  'set_default_codex_account',
+  'set_project_codex_account',
+  // `{ enabled }` → `{}`. A chat at its Account's limit continues on the
+  // signed-in Account with the most room.
+  'set_codex_auto_switch',
+  // `{ name }` → the new signed-out account.
+  'add_codex_account',
+  // `{ accountId, name }` → `{}`.
+  'rename_codex_account',
+  // `{ accountId }` → `{ movedProjectIds }`. Runs `codex logout` for that home
+  // first. The built-in Account is refused. An Account already gone answers
+  // `{ movedProjectIds: [] }`.
+  'remove_codex_account',
+  // `{ accountId, config }` → the spawn outcome of an agent whose home is that
+  // Account. The client then calls `authenticate_agent` with `chat-gpt` or
+  // `chat-gpt-device-code`. The config env is not stored in the ledger.
+  'start_codex_account_login',
   // The canvas gateway's renderer leg (spine AD-21, AD-29). `canvas_mount`
   // / `canvas_unmount` `{ projectId, mountSeq }` tell the host this connection
   // holds (or no longer holds) a project's canvas; the host then forwards
@@ -367,6 +391,15 @@ export const WS_COMMAND_CLASSES: Readonly<
   start_claude_link_login: ['idempotent', null],
   finish_claude_link_login: ['command', 'receipt-only'],
   cancel_claude_login: ['idempotent', null],
+  list_codex_accounts: ['read', null],
+  list_codex_usage: ['read', null],
+  set_default_codex_account: ['idempotent', null],
+  set_project_codex_account: ['idempotent', null],
+  set_codex_auto_switch: ['idempotent', null],
+  add_codex_account: ['command', 'payload'],
+  rename_codex_account: ['idempotent', null],
+  remove_codex_account: ['idempotent', null],
+  start_codex_account_login: ['command', 'payload'],
   kill_agent: ['idempotent', null],
   list_agents: ['read', null],
   authenticate: ['read', null],
@@ -722,6 +755,9 @@ export const WS_ERROR_CODES = {
   // Project or as the default (nothing changed), or starting a managed Claude
   // agent on it. The message names the Account and where to sign in.
   CLAUDE_ACCOUNT_SIGNED_OUT: 'claude_account_signed_out',
+  // The Codex Account a managed Codex spawn needs is not signed in. The
+  // message names the Account or the project `CODEX_HOME`.
+  CODEX_ACCOUNT_SIGNED_OUT: 'codex_account_signed_out',
   // `finish_claude_link_login` got a code the Claude CLI calls incomplete.
   // The sign-in still waits for the whole code.
   CLAUDE_LOGIN_CODE_INCOMPLETE: 'claude_login_code_incomplete',

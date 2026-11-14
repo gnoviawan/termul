@@ -1,7 +1,9 @@
 import { toast } from 'sonner'
 import {
   claudeAccountSignedOutMessage,
-  isClaudeAccountSignedOutError
+  codexAccountSignedOutMessage,
+  isClaudeAccountSignedOutError,
+  isCodexAccountSignedOutError
 } from '@/lib/agents/acp-spawn-errors'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 
@@ -11,8 +13,11 @@ import { useSettingsModalStore } from '@/stores/settings-modal-store'
  * signs in; nothing changed on the host. Any other failure keeps `fallback`.
  */
 export function toastAccountChoiceError(error: unknown, fallback: string): void {
-  if (isClaudeAccountSignedOutError(error)) {
-    toast.error(claudeAccountSignedOutMessage(error), {
+  if (isClaudeAccountSignedOutError(error) || isCodexAccountSignedOutError(error)) {
+    const text = isCodexAccountSignedOutError(error)
+      ? codexAccountSignedOutMessage(error)
+      : claudeAccountSignedOutMessage(error)
+    toast.error(text, {
       action: {
         label: 'Open Accounts',
         onClick: () => useSettingsModalStore.getState().openApp('provider')

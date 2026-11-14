@@ -19,6 +19,9 @@ use crate::commands::IpcResult;
 mod claude_accounts;
 pub use claude_accounts::*;
 
+mod codex_accounts;
+pub use codex_accounts::*;
+
 /// Whether the host OS keychain currently holds a Factory Droid API key.
 #[tauri::command]
 pub fn acp_factory_key_status() -> bool {
@@ -47,7 +50,7 @@ pub struct CodexCliAuthStatus {
 /// `codex-acp` uses (`CODEX_HOME`, default `~/.codex`).
 #[tauri::command]
 pub async fn codex_cli_auth_status(codex_home: Option<String>) -> CodexCliAuthStatus {
-    let state = match codex_login_status(codex_home).await {
+    let state = match codex_login_status(codex_home, None, None).await {
         CodexLoginProbe::SignedIn => "signed-in",
         CodexLoginProbe::SignedOut => "signed-out",
         CodexLoginProbe::Unavailable => "unavailable",
@@ -58,40 +61,67 @@ pub async fn codex_cli_auth_status(codex_home: Option<String>) -> CodexCliAuthSt
     }
 }
 
-enum CodexLoginProbe {
+pub(crate) enum CodexLoginProbe {
     SignedIn,
     SignedOut,
     Unavailable,
 }
 
-async fn codex_login_status(codex_home: Option<String>) -> CodexLoginProbe {
-    let resolved = crate::pty::manager::resolve_spawn_program("codex")
-        .unwrap_or_else(|_| crate::pty::manager::ResolvedProgram::new("codex".to_string()));
-    let mut command = tokio::process::Command::new(&resolved.program);
-    // Polled every 4s by the renderer: never flash a console window.
-    crate::process_util::background_command_hygiene(&mut command);
+/// PATH the login probe searches, matching the spawned adapter.
+/// A project `PATH` is the inherited side of `apply_fresh_path`.
+fn codex_probe_search_path(project_path: Option<&str>) -> String {
+    let mut env = std::collections::HashMap::new();
+    if let Some(path) = project_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        env.insert("PATH".to_string(), path.to_string());
+    }
+    crate::pty::env_refresh::apply_fresh_path(&mut env);
+    env.iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("path"))
+        .map(|(_, value)| value.clone())
+        .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default())
+}
+
+/// Resolve `program` the way the spawned adapter finds `codex`.
+/// An explicit path is kept. A bare name is the first executable on `search_path`.
+fn resolve_codex_probe_program(
+    program: &str,
+    search_path: &str,
+) -> crate::pty::manager::ResolvedProgram {
+    let trimmed = program.trim();
+    let explicit = trimmed.contains('/') || (cfg!(windows) && trimmed.contains('\\'));
+    let candidate = if explicit {
+        trimmed.to_string()
+    } else {
+        crate::acp::config::resolve_runtime_executable(trimmed, search_path)
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| trimmed.to_string())
+    };
+    crate::pty::manager::resolve_spawn_program(&candidate)
+        .unwrap_or_else(|_| crate::pty::manager::ResolvedProgram::new(candidate))
+}
+
+/// `codex login status` for one home. `None` uses the host default (`~/.codex`).
+/// `codex_bin` is the executable the managed adapter will run (`CODEX_PATH`);
+/// when it is absent the host `CODEX_PATH` is used, then `codex` on `PATH`.
+/// `project_path` is the project env `PATH`. A bare executable is resolved
+/// against that path merged with the login-shell PATH, the same PATH the
+/// spawned adapter searches. Exit 0 is signed in, exit 1 is signed out, and
+/// every other result is unavailable. The command's output is discarded and
+/// never logged.
+pub(crate) async fn codex_login_status(
+    codex_home: Option<String>,
+    codex_bin: Option<&str>,
+    project_path: Option<&str>,
+) -> CodexLoginProbe {
+    let mut command = codex_command(&["login", "status"], codex_home, codex_bin, project_path);
     command
-        .args(&resolved.prepend_args)
-        .arg("login")
-        .arg("status")
         .kill_on_drop(true)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    let mut path_env = std::collections::HashMap::new();
-    crate::pty::env_refresh::apply_fresh_path(&mut path_env);
-    if let Some(path) = path_env
-        .iter()
-        .find(|(key, _)| key.eq_ignore_ascii_case("path"))
-        .map(|(_, value)| value.clone())
-    {
-        command.env("PATH", &path);
-        #[cfg(windows)]
-        command.env("Path", &path);
-    }
-    if let Some(home) = codex_home.filter(|value| !value.trim().is_empty()) {
-        command.env("CODEX_HOME", home);
-    }
     match tokio::time::timeout(std::time::Duration::from_secs(5), command.status()).await {
         Ok(Ok(status)) if status.success() => CodexLoginProbe::SignedIn,
         // Exit 1 is the unauthenticated status, matching the Claude probe.
@@ -116,6 +146,157 @@ async fn codex_login_status(codex_home: Option<String>) -> CodexLoginProbe {
             CodexLoginProbe::Unavailable
         }
     }
+}
+
+/// Arguments of a ChatGPT device login. The command never takes an API key.
+pub(crate) const CODEX_DEVICE_LOGIN_ARGS: &[&str] = &["login", "--device-auth"];
+
+/// `codex logout` for one home. `None` uses the host default. Output is
+/// discarded and never logged. `Ok` only on exit 0.
+pub(crate) async fn codex_logout(codex_home: Option<String>) -> Result<(), String> {
+    let mut command = codex_command(&["logout"], codex_home, None, None);
+    command
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    match tokio::time::timeout(std::time::Duration::from_secs(20), command.status()).await {
+        Ok(Ok(status)) if status.success() => {
+            log::info!("[acp] codex logout finished");
+            Ok(())
+        }
+        Ok(Ok(status)) => {
+            log::warn!("[acp] codex logout exited {}", status.code().unwrap_or(-1));
+            Err("Codex sign-out did not finish".to_string())
+        }
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err("Codex CLI is not installed or is not on PATH".to_string())
+        }
+        Ok(Err(error)) => {
+            log::warn!("[acp] codex logout could not start: {error}");
+            Err("Could not start Codex sign-out".to_string())
+        }
+        Err(_) => {
+            log::warn!("[acp] codex logout timed out");
+            Err("Codex sign-out timed out".to_string())
+        }
+    }
+}
+
+/// ChatGPT device login in the caller's terminal (`troupe-server codex account
+/// login`). The CLI prints the code itself; Troupe never reads it.
+pub(crate) fn run_codex_device_login(codex_home: Option<&std::path::Path>) -> Result<(), String> {
+    let home = match codex_home {
+        Some(dir) => Some(dir.to_str().ok_or_else(|| {
+            log::warn!("[acp] codex account home is not valid Unicode");
+            "The Codex account folder path is not supported".to_string()
+        })?),
+        None => None,
+    };
+    if let Some(dir) = home {
+        if let Err(error) = std::fs::create_dir_all(dir) {
+            log::warn!(
+                "[acp] could not create Codex home before login: {:?}",
+                error.kind()
+            );
+            return Err("Could not create the Codex home folder".to_string());
+        }
+    }
+    let resolved = resolve_codex_program(None, None);
+    let mut command = std::process::Command::new(&resolved.program);
+    command
+        .args(&resolved.prepend_args)
+        .args(CODEX_DEVICE_LOGIN_ARGS);
+    let mut path_env = std::collections::HashMap::new();
+    crate::pty::env_refresh::apply_fresh_path(&mut path_env);
+    if let Some(path) = path_env
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("path"))
+        .map(|(_, value)| value.clone())
+    {
+        command.env("PATH", &path);
+        #[cfg(windows)]
+        command.env("Path", &path);
+    }
+    if let Some(dir) = home {
+        command.env("CODEX_HOME", dir);
+    }
+    command.env_remove("OPENAI_API_KEY");
+    command.env_remove("CODEX_ACCESS_TOKEN");
+    let status = command
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .map_err(|error| {
+            log::warn!("[acp] codex login could not start: {error}");
+            if error.kind() == std::io::ErrorKind::NotFound {
+                "Codex CLI is not installed or is not on PATH".to_string()
+            } else {
+                "Could not start Codex sign-in".to_string()
+            }
+        })?;
+    if status.success() {
+        log::info!("[acp] codex device login finished");
+        Ok(())
+    } else {
+        log::warn!(
+            "[acp] codex device login exited {}",
+            status.code().unwrap_or(-1)
+        );
+        Err("Codex sign-in did not finish".to_string())
+    }
+}
+
+/// `codex_bin` is `CODEX_PATH` from the agent env. When it is absent the host
+/// `CODEX_PATH` is used, then `codex` on `PATH`. `project_path` is the project
+/// env `PATH`. API credentials are removed so a host key is not treated as a
+/// ChatGPT login.
+fn codex_command(
+    args: &[&str],
+    codex_home: Option<String>,
+    codex_bin: Option<&str>,
+    project_path: Option<&str>,
+) -> tokio::process::Command {
+    let search_path = codex_probe_search_path(project_path);
+    let resolved = resolve_codex_program(codex_bin, Some(search_path.as_str()));
+    let mut command = tokio::process::Command::new(&resolved.program);
+    crate::process_util::background_command_hygiene(&mut command);
+    command
+        .args(&resolved.prepend_args)
+        .args(args)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("CODEX_ACCESS_TOKEN");
+    if !search_path.is_empty() {
+        command.env("PATH", &search_path);
+        #[cfg(windows)]
+        command.env("Path", &search_path);
+    }
+    if let Some(home) = codex_home.filter(|value| !value.trim().is_empty()) {
+        command.env("CODEX_HOME", home);
+    }
+    command
+}
+
+pub(crate) fn resolve_codex_program(
+    codex_bin: Option<&str>,
+    search_path: Option<&str>,
+) -> crate::pty::manager::ResolvedProgram {
+    let program = codex_bin
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            std::env::var("CODEX_PATH")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_else(|| "codex".to_string());
+    let path = search_path
+        .map(str::to_string)
+        .unwrap_or_else(|| codex_probe_search_path(None));
+    resolve_codex_probe_program(&program, &path)
 }
 
 /// Probe whether registry package-manager launchers (`npx` / `uvx`) are on PATH.
@@ -223,7 +404,9 @@ pub async fn acp_mcp_oauth_start(
                     if !crate::web::host_allow::HostAllowList::loopback()
                         .allows_header_block(&mut lines)
                     {
-                        log::warn!("[mcp-oauth] rejected callback request: foreign or missing host");
+                        log::warn!(
+                            "[mcp-oauth] rejected callback request: foreign or missing host"
+                        );
                         let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                         let _ = stream.flush();
                         continue;
