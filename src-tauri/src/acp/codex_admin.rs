@@ -2,7 +2,7 @@
 //! (`troupe-server codex account ...`). They run before the server binds a
 //! socket. They print account ids and names only — never login details.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::acp::{CodexAgentService, CodexSignInCheck};
@@ -32,7 +32,7 @@ pub fn run(args: &[String]) -> ExitCode {
     });
     let service = CodexAgentService::system(state_dir.join("acp-registry-binaries"));
     match command_args.as_slice() {
-        [area, rest @ ..] if area == "account" => run_account(&service, rest),
+        [area, rest @ ..] if area == "account" => run_account(&service, &state_dir, rest),
         _ => {
             eprintln!("{}", usage());
             ExitCode::from(2)
@@ -42,7 +42,11 @@ pub fn run(args: &[String]) -> ExitCode {
 
 /// Run one account operation. `login` of a real Account starts `codex login
 /// --device-auth` in this terminal.
-pub(crate) fn run_account(service: &CodexAgentService, args: &[String]) -> ExitCode {
+pub(crate) fn run_account(
+    service: &CodexAgentService,
+    state_dir: &Path,
+    args: &[String],
+) -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     if args.iter().any(|arg| matches!(*arg, "-h" | "--help")) {
         println!("{}", usage_text());
@@ -75,7 +79,8 @@ pub(crate) fn run_account(service: &CodexAgentService, args: &[String]) -> ExitC
         ["add", name] => service.insert_profile(name).map(|created| {
             println!("Added account {} ({}).", created.name, created.id);
             println!(
-                "Sign in with: troupe-server codex account login {}",
+                "Sign in with: troupe-server codex --state-dir {} account login {}",
+                quote_arg(&state_dir.display().to_string()),
                 created.id
             );
         }),
@@ -123,6 +128,16 @@ fn block_on(
     tokio::runtime::Runtime::new()
         .map_err(|error| format!("could not start runtime: {error}"))?
         .block_on(operation)
+}
+
+/// Quote one shell argument. Paths without spaces stay bare so the printed
+/// command can be copied. A space or quote is wrapped and the quote escaped.
+fn quote_arg(value: &str) -> String {
+    if value.contains([' ', '\t', '"']) {
+        format!("\"{}\"", value.replace('"', "\\\""))
+    } else {
+        value.to_string()
+    }
 }
 
 fn yes_no(value: bool) -> &'static str {

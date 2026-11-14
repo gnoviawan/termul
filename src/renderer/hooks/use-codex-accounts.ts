@@ -1,5 +1,6 @@
 import type { CodexAccountsSnapshot, CodexAccountUsage } from '@shared/types/codex-accounts.types'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { subscribeCodexAccountList } from '@/lib/codex-account-list'
 import { codexAccountsApi } from '@/lib/codex-accounts-api'
 
 /** The host caches usage for 5 minutes, so polling faster gains nothing. */
@@ -70,15 +71,20 @@ export function useCodexAccounts(
       }
     }
     void reload()
+    const unsubscribeList = subscribeCodexAccountList(() => {
+      void reload()
+    })
     if (!withUsage) {
       return () => {
         mounted.current = false
+        unsubscribeList()
       }
     }
     void refreshUsage(false)
     const timer = setInterval(() => void refreshUsage(false), CODEX_USAGE_POLL_MS)
     return () => {
       mounted.current = false
+      unsubscribeList()
       clearInterval(timer)
     }
   }, [reload, refreshUsage, withUsage, enabled])

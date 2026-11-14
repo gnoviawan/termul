@@ -5,6 +5,7 @@ import {
   CODEX_CLI_SIGNED_OUT_MESSAGE,
   type CodexCliAuthState,
   codexAuthSyncDecision,
+  codexHomeFromConfig,
   isCodexAcpConfig
 } from '@/lib/agents/codex-cli-auth'
 import { codexAccountsApi } from '@/lib/codex-accounts-api'
@@ -16,6 +17,12 @@ import { useProjectStore } from '@/stores/project-store'
 import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
 
 const POLL_MS = 4000
+
+function absoluteCodexHome(value: string | null | undefined): boolean {
+  const trimmed = value?.trim() ?? ''
+  if (!trimmed || trimmed.startsWith('~')) return false
+  return trimmed.startsWith('/') || trimmed.startsWith('\\\\') || /^[A-Za-z]:[\\/]/.test(trimmed)
+}
 
 function authState(account: CodexAccountView | undefined): CodexCliAuthState | null {
   if (!account || account.signedIn === null) return 'unavailable'
@@ -75,6 +82,11 @@ export function CodexCliAuthSync(): null {
           const projectId =
             parsed.projectId || session?.projectId || projects.find((item) => item.path === cwd)?.id
           if (!projectId) continue
+          const project = projects.find((item) => item.id === projectId)
+          const projectHome = project?.envVars?.find((item) => item.key === 'CODEX_HOME')?.value
+          if (absoluteCodexHome(codexHomeFromConfig(config)) || absoluteCodexHome(projectHome)) {
+            continue
+          }
           const accountId = snapshot.projectAccounts[projectId] ?? snapshot.defaultAccountId
           const group = byAccount.get(accountId) ?? { agentIds: [], sessionIds: [], restarts: [] }
           group.agentIds.push(agentId)

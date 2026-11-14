@@ -150,6 +150,7 @@ pub struct CodexAgentService {
     login_probe: Arc<dyn CodexLoginStatus>,
     usage_cache: UsageCache,
     usage_probe: Arc<dyn usage::CodexUsageProbe>,
+    usage_inflight: usage::UsageInflight,
 }
 
 impl CodexAgentService {
@@ -186,6 +187,7 @@ impl CodexAgentService {
             login_probe,
             usage_cache: parking_lot::Mutex::new(HashMap::new()),
             usage_probe: Arc::new(usage::SystemCodexUsageProbe),
+            usage_inflight: usage::UsageInflight::default(),
         }
     }
 

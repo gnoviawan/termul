@@ -182,6 +182,60 @@ fn a_missing_account_cannot_start_a_terminal_login() {
     assert_eq!(error, "That Codex account does not exist");
 }
 
+struct FlipDefault {
+    store: Arc<CodexAccountStore>,
+    flipped: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl crate::acp::codex_agent::CodexLoginStatus for FlipDefault {
+    async fn login_status(
+        &self,
+        _codex_home: Option<&std::path::Path>,
+        _codex_bin: Option<&str>,
+        _project_path: Option<&str>,
+    ) -> Result<Option<bool>, String> {
+        if !self.flipped.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let other = self.store.add("Other").unwrap();
+            self.store.set_default(&other.id).unwrap();
+        }
+        Ok(Some(true))
+    }
+}
+
+#[tokio::test]
+async fn following_the_default_refuses_when_it_changes_during_the_check() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(CodexAccountStore::new(
+        root.path(),
+        root.path().join("shared"),
+    ));
+    let work = store.add("Work").unwrap();
+    store
+        .set_project_account("office", Some(&work.id), None)
+        .unwrap();
+    let service = CodexAgentService::with_probe(
+        Arc::clone(&store),
+        Arc::new(FlipDefault {
+            store: Arc::clone(&store),
+            flipped: std::sync::atomic::AtomicBool::new(false),
+        }),
+    );
+    let error = service
+        .set_project_account("office", None, None, CodexSignInCheck::Required)
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("changed while its sign-in was checked"),
+        "{error}"
+    );
+    let snapshot = store.snapshot().unwrap();
+    assert_eq!(
+        snapshot.project_profiles.get("office").map(String::as_str),
+        Some(work.id.as_str())
+    );
+}
+
 #[test]
 fn device_login_args_are_chatgpt_only() {
     assert_eq!(

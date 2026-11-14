@@ -232,6 +232,7 @@ export function ProjectSettingsModal() {
         })
         .catch((err) => {
           toastAccountChoiceError(err, 'Could not save the Codex account')
+          setHasChanges(true)
         })
       setEnvVars(normalizedEnvVars)
       setSymlinkDirs(normalizedSymlinkDirs)

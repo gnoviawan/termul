@@ -94,3 +94,15 @@ fn the_probe_search_path_keeps_a_project_path() {
         .split(delimiter)
         .all(|segment| segment != "  "));
 }
+
+#[test]
+fn the_login_probe_command_asks_for_login_status() {
+    let command = codex_command(&["login", "status"], None, Some("/opt/codex"), None);
+    let command = command.as_std();
+    let args: Vec<String> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(command.get_program().to_string_lossy(), "/opt/codex");
+    assert_eq!(args, ["login", "status"]);
+}

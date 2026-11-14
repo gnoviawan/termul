@@ -62,7 +62,7 @@ const isOpen = (state: AcpState, sessionId: string): boolean => {
   return status === 'active' || status === 'error'
 }
 
-function openChatIds(): Set<string> {
+export function openChatIds(): Set<string> {
   const ids = getAgentChatSessionIdsInAllTrees(useWorkspaceStore.getState())
   for (const kept of Object.values(useAgentChatLifetimeStore.getState().retainedByProject)) {
     for (const id of kept) ids.add(id)
@@ -142,6 +142,21 @@ async function continueInNewSession(sessionId: string, resend: boolean): Promise
 
 /** Chats with a restart already running or waiting, so a second switch does not stack. */
 const restarting = new Set<string>()
+/** One restart to run after the in-flight one, if the chat is still on the old account. */
+const restartFollowUp = new Map<string, { resend?: boolean; cancelTurn?: boolean }>()
+
+async function waitForSharedAgent(agentId: string, sessionId: string): Promise<void> {
+  for (;;) {
+    const state = useAcpStore.getState()
+    const busy = Object.entries(state.sessions).find(([id, session]) => {
+      if (id === sessionId || session.agentId !== agentId || !isOpen(state, id)) return false
+      const reason = switchBlockedReason(state, id)
+      return reason !== null && !isBackgroundWorkBlock(reason)
+    })
+    if (!busy) return
+    await waitUntilIdle(busy[0], false)
+  }
+}
 
 /**
  * Restart one Codex chat on its Project's current Account and resume the same
@@ -152,7 +167,10 @@ export async function restartCodexSession(
   sessionId: string,
   options: { resend?: boolean; cancelTurn?: boolean } = {}
 ): Promise<boolean> {
-  if (restarting.has(sessionId)) return false
+  if (restarting.has(sessionId)) {
+    restartFollowUp.set(sessionId, options)
+    return false
+  }
   restarting.add(sessionId)
   try {
     const store = useAcpStore.getState()
@@ -195,11 +213,13 @@ export async function restartCodexSession(
     })
     // Stop the old process first: its reuse key goes with it, and a web reopen
     // cannot adopt it, so the reopen spawns with the new Account.
-    if (oldAgentId)
+    if (oldAgentId) {
+      await waitForSharedAgent(oldAgentId, sessionId)
       await useAcpStore
         .getState()
         .killAgent(oldAgentId)
         .catch(() => undefined)
+    }
     const resend = options.resend ?? false
     try {
       await useAcpStore.getState().retryCrashedSession(sessionId, { resend })
@@ -224,6 +244,18 @@ export async function restartCodexSession(
     return false
   } finally {
     restarting.delete(sessionId)
+    const again = restartFollowUp.get(sessionId)
+    if (again) {
+      restartFollowUp.delete(sessionId)
+      const state = useAcpStore.getState()
+      if (
+        isOpen(state, sessionId) &&
+        isCodexSession(state, sessionId) &&
+        !runsProjectAccount(state, sessionId)
+      ) {
+        await restartCodexSession(sessionId, again)
+      }
+    }
   }
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { type CodexAccountsState, useCodexAccounts } from '@/hooks/use-codex-accounts'
 import { codexAccountsApi } from '@/lib/codex-accounts-api'
 
@@ -25,15 +25,27 @@ export function useProjectCodexAccountDraft(
   const saved = projectId ? (accounts.snapshot?.projectAccounts[projectId] ?? null) : null
   const [value, setValue] = useState<string | null>(saved)
   const [dirty, setDirty] = useState(false)
+  const projectRef = useRef(projectId)
+  const revision = useRef(0)
 
   useEffect(() => {
+    if (projectRef.current !== projectId) {
+      projectRef.current = projectId
+      revision.current += 1
+      setValue(saved)
+      setDirty(false)
+      return
+    }
     if (!dirty) setValue(saved)
-  }, [saved, dirty])
+  }, [projectId, saved, dirty])
 
   const save = useCallback(async () => {
     if (!projectId || !dirty) return false
-    await codexAccountsApi.setProjectAccount(projectId, value)
-    setDirty(false)
+    const submitted = { projectId, revision: revision.current, value }
+    await codexAccountsApi.setProjectAccount(submitted.projectId, submitted.value)
+    if (projectRef.current === submitted.projectId && revision.current === submitted.revision) {
+      setDirty(false)
+    }
     await accounts.reload()
     return true
   }, [projectId, dirty, value, accounts])
@@ -43,6 +55,7 @@ export function useProjectCodexAccountDraft(
     value,
     dirty,
     setValue: (next) => {
+      revision.current += 1
       setValue(next)
       setDirty(next !== saved)
     },

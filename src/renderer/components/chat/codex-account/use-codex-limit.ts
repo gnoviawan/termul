@@ -129,6 +129,15 @@ export const useCodexResumeStore = create<ResumeState>((set, get) => ({
   }
 }))
 
+useAcpStore.subscribe((state, prev) => {
+  if (state.sessions === prev.sessions) return
+  const { turns, cancel } = useCodexResumeStore.getState()
+  for (const sessionId of Object.keys(turns)) {
+    const current = state.sessions[sessionId]?.openTurnId ?? null
+    if (turnReplaced(turns[sessionId], current)) cancel(sessionId)
+  }
+})
+
 export const useCodexSwitchingStore = create<Record<string, string>>(() => ({}))
 
 export function setSwitchingTo(sessionId: string, accountName: string | null): void {
@@ -189,6 +198,10 @@ export function useCodexLimit(sessionId: string): CodexLimit | null {
       await reloadAccounts()
       if (continued === null) {
         toast.info('That account was changed on another client')
+        return
+      }
+      if (atLimit && !continued.includes(sessionId)) {
+        toast.info(`Switched to ${target.account.name}, but this chat did not continue`)
         return
       }
       toast.success(`Switched to ${target.account.name}`)

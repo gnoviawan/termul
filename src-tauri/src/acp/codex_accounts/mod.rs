@@ -163,6 +163,14 @@ pub struct CodexAccountStore {
     lock: parking_lot::Mutex<()>,
 }
 
+/// In-process mutex plus the OS lock on `<store>.lock`. The file lock is what
+/// coordinates `troupe-server codex account` with a server that uses the same
+/// state directory. Drop releases both.
+struct StoreLock<'a> {
+    _memory: parking_lot::MutexGuard<'a, ()>,
+    _file: std::fs::File,
+}
+
 impl CodexAccountStore {
     /// Store under `state_dir`, linking Account directories to `shared_dir`.
     #[must_use]
@@ -219,7 +227,7 @@ impl CodexAccountStore {
     /// signed out until the user signs that home in with Codex.
     pub fn add(&self, name: &str) -> Result<CodexAccount, String> {
         let name = validate_name(name)?;
-        let _guard = self.lock.lock();
+        let _guard = self.lock_store()?;
         let mut file = self.load()?;
         if file
             .entries
@@ -258,7 +266,7 @@ impl CodexAccountStore {
 
     pub fn rename(&self, id: &str, name: &str) -> Result<(), String> {
         let name = validate_name(name)?;
-        let _guard = self.lock.lock();
+        let _guard = self.lock_store()?;
         let mut file = self.load()?;
         if file
             .entries
@@ -285,7 +293,7 @@ impl CodexAccountStore {
         if id == BUILTIN_ACCOUNT_ID {
             return Err("The built-in account cannot be removed".to_string());
         }
-        let _guard = self.lock.lock();
+        let _guard = self.lock_store()?;
         let mut file = self.load()?;
         if !file.has_account(id) {
             return Err(unknown_account(id));
@@ -312,7 +320,7 @@ impl CodexAccountStore {
     }
 
     pub fn set_default(&self, id: &str) -> Result<(), String> {
-        let _guard = self.lock.lock();
+        let _guard = self.lock_store()?;
         let mut file = self.load()?;
         if !file.has_account(id) {
             return Err(unknown_account(id));
@@ -324,7 +332,7 @@ impl CodexAccountStore {
     }
 
     pub fn set_auto_switch(&self, enabled: bool) -> Result<(), String> {
-        let _guard = self.lock.lock();
+        let _guard = self.lock_store()?;
         let mut file = self.load()?;
         file.auto_switch = enabled;
         self.save(&file)?;
@@ -346,7 +354,7 @@ impl CodexAccountStore {
         if project_id.is_empty() {
             return Err("A project id is required".to_string());
         }
-        let _guard = self.lock.lock();
+        let _guard = self.lock_store()?;
         let mut file = self.load()?;
         if let Some(id) = account_id {
             if !file.has_account(id) {
@@ -377,7 +385,9 @@ impl CodexAccountStore {
     /// to the built-in Account so Codex chats keep working.
     #[must_use]
     pub fn resolve(&self, project_id: Option<&str>) -> AccountResolution {
-        let _guard = self.lock.lock();
+        let Ok(_guard) = self.lock_store() else {
+            return builtin_resolution(BUILTIN_ACCOUNT_NAME);
+        };
         let file = match self.load() {
             Ok(file) => file,
             Err(error) => {
@@ -436,6 +446,50 @@ impl CodexAccountStore {
         Some(self.accounts_root.join(id))
     }
 
+    /// Exclusive lock for one load-modify-save. The OS lock is a sibling of
+    /// the store file so every process using this state directory waits on
+    /// the same file.
+    fn lock_store(&self) -> Result<StoreLock<'_>, String> {
+        let memory = self.lock.lock();
+        if let Some(parent) = self.store_path.parent() {
+            if let Err(error) = std::fs::create_dir_all(parent) {
+                log::warn!(
+                    "[codex-accounts] could not create the store directory before locking: {:?}",
+                    error.kind()
+                );
+                return Err("Could not lock the Codex account list".to_string());
+            }
+        }
+        let path = store_lock_path(&self.store_path);
+        let file = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(error) => {
+                log::warn!(
+                    "[codex-accounts] could not open the store lock: {:?}",
+                    error.kind()
+                );
+                return Err("Could not lock the Codex account list".to_string());
+            }
+        };
+        if let Err(error) = file.lock() {
+            log::warn!(
+                "[codex-accounts] could not lock the store: {:?}",
+                error.kind()
+            );
+            return Err("Could not lock the Codex account list".to_string());
+        }
+        Ok(StoreLock {
+            _memory: memory,
+            _file: file,
+        })
+    }
+
     fn load(&self) -> Result<StoreFile, String> {
         let bytes = match std::fs::read(&self.store_path) {
             Ok(bytes) => bytes,
@@ -478,6 +532,12 @@ impl CodexAccountStore {
             "Could not save the Codex account list".to_string()
         })
     }
+}
+
+fn store_lock_path(store_path: &Path) -> PathBuf {
+    let mut name = store_path.file_name().unwrap_or_default().to_os_string();
+    name.push(".lock");
+    store_path.with_file_name(name)
 }
 
 fn builtin_resolution(name: &str) -> AccountResolution {

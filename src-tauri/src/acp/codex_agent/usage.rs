@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -57,6 +58,11 @@ pub(super) struct CachedUsage {
 /// Latest read per Account id.
 pub(super) type UsageCache = parking_lot::Mutex<HashMap<String, CachedUsage>>;
 
+/// In-flight usage probes, shared by concurrent callers of one account.
+pub(super) type UsageInflight = std::sync::Arc<
+    parking_lot::Mutex<HashMap<String, tokio::sync::watch::Receiver<Option<CodexAccountUsage>>>>,
+>;
+
 impl CodexAgentService {
     /// Usage of every Account, in list order. Reads younger than 5 minutes
     /// come from the cache; `force` refreshes reads older than 60 seconds.
@@ -88,18 +94,50 @@ impl CodexAgentService {
                 .collect()
         };
         if !stale.is_empty() {
-            let reads = futures::future::join_all(stale.iter().map(|(id, home)| async move {
-                let checked_at = chrono::Utc::now().timestamp_millis();
-                let verdict = match home {
-                    Some(home) => match ensure_home(home) {
-                        Ok(()) => self.usage_probe.probe(home).await,
-                        Err(message) => ProbeVerdict::Failed(message),
-                    },
-                    None => ProbeVerdict::Unavailable,
-                };
-                usage_from_verdict(id, verdict, checked_at)
-            }))
-            .await;
+            let mut waiters = Vec::with_capacity(stale.len());
+            let mut started = Vec::new();
+            {
+                let mut inflight = self.usage_inflight.lock();
+                for (id, home) in stale {
+                    if let Some(receiver) = inflight.get(&id) {
+                        waiters.push(receiver.clone());
+                        continue;
+                    }
+                    let (sender, receiver) = tokio::sync::watch::channel(None);
+                    inflight.insert(id.clone(), receiver.clone());
+                    waiters.push(receiver);
+                    started.push((id, home, sender));
+                }
+            }
+            for (id, home, sender) in started {
+                let probe = Arc::clone(&self.usage_probe);
+                let inflight = Arc::clone(&self.usage_inflight);
+                tokio::spawn(async move {
+                    let checked_at = chrono::Utc::now().timestamp_millis();
+                    let verdict = match &home {
+                        Some(home) => match ensure_home(home) {
+                            Ok(()) => probe.probe(home).await,
+                            Err(message) => ProbeVerdict::Failed(message),
+                        },
+                        None => ProbeVerdict::Unavailable,
+                    };
+                    let usage = usage_from_verdict(&id, verdict, checked_at);
+                    inflight.lock().remove(&id);
+                    let _ = sender.send(Some(usage));
+                });
+            }
+            let mut reads = Vec::with_capacity(waiters.len());
+            for mut receiver in waiters {
+                loop {
+                    if let Some(usage) = receiver.borrow().clone() {
+                        reads.push(usage);
+                        break;
+                    }
+                    if receiver.changed().await.is_err() {
+                        break;
+                    }
+                }
+            }
             let unavailable = reads
                 .iter()
                 .filter(|usage| usage.status == CodexUsageStatus::Unavailable)

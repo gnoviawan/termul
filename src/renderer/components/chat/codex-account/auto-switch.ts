@@ -16,14 +16,17 @@ import { codexResetSeconds, primaryCodexWindow } from '@/lib/codex-usage-format'
 import { logFrontendError } from '@/lib/log-api'
 import { type AcpState, useAcpStore } from '@/stores/acp-store'
 import { withRateLimit } from '@/stores/acp-store/rate-limit'
+import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import {
   applyProjectCodexAccount,
   isChatOpenHere,
   isCodexSession,
+  openChatIds,
   restartCodexSession,
   runsProjectAccount,
   switchProjectCodexAccount
 } from '@/stores/codex-account-switch'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import {
   formatClock,
   isAtLimit,
@@ -285,9 +288,13 @@ export function startCodexAutoSwitch(): () => void {
     }
   }
 
+  let openKey = ''
   function check(state: AcpState): void {
-    if (stopped || state.sessionUsage === lastUsage) return
+    const nextOpen = [...openChatIds()].sort().join('\0')
+    const opened = nextOpen !== openKey
+    if (stopped || (state.sessionUsage === lastUsage && !opened)) return
     lastUsage = state.sessionUsage
+    openKey = nextOpen
     for (const sessionId of handled.keys()) {
       const limit = state.sessionUsage[sessionId]?.rateLimit
       if (!limit || !isAtLimit(limit)) handled.delete(sessionId)
@@ -332,10 +339,14 @@ export function startCodexAutoSwitch(): () => void {
     void stampProbeLimits().catch(() => undefined)
   }, PROBE_STAMP_MS)
   const unsubscribe = useAcpStore.subscribe(check)
+  const unsubscribeOpen = useWorkspaceStore.subscribe(() => check(useAcpStore.getState()))
+  const unsubscribeKept = useAgentChatLifetimeStore.subscribe(() => check(useAcpStore.getState()))
   return () => {
     stopped = true
     clearInterval(timer)
     unsubscribe()
+    unsubscribeOpen()
+    unsubscribeKept()
   }
 }
 

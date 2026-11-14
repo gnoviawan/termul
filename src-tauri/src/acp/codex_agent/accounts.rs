@@ -136,6 +136,16 @@ impl CodexAgentService {
                     let default_id = store.snapshot()?.default_account_id;
                     self.ensure_signed_in(store, &default_id, Choice::FollowDefault)
                         .await?;
+                    let current = store.snapshot()?.default_account_id;
+                    if current != default_id {
+                        log::info!(
+                            "[codex-accounts] project profile unchanged: the default account changed during the sign-in check"
+                        );
+                        return Err(
+                            "The default Codex account changed while its sign-in was checked. Choose it again."
+                                .to_string(),
+                        );
+                    }
                 }
             }
         }

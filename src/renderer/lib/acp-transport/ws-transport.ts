@@ -1146,15 +1146,18 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   async listCodexAccounts(): Promise<CodexAccountsSnapshot> {
+    await this.connect()
     return this.request<CodexAccountsSnapshot>('list_codex_accounts', {})
   }
 
   async listCodexUsage(force = false): Promise<CodexAccountUsage[]> {
+    await this.connect()
     const reply = await this.request<{ usage: CodexAccountUsage[] }>('list_codex_usage', { force })
     return reply?.usage ?? []
   }
 
   async setDefaultCodexAccount(accountId: string): Promise<void> {
+    await this.connect()
     await this.request('set_default_codex_account', { accountId })
   }
 
@@ -1163,6 +1166,7 @@ export class WsAcpTransport implements AcpTransport {
     accountId: string | null,
     expectedAccountId?: string
   ): Promise<boolean> {
+    await this.connect()
     const reply = await this.request<{ applied?: boolean }>('set_project_codex_account', {
       projectId,
       accountId,
@@ -1172,18 +1176,22 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   async setCodexAutoSwitch(enabled: boolean): Promise<void> {
+    await this.connect()
     await this.request('set_codex_auto_switch', { enabled })
   }
 
   async addCodexAccount(name: string, options?: CommandCallOptions): Promise<CodexAccount> {
+    await this.connect()
     return this.request<CodexAccount>('add_codex_account', { name }, undefined, options)
   }
 
   async renameCodexAccount(accountId: string, name: string): Promise<void> {
+    await this.connect()
     await this.request('rename_codex_account', { accountId, name })
   }
 
   async removeCodexAccount(accountId: string): Promise<string[]> {
+    await this.connect()
     const reply = await this.request<{ movedProjectIds?: unknown }>('remove_codex_account', {
       accountId
     })
@@ -1201,6 +1209,7 @@ export class WsAcpTransport implements AcpTransport {
     config: AgentConfig,
     options?: CommandCallOptions
   ): Promise<SpawnAgentResult> {
+    await this.connect()
     return this.request<SpawnAgentResult>(
       'start_codex_account_login',
       { accountId, config },

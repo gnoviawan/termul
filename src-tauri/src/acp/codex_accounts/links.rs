@@ -426,19 +426,42 @@ pub(crate) fn merge_dir(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Copy `from` to a sibling of `to`, then rename that sibling onto `to`.
-/// The canonical name appears only after the copy finishes. A failed copy or
-/// rename removes the sibling and returns the error, so a later migration
-/// does not treat a partial file as the shared version.
+/// Copy `from` into a new file in `to`'s directory, then rename that file
+/// onto `to`. The temporary name is created exclusively, so an existing
+/// sibling is never used as scratch space. The canonical name appears only
+/// after the copy finishes. A failed copy or rename deletes only that
+/// temporary file.
 fn copy_file_into_place(from: &Path, to: &Path) -> io::Result<()> {
-    let mut partial_name = to.file_name().unwrap_or_default().to_os_string();
-    partial_name.push(".partial");
-    let partial = to.with_file_name(partial_name);
-    if let Err(error) = fs::copy(from, &partial).and_then(|_| fs::rename(&partial, to)) {
-        let _ = fs::remove_file(&partial);
-        return Err(error);
+    let (temp, mut file) = exclusive_temp_file(to)?;
+    let copied = io::copy(&mut fs::File::open(from)?, &mut file).and_then(|_| file.sync_all());
+    drop(file);
+    let result = copied.and_then(|_| fs::rename(&temp, to));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
     }
-    Ok(())
+    result
+}
+
+/// A new file next to `to`. `create_new` refuses a name that already exists,
+/// so a sibling such as `rollout.jsonl.partial` is left untouched.
+fn exclusive_temp_file(to: &Path) -> io::Result<(std::path::PathBuf, fs::File)> {
+    for attempt in 1..=32 {
+        let mut name = to.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".merging-{attempt}"));
+        let path = to.with_file_name(name);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::other(
+        "could not create a temporary file for the shared copy",
+    ))
 }
 
 /// The shared path `existing` already holds a different entry than the private

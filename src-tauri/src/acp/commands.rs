@@ -116,39 +116,12 @@ pub(crate) async fn codex_login_status(
     codex_bin: Option<&str>,
     project_path: Option<&str>,
 ) -> CodexLoginProbe {
-    let search_path = codex_probe_search_path(project_path);
-    let program = codex_bin
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            std::env::var("CODEX_PATH")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        })
-        .unwrap_or_else(|| "codex".to_string());
-    let resolved = resolve_codex_probe_program(&program, &search_path);
-    let mut command = tokio::process::Command::new(&resolved.program);
-    // Polled from the account snapshot: never flash a console window.
-    crate::process_util::background_command_hygiene(&mut command);
+    let mut command = codex_command(&["login", "status"], codex_home, codex_bin, project_path);
     command
         .kill_on_drop(true)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        // The managed child does not receive these. The probe must not treat
-        // a host API key as a ChatGPT login for the selected home.
-        .env_remove("OPENAI_API_KEY")
-        .env_remove("CODEX_ACCESS_TOKEN");
-    if !search_path.is_empty() {
-        command.env("PATH", &search_path);
-        #[cfg(windows)]
-        command.env("Path", &search_path);
-    }
-    if let Some(home) = codex_home.filter(|value| !value.trim().is_empty()) {
-        command.env("CODEX_HOME", home);
-    }
+        .stderr(std::process::Stdio::null());
     match tokio::time::timeout(std::time::Duration::from_secs(5), command.status()).await {
         Ok(Ok(status)) if status.success() => CodexLoginProbe::SignedIn,
         // Exit 1 is the unauthenticated status, matching the Claude probe.

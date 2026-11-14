@@ -286,11 +286,30 @@ fn merge_dir_copies_new_files_keeping_the_relative_layout() {
         fs::read(dst.join("sub").join("deep.jsonl")).unwrap(),
         b"deep"
     );
-    // The canonical name is published by rename. The temporary sibling is gone.
+    // The canonical name is published by rename. No scratch file is left behind.
     assert!(!dst.join("top.jsonl.partial").exists());
     assert!(!dst.join("sub").join("deep.jsonl.partial").exists());
     // merge_dir copies; the caller removes the private dir afterwards.
     assert!(src.join("top.jsonl").is_file());
+}
+
+#[test]
+fn merge_dir_does_not_reuse_an_existing_partial_name() {
+    let root = tempfile::tempdir().unwrap();
+    let src = root.path().join("private");
+    let dst = root.path().join("shared");
+    fs::create_dir_all(&src).unwrap();
+    fs::create_dir_all(&dst).unwrap();
+    fs::write(src.join("rollout.jsonl"), b"complete").unwrap();
+    fs::write(dst.join("rollout.jsonl.partial"), b"keep-me").unwrap();
+
+    links::merge_dir(&src, &dst).unwrap();
+
+    assert_eq!(fs::read(dst.join("rollout.jsonl")).unwrap(), b"complete");
+    assert_eq!(
+        fs::read(dst.join("rollout.jsonl.partial")).unwrap(),
+        b"keep-me"
+    );
 }
 
 #[test]
@@ -785,4 +804,32 @@ fn account_ids_that_are_not_hex_never_map_to_a_path() {
     let s = store(&f);
     assert_eq!(s.config_dir("../escape"), None);
     assert_eq!(s.config_dir(BUILTIN_ACCOUNT_ID), None);
+}
+
+#[test]
+fn a_second_store_waits_until_the_lock_file_is_released() {
+    let f = fixture();
+    let lock_path = f.state.join("codex-accounts.json.lock");
+    fs::create_dir_all(&f.state).unwrap();
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    held.lock().unwrap();
+    let state = f.state.clone();
+    let shared = f.shared.clone();
+    let worker = std::thread::spawn(move || {
+        let store = CodexAccountStore::new(&state, shared);
+        store.add("Work")
+    });
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    assert!(
+        !worker.is_finished(),
+        "the second store wrote while the lock was held"
+    );
+    drop(held);
+    assert!(worker.join().unwrap().is_ok());
 }

@@ -17,6 +17,7 @@ import type {
 } from '@shared/types/codex-accounts.types'
 import type { AgentConfig, SpawnAgentResult } from '@/lib/acp-api'
 import { getAcpTransport } from './acp-transport'
+import { notifyCodexAccountListChanged } from './codex-account-list'
 import { runCommand } from './command-engine'
 import { logFrontendError } from './log-api'
 
@@ -46,7 +47,10 @@ export const codexAccountsApi = {
     logged('usage', () => getAcpTransport().listCodexUsage(force)),
 
   setDefault: (accountId: string): Promise<void> =>
-    logged('setDefault', () => getAcpTransport().setDefaultCodexAccount(accountId)),
+    logged('setDefault', async () => {
+      await getAcpTransport().setDefaultCodexAccount(accountId)
+      notifyCodexAccountListChanged()
+    }),
 
   /**
    * `null` returns the Project to the Default Account. `expectedAccountId`
@@ -57,13 +61,22 @@ export const codexAccountsApi = {
     accountId: string | null,
     options: { expectedAccountId?: string } = {}
   ): Promise<boolean> =>
-    logged('setProjectAccount', () =>
-      getAcpTransport().setProjectCodexAccount(projectId, accountId, options.expectedAccountId)
-    ),
+    logged('setProjectAccount', async () => {
+      const applied = await getAcpTransport().setProjectCodexAccount(
+        projectId,
+        accountId,
+        options.expectedAccountId
+      )
+      if (applied) notifyCodexAccountListChanged()
+      return applied
+    }),
 
   /** A chat at its limit continues on the signed-in Account with the most room. */
   setAutoSwitch: (enabled: boolean): Promise<void> =>
-    logged('setAutoSwitch', () => getAcpTransport().setCodexAutoSwitch(enabled)),
+    logged('setAutoSwitch', async () => {
+      await getAcpTransport().setCodexAutoSwitch(enabled)
+      notifyCodexAccountListChanged()
+    }),
 
   /** A lost reply is resent with the same command id, so it never adds twice. */
   add: (name: string): Promise<CodexAccount> =>
@@ -73,15 +86,23 @@ export const codexAccountsApi = {
         entityKey: name,
         send: (call) => getAcpTransport().addCodexAccount(name, call)
       })
+      notifyCodexAccountListChanged()
       return run.result
     }),
 
   rename: (accountId: string, name: string): Promise<void> =>
-    logged('rename', () => getAcpTransport().renameCodexAccount(accountId, name)),
+    logged('rename', async () => {
+      await getAcpTransport().renameCodexAccount(accountId, name)
+      notifyCodexAccountListChanged()
+    }),
 
   /** Resolves to the ids of the Projects that moved to the Default Account. */
   remove: (accountId: string): Promise<string[]> =>
-    logged('remove', () => getAcpTransport().removeCodexAccount(accountId)),
+    logged('remove', async () => {
+      const moved = await getAcpTransport().removeCodexAccount(accountId)
+      notifyCodexAccountListChanged()
+      return moved
+    }),
 
   /**
    * Spawn the Codex agent with this Account's home. The caller authenticates
