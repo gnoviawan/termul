@@ -296,15 +296,15 @@
     /* Rail row hover surface: the 3% foreground wash of the State table
        (docs/design/colors.md). One strength feeds both forms: --row-hover is
        the translucent wash (stacks on a group surface); --row-hover-solid is
-       the same wash flattened over the Rail's sidebar surface, for a fade
+       the same wash flattened over the Rail's background surface, for a fade
        that must end in the row's own colour. Both follow applyColorTheme
-       through --foreground and --sidebar-background. */
+       through --foreground and --background. */
     --row-hover-strength: 3%;
     --row-hover: oklch(var(--foreground) / var(--row-hover-strength));
     --row-hover-solid: color-mix(
       in oklab,
       oklch(var(--foreground)) var(--row-hover-strength),
-      oklch(var(--sidebar-background))
+      oklch(var(--background))
     );
 
     /* Rail keycap fill: the `.keycap` surface inside the Rail

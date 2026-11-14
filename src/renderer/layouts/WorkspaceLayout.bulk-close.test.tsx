@@ -337,10 +337,6 @@ vi.mock('@/components/workspace/PaneRenderer', () => ({
   }
 }))
 
-vi.mock('@/components/StatusBar', () => ({
-  StatusBar: () => <div data-testid="status-bar" />
-}))
-
 vi.mock('@/components/NewProjectModal', () => ({
   NewProjectModal: () => null
 }))

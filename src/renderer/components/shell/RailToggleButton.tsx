@@ -16,11 +16,11 @@ interface RailToggleButtonProps {
 }
 
 /**
- * Expands or collapses the Rail. Expanded: the last control of the Rail's top
- * row (`RailHeader`). Collapsed: the first control of the top row bar next
- * to the Rail, right of the macOS traffic lights (`ShowSidePanelSlot`, or the
- * Side panel header). The glyph names the next action (collapse when
- * expanded, expand when collapsed); the accessible name and `aria-pressed`
+ * Expands or collapses the Rail. Expanded: right after the mark in the Rail's
+ * top row (`RailHeader`). Collapsed: the first control of the top row bar
+ * next to the Rail, right of the macOS traffic lights (`TopRowStartSlot`).
+ * The glyph names the next action (collapse when expanded, expand when
+ * collapsed); the accessible name and `aria-pressed`
  * stay stable. No keycap: pressed here means "expanded", not "you are here".
  * It brings its own tooltip provider, so it works in any top row bar.
  */
@@ -47,7 +47,7 @@ export function RailToggleButton({
             aria-pressed={expanded}
             data-testid="rail-toggle"
           >
-            <Icon size={16} aria-hidden="true" />
+            <Icon size={14} aria-hidden="true" />
           </button>
         </TooltipTrigger>
         <TooltipContent side={tooltipSide} className="px-2.5 py-1.5 text-xs">

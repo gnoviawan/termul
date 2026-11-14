@@ -1277,9 +1277,13 @@ describe('WorkspaceLayout - Empty States', () => {
   })
 })
 
-// Desktop always renders the revamped shell (ShellFrame): Rail | Side panel |
-// main. A stored legacy `shellLayout` value is ignored.
+// Desktop always renders the revamped shell (ShellFrame): Rail | main |
+// Side panel | tool strip. A stored legacy `shellLayout` value is ignored.
 describe('WorkspaceLayout - desktop shell', () => {
+  beforeEach(() => {
+    useShellLayoutStore.setState({ sidePanelVisible: true })
+  })
+
   function precedes(a: Element, b: Element): boolean {
     return Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
   }
@@ -1288,13 +1292,16 @@ describe('WorkspaceLayout - desktop shell', () => {
     const rail = screen.getByRole('navigation', { name: 'Projects' })
     const sidePanel = screen.getByTestId('side-panel-column')
     const main = document.querySelector('main') as Element
-    expect(precedes(rail, sidePanel)).toBe(true)
-    expect(precedes(sidePanel, main)).toBe(true)
+    const strip = screen.getByRole('toolbar', { name: 'Tools' })
+    expect(precedes(rail, main)).toBe(true)
+    expect(precedes(main, sidePanel)).toBe(true)
+    expect(precedes(sidePanel, strip)).toBe(true)
+    expect(document.querySelector('[data-status-bar]')).toBeNull()
     expect(screen.queryByRole('navigation', { name: 'Global actions' })).not.toBeInTheDocument()
     expect(document.querySelector('aside.w-64')).toBeNull()
   }
 
-  it('renders ShellFrame on desktop: Rail, Side panel and main in order', () => {
+  it('renders ShellFrame on desktop: Rail, main, Side panel and tool strip in order', () => {
     mockUseActiveProject.mockReturnValue(createProject('p1', '/workspace/p1', 'blue'))
 
     renderWithRouter()

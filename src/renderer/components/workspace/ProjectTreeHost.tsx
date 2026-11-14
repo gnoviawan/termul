@@ -1,4 +1,3 @@
-import type { ShellInfo } from '@shared/types/ipc.types'
 import { motion } from 'framer-motion'
 import { memo, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/shallow'
@@ -14,14 +13,11 @@ export interface ProjectTreeHostProps {
   isActiveProject: boolean
   /** Mobile shell only: render this leaf instead of the whole tree (active host only). */
   leafOverride?: LeafNode | null
-  onAddTerminal?: (paneId: string, shell?: ShellInfo) => void
-  onAddBrowserTab?: (paneId: string) => void
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
   onCloseTabs?: (tabs: WorkspaceTab[]) => void
   closingTerminalIds?: string[]
-  defaultShell?: string
 }
 
 /**
@@ -105,8 +101,5 @@ function ProjectTreeHostView({
 export const ProjectTreeHost = memo(
   ProjectTreeHostView,
   (prev, next) =>
-    !prev.isActiveProject &&
-    !next.isActiveProject &&
-    prev.projectId === next.projectId &&
-    prev.defaultShell === next.defaultShell
+    !prev.isActiveProject && !next.isActiveProject && prev.projectId === next.projectId
 )

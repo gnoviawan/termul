@@ -49,11 +49,11 @@ export const ProjectIconItem = memo(function ProjectIconItem({
                 type="button"
                 onClick={onClick}
                 onContextMenu={onContextMenu}
+                // Paper 1BU1: the open project is plain on the collapsed Rail too.
                 className={cn(
                   'flex h-7.5 w-full cursor-pointer select-none items-center justify-center rounded-md',
-                  'transition-colors duration-150 ease-out focus-visible:ring-inset',
-                  FOCUS_RING_CLASS,
-                  isActive ? 'keycap' : 'hover:bg-foreground/[0.06]'
+                  'transition-colors duration-150 ease-out hover:bg-foreground/[0.06] focus-visible:ring-inset',
+                  FOCUS_RING_CLASS
                 )}
                 aria-current={isActive ? 'page' : undefined}
                 aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}

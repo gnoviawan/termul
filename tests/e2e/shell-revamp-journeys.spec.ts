@@ -6,7 +6,8 @@ import { chatTab, openWorkspace, selectProject } from './ui'
  * Shell-revamp journeys E2E on termul-server (story 30, CAP-18 / AD-15 / E6).
  *
  * These two specs walk Journey 1 and Journey 2 of EXPERIENCE.md
- * (ux-termul-2026-10-10) on the only desktop shell: Rail | Side panel | main.
+ * (ux-termul-2026-10-10) on the only desktop shell: Rail | main | Side panel |
+ * tool strip (Sidebar V2).
  * The suite passing is also the proof that the classic shell is gone (no
  * "Global actions" navigation).
  *
@@ -93,14 +94,14 @@ const railNav = (page: Page): Locator => page.getByRole('navigation', { name: 'P
 const paneContents = (page: Page): Locator => page.locator('[data-pane-content]')
 const chatCard = (page: Page, title: string): Locator =>
   page.locator(`button[data-chat-card-index][aria-label^="${title}"]`)
-const columnTab = (page: Page, name: RegExp): Locator => page.getByRole('tab', { name })
-const workspaceSwitcherTrigger = (page: Page): Locator =>
-  page.locator('button[aria-haspopup="dialog"][title]:has(> span.label-panel)')
+const toolStrip = (page: Page): Locator => page.getByRole('toolbar', { name: 'Tools' })
+const stripButton = (page: Page, name: string): Locator =>
+  toolStrip(page).getByRole('button', { name, exact: true })
 
 /**
- * Expands or collapses the Rail. Expanded, the toggle ends the Rail header;
- * collapsed, it opens the top row bar next to the Rail (the tab bar, right of
- * the macOS traffic lights, or the Side panel header). Exactly one shows.
+ * Expands or collapses the Rail. Expanded, the toggle follows the mark in the
+ * Rail header; collapsed, it opens the tab bar next to the Rail (right of the
+ * macOS traffic lights). Exactly one shows.
  */
 async function clickRailToggle(page: Page): Promise<void> {
   const toggle = page.getByRole('button', { name: RAIL_TOGGLE })
@@ -124,7 +125,7 @@ async function openRevampWorkspace(page: Page): Promise<void> {
 }
 
 /**
- * Start a NEW chat from the Side panel's New chat button (the launcher opens
+ * Start a NEW chat from the Rail's New chat row (the launcher opens
  * over the active pane). `workspace` drives the launcher's Workspace chip.
  * Resolves once the chat tab exists.
  */
@@ -229,7 +230,10 @@ test('Journey 1: three chats on one project, side by side, next to the diff', as
     await expect(stat).toBeVisible()
     await expect(stat).toContainText('+4')
     await expect(stat).toContainText('−1')
-    await expect(columnTab(page, /^Chats/)).toHaveAttribute('aria-selected', 'true')
+    // Sidebar V2: the main screen opens without the Side panel; the strip's
+    // Changes button carries the changed-file count.
+    await expect(page.getByTestId('right-panel')).toHaveCount(0)
+    await expect(page.getByTestId('tool-strip-changes-badge')).toHaveText('2')
   })
 
   await test.step('2. Chats list: one card per chat with its agent, status, title and branch', async () => {
@@ -272,9 +276,10 @@ test('Journey 1: three chats on one project, side by side, next to the diff', as
   )
 
   await test.step('4. Changes: the changed files and the docked Graph', async () => {
-    await columnTab(page, /^Changes/).click()
-    await expect(columnTab(page, /^Changes/)).toHaveAttribute('aria-selected', 'true')
-    await expect(page.getByTestId('column-tab-changes-badge')).toHaveText('2')
+    await stripButton(page, 'Changes').click()
+    await expect(stripButton(page, 'Changes')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('right-panel')).toBeVisible()
+    await expect(page.getByTestId('tool-strip-changes-badge')).toHaveText('2')
 
     const graph = page.getByRole('region', { name: 'Git graph' })
     await expect(graph).toBeVisible()
@@ -363,8 +368,6 @@ test('Journey 2: two fixes at once, one in a new worktree', async ({ page }) => 
   const spawns = trackTerminals.get(page)
   if (!spawns) throw new Error('terminal spawn tracker missing')
   await selectProject(page, PROJECT)
-  await columnTab(page, /^Chats/).click()
-  await expect(columnTab(page, /^Chats/)).toHaveAttribute('aria-selected', 'true')
 
   const before = new Set((await listWorktrees(page)).map((w) => w.path))
   let worktree: ListedWorktree | undefined
@@ -432,71 +435,30 @@ test('Journey 2: two fixes at once, one in a new worktree', async ({ page }) => 
     await expect(card).not.toContainText(created.branch)
   })
 
-  await test.step('4. Workspace switcher lists both copies; picking the worktree narrows Chats', async () => {
-    await workspaceSwitcherTrigger(page).click()
-    const list = page.getByRole('listbox', { name: 'Working copies' })
-    await expect(list).toBeVisible()
-    const worktreeRow = list.getByRole('option', { name: new RegExp(created.branch) })
-    await expect(worktreeRow).toBeVisible()
-    // The worktree's only open tab is its chat.
-    await expect(worktreeRow.locator('[title^="1 open tab"]')).toBeVisible()
-    // The project folder is listed too (first row).
-    await expect(list.getByRole('option').first()).not.toContainText(created.branch)
+  await skipStep(
+    '4. Workspace switcher lists both copies; picking the worktree narrows Chats',
+    'Sidebar V2 P3 removed the Side panel header that held the Workspace switcher; it has no place yet'
+  )
 
-    await worktreeRow.click()
-    await expect(list).toHaveCount(0)
-
-    await expect(chatCard(page, CHAT_WORKTREE)).toBeVisible()
-    await expect(chatCard(page, CHAT_CHECKOUT)).toHaveCount(0)
-    await expect(chatCard(page, CHAT_ONE)).toHaveCount(0)
-    await expect(workspaceSwitcherTrigger(page)).toContainText(created.branch)
-  })
-
-  await test.step('5. Status bar shows the worktree branch and its Terminal button opens a shell there', async () => {
+  await test.step('5. The tool strip Terminal opens a new terminal tab in the worktree folder', async () => {
     await chatTab(page, CHAT_WORKTREE).click()
-    const statusBar = page.locator('[data-status-bar]')
-    await expect(statusBar).toContainText(created.branch)
-
-    const terminalButton = statusBar.getByRole('button', { name: /^Open terminal at / })
-    await expect
-      .poll(async () => norm((await terminalButton.getAttribute('aria-label')) ?? ''))
-      .toContain(norm(created.path))
-
-    const spawnedBefore = spawns.cwds().length
-    await terminalButton.click()
-    await expect.poll(() => spawns.cwds().length).toBeGreaterThan(spawnedBefore)
-    expect(norm(spawns.cwds().at(-1) ?? '')).toBe(norm(created.path))
+    for (let click = 1; click <= 2; click += 1) {
+      const spawnedBefore = spawns.cwds().length
+      await stripButton(page, 'New terminal').click()
+      // A new tab on every click, at the active tab's working copy.
+      await expect.poll(() => spawns.cwds().length).toBeGreaterThan(spawnedBefore)
+      expect(norm(spawns.cwds().at(-1) ?? '')).toBe(norm(created.path))
+      await chatTab(page, CHAT_WORKTREE).click()
+    }
   })
 
-  await test.step('6. The switcher row terminal action opens a terminal whose cwd is the worktree folder', async () => {
-    const spawnedBefore = spawns.cwds().length
-    await workspaceSwitcherTrigger(page).click()
-    const list = page.getByRole('listbox', { name: 'Working copies' })
-    await expect(list).toBeVisible()
-    // The action sits beside its option and shows on hover.
-    await list.getByRole('option', { name: new RegExp(created.branch) }).hover()
-    // Keyboard activation: the popover closes in the click handler, which makes
-    // a pointer click's post-action checks see a detached element and retry.
-    const rowAction = page.getByRole('button', { name: `Open terminal in ${created.branch}` })
-    await rowAction.focus()
-    await page.keyboard.press('Enter')
-
-    await expect(page.getByText('Terminal opened').first()).toBeVisible()
-    await expect.poll(() => spawns.cwds().length).toBeGreaterThan(spawnedBefore)
-    expect(norm(spawns.cwds().at(-1) ?? '')).toBe(norm(created.path))
-  })
+  await skipStep(
+    '6. The switcher row terminal action opens a terminal whose cwd is the worktree folder',
+    'the Workspace switcher has no place in Sidebar V2 P3'
+  )
 
   await skipStep(
     '2b. the worktree branch is renamed to the suggested name (chat/fix-903)',
     'the suggested name comes from a real model turn; the fake agent suggests nothing'
   )
-
-  await test.step('cleanup: back to the project folder so Chats shows every chat again', async () => {
-    await workspaceSwitcherTrigger(page).click()
-    const list = page.getByRole('listbox', { name: 'Working copies' })
-    await expect(list).toBeVisible()
-    await list.getByRole('option').first().click()
-    await expect(chatCard(page, CHAT_CHECKOUT)).toBeVisible()
-    await expect(chatCard(page, CHAT_WORKTREE)).toBeVisible()
-  })
 })

@@ -110,6 +110,10 @@ export interface RailHoverTooltipContentProps {
   hint?: string
   /** Keyboard shortcut, as a keycap. */
   shortcut?: string
+  /** Defaults to `right` (away from the Rail); the tool strip opens it on the `left`. */
+  side?: 'right' | 'left'
+  /** Gap to the trigger. Defaults to the Rail's 12px (the panel opens at the Rail edge + 4). */
+  sideOffset?: number
 }
 
 /**
@@ -120,13 +124,15 @@ export interface RailHoverTooltipContentProps {
 export function RailHoverTooltipContent({
   label,
   hint,
-  shortcut
+  shortcut,
+  side = 'right',
+  sideOffset = RAIL_HOVER_PANEL_SIDE_OFFSET
 }: RailHoverTooltipContentProps): React.JSX.Element {
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
-        side="right"
-        sideOffset={RAIL_HOVER_PANEL_SIDE_OFFSET}
+        side={side}
+        sideOffset={sideOffset}
         className={cn(
           RAIL_HOVER_SURFACE_CLASS,
           'flex h-7 items-center gap-2 rounded-lg pr-1.5 pl-2.5 text-xs leading-4 font-medium',

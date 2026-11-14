@@ -885,14 +885,14 @@ test.describe('desktop layout', () => {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
   })
 
-  test('V-12: the StatusBar lamp keeps its plain Connected reading', async ({ page }) => {
+  test('V-12: the tool strip lamp keeps its plain Connected reading', async ({ page }) => {
     await openWorkspace(page)
-    const statusBar = page.locator('[data-status-bar]')
-    await expect(statusBar).toBeVisible()
-    const lamp = statusBar.getByRole('status')
+    const toolStrip = page.getByRole('toolbar', { name: 'Tools' })
+    await expect(toolStrip).toBeVisible()
+    const lamp = toolStrip.getByRole('status')
     await expect(lamp).toHaveAccessibleName('Connected')
     await expect(lamp).not.toContainText('·')
-    await expect(statusBar).not.toContainText(new URL(E2E_BASE_URL).host)
+    await expect(toolStrip).not.toContainText(new URL(E2E_BASE_URL).host)
   })
 })
 

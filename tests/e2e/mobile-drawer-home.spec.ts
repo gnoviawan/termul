@@ -982,16 +982,16 @@ test.describe('desktop layout', () => {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
   })
 
-  test('the desktop-width web client still renders the StatusBar and has no mobile menu', async ({
+  test('the desktop-width web client renders the tool strip lamp and has no mobile menu', async ({
     page
   }) => {
     const project = await registerProject()
     await setActiveProject(project)
     await signIn(page)
 
-    const statusBar = page.locator('[data-status-bar]')
-    await expect(statusBar).toBeVisible()
-    await expect(statusBar.getByRole('status')).toBeVisible()
+    const toolStrip = page.getByRole('toolbar', { name: 'Tools' })
+    await expect(toolStrip).toBeVisible()
+    await expect(toolStrip.getByRole('status')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Open menu' })).toHaveCount(0)
   })
 })

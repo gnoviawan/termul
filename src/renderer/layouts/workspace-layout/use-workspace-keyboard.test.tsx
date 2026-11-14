@@ -71,7 +71,8 @@ describe('useWorkspaceKeyboard panel toggles (shell-layout store)', () => {
     mockWriteDebounced.mockResolvedValue({ success: true, data: undefined })
     mockWrite.mockResolvedValue({ success: true, data: undefined })
     resetShellLayoutStoreForTests()
-    useShellLayoutStore.setState({ status: 'ready' })
+    // Start with the right panel open so each toggle has something to close.
+    useShellLayoutStore.setState({ status: 'ready', sidePanelVisible: true })
   })
 
   it('keeps the shortcut ids, with Ctrl+B on the Rail and Ctrl+Alt+B on the Side panel', () => {
@@ -84,7 +85,7 @@ describe('useWorkspaceKeyboard panel toggles (shell-layout store)', () => {
     expect(DEFAULT_KEYBOARD_SHORTCUTS.toggleFileExplorer).toMatchObject({
       id: 'toggleFileExplorer',
       label: 'Toggle Side Panel',
-      description: 'Show or hide side panel',
+      description: 'Show or hide the side panel at the right edge',
       defaultKey: 'ctrl+alt+b'
     })
   })

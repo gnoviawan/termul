@@ -76,8 +76,8 @@ describe('shell-layout-store', () => {
         status: 'idle',
         railExpanded: true,
         railWidth: 248,
-        sidePanelVisible: true,
-        sidePanelWidth: 260,
+        sidePanelVisible: false,
+        sidePanelWidth: 340,
         sshSectionVisible: true,
         sshSectionHeight: 140,
         gitHistoryDetailWidth: 400,
@@ -109,18 +109,18 @@ describe('shell-layout-store', () => {
         sidePanelVisible: 1
       })
       expect(record.railWidth).toBe(248)
-      expect(record.sidePanelWidth).toBe(260)
+      expect(record.sidePanelWidth).toBe(340)
       expect(record.railExpanded).toBe(true)
-      expect(record.sidePanelVisible).toBe(true)
+      expect(record.sidePanelVisible).toBe(false)
     })
 
-    it('drops invalid map entries, SSH as a last tab, and unknown fields', () => {
+    it('drops invalid map entries, SSH and the retired chats view, and unknown fields', () => {
       const record = sanitizeShellLayout({
         lastColumnTabByProject: { a: 'chats', b: 'ssh', c: 7, d: 'changes', e: 'github' },
         worktreePickByProject: { a: 'C:/repo/wt', b: 3, c: '' },
         somethingElse: true
       })
-      expect(record.lastColumnTabByProject).toEqual({ a: 'chats', d: 'changes', e: 'github' })
+      expect(record.lastColumnTabByProject).toEqual({ d: 'changes', e: 'github' })
       expect(record.worktreePickByProject).toEqual({ a: 'C:/repo/wt' })
       expect(record).not.toHaveProperty('somethingElse')
     })
@@ -173,7 +173,7 @@ describe('shell-layout-store', () => {
 
     it('loads an existing record, clamped, and never migrates', async () => {
       await hydrateWithRecord({
-        version: 2,
+        version: 3,
         railExpanded: false,
         railWidth: 5000,
         sidePanelVisible: false,
@@ -210,14 +210,45 @@ describe('shell-layout-store', () => {
         expect(state().gitHistoryDetailWidth).toBe(400)
         expect(mockWriteDebounced).toHaveBeenCalledTimes(1)
         const saved = mockWriteDebounced.mock.calls[0][1] as Record<string, unknown>
-        expect(saved).toMatchObject({ version: 2, railWidth: 250, gitHistoryDetailWidth: 400 })
+        expect(saved).toMatchObject({ version: 3, railWidth: 250, gitHistoryDetailWidth: 400 })
         expect(saved).not.toHaveProperty('graphHeight')
       })
 
       it('does not save a record that is already the current version', async () => {
-        await hydrateWithRecord({ version: 2, railWidth: 250, gitHistoryDetailWidth: 340 })
+        await hydrateWithRecord({ version: 3, railWidth: 250, gitHistoryDetailWidth: 340 })
         expect(state().gitHistoryDetailWidth).toBe(340)
         expect(mockWriteDebounced).not.toHaveBeenCalled()
+      })
+    })
+
+    describe('a saved version 2 record (Sidebar V2 P3 migration)', () => {
+      const V2 = {
+        version: 2,
+        sidePanelVisible: true,
+        sidePanelWidth: 260,
+        lastColumnTabByProject: { p1: 'chats', p2: 'changes', p3: 'github' }
+      }
+
+      it('turns a remembered chats view into explorer and keeps visibility and width', async () => {
+        await hydrateWithRecord(V2)
+        expect(state()).toMatchObject({
+          status: 'ready',
+          sidePanelVisible: true,
+          sidePanelWidth: 260,
+          lastColumnTabByProject: { p1: 'explorer', p2: 'changes', p3: 'github' }
+        })
+        expect(mockWriteDebounced).toHaveBeenCalledTimes(1)
+        expect(mockWriteDebounced.mock.calls[0][1]).toMatchObject({
+          version: 3,
+          sidePanelVisible: true,
+          sidePanelWidth: 260,
+          lastColumnTabByProject: { p1: 'explorer', p2: 'changes', p3: 'github' }
+        })
+      })
+
+      it('keeps a hidden panel hidden', async () => {
+        await hydrateWithRecord({ ...V2, sidePanelVisible: false })
+        expect(state().sidePanelVisible).toBe(false)
       })
     })
 
@@ -245,11 +276,11 @@ describe('shell-layout-store', () => {
     })
 
     it('goes unavailable for a newer version and keeps the saved record untouched', async () => {
-      await hydrateWithRecord({ version: 3, railWidth: 333 })
+      await hydrateWithRecord({ version: 4, railWidth: 333 })
       expect(state().status).toBe('unavailable')
       expect(state().railWidth).toBe(248)
       expect(mockLog).toHaveBeenCalledWith(
-        expect.objectContaining({ level: 'warn', message: expect.stringContaining('version 3') })
+        expect.objectContaining({ level: 'warn', message: expect.stringContaining('version 4') })
       )
       state().setRailWidth(250)
       expect(state().railWidth).toBe(250)
@@ -279,7 +310,7 @@ describe('shell-layout-store', () => {
       expect(state().status).toBe('ready')
       expect(mockWrite).toHaveBeenCalledTimes(1)
       expect(mockWrite).toHaveBeenCalledWith(PersistenceKeys.shellLayout, {
-        version: 2,
+        version: 3,
         railExpanded: false,
         railWidth: 248,
         sidePanelVisible: false,
@@ -337,7 +368,7 @@ describe('shell-layout-store', () => {
       expect(mockWriteDebounced).toHaveBeenLastCalledWith(
         PersistenceKeys.shellLayout,
         expect.objectContaining({
-          version: 2,
+          version: 3,
           railWidth: 360,
           sidePanelWidth: 220,
           sshSectionHeight: 60,

@@ -281,12 +281,13 @@ describe('ShellRail', () => {
       expect(props.onShortcutsOpenChange).toHaveBeenCalledWith(true)
     })
 
-    it('ends the Rail header with the one 28px toggle, after the centered Troupe mark', () => {
+    it('puts the one 28px toggle right after the centered Troupe mark (Paper rail header)', () => {
       for (const tauri of [true, false]) {
         tauriRef.current = tauri
         const { unmount } = renderRail()
         const header = screen.getByTestId('rail-header')
-        expect(header).toHaveClass('h-12', 'pt-2')
+        expect(header).toHaveClass('h-11')
+        expect(header).not.toHaveClass('pt-2')
         // The mark sits in a 48px slot: its center is the icon column (x = 24).
         const slot = within(header).getByTestId('rail-header-mark-slot')
         expect(slot).toHaveClass('w-12', 'justify-center')
@@ -297,10 +298,11 @@ describe('ShellRail', () => {
         expect(toggles[0]).toHaveAttribute('aria-pressed', 'true')
         expect(toggles[0]).toHaveAttribute('data-testid', 'rail-toggle')
         expect(toggles[0]).toHaveClass('size-7')
-        // The toggle is the header's only and last control.
+        // The toggle is the header's only control, 4px after the mark.
         const headerButtons = within(header).getAllByRole('button')
         expect(headerButtons).toEqual([toggles[0]])
-        expect(header.lastElementChild).toBe(toggles[0])
+        expect(slot.nextElementSibling).toBe(toggles[0])
+        expect(toggles[0]).toHaveClass('ml-1')
         unmount()
       }
     })
@@ -314,7 +316,9 @@ describe('ShellRail', () => {
         const clearance = within(header).getByTestId('traffic-light-clearance')
         expect(clearance.nextElementSibling).toBe(within(header).getByTestId('shell-brand-mark'))
         expect(within(header).queryByTestId('rail-header-mark-slot')).not.toBeInTheDocument()
-        expect(header.lastElementChild).toBe(screen.getByTestId('rail-toggle'))
+        expect(within(header).getByTestId('shell-brand-mark').nextElementSibling).toBe(
+          screen.getByTestId('rail-toggle')
+        )
       } finally {
         macRef.current = false
       }
@@ -351,10 +355,10 @@ describe('ShellRail', () => {
       ).toBeNull()
     })
 
-    it('paints the Rail with the sidebar surface and no canvas patches inside', () => {
+    it('paints the Rail with the background surface (Paper 2.2) and no patches inside', () => {
       renderRail()
       const nav = screen.getByTestId('shell-rail')
-      expect(nav).toHaveClass('bg-sidebar', 'group/rail')
+      expect(nav).toHaveClass('bg-background', 'group/rail')
       // Scopes the Rail keycap fill (`--rail-keycap` in index.css).
       expect(nav).toHaveAttribute('data-rail-surface')
       expect(nav.querySelector('.bg-background')).toBeNull()
@@ -497,7 +501,7 @@ describe('ShellRail', () => {
       }
       // The header row stays (same height) but holds no mark and no toggle.
       const header = screen.getByTestId('rail-header')
-      expect(header).toHaveClass('h-12')
+      expect(header).toHaveClass('h-11')
       expect(header).toBeEmptyDOMElement()
       expect(screen.queryByRole('button', { name: 'Expand or collapse projects' })).toBeNull()
       // SSH is hidden; the old icon stack and tab track are gone.
@@ -515,7 +519,7 @@ describe('ShellRail', () => {
           .getByRole('button', { name: /^Project: Alpha/ })
           .className.match(/\bh-7\.5\b/)?.[0],
         chat: screen.getByRole('button', { name: 'Chat a' }).className.match(/\bh-7\.5\b/)?.[0],
-        header: screen.getByTestId('rail-header').className.match(/\bh-12\b/)?.[0],
+        header: screen.getByTestId('rail-header').className.match(/\bh-11\b/)?.[0],
         section: screen.getByTestId('rail-section-projects').className.match(/\bh-10\b/)?.[0]
       })
       useShellLayoutStore.setState({ railExpanded: true })
@@ -530,7 +534,7 @@ describe('ShellRail', () => {
         nav: 'h-7',
         project: 'h-7.5',
         chat: 'h-7.5',
-        header: 'h-12',
+        header: 'h-11',
         section: 'h-10'
       })
       useAcpStore.setState({ sessionIndex: [] })

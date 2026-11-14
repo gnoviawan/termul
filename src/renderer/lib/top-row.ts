@@ -9,7 +9,7 @@ export type TopRowMode = 'panes' | 'ssh' | 'fallback'
 /** Who renders the window controls (Windows/Linux desktop). */
 export type TopRowControlsOwner = 'pane' | 'ssh-header' | 'fallback-bar'
 
-/** Who renders the Show side panel button while the Side panel is hidden. */
+/** Who renders the top row start slot (traffic-light inset, expand-Rail toggle). */
 export type TopRowShowPanelOwner = 'pane' | 'ssh-header' | 'fallback-bar'
 
 export interface TopRowRoles {
@@ -17,10 +17,10 @@ export interface TopRowRoles {
   topEdgeLeafIds: ReadonlySet<string>
   /** The top-edge leaf that is rightmost (it owns the controls in `pane` mode). */
   rightmostLeafId: string | null
-  /** The top-edge leaf that is leftmost (it owns the Show side panel button). */
+  /** The top-edge leaf that is leftmost (it owns the top row start slot). */
   leftmostLeafId: string | null
   controlsOwner: TopRowControlsOwner
-  /** Owner of the Show side panel button (the leftmost leaf's tab bar in `pane` mode). */
+  /** Owner of the top row start slot (the leftmost leaf's tab bar in `pane` mode). */
   showPanelOwner: TopRowShowPanelOwner
 }
 
@@ -35,7 +35,7 @@ export interface TopRowPlatform {
 
 export interface PaneTopRowRole {
   topEdge: boolean
-  /** Leftmost top-edge pane: its tab bar starts where the Side panel edge was. */
+  /** Leftmost top-edge pane: its tab bar touches the Rail and holds the start slot. */
   leftEdge: boolean
   dragRegion: boolean
   windowControls: boolean
@@ -75,9 +75,9 @@ export function getLeftmostTopEdgeLeafId(root: PaneNode): string | null {
 }
 
 /**
- * The single place that decides who owns the window controls and the Show
- * side panel button. A fullscreen pane is the whole tree. SSH and the fallback
- * bar carry no pane roles, so each renders the button in its own bar.
+ * The single place that decides who owns the window controls and the top
+ * row start slot. A fullscreen pane is the whole tree. SSH and the fallback
+ * bar carry no pane roles, so each renders the slot in its own bar.
  */
 export function selectTopRowRoles({
   root,

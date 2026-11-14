@@ -88,11 +88,13 @@ export const ProjectItem = memo(function ProjectItem({
             }}
             className={cn(
               'group flex h-7.5 w-full cursor-pointer select-none items-center text-left text-xs',
-              'rounded-lg',
+              // Paper 10X5: the open project is a plain row (only the open
+              // chat under it is raised), radius 6.
+              'rounded-md',
               RAIL_ROW_INSET_CLASS,
               'transition-colors duration-150 ease-out focus-visible:ring-inset',
               FOCUS_RING_CLASS,
-              isActive ? 'keycap text-foreground' : 'hover:bg-row-hover focus-within:bg-row-hover'
+              'hover:bg-row-hover focus-within:bg-row-hover'
             )}
             aria-current={isActive ? 'page' : undefined}
             aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}
@@ -117,14 +119,9 @@ export const ProjectItem = memo(function ProjectItem({
               // hover: the actions sit on top of its end, over a fade, so
               // nothing reflows and the name is not cut again.
               <span className="relative flex min-w-0 flex-1 items-center gap-2">
+                {/* Fills the row and fades its last 24px instead of an ellipsis. */}
                 <span
-                  className={cn(
-                    // Fills the row and fades its last 24px instead of an ellipsis.
-                    'fade-end min-w-0 flex-1 font-medium transition-colors duration-150 ease-out',
-                    isActive
-                      ? 'text-foreground'
-                      : 'text-secondary-foreground group-hover:text-foreground'
-                  )}
+                  className="fade-end min-w-0 flex-1 font-medium text-secondary-foreground transition-colors duration-150 ease-out group-hover:text-foreground"
                   title={project.name}
                 >
                   {project.name}
@@ -134,17 +131,11 @@ export const ProjectItem = memo(function ProjectItem({
                     <ProjectDiffStat stat={diffStat} />
                   </span>
                 )}
+                {/* The fade ends in the row's own surface, the hover wash. It
+                    shows under the same conditions as the wash (hover and
+                    focus-within). */}
                 <span
-                  className={cn(
-                    'absolute inset-y-0 right-0 hidden items-center gap-1 bg-gradient-to-l to-transparent pl-6 group-hover:flex group-focus-within:flex',
-                    // The fade ends in the row's own surface: the Rail keycap
-                    // fill when active, the hover wash otherwise. It shows
-                    // under the same conditions as the wash (hover and
-                    // focus-within).
-                    isActive
-                      ? 'from-[var(--rail-keycap-fill)] from-60%'
-                      : 'from-row-hover-solid from-60%'
-                  )}
+                  className="absolute inset-y-0 right-0 hidden items-center gap-1 bg-gradient-to-l from-row-hover-solid from-60% to-transparent pl-6 group-hover:flex group-focus-within:flex"
                   data-testid="project-row-actions"
                 >
                   <RailTooltip label="Project settings">

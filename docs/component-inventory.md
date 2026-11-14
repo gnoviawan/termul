@@ -17,8 +17,8 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 
 ### Layout and Shell
 
-- `shell/ShellFrame.tsx` — the desktop frame: Rail, Side panel and main area, with one top row carrying the Rail and Side panel toggles and the native window controls
-- `StatusBar.tsx` — active project/terminal context bar showing git branch, git status, working directory, exit code, and updater state; rendered on the desktop layout only (the desktop app and the desktop-width web client), not on the mobile web shell, where connection health lives in the `MobileShellDrawer` footer
+- `shell/ShellFrame.tsx` — the desktop frame, edge to edge: Rail, main area, the right Side panel and the tool strip, with one 44px top row carrying the Rail toggle and the native window controls
+- `shell/tool-strip/` — `ToolStrip` (compound: `ToolStrip.Group`, `.Button`, `.Spacer`) and `ShellToolStrip`: Explorer, Changes and GitHub open the Side panel on that view; Terminal and Browser open a new tab; Remote access (desktop) or the connection lamp (web)
 - `ProjectSidebar.tsx` — project switcher, reorderable workspace list, archive/restore flows, rename/color operations, shell discovery hooks
 - `WorkspaceLayout.tsx` — top-level application shell coordinating the Rail, Side panel, pane area, modals, keyboard shortcuts, and close workflows
 
@@ -128,7 +128,7 @@ These components are coordinated by dedicated Zustand stores:
 - `annotation-store.ts` — annotation data model and export concerns
 - `snapshot-store.ts` — workspace snapshots
 - `app-settings-store.ts` — terminal/UI preferences
-- `context-bar-settings-store.ts` — status bar visibility preferences
+- `context-bar-settings-store.ts` — context bar visibility preferences (the desktop status bar that read them is gone; no surface reads them now)
 - `updater-store.ts` — updater lifecycle and download/install state
 
 ## Design Patterns

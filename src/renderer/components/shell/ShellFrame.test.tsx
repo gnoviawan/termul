@@ -45,6 +45,19 @@ vi.mock('@/components/shell/ShellRail', () => ({
 vi.mock('@/layouts/workspace-layout/ExplorerColumn', () => ({
   ExplorerColumn: () => <div data-testid="side-panel" />
 }))
+const stripProps: {
+  current: { sshOpen: boolean; onNewTerminal: () => void; onNewBrowserTab: () => void } | null
+} = { current: null }
+vi.mock('@/components/shell/tool-strip/ShellToolStrip', () => ({
+  ShellToolStrip: (props: {
+    sshOpen: boolean
+    onNewTerminal: () => void
+    onNewBrowserTab: () => void
+  }) => {
+    stripProps.current = props
+    return <div data-testid="tool-strip" />
+  }
+}))
 
 const mountSpy = vi.fn()
 const unmountSpy = vi.fn()
@@ -87,6 +100,8 @@ function buildProps(overrides: Partial<ShellFrameProps> = {}): ShellFrameProps {
     handleToggleThemePicker: vi.fn(),
     handleOpenAgentChat: vi.fn(),
     handleOpenCanvas: vi.fn(),
+    handleNewTerminal: vi.fn(),
+    handleNewBrowserTab: vi.fn(),
     workspaceMain: <WorkspaceMainProbe />,
     appModals: <div data-testid="app-modals" />,
     ...overrides
@@ -116,6 +131,7 @@ describe('ShellFrame', () => {
     useProjectStore.setState({ projects: [] })
     useThemePickerStore.getState().close()
     railProps.current = null
+    stripProps.current = null
     platformRef.tauri = true
     platformRef.mac = false
   })
@@ -125,24 +141,40 @@ describe('ShellFrame', () => {
     useThemePickerStore.getState().close()
   })
 
-  it('renders the Rail, then the Side panel on the left of the main area', () => {
+  it('lays out Rail | main area | Side panel | tool strip, edge to edge (Paper 2.2)', () => {
     renderFrame()
 
     const rail = screen.getByTestId('rail')
     const sidePanel = screen.getByTestId('side-panel')
-    const main = screen.getByTestId('workspace-main').closest('main')
+    const strip = screen.getByTestId('tool-strip')
+    const main = screen.getByTestId('workspace-main').closest('main') as HTMLElement
     expect(main).not.toBeNull()
-    // DOM order: Rail, Side panel, main.
-    expect(rail.compareDocumentPosition(sidePanel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(
-      sidePanel.compareDocumentPosition(main as Node) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
-    // Side panel and main share the drag-and-drop provider; the rail does not.
+    const follows = (a: Node, b: Node) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(follows(rail, main)).toBe(true)
+    expect(follows(main, sidePanel)).toBe(true)
+    expect(follows(sidePanel, strip)).toBe(true)
+    // No floating card: a 0.5px start hairline on the background surface.
+    expect(main).toHaveClass('border-l-[0.5px]', 'border-border', 'bg-background')
+    expect(main).not.toHaveClass('rounded-xl')
+    // Main and Side panel share the drag-and-drop provider; Rail and strip do not.
     const dnd = screen.getByTestId('pane-dnd')
     expect(dnd).toContainElement(sidePanel)
     expect(dnd).toContainElement(main)
     expect(dnd).not.toContainElement(rail)
+    expect(dnd).not.toContainElement(strip)
     expect(screen.getByTestId('app-modals')).toBeInTheDocument()
+  })
+
+  it('hands the tool strip the new terminal / browser handlers and the SSH mode', () => {
+    const handleNewTerminal = vi.fn()
+    const handleNewBrowserTab = vi.fn()
+    renderFrame({ ...withProject, handleNewTerminal, handleNewBrowserTab })
+    stripProps.current?.onNewTerminal()
+    stripProps.current?.onNewBrowserTab()
+    expect(handleNewTerminal).toHaveBeenCalledTimes(1)
+    expect(handleNewBrowserTab).toHaveBeenCalledTimes(1)
+    expect(stripProps.current?.sshOpen).toBeFalsy()
   })
 
   it('wires the Rail: palette, canvas, shortcuts, theme picker and project props', () => {
@@ -238,34 +270,14 @@ describe('ShellFrame', () => {
   describe('top row', () => {
     const dragRegions = (): Element[] => [...document.querySelectorAll('[data-tauri-drag-region]')]
 
-    it('tops the shell with an 8px drag gutter on desktop and none on web', () => {
-      const { unmount } = renderFrame(withProject)
-      const gutter = screen.getByTestId('top-gutter')
-      expect(gutter).toHaveClass('h-2')
-      expect(gutter).toHaveAttribute('data-tauri-drag-region')
-      unmount()
-
-      platformRef.tauri = false
+    it('has no top gutter: the shell row starts at the window top with no padding', () => {
       renderFrame(withProject)
-      expect(screen.getByTestId('top-gutter')).not.toHaveAttribute('data-tauri-drag-region')
-      expect(dragRegions()).toHaveLength(0)
-    })
-
-    it('runs the Rail full height beside the gutter: the gutter tops only the right column', () => {
-      renderFrame(withProject)
-      const rail = screen.getByTestId('rail')
-      const gutter = screen.getByTestId('top-gutter')
+      expect(screen.queryByTestId('top-gutter')).not.toBeInTheDocument()
       const row = screen.getByTestId('shell-row')
-
-      // The Rail is not under the gutter and not inside the padded row.
-      expect(rail.parentElement).not.toBe(gutter.parentElement)
-      expect(row).not.toContainElement(rail)
-      // The gutter and the row share the right column, beside the Rail.
-      expect(gutter.parentElement).toBe(row.parentElement)
-      expect(rail.parentElement).toBe(gutter.parentElement?.parentElement)
-      // `pl-2` is the 8px gap between the Rail and the Side panel.
-      expect(row).toHaveClass('pb-2', 'pr-2', 'pl-2')
+      expect(row.className).not.toMatch(/\bp[blrt]?-2\b/)
+      expect(row).not.toContainElement(screen.getByTestId('rail'))
       expect(row).toContainElement(screen.getByTestId('side-panel'))
+      expect(row).toContainElement(screen.getByTestId('tool-strip'))
     })
 
     it('renders the fallback bar with the controls when there is no project', () => {
@@ -293,25 +305,18 @@ describe('ShellFrame', () => {
       expect(screen.queryByTestId('top-row-fallback-bar')).not.toBeInTheDocument()
     })
 
-    it('puts the Show side panel button in the fallback bar while the panel is hidden', () => {
-      useProjectStore.setState({ projects: [oneProject] as never, activeProjectId: 'p1' })
-      useShellLayoutStore.setState({ sidePanelVisible: false })
+    it('puts the expand-Rail toggle in the fallback bar while the Rail is collapsed', () => {
+      useShellLayoutStore.setState({ railExpanded: false })
       const { unmount } = renderFrame(withProject, '/snapshots')
       expect(screen.getByTestId('top-row-fallback-bar')).toContainElement(
-        screen.getByRole('button', { name: 'Show side panel' })
+        screen.getByRole('button', { name: 'Expand or collapse projects' })
       )
+      expect(screen.queryByRole('button', { name: 'Show side panel' })).not.toBeInTheDocument()
       unmount()
 
-      useShellLayoutStore.setState({ sidePanelVisible: true })
+      useShellLayoutStore.setState({ railExpanded: true })
       renderFrame(withProject, '/snapshots')
-      expect(screen.queryByRole('button', { name: 'Show side panel' })).not.toBeInTheDocument()
-    })
-
-    it('leaves the Show side panel button to the pane tab bars in panes mode', () => {
-      useProjectStore.setState({ projects: [oneProject] as never, activeProjectId: 'p1' })
-      useShellLayoutStore.setState({ sidePanelVisible: false })
-      renderFrame(withProject)
-      expect(screen.queryByRole('button', { name: 'Show side panel' })).not.toBeInTheDocument()
+      expect(screen.queryByTestId('top-row-start-slot')).not.toBeInTheDocument()
     })
 
     it('leaves the controls to the pane tab bars in panes mode', () => {
@@ -343,17 +348,17 @@ describe('ShellFrame', () => {
       expect(dragRegions()).toHaveLength(0)
     })
 
-    it('keeps the main card at the top and pads the top row under the traffic lights', () => {
+    it('keeps the main area at the top and pads the top row under the traffic lights', () => {
       platformRef.mac = true
       useShellLayoutStore.setState({ railExpanded: false })
       const { unmount } = renderFrame()
       expect(screen.getByRole('main').style.marginTop).toBe('')
-      expect(screen.getByTestId('show-side-panel-slot')).toHaveStyle({ paddingLeft: '24px' })
+      expect(screen.getByTestId('top-row-start-slot')).toHaveStyle({ paddingLeft: '24px' })
       unmount()
 
       useShellLayoutStore.setState({ railExpanded: true })
       const second = renderFrame()
-      expect(screen.queryByTestId('show-side-panel-slot')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('top-row-start-slot')).not.toBeInTheDocument()
       second.unmount()
 
       // Elsewhere there is no inset, but the collapsed Rail's expand toggle
@@ -361,7 +366,7 @@ describe('ShellFrame', () => {
       platformRef.mac = false
       useShellLayoutStore.setState({ railExpanded: false })
       renderFrame()
-      const slot = screen.getByTestId('show-side-panel-slot')
+      const slot = screen.getByTestId('top-row-start-slot')
       expect(slot.style.paddingLeft).toBe('')
       expect(
         within(slot).getByRole('button', { name: 'Expand or collapse projects' })

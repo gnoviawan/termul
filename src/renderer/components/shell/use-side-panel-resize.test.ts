@@ -25,7 +25,7 @@ describe('useSidePanelResize', () => {
     expect(result.current.max).toBe(max)
   })
 
-  it('writes the store on a pointer drag, clamped to the bounds', () => {
+  it('widens on a leftward drag from the left edge, clamped to the bounds', () => {
     const { result } = renderHook(() => useSidePanelResize())
     act(() => {
       result.current.onResizeMouseDown({
@@ -34,25 +34,25 @@ describe('useSidePanelResize', () => {
       } as React.MouseEvent<HTMLButtonElement>)
     })
     act(() => {
-      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 140 }))
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 60 }))
     })
     expect(useShellLayoutStore.getState().sidePanelWidth).toBe(initial + 40)
     act(() => {
-      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 5000 }))
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: -5000 }))
     })
     expect(useShellLayoutStore.getState().sidePanelWidth).toBe(max)
     act(() => {
       document.dispatchEvent(new MouseEvent('mouseup'))
-      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 0 }))
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 5000 }))
     })
     expect(useShellLayoutStore.getState().sidePanelWidth).toBe(max)
   })
 
   it('resizes with the keyboard', () => {
     const { result } = renderHook(() => useSidePanelResize())
-    act(() => result.current.onResizeKeyDown(keyEvent('ArrowRight')))
-    expect(useShellLayoutStore.getState().sidePanelWidth).toBe(initial + 16)
     act(() => result.current.onResizeKeyDown(keyEvent('ArrowLeft')))
+    expect(useShellLayoutStore.getState().sidePanelWidth).toBe(initial + 16)
+    act(() => result.current.onResizeKeyDown(keyEvent('ArrowRight')))
     expect(useShellLayoutStore.getState().sidePanelWidth).toBe(initial)
     act(() => result.current.onResizeKeyDown(keyEvent('End')))
     expect(useShellLayoutStore.getState().sidePanelWidth).toBe(max)

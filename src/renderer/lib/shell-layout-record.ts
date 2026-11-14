@@ -10,11 +10,15 @@
  * `gitHistoryDetailWidth`. The sanitizer drops unknown fields, so a version 1
  * record loads as is; a build that only knows version 1 reads version 2 as
  * newer and leaves it alone.
+ *
+ * Version 3 (Sidebar V2 P3) retired the `chats` view: chats live in the Rail,
+ * and the right panel shows Explorer, Changes or GitHub. An older record is
+ * upgraded by `upgradeShellLayoutRecord` (`shell-layout-migration.ts`).
  */
-export const SHELL_LAYOUT_VERSION = 2
+export const SHELL_LAYOUT_VERSION = 3
 
-/** Tabs the Side panel remembers per project. SSH is a mode, never a last tab. */
-export const SHELL_LAST_COLUMN_TABS = ['chats', 'explorer', 'changes', 'github'] as const
+/** Views the right panel remembers per project. SSH is a mode, never a last view. */
+export const SHELL_LAST_COLUMN_TABS = ['explorer', 'changes', 'github'] as const
 export type ShellLastColumnTab = (typeof SHELL_LAST_COLUMN_TABS)[number]
 
 export interface ShellLayoutBounds {
@@ -25,7 +29,7 @@ export interface ShellLayoutBounds {
 
 export const SHELL_LAYOUT_BOUNDS = {
   railWidth: { min: 180, max: 360, default: 248 },
-  sidePanelWidth: { min: 220, max: 560, default: 260 },
+  sidePanelWidth: { min: 220, max: 560, default: 340 },
   sshSectionHeight: { min: 48, max: 400, default: 140 },
   gitHistoryDetailWidth: { min: 320, max: 560, default: 400 }
 } as const satisfies Record<string, ShellLayoutBounds>
@@ -49,7 +53,8 @@ export function defaultShellLayoutRecord(): ShellLayoutRecord {
     version: SHELL_LAYOUT_VERSION,
     railExpanded: true,
     railWidth: SHELL_LAYOUT_BOUNDS.railWidth.default,
-    sidePanelVisible: true,
+    // The main screen opens without the right panel (Paper 2.2).
+    sidePanelVisible: false,
     sidePanelWidth: SHELL_LAYOUT_BOUNDS.sidePanelWidth.default,
     sshSectionVisible: true,
     sshSectionHeight: SHELL_LAYOUT_BOUNDS.sshSectionHeight.default,

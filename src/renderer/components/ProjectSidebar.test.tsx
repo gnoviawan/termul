@@ -373,30 +373,29 @@ describe('ProjectSidebar', () => {
     )
   })
 
-  it('marks the active project row with keycap and idle rows with a hover wash', () => {
+  it('keeps the active project row plain (Paper 10X5): no keycap, the same hover wash', () => {
     renderWithRouter({ activeProjectId: '1' })
 
     const activeRow = screen.getByTestId('project-item-1').querySelector('[role="button"]')
     const idleRow = screen.getByTestId('project-item-2').querySelector('[role="button"]')
-    expect(activeRow).toHaveClass('keycap', 'h-7.5', 'rounded-lg')
-    expect(activeRow).not.toHaveClass('bg-sidebar-accent')
+    expect(activeRow).toHaveClass('h-7.5', 'rounded-md')
+    expect(activeRow).toHaveAttribute('aria-current', 'page')
+    expect(activeRow).not.toHaveClass('keycap')
     expect(idleRow).not.toHaveClass('keycap')
     // The wash shows under the same conditions as the actions it sits under.
-    expect(idleRow).toHaveClass('hover:bg-row-hover', 'focus-within:bg-row-hover')
+    for (const row of [activeRow, idleRow]) {
+      expect(row).toHaveClass('hover:bg-row-hover', 'focus-within:bg-row-hover')
+    }
   })
 
-  it('ends the actions fade in the row surface: keycap when active, the hover wash otherwise', () => {
+  it('ends the actions fade in the hover wash on every row', () => {
     renderWithRouter({ activeProjectId: '1' })
 
-    const activeActions = within(screen.getByTestId('project-item-1')).getByTestId(
-      'project-row-actions'
-    )
-    const idleActions = within(screen.getByTestId('project-item-2')).getByTestId(
-      'project-row-actions'
-    )
-    expect(activeActions).toHaveClass('from-[var(--rail-keycap-fill)]')
-    expect(idleActions).toHaveClass('from-row-hover-solid')
-    expect(idleActions).toHaveClass('group-hover:flex', 'group-focus-within:flex')
+    for (const id of ['project-item-1', 'project-item-2']) {
+      const actions = within(screen.getByTestId(id)).getByTestId('project-row-actions')
+      expect(actions).toHaveClass('from-row-hover-solid')
+      expect(actions).toHaveClass('group-hover:flex', 'group-focus-within:flex')
+    }
   })
 
   it('shows a "Crashed" mark (no pulse) on a project with a crashed terminal', () => {
@@ -952,7 +951,7 @@ describe('ProjectSidebar: Mono-style alignment and groups', () => {
     const row = within(screen.getByTestId('project-item-1')).getByRole('button', {
       name: /Project: Rail Project 1/
     })
-    expect(row).toHaveClass('gap-2', 'px-3', 'rounded-lg')
+    expect(row).toHaveClass('gap-2', 'px-3', 'rounded-md')
     const iconColumn = row.querySelector('[data-rail-icon-column]')
     expect(iconColumn).toHaveClass('size-4', 'shrink-0')
   })

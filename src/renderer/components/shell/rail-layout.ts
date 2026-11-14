@@ -14,9 +14,6 @@ export const RAIL_ICON_BOX_CLASS = 'inline-flex size-4 shrink-0 items-center jus
 /** Width of the collapsed Rail (`w-12`). */
 export const COLLAPSED_WIDTH = 48
 
-/** Gap between the Rail and the Side panel (`pl-2` on the shell row in `ShellFrame`). */
-export const SHELL_GAP = 8
-
 /**
  * Collapsed Rail hover panels (Sidebar V2) open 4px right of the Rail edge
  * (x = 52). A Rail row spans x = 8..40 (the 8px list inset), so the panel

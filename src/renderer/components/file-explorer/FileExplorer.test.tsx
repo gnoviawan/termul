@@ -873,11 +873,12 @@ describe('FileExplorer header toolbar (GH-540)', () => {
       expect(button).toBeEnabled()
       expect(button).toHaveAttribute('title', name)
     }
-    // Refresh lives in the More menu. On web (jsdom has no Tauri internals)
-    // the menu also holds the file-explorer hide action.
+    // Refresh lives in the More menu; the header's Close hides the panel.
     expect(screen.getByRole('button', { name: 'More explorer actions' })).toBeEnabled()
     expect(screen.getByRole('menuitem', { name: 'Refresh' })).toBeEnabled()
-    expect(screen.getByRole('menuitem', { name: 'Hide side panel' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Hide side panel' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Close panel' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Explorer' })).toBeInTheDocument()
   })
 
   it('disables every action when no project is open', () => {

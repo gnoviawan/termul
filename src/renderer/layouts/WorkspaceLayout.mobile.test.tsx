@@ -625,9 +625,8 @@ describe('WorkspaceLayout mobile branch', () => {
       })
     }
   })
-  // The mobile revamp retires the desktop StatusBar on the phone shell:
-  // connection health moved to the drawer footer and ContextBarSettingsPopover
-  // (a StatusBar child) is not mounted. Desktop keeps it (see the breakpoint suite).
+  // The phone shell has no status bar: connection health lives in the drawer
+  // footer.
   describe('terminal ⋯ sheet navigation rows (L-14)', () => {
     beforeEach(() => {
       act(() => {

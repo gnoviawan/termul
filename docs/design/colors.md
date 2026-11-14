@@ -68,9 +68,9 @@ Terminal ANSI colors and selection do not follow `--primary`. Troupe pins them i
 | Active segment in a track | `.keycap` | `bg-foreground/10` |
 | Focus | `focus-ring` (dim, 4:1) | `focus-ring` (dim, 4:1) |
 
-The Rail paints `bg-sidebar`. Keycaps inside it (`[data-rail-surface]`) fill with `--rail-keycap`: `muted` in dark themes, `muted` plus 6% `foreground` in light themes. `--row-hover-solid` is flattened over `--sidebar-background`.
+The Rail paints `bg-background`, like the main area, the right panel and the tool strip (Sidebar V2, Paper 2.2); 0.5px `border` hairlines split the columns. Keycaps inside it (`[data-rail-surface]`) fill with `--rail-keycap`: `muted` in dark themes, `muted` plus 6% `foreground` in light themes. `--row-hover-solid` is flattened over `--background`. The open project row is plain; only the open chat row under it takes the keycap.
 
-Blue (`primary`, `primary-fill`) has three jobs only: live work (a running agent, a working spinner, a drop target), the one primary button in a view, and count badges that ask for attention (`CountBadge` in `components/ui/count-badge.tsx`: the Git change count on the activity rail and the Git Changes tab, `bg-primary-fill text-primary-foreground`). Focus, selection and hover stay neutral.
+Blue (`primary`, `primary-fill`) has three jobs only: live work (a running agent, a working spinner, a drop target), the one primary button in a view, and count badges that ask for attention (`CountBadge` in `components/ui/count-badge.tsx`: the Git change count on the tool strip Changes button and the Git Changes tab, `bg-primary-fill text-primary-foreground`). Focus, selection and hover stay neutral.
 
 ## Background
 

@@ -418,7 +418,7 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
   toggleFileExplorer: {
     id: 'toggleFileExplorer',
     label: 'Toggle Side Panel',
-    description: 'Show or hide side panel',
+    description: 'Show or hide the side panel at the right edge',
     defaultKey: 'ctrl+alt+b'
   },
   fileExplorerRename: {

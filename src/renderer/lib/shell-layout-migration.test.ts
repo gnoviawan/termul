@@ -5,7 +5,8 @@ import {
   LEGACY_EXPLORER_WIDTH_KEY,
   LEGACY_SSH_HEIGHT_KEY,
   type LegacyShellLayoutSources,
-  readLegacyShellLayoutSources
+  readLegacyShellLayoutSources,
+  upgradeShellLayoutRecord
 } from './shell-layout-migration'
 import { defaultShellLayoutRecord } from './shell-layout-record'
 
@@ -77,7 +78,8 @@ describe('buildMigratedShellLayout', () => {
       appSettings: { sidebarVisible: 'false', fileExplorerVisible: 0, sshPanelVisible: null }
     })
     expect(record.railExpanded).toBe(true)
-    expect(record.sidePanelVisible).toBe(true)
+    // The default: the main screen opens without the right panel (Paper 2.2).
+    expect(record.sidePanelVisible).toBe(false)
     expect(record.sshSectionVisible).toBe(true)
   })
 
@@ -178,5 +180,43 @@ describe('readLegacyShellLayoutSources', () => {
 
     expect(sources).toEqual(EMPTY)
     getItem.mockRestore()
+  })
+})
+
+describe('upgradeShellLayoutRecord (version 3)', () => {
+  it('turns a remembered chats view into explorer and keeps everything else', () => {
+    const raw = {
+      version: 2,
+      sidePanelVisible: true,
+      sidePanelWidth: 300,
+      lastColumnTabByProject: { a: 'chats', b: 'changes', c: 'github', d: 'explorer' }
+    }
+    expect(upgradeShellLayoutRecord(raw)).toEqual({
+      ...raw,
+      lastColumnTabByProject: { a: 'explorer', b: 'changes', c: 'github', d: 'explorer' }
+    })
+  })
+
+  it('treats a record without a version as old', () => {
+    expect(upgradeShellLayoutRecord({ lastColumnTabByProject: { a: 'chats' } })).toEqual({
+      lastColumnTabByProject: { a: 'explorer' }
+    })
+  })
+
+  it('leaves a current or newer record, and non-object data, as is', () => {
+    const current = { version: 3, lastColumnTabByProject: { a: 'chats' } }
+    expect(upgradeShellLayoutRecord(current)).toBe(current)
+    const newer = { version: 4, lastColumnTabByProject: { a: 'chats' } }
+    expect(upgradeShellLayoutRecord(newer)).toBe(newer)
+    expect(upgradeShellLayoutRecord(null)).toBeNull()
+    expect(upgradeShellLayoutRecord('x')).toBe('x')
+    const noTabs = { version: 2 }
+    expect(upgradeShellLayoutRecord(noTabs)).toBe(noTabs)
+  })
+
+  it('does not touch the prototype for a hostile key', () => {
+    const raw = JSON.parse('{"version":2,"lastColumnTabByProject":{"__proto__":"chats"}}')
+    const upgraded = upgradeShellLayoutRecord(raw) as { lastColumnTabByProject: object }
+    expect(Object.getPrototypeOf(upgraded.lastColumnTabByProject)).toBe(Object.prototype)
   })
 })

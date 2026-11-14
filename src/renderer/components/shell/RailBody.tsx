@@ -35,7 +35,7 @@ const NEED_PROJECT = 'Open a project first'
  * toggle), the nav (New chat, Search, Canvas, Automations), the Projects
  * section with the active project's chats (and the SSH section on desktop),
  * and the icon-only footer. Fills the width its container gives it and
- * inherits the Rail's sidebar surface.
+ * inherits the Rail's surface.
  *
  * One tree for both Rail states: every part reads the density from
  * `RailDensityProvider` (set by `ShellRail`). Collapsed, the rows keep their

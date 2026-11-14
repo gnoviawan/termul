@@ -2,7 +2,7 @@ import { cn } from '@/lib/utils'
 
 /**
  * Blue count pill (the one primary-fill count look): git change counts on
- * the activity rail and the Git Changes tab. Height, min width, type size and
+ * the tool strip Changes button and the Git Changes tab. Height, min width, type size and
  * position stay at the call site.
  */
 export function CountBadge({

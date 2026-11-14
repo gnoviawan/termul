@@ -10,23 +10,21 @@ vi.mock('@/components/ssh/SSHWorkspace', () => ({
   SSHWorkspace: ({
     topRow
   }: {
-    topRow?: { dragRegion: boolean; windowControls: boolean; showSidePanel: boolean }
+    topRow?: { dragRegion: boolean; windowControls: boolean; startSlot: boolean }
   }) => (
     <div
       data-testid="ssh-workspace"
       data-top-row={
-        topRow ? `${topRow.dragRegion}/${topRow.windowControls}/${topRow.showSidePanel}` : 'none'
+        topRow ? `${topRow.dragRegion}/${topRow.windowControls}/${topRow.startSlot}` : 'none'
       }
     />
   )
 }))
 vi.mock('@/components/ChatRoute', () => ({ ChatRoute: () => null }))
-vi.mock('@/components/StatusBar', () => ({ StatusBar: () => null }))
 vi.mock('@/components/workspace/PaneRenderer', () => ({
   PaneRenderer: () => <div data-testid="pane-renderer" />
 }))
 vi.mock('@/hooks/use-mobile-active-leaf', () => ({ useMobileActiveLeaf: () => null }))
-vi.mock('@/stores/app-settings-store', () => ({ useDefaultShell: () => 'bash' }))
 vi.mock('@/stores/terminal-store', () => ({
   useTerminalActions: () => ({ renameTerminal: vi.fn() })
 }))
@@ -40,15 +38,12 @@ function renderMain(mode: TopRowMode | null, platform: TopRowPlatform = desktop)
       isMobileWebShell={false}
       isWorkspaceRoute
       projects={[{ id: 'p1', name: 'One' } as never]}
-      activeProject={undefined}
       ssh={
         {
           workspaceOpen: true
         } as never
       }
       setIsNewProjectModalOpen={vi.fn()}
-      handleAddTerminal={vi.fn()}
-      handleNewBrowserTab={vi.fn()}
       handleCloseTerminal={vi.fn()}
       handleCloseEditorTab={vi.fn()}
       handleCloseTabs={vi.fn()}
@@ -72,7 +67,7 @@ describe('WorkspaceMain SSH header role', () => {
     expect(await screen.findByTestId('ssh-workspace')).toHaveAttribute('data-top-row', 'none')
   })
 
-  it('hands the SSH header the drag region, controls and Show side panel button when it owns the top row', async () => {
+  it('hands the SSH header the drag region, controls and start slot when it owns the top row', async () => {
     renderMain('ssh')
     expect(await screen.findByTestId('ssh-workspace')).toHaveAttribute(
       'data-top-row',

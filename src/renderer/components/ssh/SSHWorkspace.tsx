@@ -2,11 +2,8 @@ import type { SSHProfile } from '@shared/types/ssh.types'
 import { useMemo } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
-import {
-  ShowSidePanelSlot,
-  useShowSidePanelSlotVisible
-} from '@/components/shell/SidePanelVisibilityButtons'
 import { WindowControls } from '@/components/shell/TopRowChrome'
+import { TopRowStartSlot, useTopRowStartSlotVisible } from '@/components/shell/TopRowStartSlot'
 import { hostLabel } from '@/lib/ssh-messages'
 import { closeSSHSession, openSSHSession, requestCloseSSHSession } from '@/lib/ssh-sessions'
 import { cn } from '@/lib/utils'
@@ -30,10 +27,10 @@ interface SSHWorkspaceProps {
   /**
    * The header is the window top row. `dragRegion` marks its empty space as
    * a window drag region; `windowControls` renders the window controls flush
-   * at its right end; `showSidePanel` puts the Show side panel button at its
-   * start while the Side panel is hidden.
+   * at its right end; `startSlot` puts the top row start slot (expand-Rail
+   * toggle) at its start.
    */
-  topRow?: { dragRegion: boolean; windowControls: boolean; showSidePanel: boolean }
+  topRow?: { dragRegion: boolean; windowControls: boolean; startSlot: boolean }
 }
 
 /** Placeholder profile for a tab whose host was deleted meanwhile. */
@@ -61,7 +58,7 @@ export function SSHWorkspace({ topRow }: SSHWorkspaceProps): React.JSX.Element {
   const { setActiveTab, duplicateProfile, toggleFavorite, importConfig } = useSSHActions()
   const dialogs = useSSHPanelDialogs()
   // The slot brings its own start padding, so the header drops its own.
-  const showSidePanel = useShowSidePanelSlotVisible() && Boolean(topRow?.showSidePanel)
+  const startSlot = useTopRowStartSlotVisible() && Boolean(topRow?.startSlot)
 
   const profileById = useMemo(() => new Map(profiles.map((p) => [p.id, p])), [profiles])
   const pendingSession = sessions.find((s) => s.id === pendingClose)
@@ -89,18 +86,18 @@ export function SSHWorkspace({ topRow }: SSHWorkspaceProps): React.JSX.Element {
 
   return (
     <div
-      className="flex h-full w-full flex-col overflow-hidden rounded-xl bg-card"
+      className="flex h-full w-full flex-col overflow-hidden bg-background"
       data-testid="ssh-workspace"
     >
       <div
         className={cn(
-          'flex h-10 shrink-0 items-center gap-2 border-b border-border',
+          'flex h-11 shrink-0 items-center gap-2 border-b-[0.5px] border-border',
           !topRow && 'px-2',
-          topRow && !showSidePanel && 'pl-2'
+          topRow && !startSlot && 'pl-2'
         )}
         data-tauri-drag-region={topRow?.dragRegion ? true : undefined}
       >
-        {showSidePanel && <ShowSidePanelSlot />}
+        {startSlot && <TopRowStartSlot />}
         <SSHSessionTabs
           sessions={sessions}
           profiles={profiles}

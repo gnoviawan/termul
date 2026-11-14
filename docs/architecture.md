@@ -75,8 +75,7 @@ This preserves a browser/dev/test path while keeping the Tauri-specific app as t
 Core shell files:
 
 - `WorkspaceLayout.tsx`
-- `components/shell/ShellFrame.tsx` (Rail, Side panel and main area)
-- `StatusBar.tsx`
+- `components/shell/ShellFrame.tsx` (Rail, main area, right Side panel and tool strip)
 - route pages such as `ProjectSettings.tsx`, `AppPreferences.tsx`, and `WorkspaceSnapshots.tsx`
 
 Responsibilities:

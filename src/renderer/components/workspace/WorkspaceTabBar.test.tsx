@@ -1,4 +1,4 @@
-import { act, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, createEvent, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 import { framerMotionTestState, resetFramerMotionTestState } from '@/test-utils/mock-framer-motion'
@@ -35,6 +35,7 @@ vi.mock('framer-motion', async (importOriginal) => {
 
 const mockWorkspaceStoreState = {
   fullscreenPaneId: null as string | null,
+  leafCount: 3,
   setActiveTab: mockSetActiveTab,
   setActivePane: mockSetActivePane,
   togglePaneFullscreen: mockTogglePaneFullscreen,
@@ -59,7 +60,7 @@ vi.mock('@/stores/workspace-store', () => ({
     }
   ),
   useFullscreenPaneId: () => mockWorkspaceStoreState.fullscreenPaneId,
-  useLeafCount: () => 3,
+  useLeafCount: () => mockWorkspaceStoreState.leafCount,
   editorTabId: (filePath: string) => `edit-${filePath}`
 }))
 
@@ -192,23 +193,10 @@ vi.mock('@/hooks/use-pane-dnd', () => ({
   usePaneDnd: mockUsePaneDnd
 }))
 
-const mockShellApiGetAvailableShells = vi.hoisted(() =>
-  vi.fn().mockResolvedValue({
-    success: true,
-    data: {
-      default: { name: 'bash', displayName: 'Bash', path: '/bin/bash' },
-      available: [{ name: 'bash', displayName: 'Bash', path: '/bin/bash' }]
-    }
-  })
-)
-
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
   return {
     ...actual,
-    shellApi: {
-      getAvailableShells: mockShellApiGetAvailableShells
-    },
     clipboardApi: {
       writeText: vi.fn()
     },
@@ -237,6 +225,7 @@ beforeEach(() => {
   mockCloseAgentChat.mockImplementation((_sessionId: string, closeTab: () => void) => closeTab())
   tauriRef.current = true
   mockWorkspaceStoreState.fullscreenPaneId = null
+  mockWorkspaceStoreState.leafCount = 3
   mockCloseFileIfIdle.mockReturnValue(true)
   mockEditorOpenFiles.clear()
   resetFramerMotionTestState()
@@ -254,14 +243,6 @@ beforeEach(() => {
     clearReorderPreview: mockClearReorderPreview,
     handleTabReorder: mockHandleTabReorder
   })
-
-  mockShellApiGetAvailableShells.mockResolvedValue({
-    success: true,
-    data: {
-      default: { name: 'bash', displayName: 'Bash', path: '/bin/bash' },
-      available: [{ name: 'bash', displayName: 'Bash', path: '/bin/bash' }]
-    }
-  })
 })
 
 async function flushShellEffect(): Promise<void> {
@@ -270,92 +251,24 @@ async function flushShellEffect(): Promise<void> {
   })
 }
 
-async function openNewTabMenu(): Promise<void> {
-  fireEvent.pointerDown(screen.getByRole('button', { name: 'New tab' }), {
-    button: 0,
-    ctrlKey: false
-  })
-  await screen.findByRole('menu')
-}
-
 describe('WorkspaceTabBar', () => {
-  it('shows pane plus action and no pane-close side control', async () => {
-    render(<WorkspaceTabBar paneId="pane-a" tabs={[]} activeTabId={null} onAddTerminal={vi.fn()} />)
+  it('has no New tab menu, title actions or pane-close control (Paper tab bar)', async () => {
+    mockWorkspaceStoreState.leafCount = 1
+    const { container } = render(<WorkspaceTabBar paneId="pane-a" tabs={[]} activeTabId={null} />)
 
     await flushShellEffect()
 
-    expect(screen.getByTitle('New tab')).toBeInTheDocument()
-
-    await waitFor(() => {
-      expect(screen.queryByTitle('Close pane')).not.toBeInTheDocument()
-    })
-  })
-
-  it('calls pane-scoped onAddTerminal when a shell is selected from the terminal menu', async () => {
-    const onAddTerminal = vi.fn()
-
-    render(
-      <WorkspaceTabBar paneId="pane-a" tabs={[]} activeTabId={null} onAddTerminal={onAddTerminal} />
+    expect(screen.queryByRole('button', { name: 'New tab' })).not.toBeInTheDocument()
+    expect(screen.queryByTitle('Close pane')).not.toBeInTheDocument()
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
+    // 44px, background surface, 0.5px bottom hairline, 6px inline padding.
+    expect(container.firstElementChild).toHaveClass(
+      'h-11',
+      'bg-background',
+      'border-b-[0.5px]',
+      'border-border',
+      'px-1.5'
     )
-
-    await flushShellEffect()
-
-    await openNewTabMenu()
-    fireEvent.click(await screen.findByRole('menuitem', { name: /Bash/ }))
-
-    expect(onAddTerminal).toHaveBeenCalledTimes(1)
-    expect(onAddTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'bash', displayName: 'Bash', path: '/bin/bash' })
-    )
-  })
-
-  it('calls pane-scoped onAddBrowserTab when browser action is clicked', async () => {
-    const onAddBrowserTab = vi.fn()
-
-    render(
-      <WorkspaceTabBar
-        paneId="pane-a"
-        tabs={[]}
-        activeTabId={null}
-        onAddBrowserTab={onAddBrowserTab}
-      />
-    )
-
-    await flushShellEffect()
-
-    await openNewTabMenu()
-    fireEvent.click(screen.getByRole('menuitem', { name: 'New browser tab' }))
-
-    expect(onAddBrowserTab).toHaveBeenCalledTimes(1)
-  })
-
-  // Story 8 (web honesty): the New browser tab item is desktop-only — on the
-  // web client it must be absent (browser tabs are native child webviews),
-  // while the terminal shells stay available.
-  it('omits the New browser tab item on web', async () => {
-    const onAddBrowserTab = vi.fn()
-    const prev = tauriRef.current
-    tauriRef.current = false
-    try {
-      render(
-        <WorkspaceTabBar
-          paneId="pane-a"
-          tabs={[]}
-          activeTabId={null}
-          onAddTerminal={vi.fn()}
-          onAddBrowserTab={onAddBrowserTab}
-        />
-      )
-
-      await flushShellEffect()
-
-      await openNewTabMenu()
-      expect(screen.queryByRole('menuitem', { name: 'New browser tab' })).not.toBeInTheDocument()
-      expect(await screen.findByRole('menuitem', { name: /Bash/ })).toBeInTheDocument()
-      expect(onAddBrowserTab).not.toHaveBeenCalled()
-    } finally {
-      tauriRef.current = prev
-    }
   })
 
   it('renders fullscreen focus button when leafCount > 1', async () => {
@@ -393,7 +306,8 @@ describe('WorkspaceTabBar', () => {
     expect(tabEl.className).not.toContain('border-b')
     // The raised surface is its own layer so it can slide between tabs.
     expect(tabEl.querySelector('.keycap')).toBeTruthy()
-    expect(container.querySelector('.h-10')?.className).not.toContain('border-b')
+    // The bar draws one 0.5px bottom hairline; the tab draws none.
+    expect(container.querySelector('.h-11')).toHaveClass('border-b-[0.5px]')
   })
 
   it('reserves the close slot on every tab and reveals it on the active tab', async () => {
@@ -1549,12 +1463,7 @@ describe('WorkspaceTabBar', () => {
 
     it('has no drag region and no window controls without topRow', async () => {
       const { container } = render(
-        <WorkspaceTabBar
-          paneId="pane-a"
-          tabs={mountTabs}
-          activeTabId="edit-/a.ts"
-          onAddTerminal={vi.fn()}
-        />
+        <WorkspaceTabBar paneId="pane-a" tabs={mountTabs} activeTabId="edit-/a.ts" />
       )
       await flushShellEffect()
       expect(dragged(container)).toHaveLength(0)
@@ -1567,7 +1476,6 @@ describe('WorkspaceTabBar', () => {
           paneId="pane-a"
           tabs={mountTabs}
           activeTabId="edit-/a.ts"
-          onAddTerminal={vi.fn()}
           topRow={{ dragRegion: true, windowControls: false }}
         />
       )
@@ -1588,13 +1496,12 @@ describe('WorkspaceTabBar', () => {
       expect(screen.queryByTestId('window-controls')).toBeNull()
     })
 
-    it('renders the window controls flush at the right end, after the trailing buttons', async () => {
+    it('renders the window controls flush at the right end, after the tabs', async () => {
       const { container } = render(
         <WorkspaceTabBar
           paneId="pane-a"
           tabs={mountTabs}
           activeTabId="edit-/a.ts"
-          onAddTerminal={vi.fn()}
           topRow={{ dragRegion: true, windowControls: true }}
         />
       )
@@ -1605,11 +1512,7 @@ describe('WorkspaceTabBar', () => {
       expect(bar.lastElementChild).toBe(controls)
       expect(controls).not.toHaveAttribute('data-tauri-drag-region')
       expect(screen.getAllByRole('button', { name: /window$/ })).toHaveLength(3)
-      // The New tab button comes before the controls.
-      expect(
-        screen.getByTitle('New tab').compareDocumentPosition(controls) &
-          Node.DOCUMENT_POSITION_FOLLOWING
-      ).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'New tab' })).toBeNull()
     })
 
     it('renders the controls without drag attributes on a bar without drag (web-like)', async () => {

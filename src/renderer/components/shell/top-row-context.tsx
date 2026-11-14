@@ -11,14 +11,13 @@ export interface TopRowValue {
   roles: TopRowRoles
   platform: TopRowPlatform
   /**
-   * Start padding for the main card's top row so it clears the macOS traffic
-   * lights (Rail collapsed, no Side panel column). `0` otherwise.
+   * Start padding for the main area's top row so it clears the macOS traffic
+   * lights (Rail collapsed). `0` otherwise.
    */
   mainStartInsetPx: number
   /**
-   * The Rail is collapsed and the main card's top row touches it (no Side
-   * panel column): that row starts with the expand-Rail toggle
-   * (`ShowSidePanelSlot`).
+   * The Rail is collapsed: the main area's top row starts with the
+   * expand-Rail toggle (`TopRowStartSlot`).
    */
   railToggleInMain: boolean
 }

@@ -80,7 +80,7 @@ export function ShellRail({
         data-testid="shell-rail"
         data-expanded={expanded}
         data-rail-surface
-        className="group/rail relative h-full shrink-0 overflow-hidden bg-sidebar"
+        className="group/rail relative h-full shrink-0 overflow-hidden bg-background"
         initial={false}
         animate={{ width: targetWidth }}
         transition={{ duration, ease: EASE_OUT }}
