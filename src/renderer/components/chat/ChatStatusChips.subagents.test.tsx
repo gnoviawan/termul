@@ -10,7 +10,7 @@ import {
 } from '@/lib/test-utils/subagent'
 import type { ChatMessage } from '@/stores/acp-store/types'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
-import { ChatStatusPill } from './ChatStatusPill'
+import { ChatStatusChips } from './ChatStatusChips'
 import { SubagentSurfaceProvider } from './SubagentSurface'
 
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
@@ -74,7 +74,7 @@ function Pill({ toolCalls, ...extra }: PillProps & { toolCalls: ToolCall[] }): R
         filePathContext={undefined}
         isVisible={props.isVisible ?? true}
       >
-        <ChatStatusPill toolCalls={toolCalls} {...props} />
+        <ChatStatusChips toolCalls={toolCalls} {...props} />
       </SubagentSurfaceProvider>
     </TooltipProvider>
   )
@@ -86,9 +86,9 @@ function renderPill(toolCalls: ToolCall[], extra: PillProps = {}) {
 
 const panel = () => screen.getByTestId('subagent-panel')
 
-const pill = () => screen.getByRole('button', { name: /^Session status:/ })
+const pill = () => screen.getByRole('button', { name: /^Subagents:/ })
 
-describe('ChatStatusPill subagents', () => {
+describe('ChatStatusChips subagents', () => {
   beforeEach(() => {
     mobileRef.current = false
     useOverlayStackStore.setState({ stack: [] })
@@ -98,7 +98,7 @@ describe('ChatStatusPill subagents', () => {
     vi.useRealTimers()
   })
 
-  it('renders no pill without current-turn subagents or while hidden', () => {
+  it('renders no chip without current-turn subagents or while hidden', () => {
     renderPill([
       sub({ seq: 0 }),
       { toolCallId: 'r', kind: 'read', rawInput: { path: 'a' }, seq: 3 }
@@ -108,7 +108,7 @@ describe('ChatStatusPill subagents', () => {
     expect(screen.queryByRole('button')).toBeNull()
   })
 
-  it('shows counts on the pill and rows in the popover', () => {
+  it('shows the count on the chip, and the summary and rows in its panel', () => {
     renderPill([
       sub({ toolCallId: 'a', status: 'in_progress' }),
       sub(
@@ -117,11 +117,12 @@ describe('ChatStatusPill subagents', () => {
       ),
       sub({ toolCallId: 'c', status: 'failed' })
     ])
-    expect(pill()).toHaveTextContent(/1 working.*1 done.*1 failed/)
-    expect(pill()).toHaveAccessibleName('Session status: subagents 1 working, 1 done, 1 failed')
+    expect(pill()).toHaveTextContent('Subagent3')
+    expect(pill()).toHaveAccessibleName('Subagents: 1 working, 1 done, 1 failed')
     fireEvent.click(pill())
     const popover = screen.getByRole('dialog', { name: 'Subagents' })
     expect(popover).not.toHaveAttribute('data-sheet')
+    expect(within(popover).getByText('1 working, 1 done, 1 failed')).toBeInTheDocument()
     expect(within(popover).getByRole('button', { name: /^Write tests.*Done/ })).toHaveTextContent(
       /Done\s*3s/
     )
@@ -190,8 +191,8 @@ describe('ChatStatusPill subagents', () => {
 
   it('shows an in-flight call as stopped once the turn ended', () => {
     renderPill([sub({ status: 'in_progress' })], { turnActive: false })
-    expect(pill()).toHaveTextContent('1 stopped')
     fireEvent.click(pill())
+    expect(screen.getByText('1 stopped')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^Audit code.*Stopped/ })).toBeInTheDocument()
   })
 
@@ -216,7 +217,7 @@ describe('ChatStatusPill subagents', () => {
       { background: true, outputFile: '/tmp/a1.output' }
     )
     renderPill([launched])
-    expect(pill()).toHaveAccessibleName('Session status: subagents 1 working')
+    expect(pill()).toHaveAccessibleName('Subagents: 1 working')
     fireEvent.click(pill())
     const row = screen.getByRole('button', { name: /^Audit code.*Working/ })
     expect(within(row).getByText('background')).toBeInTheDocument()
@@ -231,7 +232,7 @@ describe('ChatStatusPill subagents', () => {
     const done = sub({ toolCallId: 'b', status: 'completed' })
     const { rerender } = renderPill([launched, done], { turnActive: false })
     expect(pill()).toHaveAccessibleName(
-      'Session status: subagents 1 working, 1 done; waiting on 1 background subagent'
+      'Subagents: 1 working, 1 done; waiting on 1 background subagent'
     )
     fireEvent.click(pill())
     const popover = screen.getByRole('dialog', { name: 'Subagents' })
@@ -239,7 +240,7 @@ describe('ChatStatusPill subagents', () => {
 
     const ended = sub({ status: 'completed' }, { background: true, state: endedState() })
     rerender(<Pill toolCalls={[ended, done]} turnActive={false} />)
-    expect(pill()).toHaveAccessibleName('Session status: subagents 2 done')
+    expect(pill()).toHaveAccessibleName('Subagents: 2 done')
     expect(screen.queryByText(/^Waiting on/)).toBeNull()
     expect(
       vi
@@ -258,9 +259,7 @@ describe('ChatStatusPill subagents', () => {
       { background: true, source: 'acp-rfd', caps: { liveProgress: true } }
     )
     renderPill([earlier], { turnActive: false })
-    expect(pill()).toHaveAccessibleName(
-      'Session status: subagents 1 working; waiting on 1 background subagent'
-    )
+    expect(pill()).toHaveAccessibleName('Subagents: 1 working; waiting on 1 background subagent')
     fireEvent.click(pill())
     const popover = screen.getByRole('dialog', { name: 'Subagents' })
     expect(within(popover).getByText('Waiting on 1 background subagent')).toBeInTheDocument()
@@ -271,13 +270,13 @@ describe('ChatStatusPill subagents', () => {
   it('does not say it waits while the turn is still running', () => {
     const launched = sub({ status: 'completed' }, { background: true })
     renderPill([launched])
-    expect(pill()).toHaveAccessibleName('Session status: subagents 1 working')
+    expect(pill()).toHaveAccessibleName('Subagents: 1 working')
   })
 
   it('opens a bottom sheet on the phone shell and registers it for Back', () => {
     mobileRef.current = true
     renderPill([sub({ status: 'completed' }), sub({ toolCallId: 'b', status: 'in_progress' })])
-    expect(pill()).toHaveTextContent(/^2$/)
+    expect(pill()).toHaveTextContent('Subagent2')
     fireEvent.click(pill())
     const sheet = screen.getByRole('dialog', { name: 'Subagents' })
     expect(sheet).toHaveAttribute('data-sheet')

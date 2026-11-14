@@ -153,7 +153,7 @@ export function TitleBarShortcutsPopover({
               aria-labelledby="shortcut-menu-title"
               initial={{ opacity: 0, scale: 0.97, y: -8 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.97, y: -8 }}
+              exit={{ opacity: 0, scale: 0.97, y: -8, transition: { duration: 0.1 } }}
               transition={{ duration: 0.15 }}
               className="w-full max-w-lg overflow-hidden rounded-lg border border-border bg-card shadow-2xl"
               onClick={(event) => event.stopPropagation()}

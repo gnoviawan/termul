@@ -83,7 +83,7 @@ export function CommitComposer({
             type="text"
             aria-label="Commit summary"
             placeholder={amend ? 'Update commit message' : 'Summary (required)'}
-            className={cn(PANEL_FIELD_CLASS, 'h-11 w-full pl-2.5 pr-12 disabled:opacity-50')}
+            className={cn(PANEL_FIELD_CLASS, 'h-11 w-full pl-2.5 pr-12')}
             value={summary}
             onChange={(e) => onSummaryChange(e.target.value)}
             disabled={isCommitting || isGenerating}
@@ -118,7 +118,7 @@ export function CommitComposer({
           aria-label="Commit description"
           placeholder="Description (optional)"
           rows={3}
-          className={cn(PANEL_FIELD_CLASS, 'w-full resize-none px-2.5 py-1.5 disabled:opacity-50')}
+          className={cn(PANEL_FIELD_CLASS, 'w-full resize-none px-2.5 py-1.5')}
           value={description}
           onChange={(e) => onDescriptionChange(e.target.value)}
           disabled={isCommitting || isGenerating}
@@ -240,7 +240,7 @@ export function CommitComposer({
         type="text"
         aria-label="Commit summary"
         placeholder={amend ? 'Update commit message' : 'Summary (required)'}
-        className={cn(PANEL_FIELD_CLASS, 'h-8 w-full px-2.5 disabled:opacity-50')}
+        className={cn(PANEL_FIELD_CLASS, 'h-8 w-full px-2.5')}
         value={summary}
         onChange={(e) => onSummaryChange(e.target.value)}
         disabled={isCommitting || isGenerating}
@@ -249,7 +249,7 @@ export function CommitComposer({
         aria-label="Commit description"
         placeholder="Description (optional)"
         rows={3}
-        className={cn(PANEL_FIELD_CLASS, 'w-full resize-none px-2.5 py-1.5 disabled:opacity-50')}
+        className={cn(PANEL_FIELD_CLASS, 'w-full resize-none px-2.5 py-1.5')}
         value={description}
         onChange={(e) => onDescriptionChange(e.target.value)}
         disabled={isCommitting || isGenerating}

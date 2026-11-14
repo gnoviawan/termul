@@ -1005,6 +1005,10 @@ export interface AcpState {
    */
   recheckPromptCommand: (sessionId: SessionId) => void
   removeQueuedPrompt: (sessionId: SessionId, queueId: string) => void
+  /** Move a queued prompt to `toIndex` in its queue (the queue sends in order). */
+  moveQueuedPrompt: (sessionId: SessionId, queueId: string, toIndex: number) => void
+  /** Drop every queued prompt of the session. */
+  clearQueuedPrompts: (sessionId: SessionId) => void
   /** Cancel the active turn if needed, then send a queued prompt immediately. */
   sendQueuedPromptNow: (sessionId: SessionId, queueId: string) => Promise<void>
   /**

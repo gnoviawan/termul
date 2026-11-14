@@ -66,7 +66,7 @@ vi.mock('../ChatErrorNotice', () => ({ ChatErrorNotice: () => null }))
 vi.mock('../PermissionPrompt', () => ({ PermissionPrompt: () => null }))
 vi.mock('../AskUserQuestion', () => ({ AskUserQuestion: () => null }))
 vi.mock('../PlanPanel', () => ({ PlanPanel: () => null }))
-vi.mock('../ChatStatusPill', () => ({ ChatStatusPill: () => null }))
+vi.mock('../ChatStatusChips', () => ({ ChatStatusChips: () => null }))
 vi.mock('../PendingRestartBanner', () => ({ PendingRestartBanner: () => null }))
 
 import { ChatMessage } from '../ChatMessage'

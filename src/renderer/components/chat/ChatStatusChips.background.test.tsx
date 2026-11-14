@@ -7,7 +7,7 @@ import { useAcpStore } from '@/stores/acp-store'
 import type { AcpSession, ChatMessage } from '@/stores/acp-store/types'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { useToolCallRevealStore } from '@/stores/tool-call-reveal-store'
-import { ChatStatusPill } from './ChatStatusPill'
+import { ChatStatusChips } from './ChatStatusChips'
 
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 
@@ -68,7 +68,7 @@ function seed(
 function renderPill(toolCalls: ToolCall[] = []): void {
   render(
     <TooltipProvider>
-      <ChatStatusPill
+      <ChatStatusChips
         sessionId="s1"
         cwd=""
         toolCalls={toolCalls}
@@ -79,9 +79,9 @@ function renderPill(toolCalls: ToolCall[] = []): void {
   )
 }
 
-const pill = () => screen.getByRole('button', { name: /^Session status:/ })
+const pill = () => screen.getByRole('button', { name: /^Background commands:/ })
 
-describe('ChatStatusPill background commands', () => {
+describe('ChatStatusChips background commands', () => {
   beforeEach(() => {
     mobileRef.current = false
     useOverlayStackStore.setState({ stack: [] })
@@ -93,12 +93,16 @@ describe('ChatStatusPill background commands', () => {
     useToolCallRevealStore.setState({ target: null })
   })
 
-  it('counts running and ended commands on the pill', () => {
+  it('counts the commands on the chip and running and ended ones in its panel', () => {
     seed([watch, tests])
     renderPill()
-    expect(pill()).toHaveTextContent('1 running·1 ended')
-    expect(pill()).toHaveAccessibleName('Session status: background commands 1 running, 1 ended')
+    expect(pill()).toHaveTextContent('Background2')
+    expect(pill()).toHaveAccessibleName('Background commands: 1 running, 1 ended')
     expect(pill()).toHaveAttribute('title', '1 command running in the background')
+    fireEvent.click(pill())
+    expect(
+      within(screen.getByRole('dialog', { name: 'Background' })).getByText('1 running, 1 ended')
+    ).toBeInTheDocument()
   })
 
   it('announces and titles a background subagent wait and running commands together', () => {
@@ -110,7 +114,11 @@ describe('ChatStatusPill background commands', () => {
       )
     ])
     const text = 'Waiting on 1 background subagent. 1 command running in the background'
-    expect(pill()).toHaveAttribute('title', text)
+    expect(screen.getByRole('button', { name: /^Subagents:/ })).toHaveAttribute(
+      'title',
+      'Waiting on 1 background subagent'
+    )
+    expect(pill()).toHaveAttribute('title', '1 command running in the background')
     expect(document.querySelector('[aria-live="polite"]')).toHaveTextContent(text)
   })
 

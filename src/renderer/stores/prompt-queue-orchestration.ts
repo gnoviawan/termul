@@ -108,6 +108,27 @@ export function moveQueuedPrompts(
   return { ...next, [toSessionId]: [...(next[toSessionId] ?? []), ...moved] }
 }
 
+/**
+ * Moves one queued prompt to `toIndex` (clamped) in its session's queue. An
+ * unknown id or a move to the same place returns the same queue map.
+ */
+export function reorderQueuedPrompt(
+  queues: PromptQueueMap,
+  sessionId: SessionId,
+  queueId: string,
+  toIndex: number
+): PromptQueueMap {
+  const queue = queues[sessionId] ?? []
+  const from = queue.findIndex((item) => item.id === queueId)
+  if (from === -1) return queues
+  const to = Math.max(0, Math.min(queue.length - 1, toIndex))
+  if (to === from) return queues
+  const next = queue.slice()
+  const [item] = next.splice(from, 1)
+  next.splice(to, 0, item)
+  return { ...queues, [sessionId]: next }
+}
+
 export function appendQueuedPrompt(
   queues: PromptQueueMap,
   sessionId: SessionId,

@@ -7,6 +7,7 @@ import {
   dropPromptQueueForSession,
   isAgentDeadError,
   isPromptTurnInProgressError,
+  reorderQueuedPrompt,
   sessionTurnBusy,
   waitForTurnClear
 } from './prompt-queue-orchestration'
@@ -239,5 +240,21 @@ describe('prompt-queue-orchestration', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('reorderQueuedPrompt', () => {
+  const q = (id: string) => ({ id, createdAt: 1, blocks: [] })
+  const queues = { s1: [q('a'), q('b'), q('c')] }
+  const ids = (map: typeof queues) => map.s1.map((item) => item.id)
+
+  it('moves a prompt up or down, clamped to the queue', () => {
+    expect(ids(reorderQueuedPrompt(queues, 's1', 'c', 0))).toEqual(['c', 'a', 'b'])
+    expect(ids(reorderQueuedPrompt(queues, 's1', 'a', 9))).toEqual(['b', 'c', 'a'])
+  })
+
+  it('returns the same map for an unknown id or the same place', () => {
+    expect(reorderQueuedPrompt(queues, 's1', 'x', 0)).toBe(queues)
+    expect(reorderQueuedPrompt(queues, 's1', 'b', 1)).toBe(queues)
   })
 })

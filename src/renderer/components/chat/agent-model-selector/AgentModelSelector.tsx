@@ -42,8 +42,6 @@ import { SelectorPanelV2, type SelectorPanelV2Props } from './SelectorPanelV2'
 import { type SelectorSource, useSessionSelectorSource } from './selector-source'
 import { useCurrentAgentConfigId } from './use-agent-switch'
 
-const PRESS = 'duration-150 ease-out enabled:active:scale-[0.96] motion-reduce:active:scale-100'
-
 const NO_MESSAGES: ReadonlyArray<{ role: string }> = []
 
 const NO_MODE_SET = (): void => {}
@@ -296,10 +294,9 @@ export function AgentModelSelector({
       disabled={disabled}
       pending={pending || Boolean(modelStatus?.loading)}
       chevron={!armed}
-      chevronDirection="up"
       aria-label={pillAria}
       data-testid="agent-model-selector-trigger"
-      className={cn('max-w-[240px]', PRESS)}
+      className="max-w-[240px]"
     >
       <AgentGlyph
         templateId={agentTemplateId}

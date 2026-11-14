@@ -1,12 +1,14 @@
 import { useEffect } from 'react'
 import { accountReadiness, NOT_READY_REASON } from '@/components/settings/provider/account-status'
+import { Button } from '@/components/ui/button'
 import { useAcpStore } from '@/stores/acp-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
+import { COMPOSER_DOCK_TEXT_ACTION_CLASS } from '../composer/ComposerDock'
 import { useChatClaudeAccount } from './use-chat-claude-account'
 
 /**
- * The way out of a stopped Claude chat whose Account is not signed in: the
- * reason and a button to the Accounts page, where the user signs in (desktop)
+ * The way out of a stopped Claude chat whose Account is not signed in, in the
+ * stopped-chat dock: the reason and a button to the Accounts page, where the user signs in (desktop)
  * or reads how to sign in on the host (web). Renders nothing otherwise.
  */
 export function ClaudeSignInAction({ sessionId }: { sessionId: string }): React.JSX.Element | null {
@@ -23,17 +25,19 @@ export function ClaudeSignInAction({ sessionId }: { sessionId: string }): React.
   const readiness = accountReadiness(ctx.current.account, ctx.current.usage)
   if (readiness === 'ready') return null
   return (
-    <span className="flex min-w-0 items-center gap-2">
-      <span className="truncate">
+    <span className="flex min-w-0 items-center gap-1.5">
+      <span className="truncate text-xs text-muted-foreground">
         {ctx.current.account.name}: {NOT_READY_REASON[readiness].toLowerCase()}
       </span>
-      <button
+      <Button
         type="button"
+        size="xs"
+        variant="ghost"
         onClick={() => openAppSettings('provider')}
-        className="inline-flex min-h-11 shrink-0 items-center rounded-md border border-warning/40 px-3 text-xs font-medium transition-colors hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
+        className={COMPOSER_DOCK_TEXT_ACTION_CLASS}
       >
         Open Accounts
-      </button>
+      </Button>
     </span>
   )
 }

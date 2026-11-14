@@ -1,12 +1,21 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { AlertTriangle, RotateCcw, X } from '@/components/icons'
-import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
-import { cn } from '@/lib/utils'
-import { CHAT_GUTTER_X } from './chat-layout'
+import { useId, useState } from 'react'
+import { X } from '@/components/icons'
+import { Button } from '@/components/ui/button'
+import {
+  COMPOSER_DOCK_TEXT_ACTION_CLASS,
+  ComposerDock,
+  ComposerDockActions,
+  ComposerDockDetails,
+  ComposerDockMessage,
+  ComposerDockRow
+} from './composer/ComposerDock'
 
 interface ChatErrorNoticeProps {
   /** Error text to show, or null/empty to hide. */
   message: string | null
+  /** Lead sentence before the error text. */
+  title?: string
   code?: number | null
   data?: unknown
   /** Re-run the latest user turn; omitted when there's nothing to retry. */
@@ -16,9 +25,13 @@ interface ChatErrorNoticeProps {
   onDismiss: () => void
 }
 
-/** Dismissible inline error with a retry affordance for a failed/cancelled turn. */
+/**
+ * Failed or cancelled turn, docked at the top of the composer card: what
+ * happened, the technical details on demand, and Retry as the one next step.
+ */
 export function ChatErrorNotice({
   message,
+  title = 'The last turn did not finish.',
   code = null,
   data,
   onRetry,
@@ -26,6 +39,9 @@ export function ChatErrorNotice({
   onDismiss
 }: ChatErrorNoticeProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
+  const [showDetails, setShowDetails] = useState(false)
+  const detailsId = useId()
+  const hasDetails = code !== null || data !== undefined
   return (
     <AnimatePresence initial={false}>
       {message && (
@@ -35,61 +51,55 @@ export function ChatErrorNotice({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={reduced ? { duration: 0 } : { duration: 0.15, ease: 'easeOut' }}
-          className="border-b border-destructive/30 bg-destructive/10"
         >
-          <div
-            className={cn('mx-auto flex w-full max-w-3xl items-start gap-2 py-2', CHAT_GUTTER_X)}
-          >
-            <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-destructive" />
-            <div className="min-w-0 flex-1">
-              <p className="whitespace-pre-wrap break-words text-xs text-destructive">{message}</p>
-              {(code !== null || data !== undefined) && (
-                <details className="mt-1">
-                  <summary
-                    className={cn(
-                      'w-fit cursor-pointer rounded-sm py-1 text-xs text-destructive/80 hover:text-destructive pointer-coarse:py-3.5',
-                      FOCUS_RING_CLASS
-                    )}
+          <ComposerDock tone="destructive" role="alert" data-testid="chat-error-notice">
+            <ComposerDockRow>
+              <ComposerDockMessage title={title}>{message}</ComposerDockMessage>
+              <ComposerDockActions>
+                {hasDetails && (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    aria-expanded={showDetails}
+                    aria-controls={detailsId}
+                    onClick={() => setShowDetails((open) => !open)}
+                    className={COMPOSER_DOCK_TEXT_ACTION_CLASS}
                   >
-                    Technical details
-                  </summary>
-                  <div className="mt-1 space-y-1 font-mono text-2xs text-destructive">
-                    {code !== null && <p className="select-all">Code {code}</p>}
-                    {data !== undefined && (
-                      <pre
-                        data-testid="chat-error-data"
-                        className="max-h-40 select-all overflow-auto whitespace-pre-wrap break-all"
-                      >
-                        {JSON.stringify(data, null, 2)}
-                      </pre>
-                    )}
-                  </div>
-                </details>
-              )}
-            </div>
-            {onRetry && (
-              <button
-                type="button"
-                onClick={onRetry}
-                className="flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/15 active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
-              >
-                <RotateCcw className="size-3.5" />
-                {retryLabel}
-              </button>
+                    {showDetails ? 'Hide details' : 'Details'}
+                  </Button>
+                )}
+                {onRetry && (
+                  <Button type="button" size="xs" onClick={onRetry} className="px-3">
+                    {retryLabel}
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  onClick={onDismiss}
+                  aria-label="Dismiss error"
+                  className="text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground [&_svg]:size-3"
+                >
+                  <X />
+                </Button>
+              </ComposerDockActions>
+            </ComposerDockRow>
+            {hasDetails && (
+              <ComposerDockDetails id={detailsId} hidden={!showDetails} className="space-y-1">
+                {code !== null && <p className="select-all">Code {code}</p>}
+                {data !== undefined && (
+                  <pre
+                    data-testid="chat-error-data"
+                    className="max-h-40 select-all overflow-auto whitespace-pre-wrap break-all"
+                  >
+                    {JSON.stringify(data, null, 2)}
+                  </pre>
+                )}
+              </ComposerDockDetails>
             )}
-            <button
-              type="button"
-              onClick={onDismiss}
-              aria-label="Dismiss error"
-              className={cn(
-                'relative flex size-11 shrink-0 items-center justify-center rounded-md text-destructive/80',
-                'transition-colors hover:bg-destructive/15 hover:text-destructive active:scale-[0.96]',
-                'motion-reduce:transition-none motion-reduce:active:scale-100'
-              )}
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
+          </ComposerDock>
         </motion.div>
       )}
     </AnimatePresence>

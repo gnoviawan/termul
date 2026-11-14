@@ -132,7 +132,7 @@ describe('ClaudeLimitNotice', () => {
     render(
       <>
         <ClaudeLimitNotice sessionId="s1" />
-        <ClaudeLimitWarning sessionId="s1" atTop />
+        <ClaudeLimitWarning sessionId="s1" />
       </>
     )
     expect(await screen.findByRole('status')).toBeInTheDocument()
@@ -142,9 +142,12 @@ describe('ClaudeLimitNotice', () => {
   it('at the limit switches to the best account and continues this chat', async () => {
     seed(limit('rejected', 100))
     render(<ClaudeLimitNotice sessionId="s1" />)
-    expect(await screen.findByText('Personal reached its 5-hour limit')).toBeInTheDocument()
-    expect(screen.getByText(/Switch to Work \(4% used\) and continue\?/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /switch to work and continue/i }))
+    expect(await screen.findByText('Personal reached its 5-hour limit.')).toBeInTheDocument()
+    // The Account with the most room is the chosen one in the dock.
+    expect(
+      screen.getByRole('button', { name: /account to go on with: work, 4% used/i })
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Switch and continue' }))
     await waitFor(() =>
       expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledWith('office', 'ab12', {
         continueSessionIds: ['s1']
@@ -157,11 +160,9 @@ describe('ClaudeLimitNotice', () => {
     setSwitchingTo('s1', 'Work')
     render(<ClaudeLimitNotice sessionId="s1" />)
     expect(await screen.findByText('Switching to Work and continuing…')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /switch to work and continue/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Switch and continue' })).toBeNull()
     act(() => setSwitchingTo('s1', null))
-    expect(
-      await screen.findByRole('button', { name: /switch to work and continue/i })
-    ).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Switch and continue' })).toBeInTheDocument()
   })
 
   it('offers to continue when the window resets when no account has room', async () => {
@@ -214,17 +215,21 @@ describe('ClaudeLimitNotice', () => {
         providerCode: 'provider_quota_exceeded'
       })
     )
-    expect(await screen.findByText('Personal reached its 5-hour limit')).toBeInTheDocument()
-    expect(screen.getByText(/Switch to Work \(4% used\) and continue\?/)).toBeInTheDocument()
+    expect(await screen.findByText('Personal reached its 5-hour limit.')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /account to go on with: work, 4% used/i })
+    ).toBeInTheDocument()
   })
 })
 
 describe('ClaudeLimitWarning', () => {
   it('warns calmly near the limit and offers the account with the most room', async () => {
     seed(limit('allowed_warning', 84))
-    render(<ClaudeLimitWarning sessionId="s1" atTop />)
+    render(<ClaudeLimitWarning sessionId="s1" />)
     expect(await screen.findByText(/Personal has used 84% of its 5-hour limit/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Switch to Work' }))
+    const trigger = screen.getByRole('button', { name: /switch account/i })
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false })
+    fireEvent.click(await screen.findByRole('menuitem', { name: /work/i }))
     await waitFor(() =>
       expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledWith('office', 'ab12', {
         continueSessionIds: undefined
@@ -234,13 +239,13 @@ describe('ClaudeLimitWarning', () => {
 
   it('warns from 80% of an allowed window', async () => {
     seed(limit('allowed', 80))
-    render(<ClaudeLimitWarning sessionId="s1" atTop />)
+    render(<ClaudeLimitWarning sessionId="s1" />)
     expect(await screen.findByText(/Personal has used 80%/)).toBeInTheDocument()
   })
 
   it('hides after Dismiss', async () => {
     seed(limit('allowed_warning', 91, 1_900_000_000))
-    render(<ClaudeLimitWarning sessionId="s1" atTop />)
+    render(<ClaudeLimitWarning sessionId="s1" />)
     await screen.findByText(/Personal has used 91%/)
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
@@ -251,7 +256,7 @@ describe('ClaudeLimitWarning', () => {
     render(
       <>
         <ClaudeLimitNotice sessionId="s1" />
-        <ClaudeLimitWarning sessionId="s1" atTop />
+        <ClaudeLimitWarning sessionId="s1" />
       </>
     )
     expect(await screen.findByRole('alert')).toBeInTheDocument()

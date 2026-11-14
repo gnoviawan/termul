@@ -492,8 +492,8 @@
          utilities and apply later). If a hover snap shows up, scope the
          override per component or drop the shorthand here in favour of
          transition-property: transform; transition-duration: 120ms;
-         transition-timing-function: var(--ease-out); */
-      transition: transform 120ms var(--ease-out);
+         transition-timing-function: var(--ease-out, ease-out); */
+      transition: transform var(--duration-quick, 150ms) var(--ease-out, ease-out);
     }
 
     button:not(:disabled):not([data-press-feedback="off"]):not([aria-haspopup]):not(
@@ -529,6 +529,7 @@
   select option:hover {
     background-color: oklch(var(--input));
     color: oklch(var(--popover-foreground));
+    transition-duration: var(--duration-quick, 150ms);
   }
 
   /* Custom scrollbar, app-wide — replaces the native scrollbar everywhere.
@@ -573,6 +574,7 @@
 
     ::-webkit-scrollbar-thumb:hover {
       background-color: oklch(var(--foreground) / var(--scrollbar-thumb-hover-alpha));
+      transition-duration: var(--duration-quick, 150ms);
     }
 
     ::-webkit-scrollbar-thumb:active {
@@ -617,6 +619,7 @@
   }
   .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider:hover {
     background: oklch(var(--foreground) / var(--terminal-scrollbar-hover-alpha));
+    transition-duration: var(--duration-quick, 150ms);
   }
 
   /* Thin separator line between commands (OSC 133;A + xterm decoration) */
@@ -674,13 +677,13 @@
         )
       )
     );
-    animation-duration: var(--duration-fast);
-    animation-timing-function: var(--ease-smooth-out);
+    animation-duration: var(--duration-fast, 250ms);
+    animation-timing-function: var(--ease-smooth-out, cubic-bezier(0.22, 1, 0.36, 1));
   }
 
   /* Closing is quicker than opening so dismiss feels instant. */
   [data-radix-popper-content-wrapper] > [data-state="closed"] {
-    animation-duration: var(--duration-quick);
+    animation-duration: var(--duration-quick, 150ms);
   }
 
   /* ------------------------------------------------------------
@@ -707,7 +710,7 @@
   :where([role="dialog"], [role="alertdialog"])[data-state]:not(
     [data-radix-popper-content-wrapper] *
   ):not([data-sheet]) {
-    animation-timing-function: var(--ease-out);
+    animation-timing-function: var(--ease-out, ease-out);
   }
 
   :where([role="dialog"], [role="alertdialog"])[data-state="open"]:not(
@@ -759,6 +762,7 @@
     transition:
       opacity var(--tt-out-dur) var(--tt-out-ease),
       transform var(--tt-out-dur) var(--tt-out-ease);
+    transition-delay: var(--tt-delay, 80ms);
   }
 
   .animate-tooltip-in[data-state="delayed-open"],
@@ -803,6 +807,13 @@
     animation-name: termul-popover-fade-out;
     animation-duration: 150ms;
   }
+}
+
+/* A popup trigger (menu, popover, select, sheet: every element with
+   aria-haspopup) does not squeeze on press, even when its own classes ask
+   for it (Button's active:scale). Unlayered, so it wins over utilities. */
+[aria-haspopup]:active {
+  scale: none;
 }
 
 /* The model menu drives open and close with a transition. */
@@ -927,9 +938,11 @@
   @media (hover: hover) {
     .switch-track[data-state="unchecked"]:enabled:hover {
       background-color: var(--switch-track-off-hover);
+      transition-duration: var(--duration-quick, 150ms);
     }
     .switch-track[data-state="checked"]:enabled:hover {
       background-color: var(--switch-track-on-hover);
+      transition-duration: var(--duration-quick, 150ms);
     }
   }
   .switch-track[data-state="unchecked"]:enabled:active {
@@ -1160,8 +1173,8 @@
     border-radius: 4px;
     opacity: 0;
     transition:
-      opacity 150ms var(--ease-out),
-      color 150ms var(--ease-out);
+      opacity var(--duration-quick, 150ms) var(--ease-out, ease-out),
+      color var(--duration-quick, 150ms) var(--ease-out, ease-out);
     cursor: pointer;
   }
   .chat-code-copy svg {
@@ -1234,7 +1247,7 @@
     background-clip: text;
     color: transparent;
     -webkit-text-fill-color: transparent;
-    animation: t-shimmer var(--shimmer-dur) var(--shimmer-ease) infinite;
+    animation: t-shimmer var(--shimmer-dur, 2000ms) var(--shimmer-ease) infinite;
   }
   @keyframes t-shimmer {
     0% {
@@ -1268,7 +1281,7 @@
     position: absolute;
     inset: 0;
     transform-origin: center;
-    animation: tm-comet-rotate 700ms linear infinite;
+    animation: tm-comet-rotate var(--duration-very-slow, 500ms) var(--ease-linear, linear) infinite;
     animation-play-state: var(--tm-comet-play);
   }
   .tm-comet-tail {
@@ -1331,9 +1344,9 @@
     filter: blur(0);
     opacity: 1;
     transition:
-      transform var(--think-swap) var(--think-ease),
-      filter var(--think-swap) var(--think-ease),
-      opacity var(--think-swap) var(--think-ease);
+      transform var(--think-swap, 150ms) var(--think-ease),
+      filter var(--think-swap, 150ms) var(--think-ease),
+      opacity var(--think-swap, 150ms) var(--think-ease);
     will-change: transform, filter, opacity;
   }
   .t-think-text::before {
@@ -1355,7 +1368,7 @@
     background-clip: text;
     color: transparent;
     -webkit-text-fill-color: transparent;
-    animation: t-think-shimmer var(--think-shimmer) linear infinite;
+    animation: t-think-shimmer var(--think-shimmer, 2000ms) var(--ease-linear, linear) infinite;
   }
   @keyframes t-think-shimmer {
     0% {
@@ -1493,7 +1506,7 @@
     cursor: pointer;
     color: oklch(var(--muted-foreground));
     transition-property: color;
-    transition-duration: 150ms;
+    transition-duration: var(--duration-quick, 150ms);
   }
   .chat-streamdown [data-streamdown="table-toolbar"] button:hover {
     color: oklch(var(--foreground));
@@ -1521,7 +1534,7 @@
     cursor: pointer;
     color: oklch(var(--muted-foreground));
     transition-property: color;
-    transition-duration: 150ms;
+    transition-duration: var(--duration-quick, 150ms);
   }
   [data-streamdown="table-fullscreen"] button:hover {
     color: oklch(var(--foreground));

@@ -12,7 +12,7 @@ import {
 } from '@/lib/test-utils/subagent'
 import type { ChatMessage } from '@/stores/acp-store/types'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
-import { ChatStatusPill } from './ChatStatusPill'
+import { ChatStatusChips } from './ChatStatusChips'
 import { SubagentSurfaceProvider } from './SubagentSurface'
 
 const mobileRef = vi.hoisted(() => ({ current: false }))
@@ -65,13 +65,13 @@ function Chat({ toolCalls }: { toolCalls: ToolCall[] }): React.JSX.Element {
         filePathContext={undefined}
         isVisible
       >
-        <ChatStatusPill toolCalls={toolCalls} sessionId="s1" cwd="" messages={[user]} turnActive />
+        <ChatStatusChips toolCalls={toolCalls} sessionId="s1" cwd="" messages={[user]} turnActive />
       </SubagentSurfaceProvider>
     </TooltipProvider>
   )
 }
 
-const pill = () => screen.getByRole('button', { name: /^Session status:/ })
+const pill = () => screen.getByRole('button', { name: /^Subagents:/ })
 
 function openPanel(title: string) {
   fireEvent.click(pill())

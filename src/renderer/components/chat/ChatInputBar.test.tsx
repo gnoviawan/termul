@@ -195,10 +195,8 @@ vi.mock('sonner', () => ({
 // place in the composer card matters.
 const { limitWarningRef } = vi.hoisted(() => ({ limitWarningRef: { current: false } }))
 vi.mock('@/components/chat/claude-account/ClaudeLimitWarning', () => ({
-  ClaudeLimitWarning: ({ atTop }: { atTop: boolean }) =>
-    limitWarningRef.current ? (
-      <div data-testid="claude-limit-warning-stub" data-at-top={String(atTop)} />
-    ) : null
+  ClaudeLimitWarning: () =>
+    limitWarningRef.current ? <div data-testid="claude-limit-warning-stub" /> : null
 }))
 
 vi.mock('@/hooks/use-agent-skills', async () => {
@@ -1088,7 +1086,7 @@ describe('ChatInputBar Claude limit warning', () => {
     const composer = container.querySelector('[data-chat-composer="true"]')
     const warning = screen.getByTestId('claude-limit-warning-stub')
     expect(composer).toContainElement(warning)
-    expect(warning).toHaveAttribute('data-at-top', 'true')
+    expect(composer?.firstElementChild).toBe(warning)
   })
 
   it('puts the warning below a pending permission prompt', () => {
@@ -1104,7 +1102,6 @@ describe('ChatInputBar Claude limit warning', () => {
     const prompt = screen.getByTestId('permission-prompt')
     const warning = screen.getByTestId('claude-limit-warning-stub')
     expect(prompt.compareDocumentPosition(warning) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(warning).toHaveAttribute('data-at-top', 'false')
   })
 
   it('hides the warning while the chat is closed', () => {
@@ -1769,12 +1766,19 @@ describe('ChatInputBar draft start', () => {
     expect(onDraftStart).not.toHaveBeenCalled()
   })
 
-  it('shows the Session closed pill only while disabled', () => {
-    const { unmount } = renderInputBar({ disabled: true })
-    expect(screen.getByText('Session closed')).toBeInTheDocument()
-    unmount()
-    renderInputBar({ disabled: false })
-    expect(screen.queryByText('Session closed')).not.toBeInTheDocument()
+  it('shows a notice in the composer dock and hides the limit warning for it', () => {
+    limitWarningRef.current = true
+    try {
+      const { container } = renderInputBar({
+        notice: <div data-testid="dock-notice">This chat stopped.</div>
+      })
+      const composer = container.querySelector('[data-chat-composer="true"]')
+      expect(composer?.firstElementChild).toBe(screen.getByTestId('dock-notice'))
+      expect(screen.queryByTestId('claude-limit-warning-stub')).not.toBeInTheDocument()
+      expect(screen.queryByText('Session closed')).not.toBeInTheDocument()
+    } finally {
+      limitWarningRef.current = false
+    }
   })
 })
 
@@ -2211,7 +2215,7 @@ describe('ChatInputBar mobile dock', () => {
   it('collapses the queue by default on mobile and keeps it expanded on desktop', () => {
     const props = { queue, onRemoveQueued: vi.fn(), onSendQueuedNow: vi.fn() }
     const mobile = render(bar(props))
-    expect(screen.getByRole('button', { name: '2 Queued' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: '2 queued' })).toHaveAttribute(
       'aria-expanded',
       'false'
     )
@@ -2219,10 +2223,23 @@ describe('ChatInputBar mobile dock', () => {
 
     mobileRef.current = false
     render(bar(props))
-    expect(screen.getByRole('button', { name: '2 Queued' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: '2 queued' })).toHaveAttribute(
       'aria-expanded',
       'true'
     )
+  })
+
+  it('docks the queue inside the composer card and edits a prompt back into the draft', async () => {
+    mobileRef.current = false
+    const onRemoveQueued = vi.fn()
+    render(
+      bar({ queue, onRemoveQueued, onSendQueuedNow: vi.fn(), seedText: 'my draft', seedNonce: 1 })
+    )
+    expect(composerCard()).toContainElement(screen.getByTestId('prompt-queue'))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0])
+    expect(onRemoveQueued).toHaveBeenCalledWith('q1')
+    await waitFor(() => expect(composerCard()).toHaveTextContent('my draft'))
+    expect(composerCard()).toHaveTextContent('first queued')
   })
 
   it('renders the embedded permission options at touch size', () => {

@@ -10,6 +10,7 @@ import { BrowserAgentIndicator } from '@/components/browser/BrowserAgentStop'
 import { armModelPick } from '@/components/chat/agent-model-selector/use-agent-switch'
 import { MODEL_CATEGORY } from '@/components/chat/chat-input-bar-config'
 import { SkillFilesProvider } from '@/components/chat/skill-file-links'
+import { openChangesTab } from '@/components/shell/column-tab-focus'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
@@ -54,12 +55,14 @@ import { BrowserConsentCard } from './BrowserConsentCard'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
-import { ChatStatusPill } from './ChatStatusPill'
-import { CHAT_GUTTER_X } from './chat-layout'
+import { ChatStatusChips } from './ChatStatusChips'
+import { ChatStoppedNotice } from './ChatStoppedNotice'
+import { CHAT_GUTTER_X, COMPOSER_CARD_CLASS } from './chat-layout'
 import { ChatStarters } from './chat-start'
 import { buildTimeline, consolidateThoughtGroups, spliceReloadMarker } from './chat-timeline'
 import { ClaudeLimitNotice } from './claude-account/ClaudeLimitNotice'
 import { ClaudeSignInAction } from './claude-account/ClaudeSignInAction'
+import { isAtLimit, useClaudeLimit } from './claude-account/use-claude-limit'
 import type { SelectionContextInsertRequest } from './composer/insert-selection-context'
 import { ElicitationPrompt } from './ElicitationPrompt'
 import { PendingRestartBanner } from './PendingRestartBanner'
@@ -241,6 +244,8 @@ export function AgentChatPanel({
   const cancelPrompt = useAcpStore((s) => s.cancelPrompt)
   const removeQueuedPrompt = useAcpStore((s) => s.removeQueuedPrompt)
   const sendQueuedPromptNow = useAcpStore((s) => s.sendQueuedPromptNow)
+  const moveQueuedPrompt = useAcpStore((s) => s.moveQueuedPrompt)
+  const clearQueuedPrompts = useAcpStore((s) => s.clearQueuedPrompts)
   const retryCrashedSession = useAcpStore((s) => s.retryCrashedSession)
   // A turn error (auth required, timeout) can retire the chat's agent while
   // the chat itself stays live with its error banner.
@@ -395,6 +400,9 @@ export function AgentChatPanel({
   // Composer seed (edit a message / pick a starter prompt) + dismissed-error tracking.
   const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null)
   const [dismissedError, setDismissedError] = useState<string | null>(null)
+  // At the usage limit, the limit dock replaces the provider's quota error.
+  const claudeLimit = useClaudeLimit(sessionId)
+  const atClaudeLimit = claudeLimit !== null && isAtLimit(claudeLimit.limit)
   const seedComposer = useCallback((text: string) => setSeed({ text, nonce: Date.now() }), [])
   const [contextInsert, setContextInsert] = useState<SelectionContextInsertRequest>()
   const addSelectionContext = useCallback(
@@ -408,6 +416,15 @@ export function AgentChatPanel({
       removeQueuedPrompt(sessionId, queueId)
     },
     [removeQueuedPrompt, sessionId]
+  )
+
+  const handleMoveQueued = useCallback(
+    (queueId: string, toIndex: number) => moveQueuedPrompt(sessionId, queueId, toIndex),
+    [moveQueuedPrompt, sessionId]
+  )
+  const handleClearQueued = useCallback(
+    () => clearQueuedPrompts(sessionId),
+    [clearQueuedPrompts, sessionId]
   )
 
   const handleSendQueuedNow = useCallback(
@@ -661,7 +678,7 @@ export function AgentChatPanel({
   // Desktop + web parity: the open-in-editor chain is transport-agnostic —
   // where `/fs/info` is loopback-guarded on remote peers, resolution falls
   // back to the deliberately unguarded `/fs/read` open path (the same one
-  // the changed-files list in ChatStatusPill uses).
+  // the changed-files list in ChatStatusChips uses).
   const projects = useProjectStore((state) => state.projects)
   const filePathContext = useMemo(
     () => ({
@@ -736,6 +753,24 @@ export function AgentChatPanel({
   // layout (the starters' `flex-1`) is unchanged. The hook is also above the
   // early returns: the wrapper may mount long after the first render.
   const dockRef = useDockClearance(isMobileShell && isVisible)
+  // Status chips (subagents, background commands, changes) above the
+  // composer card, or above the question card while one shows.
+  const renderStatusChips = (className?: string): React.ReactNode =>
+    session ? (
+      <ChatStatusChips
+        className={className}
+        sessionId={session.id}
+        cwd={session.cwd}
+        toolCalls={toolCalls}
+        messages={messages}
+        turnActive={session.activeTurn}
+        onOpenGitChanges={(opener) =>
+          isMobileShell ? openGitSheet(session.cwd, opener) : openChangesTab(session.projectId)
+        }
+        hidden={(isMobileShell && osk.isOskOpen) || showTransportOverlay}
+        isVisible={isVisible}
+      />
+    ) : null
   const dockClassName = isMobileShell ? 'flex shrink-0 flex-col' : 'contents'
 
   // An automatic resume keeps the composer (and the draft being typed)
@@ -828,6 +863,53 @@ export function AgentChatPanel({
     const pane = findPaneContainingTab(workspace.root, agentChatTabId(session.id))
     if (pane) workspace.showAgentLauncher(pane.id)
   }
+  // The composer dock shows one notice at a time: a stopped chat (with the
+  // failed resume as its reason), else the usage limit, else a turn error.
+  const showStoppedNotice =
+    isClosed &&
+    !isResumableStop &&
+    !isOpeningHistory &&
+    !isLaunchingSession &&
+    !discoveredReopenContext &&
+    (hasHistoryEntry || codexSignedOut)
+  const errorNotice = (
+    <ChatErrorNotice
+      message={atClaudeLimit ? null : activeError}
+      title={isClosed ? 'This chat stopped.' : undefined}
+      code={session.lastErrorCode}
+      data={session.lastErrorData}
+      onRetry={canOfferNoticeRetry ? handleRetry : undefined}
+      retryLabel={
+        !session.launchConfigId && (session.status === 'error' || session.status === 'closed')
+          ? 'Resume chat'
+          : 'Retry'
+      }
+      onDismiss={() => setDismissedError(session.lastError)}
+    />
+  )
+  const composerNotice = showStoppedNotice ? (
+    <ChatStoppedNotice
+      reason={codexSignedOut ? CODEX_CLI_SIGNED_OUT_MESSAGE : activeError}
+      actionLabel={codexSignedOut ? 'Sign in' : 'Resume chat'}
+      onAction={() => {
+        if (codexSignedOut) {
+          openCodexSignIn()
+          return
+        }
+        if (isClosedResumeFailure && activeError) {
+          handleRetry()
+          return
+        }
+        resumeStoppedChat()
+      }}
+      onNewChat={codexSignedOut ? undefined : openCodexSignIn}
+      extraAction={codexSignedOut ? undefined : <ClaudeSignInAction sessionId={sessionId} />}
+    />
+  ) : atClaudeLimit && !isClosed ? (
+    <ClaudeLimitNotice sessionId={sessionId} />
+  ) : (
+    errorNotice
+  )
 
   const chat = (
     // biome-ignore lint/a11y/noStaticElementInteractions: onFocus / onBlur only observe bubbled focus to track approval prompts; the root is not itself interactive
@@ -877,30 +959,6 @@ export function AgentChatPanel({
             </button>
           </div>
         )}
-      {isClosed &&
-        !isResumableStop &&
-        !isOpeningHistory &&
-        !isLaunchingSession &&
-        !discoveredReopenContext &&
-        (hasHistoryEntry || codexSignedOut) && (
-          <div className="flex items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
-            <span>{codexSignedOut ? CODEX_CLI_SIGNED_OUT_MESSAGE : 'This chat stopped.'}</span>
-            {!codexSignedOut && <ClaudeSignInAction sessionId={sessionId} />}
-            <button
-              type="button"
-              onClick={() => {
-                if (codexSignedOut) {
-                  openCodexSignIn()
-                  return
-                }
-                resumeStoppedChat()
-              }}
-              className="inline-flex min-h-11 items-center rounded-md border border-warning/40 px-3 text-xs font-medium transition-colors hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
-            >
-              {codexSignedOut ? 'Sign in' : 'Resume chat'}
-            </button>
-          </div>
-        )}
       {showTransportOverlay && (
         <div
           className="pointer-events-none absolute right-2 top-2 z-20 flex items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-2 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm"
@@ -917,18 +975,6 @@ export function AgentChatPanel({
           <span>{hostOffline ? 'Host offline' : 'Reconnecting…'}</span>
         </div>
       )}
-      <ChatErrorNotice
-        message={activeError}
-        code={session.lastErrorCode}
-        data={session.lastErrorData}
-        onRetry={canOfferNoticeRetry ? handleRetry : undefined}
-        retryLabel={
-          !session.launchConfigId && (session.status === 'error' || session.status === 'closed')
-            ? 'Resume chat'
-            : 'Retry'
-        }
-        onDismiss={() => setDismissedError(session.lastError)}
-      />
       <PlanPanel
         key={`plan-${session.id}`}
         entries={plan}
@@ -947,22 +993,6 @@ export function AgentChatPanel({
             onRetry={canOfferRetry ? handleRetry : undefined}
           />
         </SkillFilesProvider>
-        {/* Top-right status slot: floats over the transcript (clear of the
-            scrollbar gutter) so status items take no layout height. */}
-        <div className="pointer-events-none absolute right-4 top-3.5 z-20 flex items-center gap-1.5">
-          <ChatStatusPill
-            sessionId={session.id}
-            cwd={session.cwd}
-            toolCalls={toolCalls}
-            messages={messages}
-            turnActive={session.activeTurn}
-            onOpenGitChanges={
-              isMobileShell ? (opener) => openGitSheet(session.cwd, opener) : undefined
-            }
-            hidden={(isMobileShell && osk.isOskOpen) || showTransportOverlay}
-            isVisible={isVisible}
-          />
-        </div>
       </div>
       <ReloadChatConfirmDialog sessionId={sessionId} />
       {showPromptReconcile && promptCommand && session.activeTurn && (
@@ -1006,6 +1036,16 @@ export function AgentChatPanel({
           hide until the prompt resolves. */}
       {!isClosed && (pendingElicitation || pendingQuestion) ? (
         <div ref={dockRef} data-chat-dock="true" className={dockClassName}>
+          <div className={CHAT_GUTTER_X}>
+            <div className="mx-auto w-full max-w-3xl">{renderStatusChips('pt-3 pb-0')}</div>
+          </div>
+          {activeError && !atClaudeLimit && (
+            <div className={`${CHAT_GUTTER_X} pt-3`}>
+              <div className={`mx-auto w-full max-w-3xl overflow-hidden ${COMPOSER_CARD_CLASS}`}>
+                {errorNotice}
+              </div>
+            </div>
+          )}
           {pendingElicitation && (
             <ElicitationPrompt
               key={pendingElicitation.requestId}
@@ -1034,18 +1074,16 @@ export function AgentChatPanel({
         </div>
       ) : (
         <div ref={dockRef} data-chat-dock="true" className={dockClassName}>
-          {!isClosed && (
-            <div className={CHAT_GUTTER_X}>
-              <div className="mx-auto w-full max-w-3xl">
-                <ClaudeLimitNotice sessionId={sessionId} />
-              </div>
-            </div>
-          )}
           <ChatInputBar
             session={composerSession ?? session}
             projectRoot={skillsProjectRoot}
             busy={sessionTurnBusy(session)}
             disabled={isClosed && !isResumableStop}
+            notice={composerNotice}
+            statusRow={renderStatusChips()}
+            disabledPlaceholder={
+              showStoppedNotice && !codexSignedOut ? 'Resume the chat to send a message' : undefined
+            }
             controlsDisabled={isClosed}
             onDraftStart={isResumableStop ? startAutoResume : undefined}
             imageCapable={imageCapable}
@@ -1057,6 +1095,8 @@ export function AgentChatPanel({
             permission={pendingPermission && !isClosed ? pendingPermission : null}
             onRemoveQueued={handleRemoveQueued}
             onSendQueuedNow={handleSendQueuedNow}
+            onMoveQueued={handleMoveQueued}
+            onClearQueued={handleClearQueued}
             commands={commands}
             configOptions={armedOptions ? armedOptions.configOptions : session.configOptions}
             modes={armedOptions ? armedOptions.modes : session.modes}

@@ -92,7 +92,7 @@ vi.mock('sonner', () => ({
   })
 }))
 
-import { ChatStatusPill } from './ChatStatusPill'
+import { ChatStatusChips } from './ChatStatusChips'
 
 /** The pill with no subagents: only the changed files show. */
 function Pill(props: {
@@ -102,7 +102,7 @@ function Pill(props: {
   onOpenGitChanges?: (opener: HTMLElement) => void
 }) {
   return (
-    <ChatStatusPill
+    <ChatStatusChips
       sessionId="s1"
       messages={[]}
       {...props}
@@ -111,8 +111,8 @@ function Pill(props: {
   )
 }
 
-const pill = () => screen.getByRole('button', { name: /^Session status:/ })
-const noPill = () => expect(screen.queryByRole('button', { name: /^Session status:/ })).toBeNull()
+const pill = () => screen.getByRole('button', { name: /^Changes:/ })
+const noPill = () => expect(screen.queryByRole('button', { name: /^Changes:/ })).toBeNull()
 
 function makeToolCall(overrides: Partial<ToolCall> & { kind?: string; path?: string }): ToolCall {
   const kind = overrides.kind ?? 'edit'
@@ -138,7 +138,7 @@ const THREE_EDITS = [
   makeToolCall({ toolCallId: 'e3', path: 'src/c.ts' })
 ]
 
-describe('ChatStatusPill changed files', () => {
+describe('ChatStatusChips changed files', () => {
   beforeEach(() => {
     mobileRef.current = false
     openFileRef.current = vi.fn(async () => {})
@@ -170,7 +170,7 @@ describe('ChatStatusPill changed files', () => {
       makeToolCall({ toolCallId: 'e2', path: 'src/bar.ts' })
     ])
     expect(pill()).toBeInTheDocument()
-    expect(pill()).toHaveAccessibleName('Session status: 2 changed files')
+    expect(pill()).toHaveAccessibleName('Changes: 2 changed files')
   })
 
   it('shows total +/- counts on the header bar', () => {
@@ -203,6 +203,9 @@ describe('ChatStatusPill changed files', () => {
     ])
     fireEvent.click(pill())
     await screen.findByText('foo.ts')
+    // Five rows first, then the rest behind "View all".
+    expect(screen.getAllByTestId('file-icon')).toHaveLength(5)
+    fireEvent.click(screen.getByRole('button', { name: 'View all 6 files' }))
     const icons = screen.getAllByTestId('file-icon').map((el) => el.dataset.name)
     expect(icons).toEqual(['foo.ts', 'mod.RS', 'spec.test.md', 'Makefile', '.gitignore', 'App.TSX'])
   })
@@ -241,7 +244,7 @@ describe('ChatStatusPill changed files', () => {
       makeToolCall({ toolCallId: 'e1', path: 'c:/repo/src/foo.ts' }),
       makeToolCall({ toolCallId: 'e2', path: 'C:/repo/src/foo.ts' })
     ])
-    expect(pill()).toHaveAccessibleName('Session status: 1 changed file')
+    expect(pill()).toHaveAccessibleName('Changes: 1 changed file')
   })
 
   it('merges a lowercase-drive path with a cwd-relative one', async () => {
@@ -252,7 +255,7 @@ describe('ChatStatusPill changed files', () => {
       ],
       'E:\\repo'
     )
-    expect(pill()).toHaveAccessibleName('Session status: 1 changed file')
+    expect(pill()).toHaveAccessibleName('Changes: 1 changed file')
     fireEvent.click(pill())
     const row = await screen.findByRole('button', { name: /foo\.ts/i })
     fireEvent.click(row)
@@ -324,13 +327,13 @@ describe('ChatStatusPill changed files', () => {
       makeToolCall({ toolCallId: 'e3', path: 'src/foo.ts' })
     ])
     // Badge counts unique files; header totals still sum every call.
-    expect(pill()).toHaveAccessibleName('Session status: 1 changed file')
+    expect(pill()).toHaveAccessibleName('Changes: 1 changed file')
     fireEvent.click(pill())
     // Exactly one row (findByText throws on multiple matches) showing +3 −3.
     await screen.findByText('foo.ts')
-    // One occurrence each in the row, the popover header and the pill totals.
-    expect(screen.getAllByText('+3')).toHaveLength(3)
-    expect(screen.getAllByText('−3')).toHaveLength(3)
+    // One occurrence each in the row and the chip totals.
+    expect(screen.getAllByText('+3')).toHaveLength(2)
+    expect(screen.getAllByText('−3')).toHaveLength(2)
   })
 
   it('merges a relative and an absolute path to the same file under cwd', async () => {
@@ -338,7 +341,7 @@ describe('ChatStatusPill changed files', () => {
       makeToolCall({ toolCallId: 'e1', path: 'src/foo.ts' }),
       makeToolCall({ toolCallId: 'e2', path: '/work/src/foo.ts' })
     ])
-    expect(pill()).toHaveAccessibleName('Session status: 1 changed file')
+    expect(pill()).toHaveAccessibleName('Changes: 1 changed file')
     fireEvent.click(pill())
     const row = await screen.findByRole('button', { name: /foo\.ts/i })
     fireEvent.click(row)
@@ -356,7 +359,7 @@ describe('ChatStatusPill changed files', () => {
       ],
       ''
     )
-    expect(pill()).toHaveAccessibleName('Session status: 1 changed file')
+    expect(pill()).toHaveAccessibleName('Changes: 1 changed file')
     fireEvent.click(pill())
     const row = await screen.findByRole('button', { name: /foo\.ts/i })
     expect(row).toHaveAttribute('title', 'src/foo.ts')
@@ -371,7 +374,7 @@ describe('ChatStatusPill changed files', () => {
       makeToolCall({ toolCallId: 'm1', kind: 'move', path: 'b.ts' }),
       makeToolCall({ toolCallId: 'e1', kind: 'edit', path: 'b.ts' })
     ])
-    expect(pill()).toHaveAccessibleName('Session status: 1 changed file')
+    expect(pill()).toHaveAccessibleName('Changes: 1 changed file')
     fireEvent.click(pill())
     expect(await screen.findByText('b.ts')).toBeInTheDocument()
   })
@@ -381,7 +384,7 @@ describe('ChatStatusPill changed files', () => {
       makeToolCall({ toolCallId: 'd1', kind: 'delete', path: 'a.ts', content: [] }),
       makeToolCall({ toolCallId: 'e1', kind: 'edit', path: 'a.ts' })
     ])
-    expect(pill()).toHaveAccessibleName('Session status: 1 changed file')
+    expect(pill()).toHaveAccessibleName('Changes: 1 changed file')
     fireEvent.click(pill())
     expect(await screen.findByText('a.ts')).toBeInTheDocument()
   })
@@ -422,7 +425,7 @@ describe('ChatStatusPill changed files', () => {
       makeToolCall({ toolCallId: 'e3', path: 'src//deep/../foo.ts' }),
       makeToolCall({ toolCallId: 'e4', path: 'src/foo.ts/' })
     ])
-    expect(pill()).toHaveAccessibleName('Session status: 1 changed file')
+    expect(pill()).toHaveAccessibleName('Changes: 1 changed file')
     fireEvent.click(pill())
     // The row's aria-label carries the canonical resolved path.
     expect(
@@ -457,7 +460,7 @@ describe('ChatStatusPill changed files', () => {
       makeToolCall({ toolCallId: 'd1', kind: 'delete', path: 'old.ts' }),
       makeToolCall({ toolCallId: 'm1', kind: 'move', path: 'moved.ts' })
     ])
-    expect(pill()).toHaveAccessibleName('Session status: 2 changed files')
+    expect(pill()).toHaveAccessibleName('Changes: 2 changed files')
   })
 
   it('persists across agent replies (does not clear on turn end)', () => {
@@ -476,7 +479,7 @@ describe('ChatStatusPill changed files', () => {
         locations: [{ path: 'src/from-locations.ts' }]
       })
     ])
-    expect(pill()).toHaveAccessibleName('Session status: 1 changed file')
+    expect(pill()).toHaveAccessibleName('Changes: 1 changed file')
   })
 
   it('prefers locations path over rawInput path', () => {
@@ -507,12 +510,12 @@ describe('ChatStatusPill changed files', () => {
         restoredSummary: true
       }) as ToolCall
     renderPanel([summary('r1', 'src/a.ts', 3, 1), summary('r2', 'src/a.ts', 2, 0)])
-    expect(pill()).toHaveAccessibleName('Session status: 1 changed file')
+    expect(pill()).toHaveAccessibleName('Changes: 1 changed file')
     fireEvent.click(pill())
     await screen.findByText('a.ts')
-    // One occurrence each in the row, the popover header and the pill totals.
-    expect(screen.getAllByText('+5')).toHaveLength(3)
-    expect(screen.getAllByText('\u22121')).toHaveLength(3)
+    // One occurrence each in the row and the chip totals.
+    expect(screen.getAllByText('+5')).toHaveLength(2)
+    expect(screen.getAllByText('\u22121')).toHaveLength(2)
   })
 
   it('shows panel when locations is present even without diff content', () => {
@@ -529,7 +532,7 @@ describe('ChatStatusPill changed files', () => {
   })
 })
 
-describe('ChatStatusPill changed-file kind', () => {
+describe('ChatStatusChips changed-file kind', () => {
   beforeEach(() => {
     mobileRef.current = false
     openFileRef.current = vi.fn(async () => {})
@@ -662,37 +665,47 @@ describe('ChatStatusPill changed-file kind', () => {
   })
 })
 
-describe('ChatStatusPill changed files on the desktop shell', () => {
+describe('ChatStatusChips changed files on the desktop shell', () => {
   beforeEach(() => {
     mobileRef.current = false
   })
 
-  it('opens a popover of the files with no tab bar and no Git action', () => {
+  it('opens a popover of the files above the chip, with no Review action unless asked', () => {
     renderPanel(THREE_EDITS)
-    expect(pill()).toHaveTextContent('3+3 −3')
+    expect(pill()).toHaveTextContent('Changes+3 −3')
     fireEvent.click(pill())
     const popover = screen.getByRole('dialog', { name: 'Changed files' })
     expect(popover).not.toHaveAttribute('data-sheet')
-    expect(within(popover).queryByRole('tablist')).toBeNull()
+    expect(popover).toHaveAttribute('data-side', 'top')
+    expect(within(popover).getByText(/^3 files/)).toBeInTheDocument()
     expect(within(popover).getByRole('button', { name: '/work/src/b.ts, Modified' })).toBeVisible()
-    expect(screen.queryByRole('button', { name: 'Open Git changes' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Review changes' })).toBeNull()
+  })
+
+  it('opens the Git view from Review changes and closes the popover', () => {
+    const onOpenGitChanges = vi.fn()
+    render(<Pill cwd="/work" toolCalls={THREE_EDITS} onOpenGitChanges={onOpenGitChanges} />)
+    const trigger = pill()
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('button', { name: 'Review changes' }))
+    expect(onOpenGitChanges).toHaveBeenCalledWith(trigger)
+    expect(screen.queryByRole('dialog', { name: 'Changed files' })).toBeNull()
   })
 })
 
-describe('ChatStatusPill changed files on the phone shell', () => {
+describe('ChatStatusChips changed files on the phone shell', () => {
   beforeEach(() => {
     mobileRef.current = true
     openFileRef.current = vi.fn(async () => {})
     addEditorTabRef.current = vi.fn()
   })
 
-  it('shows only the file count on the pill and the files in a bottom sheet', () => {
+  it('shows the files in a bottom sheet', () => {
     renderPanel(THREE_EDITS)
-    expect(pill()).toHaveTextContent(/^3$/)
     fireEvent.click(pill())
     const sheet = screen.getByRole('dialog', { name: 'Changed files' })
     expect(sheet).toHaveAttribute('data-sheet')
-    expect(within(sheet).getByText('+3')).toBeInTheDocument()
+    expect(within(sheet).getByText(/^3 files/)).toBeInTheDocument()
     expect(within(sheet).getByRole('button', { name: '/work/src/c.ts, Modified' })).toBeVisible()
   })
 
@@ -702,8 +715,7 @@ describe('ChatStatusPill changed files on the phone shell', () => {
     const trigger = pill()
     fireEvent.click(trigger)
     const sheet = screen.getByRole('dialog', { name: 'Changed files' })
-    const git = within(sheet).getByRole('button', { name: 'Open Git changes' })
-    expect(git).toHaveTextContent('Git')
+    const git = within(sheet).getByRole('button', { name: 'Review changes' })
 
     fireEvent.click(git)
     expect(onOpenGitChanges).toHaveBeenCalledTimes(1)
@@ -729,7 +741,7 @@ describe('ChatStatusPill changed files on the phone shell', () => {
   })
 })
 
-describe('ChatStatusPill changed files with git as the source of truth', () => {
+describe('ChatStatusChips changed files with git as the source of truth', () => {
   type Entry = [path: string, status: GitStatusDetail['status'], added: number, removed: number]
 
   /** What git reports for `/work` on the next status and diff-stat reads. */
@@ -773,7 +785,7 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
     // The session edited a.ts and new.ts; other.ts is dirty from outside the session.
     render(panel([edit('e1', 'src/a.ts'), edit('e2', '/work/src/new.ts')]))
     expect(await screen.findByText('+8')).toBeInTheDocument()
-    expect(pill()).toHaveAccessibleName('Session status: 2 changed files')
+    expect(pill()).toHaveAccessibleName('Changes: 2 changed files')
     expect(screen.getByText('−1')).toBeInTheDocument()
     fireEvent.click(pill())
     const row = await screen.findByRole('button', { name: '/work/src/new.ts, Untracked' })
@@ -814,7 +826,7 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
       ])
     )
     expect(await screen.findByText('+3')).toBeInTheDocument()
-    expect(pill()).toHaveAccessibleName('Session status: 2 changed files')
+    expect(pill()).toHaveAccessibleName('Changes: 2 changed files')
   })
 
   it('lists every file of a multi-file edit call that has no locations', async () => {
@@ -837,7 +849,7 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
       ])
     )
     expect(await screen.findByText('+7')).toBeInTheDocument()
-    expect(pill()).toHaveAccessibleName('Session status: 3 changed files')
+    expect(pill()).toHaveAccessibleName('Changes: 3 changed files')
   })
 
   it('drops files that the agent committed', async () => {
@@ -865,7 +877,7 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
     setGit([['src/b.ts', 'modified', 2, 0]])
     await act(() => useGitStatusStore.getState().discardFile('/work', 'src/a.ts'))
     expect(await screen.findByText('+2')).toBeInTheDocument()
-    expect(pill()).toHaveAccessibleName('Session status: 1 changed file')
+    expect(pill()).toHaveAccessibleName('Changes: 1 changed file')
     expect(screen.queryByText('−1')).not.toBeInTheDocument()
   })
 
@@ -930,7 +942,7 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
   it('shows a file deleted in git as a deleted row that does not open', async () => {
     setGit([['src/gone.ts', 'deleted', 0, 9]])
     render(panel([makeToolCall({ toolCallId: 'd1', kind: 'delete', path: 'src/gone.ts' })]))
-    fireEvent.click(await screen.findByRole('button', { name: /^Session status:/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^Changes:/ }))
     expect(
       await screen.findByRole('group', { name: 'Deleted: /work/src/gone.ts' })
     ).toBeInTheDocument()
@@ -939,7 +951,7 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
   it('opens a git row in the editor', async () => {
     setGit([['src/a.ts', 'modified', 1, 0]])
     render(panel([edit('e1', 'src/a.ts')]))
-    fireEvent.click(await screen.findByRole('button', { name: /^Session status:/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^Changes:/ }))
     fireEvent.click(await screen.findByRole('button', { name: '/work/src/a.ts, Modified' }))
     await waitFor(() => expect(openFileRef.current).toHaveBeenCalledWith('/work/src/a.ts'))
   })
@@ -969,7 +981,7 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
         ]}
       />
     )
-    fireEvent.click(await screen.findByRole('button', { name: /^Session status:/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^Changes:/ }))
     expect(
       await screen.findByRole('button', { name: '/work/sub/file.ts, Modified' })
     ).toBeInTheDocument()
@@ -982,7 +994,7 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
     ])
     gitApiMock.getDiffStat.mockRejectedValue(new Error('diff stat timed out'))
     render(panel([edit('e1', 'src/a.ts')]))
-    fireEvent.click(await screen.findByRole('button', { name: /^Session status:/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^Changes:/ }))
     expect(
       await screen.findByRole('button', { name: '/work/src/a.ts, Modified' })
     ).toBeInTheDocument()
@@ -991,7 +1003,7 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
   it('falls back to the agent tool calls when the cwd is not a git repository', async () => {
     seedNotARepo('/work')
     render(panel([edit('e1', 'src/a.ts')]))
-    expect(pill()).toHaveAccessibleName('Session status: 1 changed file')
+    expect(pill()).toHaveAccessibleName('Changes: 1 changed file')
     await waitFor(() =>
       expect(logFrontendErrorRef.current).toHaveBeenCalledWith(
         expect.objectContaining({ level: 'info', source: 'useGitChangedFiles' })

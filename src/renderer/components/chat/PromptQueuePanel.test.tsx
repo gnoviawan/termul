@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import type { QueuedPrompt } from '@/stores/acp-store'
 
 const { mobileRef } = vi.hoisted(() => ({ mobileRef: { current: false } }))
@@ -13,16 +14,29 @@ function queued(id: string, text: string): QueuedPrompt {
   return { id, createdAt: 1, blocks: [{ type: 'text', text }] }
 }
 
-const ITEMS = [queued('q1', 'Fix the lint errors'), queued('q2', 'Then update the docs')]
+const ITEMS = [
+  queued('q1', 'Fix the lint errors'),
+  queued('q2', 'Then update the docs'),
+  queued('q3', 'Open a PR')
+]
 
 function renderPanel(props: Partial<React.ComponentProps<typeof PromptQueuePanel>> = {}) {
-  const onRemove = vi.fn()
-  const onSendNow = vi.fn()
+  const handlers = {
+    onRemove: vi.fn(),
+    onSendNow: vi.fn(),
+    onMove: vi.fn(),
+    onClear: vi.fn(),
+    onEdit: vi.fn()
+  }
   const view = render(
-    <PromptQueuePanel items={ITEMS} onRemove={onRemove} onSendNow={onSendNow} {...props} />
+    <TooltipProvider>
+      <PromptQueuePanel items={ITEMS} {...handlers} {...props} />
+    </TooltipProvider>
   )
-  return { ...view, onRemove, onSendNow }
+  return { ...view, ...handlers }
 }
+
+const rows = () => screen.getAllByRole('listitem')
 
 describe('PromptQueuePanel', () => {
   beforeEach(() => {
@@ -30,111 +44,79 @@ describe('PromptQueuePanel', () => {
   })
 
   it('renders nothing for an empty queue', () => {
-    const { container } = renderPanel({ items: [] })
-    expect(container.firstChild).toBeNull()
+    renderPanel({ items: [] })
+    expect(screen.queryByTestId('prompt-queue')).toBeNull()
   })
 
-  describe('desktop baseline', () => {
-    it('starts expanded with the shipped action names', () => {
-      renderPanel()
-      const trigger = screen.getByRole('button', { name: '2 Queued' })
-      expect(trigger).toHaveAttribute('aria-expanded', 'true')
-      expect(trigger).not.toHaveClass('min-h-11')
-      expect(screen.getAllByRole('button', { name: 'Send now' })).toHaveLength(2)
-      expect(screen.getAllByRole('button', { name: 'Remove from queue' })).toHaveLength(2)
-    })
-
-    it('matches the Changed files panel: no press-scale, same text sizes', () => {
-      renderPanel()
-      const trigger = screen.getByRole('button', { name: '2 Queued' })
-      // The global press-scale (index.css) would shrink the header on hold.
-      expect(trigger).toHaveAttribute('data-press-feedback', 'off')
-      expect(trigger).toHaveClass('text-xs', 'active:bg-secondary/80', 'select-none')
-      expect(trigger).not.toHaveClass('text-sm')
-      const row = screen.getByText('Fix the lint errors')
-      expect(row).toHaveClass('text-2xs')
-      expect(row).not.toHaveClass('text-sm')
-    })
-
-    it('shows the Changed files keyboard-focus ring on the header', () => {
-      renderPanel()
-      expect(screen.getByRole('button', { name: '2 Queued' })).toHaveClass(
-        'focus-visible:bg-secondary/60',
-        'focus-visible:outline-hidden',
-        'focus-visible:ring-2',
-        'focus-visible:ring-inset',
-        'focus-visible:ring-focus-ring'
-      )
-    })
-
-    it('keeps the forced-colors focus outline inside the header so the composer cannot cover it', () => {
-      renderPanel({ defaultOpen: false })
-      expect(screen.getByRole('button', { name: '2 Queued' })).toHaveClass(
-        'forced-colors:focus-visible:-outline-offset-2'
-      )
-    })
-
-    it('starts collapsed with defaultOpen={false}', () => {
-      renderPanel({ defaultOpen: false })
-      expect(screen.getByRole('button', { name: '2 Queued' })).toHaveAttribute(
-        'aria-expanded',
-        'false'
-      )
-    })
+  it('shows the count in a header that collapses the list', () => {
+    renderPanel()
+    const header = screen.getByRole('button', { name: '3 queued' })
+    expect(header).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(header)
+    expect(header).toHaveAttribute('aria-expanded', 'false')
   })
 
-  describe('mobile shell', () => {
-    beforeEach(() => {
-      mobileRef.current = true
+  it('starts collapsed with defaultOpen={false}', () => {
+    renderPanel({ defaultOpen: false })
+    expect(screen.getByRole('button', { name: '3 queued' })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+  })
+
+  it('clears the queue from the header', () => {
+    const { onClear } = renderPanel()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear queue' }))
+    expect(onClear).toHaveBeenCalledTimes(1)
+  })
+
+  it('steers, edits and removes a row', () => {
+    const { onSendNow, onEdit, onRemove } = renderPanel()
+    const second = within(rows()[1])
+    fireEvent.click(second.getByRole('button', { name: 'Steer' }))
+    expect(onSendNow).toHaveBeenCalledWith('q2')
+    fireEvent.click(second.getByRole('button', { name: 'Edit' }))
+    expect(onEdit).toHaveBeenCalledWith(ITEMS[1], 'Then update the docs')
+    fireEvent.click(second.getByRole('button', { name: 'Remove from queue' }))
+    expect(onRemove).toHaveBeenCalledWith('q2')
+  })
+
+  it('offers no Edit for a prompt with files, and names it after the file', () => {
+    const withFile: QueuedPrompt = {
+      id: 'f1',
+      createdAt: 1,
+      blocks: [{ type: 'resource_link', uri: 'file:///w/notes.md', name: 'notes.md' }]
+    } as QueuedPrompt
+    renderPanel({ items: [withFile] })
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull()
+    expect(screen.getByTitle('notes.md')).toBeInTheDocument()
+  })
+
+  it('reorders a row with the arrow keys on its handle and announces the place', () => {
+    const { onMove } = renderPanel()
+    const handle = screen.getByRole('button', { name: 'Reorder: Then update the docs' })
+    fireEvent.keyDown(handle, { key: 'ArrowUp' })
+    expect(onMove).toHaveBeenCalledWith('q2', 0)
+    expect(screen.getByText('Moved to place 1 of 3')).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Reorder: Fix the lint errors' }), {
+      key: 'ArrowUp'
     })
+    // Already first: no move.
+    expect(onMove).toHaveBeenCalledTimes(1)
+  })
 
-    it('shows a collapsed touch-height "2 Queued" trigger with defaultOpen={false}', () => {
-      renderPanel({ defaultOpen: false })
-      const trigger = screen.getByRole('button', { name: '2 Queued' })
-      expect(trigger).toHaveAttribute('aria-expanded', 'false')
-      expect(trigger).toHaveClass('min-h-11')
-    })
+  it('has no drag handle for a single prompt or without onMove', () => {
+    const { unmount } = renderPanel({ items: [ITEMS[0]] })
+    expect(screen.queryByRole('button', { name: /^Reorder/ })).toBeNull()
+    unmount()
+    renderPanel({ onMove: undefined })
+    expect(screen.queryByRole('button', { name: /^Reorder/ })).toBeNull()
+  })
 
-    it('expands on tap and names each action after its queued text', async () => {
-      const { onSendNow, onRemove } = renderPanel({ defaultOpen: false })
-      fireEvent.click(screen.getByRole('button', { name: '2 Queued' }))
-
-      const sendFirst = await screen.findByRole('button', {
-        name: 'Send now: Fix the lint errors'
-      })
-      const removeSecond = screen.getByRole('button', {
-        name: 'Remove from queue: Then update the docs'
-      })
-      await waitFor(() => {
-        expect(screen.getByRole('button', { name: 'Send now: Then update the docs' })).toBeVisible()
-        expect(
-          screen.getByRole('button', { name: 'Remove from queue: Fix the lint errors' })
-        ).toBeVisible()
-      })
-
-      fireEvent.click(sendFirst)
-      expect(onSendNow).toHaveBeenCalledWith('q1')
-      fireEvent.click(removeSecond)
-      expect(onRemove).toHaveBeenCalledWith('q2')
-    })
-
-    it('falls back to the attachment name, then a placeholder, as the action object', () => {
-      renderPanel({
-        items: [
-          {
-            id: 'q3',
-            createdAt: 1,
-            blocks: [
-              { type: 'resource_link', uri: 'file:///work/notes.md', name: 'notes.md' }
-            ] as never
-          },
-          queued('q4', '')
-        ]
-      })
-      expect(screen.getByRole('button', { name: 'Send now: notes.md' })).toBeInTheDocument()
-      expect(
-        screen.getByRole('button', { name: 'Remove from queue: (queued message)' })
-      ).toBeInTheDocument()
-    })
+  it('names each action after its row on the phone', () => {
+    mobileRef.current = true
+    renderPanel()
+    expect(screen.getByRole('button', { name: 'Steer: Fix the lint errors' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove from queue: Open a PR' })).toBeInTheDocument()
   })
 })

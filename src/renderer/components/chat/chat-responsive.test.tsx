@@ -13,7 +13,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import type { AcpSession } from '@/stores/acp-store'
-import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
 import { CHAT_GUTTER_X, NARROW_PANE_PX } from './chat-layout'
@@ -221,12 +220,9 @@ describe('Story 5.1 responsive chat layout', () => {
     expect(container.innerHTML).toContain('@[400px]:px-5')
   })
 
-  it('aligns notice / plan gutters with CHAT_GUTTER_X', () => {
-    const error = render(<ChatErrorNotice message="boom" onDismiss={vi.fn()} />)
-    expect(error.container.innerHTML).toContain('max-w-3xl')
-    expect(error.container.innerHTML).toContain('@[400px]:px-5')
-    error.unmount()
-
+  it('aligns the plan gutter with CHAT_GUTTER_X', () => {
+    // The error notice lives inside the composer card, so the card's own
+    // gutter places it.
     const plan = render(
       <PlanPanel entries={[{ content: 'step', status: 'pending', priority: 'low' }]} />
     )

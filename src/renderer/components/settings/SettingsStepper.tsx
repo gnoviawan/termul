@@ -1,6 +1,6 @@
 import { forwardRef } from 'react'
 import { Minus, Plus } from '@/components/icons'
-import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
+import { FIELD_SURFACE_CLASS, FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 
 interface SettingsStepperProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'onChange'> {
@@ -50,7 +50,12 @@ export const SettingsStepper = forwardRef<HTMLDivElement, SettingsStepperProps>(
       onValueChange(snap(Math.min(max, Math.max(min, next)), step))
     return (
       <div ref={ref} className={cn('flex items-center gap-2', className)} {...props}>
-        <div className="flex h-8 items-center rounded-lg border border-field-border bg-background">
+        <div
+          className={cn(
+            'flex h-8 items-center rounded-lg transition-colors duration-150 ease-out',
+            FIELD_SURFACE_CLASS
+          )}
+        >
           <button
             type="button"
             aria-label={decrementLabel}

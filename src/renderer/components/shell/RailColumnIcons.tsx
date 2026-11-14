@@ -1,6 +1,6 @@
 import { toast } from 'sonner'
 import { FolderTree, GitBranch, Github, MessageSquare } from '@/components/icons'
-import { columnTabId } from '@/components/shell/ColumnTabs'
+import { focusPanelTab } from '@/components/shell/column-tab-focus'
 import { RailButton } from '@/components/shell/rail-button'
 import { useColumnWorkingCopy } from '@/components/shell/use-column-working-copy'
 import { CountBadge } from '@/components/ui/count-badge'
@@ -13,20 +13,6 @@ import { useSSHWorkspaceOpen } from '@/stores/ssh-store'
 import type { Project } from '@/types/project'
 
 const NEED_PROJECT = 'Open a project first'
-
-/** Frames to wait for the revealed Side panel to mount its tab bar. */
-const FOCUS_FRAMES = 10
-
-/** Focuses the Side panel's tab once it mounts (the Rail icon unmounts). */
-function focusPanelTab(tab: ShellLastColumnTab): void {
-  let frames = 0
-  const attempt = (): void => {
-    const el = document.getElementById(columnTabId(tab))
-    if (el) el.focus()
-    else if (++frames < FOCUS_FRAMES) requestAnimationFrame(attempt)
-  }
-  requestAnimationFrame(attempt)
-}
 
 /**
  * Collapsed Rail's Column tab icons (CAP-2): Chats, Explorer, Changes and GitHub.
