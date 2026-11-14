@@ -1,4 +1,4 @@
-import { act, render, renderHook, screen } from '@testing-library/react'
+import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
 import { resetChatActivity, seedChatActivity } from '@/lib/test-utils/chat-activity'
@@ -9,77 +9,7 @@ import {
 } from '@/stores/acp-store'
 import { RESUME_FAILED_PREFIX } from '@/stores/acp-store/helpers'
 import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
-import {
-  AgentChatStatusGlyphs,
-  agentChatStatusSlots,
-  useAgentChatStatusSignals
-} from './agent-chat-status'
-
-const IDLE = {
-  needsAttention: false,
-  turnBusy: false,
-  unread: false
-}
-
-describe('agentChatStatusSlots', () => {
-  it('is empty for an idle live chat', () => {
-    expect(agentChatStatusSlots(IDLE)).toEqual({
-      showWorking: false,
-      showUnread: false,
-      statuses: [],
-      statusText: ''
-    })
-  })
-
-  it('shows Working while a turn runs', () => {
-    const slots = agentChatStatusSlots({ ...IDLE, turnBusy: true })
-    expect(slots.showWorking).toBe(true)
-    expect(slots.statuses).toEqual(['Working'])
-    expect(slots.statusText).toBe('Working')
-  })
-
-  it('shows New activity for an unread chat', () => {
-    expect(agentChatStatusSlots({ ...IDLE, unread: true }).statuses).toEqual(['New activity'])
-    // A turn in flight hides the dot until it finishes.
-    expect(agentChatStatusSlots({ ...IDLE, unread: true, turnBusy: true }).showUnread).toBe(false)
-  })
-
-  it('shows Needs you alongside Working', () => {
-    const slots = agentChatStatusSlots({ ...IDLE, needsAttention: true, turnBusy: true })
-    expect(slots.statuses).toEqual(['Needs you', 'Working'])
-    expect(slots.statusText).toBe('Needs you, Working')
-  })
-
-  it('orders statuses Needs you, Working, New activity', () => {
-    expect(agentChatStatusSlots({ ...IDLE, needsAttention: true, unread: true }).statusText).toBe(
-      'Needs you, New activity'
-    )
-  })
-})
-
-describe('AgentChatStatusGlyphs', () => {
-  const NONE = { needsAttention: false, showWorking: false, showUnread: false }
-
-  it('renders nothing when no slot is active', () => {
-    const { container } = render(<AgentChatStatusGlyphs {...NONE} />)
-    expect(container).toBeEmptyDOMElement()
-  })
-
-  it('renders each glyph with its title and sr-only text', () => {
-    render(<AgentChatStatusGlyphs needsAttention showWorking={false} showUnread={false} />)
-    expect(screen.getByTitle('Needs you')).toHaveClass('text-warning')
-    expect(screen.getByText('Needs you')).toHaveClass('sr-only')
-  })
-
-  it('renders the Working spinner and the New activity primary-fill dot', () => {
-    render(<AgentChatStatusGlyphs {...NONE} showWorking />)
-    expect(screen.getByTitle('Working')).toHaveClass('size-3.5', 'text-muted-foreground')
-
-    render(<AgentChatStatusGlyphs {...NONE} showUnread />)
-    const dot = screen.getByTitle('New activity').querySelector('span[aria-hidden="true"]')
-    expect(dot).toHaveClass('bg-primary-fill', 'h-2', 'w-2', 'rounded-full')
-  })
-})
+import { useAgentChatStatusSignals } from './agent-chat-status'
 
 describe('useAgentChatStatusSignals', () => {
   beforeEach(() => {
@@ -184,10 +114,8 @@ describe('useAgentChatStatusSignals', () => {
     seedChatActivity({ s1: { unread: true, turnEnd: { seq: 5, logEpoch: 'e1' } } })
     const { result } = renderHook(() => useAgentChatStatusSignals('s1'))
 
-    const slots = agentChatStatusSlots(result.current)
-    expect(slots.showUnread).toBe(true)
-    expect(slots.showWorking).toBe(false)
-    expect(slots.statuses).toEqual(['New activity'])
+    expect(result.current.unread).toBe(true)
+    expect(result.current.turnBusy).toBe(false)
   })
 
   it.each([

@@ -6,7 +6,7 @@ import { chatTab, openWorkspace, selectProject } from './ui'
  * Shell-revamp journeys E2E on termul-server (story 30, CAP-18 / AD-15 / E6).
  *
  * These two specs walk Journey 1 and Journey 2 of EXPERIENCE.md
- * (ux-termul-2026-10-10) on the only desktop shell: Rail | main | Side panel |
+ * (ux-termul-2026-10-10) on the only desktop shell: Rail | main | right panel |
  * tool strip (Sidebar V2).
  * The suite passing is also the proof that the classic shell is gone (no
  * "Global actions" navigation).
@@ -14,7 +14,7 @@ import { chatTab, openWorkspace, selectProject } from './ui'
  * Fixtures: `proj-w` (`e2e-proj-w`) is a git repo whose `global-setup` leaves
  * two uncommitted files behind (`notes.txt` modified, `scratch.txt` untracked:
  * `+4 -1`, 2 changed files). The fake long-run agent (fake-longrun-agent.ts)
- * answers every chat; its turns run for minutes, so a chat card reads
+ * answers every chat; its turns run for minutes, so a Rail chat row reads
  * "Running" for the whole spec.
  *
  * Steps that need a real LLM, a real connection failure or a model list are
@@ -92,8 +92,6 @@ async function listWorktrees(page: Page): Promise<ListedWorktree[]> {
 
 const railNav = (page: Page): Locator => page.getByRole('navigation', { name: 'Projects' })
 const paneContents = (page: Page): Locator => page.locator('[data-pane-content]')
-const chatCard = (page: Page, title: string): Locator =>
-  page.locator(`button[data-chat-card-index][aria-label^="${title}"]`)
 const toolStrip = (page: Page): Locator => page.getByRole('toolbar', { name: 'Tools' })
 /** The active project's chats in the Rail. */
 const railChats = (page: Page): Locator =>
@@ -183,19 +181,35 @@ async function launchRevampChat(
     await page.getByRole('button', { name: 'Start agent chat' }).click()
     await tab.waitFor({ state: 'visible' })
   }
-  // Let the session settle (its card lands in Chats, the launcher closes)
+  // Let the session settle (its row lands in the Rail, the launcher closes)
   // before the next launch: a New chat click while the previous session is
   // still being created is swallowed.
-  await expect(chatCard(page, prompt)).toBeVisible()
+  await expect(railChat(page, prompt)).toBeVisible()
   await expect(page.getByRole('dialog', { name: 'Agent launcher' })).toHaveCount(0)
 }
 
 /**
- * Drag a Chats-list card onto one edge of a pane with the real mouse: the
- * pane's drop-zone overlay only exists while a drag is in flight, so the
- * zone is located after the drag has started.
+ * Searches the command palette (opened from the Rail "Search" row) and
+ * returns its "Chats" group (Sidebar V2 P4).
  */
-async function dragCardToPaneEdge(
+async function searchPaletteChats(page: Page, query: string): Promise<Locator> {
+  await railNav(page).getByRole('button', { name: 'Search' }).click()
+  const input = page.getByPlaceholder('Search commands, projects, chats…')
+  await expect(input).toBeVisible()
+  await input.fill(query)
+  const group = page.locator('[cmdk-group]').filter({
+    has: page.locator('[cmdk-group-heading]', { hasText: /^Chats$/ })
+  })
+  await expect(group).toBeVisible()
+  return group
+}
+
+/**
+ * Drag a chat tab onto one edge of a pane with the real mouse: the pane's
+ * drop-zone overlay only exists while a drag is in flight, so the zone is
+ * located after the drag has started.
+ */
+async function dragTabToPaneEdge(
   page: Page,
   card: Locator,
   pane: Locator,
@@ -206,7 +220,7 @@ async function dragCardToPaneEdge(
       ? 'div[class*="right-0"][class*="w-1/4"]'
       : 'div[class*="bottom-0"][class*="h-1/4"]'
   const cardBox = await card.boundingBox()
-  if (!cardBox) throw new Error('chat card has no bounding box')
+  if (!cardBox) throw new Error('chat tab has no bounding box')
   const startX = cardBox.x + cardBox.width / 2
   const startY = cardBox.y + cardBox.height / 2
   await page.mouse.move(startX, startY)
@@ -249,34 +263,42 @@ test('Journey 1: three chats on one project, side by side, next to the diff', as
     await expect(stat).toBeVisible()
     await expect(stat).toContainText('+4')
     await expect(stat).toContainText('−1')
-    // Sidebar V2: the main screen opens without the Side panel; the strip's
+    // Sidebar V2: the main screen opens without the right panel; the strip's
     // Changes button carries the changed-file count.
     await expect(page.getByTestId('right-panel')).toHaveCount(0)
     await expect(page.getByTestId('tool-strip-changes-badge')).toHaveText('2')
   })
 
-  await test.step('2. Chats list: one card per chat with its agent, status, title and branch', async () => {
+  await test.step('2. Rail: one row per chat under the project, with its title and status', async () => {
     await launchRevampChat(page, CHAT_ONE)
     await launchRevampChat(page, CHAT_TWO)
     await launchRevampChat(page, CHAT_THREE)
     for (const title of [CHAT_ONE, CHAT_TWO, CHAT_THREE]) {
-      const card = chatCard(page, title)
-      await expect(card).toBeVisible()
-      await expect(card).toContainText(title)
-      await expect(card).toContainText('Fake Longrun')
-      // The project folder's current branch is the card's branch line.
-      await expect(card).toContainText('main')
-      // Same signal as the tab: a running turn reads "Running".
-      await expect(card).toHaveAttribute('aria-label', /Running/)
+      const row = railChat(page, title)
+      await expect(row).toBeVisible()
+      await expect(row).toContainText(title)
+      // Same signal as the tab: a running turn reads "Running" (the trail spinner).
+      await expect(row).toHaveAttribute('aria-label', /Running/)
+      await expect(row.getByRole('status', { name: 'Running' })).toBeVisible()
     }
+    // The palette Chats group matches the agent and shows it with the branch.
+    const chats = await searchPaletteChats(page, 'Fake Longrun')
+    for (const title of [CHAT_ONE, CHAT_TWO, CHAT_THREE]) {
+      const item = chats.getByRole('option').filter({ hasText: title })
+      await expect(item).toContainText('Fake Longrun')
+      // The project folder's current branch.
+      await expect(item).toContainText('main')
+    }
+    await page.keyboard.press('Escape')
+    await expect(page.getByPlaceholder('Search commands, projects, chats…')).toHaveCount(0)
   })
 
-  await test.step('3. Dragging a card onto a pane edge splits the pane', async () => {
+  await test.step('3. Dragging a chat tab onto a pane edge splits the pane', async () => {
     await expect(paneContents(page)).toHaveCount(1)
-    await dragCardToPaneEdge(page, chatCard(page, CHAT_TWO), paneContents(page).first(), 'right')
+    await dragTabToPaneEdge(page, chatTab(page, CHAT_TWO), paneContents(page).first(), 'right')
     await expect(paneContents(page)).toHaveCount(2)
 
-    await dragCardToPaneEdge(page, chatCard(page, CHAT_THREE), paneContents(page).last(), 'bottom')
+    await dragTabToPaneEdge(page, chatTab(page, CHAT_THREE), paneContents(page).last(), 'bottom')
     await expect(paneContents(page)).toHaveCount(3)
 
     // Every chat keeps its own tab, in its own pane, and keeps running.
@@ -290,7 +312,7 @@ test('Journey 1: three chats on one project, side by side, next to the diff', as
     'a real agent connection failure cannot be produced with the fake agent'
   )
   await skipStep(
-    '3c. cards show the agent AND the model',
+    '3c. the palette Chats group shows the agent AND the model',
     'the fake agent advertises no model list; only the agent name is asserted in step 2'
   )
 
@@ -327,8 +349,7 @@ test('Journey 1: three chats on one project, side by side, next to the diff', as
       // Sidebar V2: the collapsed Rail is the expanded one without labels.
       await expect(railNav(page).getByRole('button', { name: 'Search' })).toBeVisible()
       await expect(railNav(page).getByText(PROJECT, { exact: true })).toHaveCount(0)
-      // The old icon stack, project switcher and Column tab track are gone.
-      await expect(page.getByTestId('rail-column-tab-track')).toHaveCount(0)
+      // The old icon stack and project switcher are gone.
       await expect(railNav(page).getByRole('button', { name: /^Switch project/ })).toHaveCount(0)
 
       // Hovering a project icon opens its card next to the Rail.
@@ -432,26 +453,26 @@ test('Journey 2: two fixes at once, one in a new worktree', async ({ page }) => 
   if (!worktree) throw new Error('worktree was not created')
   const created: ListedWorktree = worktree
 
-  await test.step('2. The chat lands in Chats, on the worktree branch, in the worktree folder', async () => {
-    const card = chatCard(page, CHAT_WORKTREE)
-    await expect(card).toBeVisible()
-    await expect(card).toContainText(created.branch)
-    await expect(card).toHaveAttribute('aria-label', /Running/)
-    // The card's terminal action names the chat's working directory.
-    const terminal = page.getByRole('button', {
-      name: `Open terminal for chat ${CHAT_WORKTREE}`
-    })
-    await expect
-      .poll(async () => norm((await terminal.getAttribute('title')) ?? ''))
-      .toContain(norm(created.path))
+  await test.step('2. The chat lands in the Rail, on the worktree branch', async () => {
+    const row = railChat(page, CHAT_WORKTREE)
+    await expect(row).toBeVisible()
+    await expect(row).toHaveAttribute('aria-label', /Running/)
+    // The palette Chats group shows the chat's branch: the worktree's.
+    const chats = await searchPaletteChats(page, CHAT_WORKTREE)
+    await expect(chats.getByRole('option').filter({ hasText: CHAT_WORKTREE })).toContainText(
+      created.branch
+    )
+    await page.keyboard.press('Escape')
   })
 
   await test.step('3. A second chat on the current checkout', async () => {
     await launchRevampChat(page, CHAT_CHECKOUT, 'Current checkout')
-    const card = chatCard(page, CHAT_CHECKOUT)
-    await expect(card).toBeVisible()
-    await expect(card).toContainText('main')
-    await expect(card).not.toContainText(created.branch)
+    await expect(railChat(page, CHAT_CHECKOUT)).toBeVisible()
+    const chats = await searchPaletteChats(page, CHAT_CHECKOUT)
+    const item = chats.getByRole('option').filter({ hasText: CHAT_CHECKOUT })
+    await expect(item).toContainText('main')
+    await expect(item).not.toContainText(created.branch)
+    await page.keyboard.press('Escape')
   })
 
   await test.step('4. The project row menu switches to the worktree; the Rail chats narrow and the chip shows it', async () => {

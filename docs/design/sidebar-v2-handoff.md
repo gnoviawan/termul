@@ -1,6 +1,6 @@
 # Sidebar V2: handoff checklist
 
-Status: design final (2026-11-14). Implemented in steps P1 to P4 (2026-11-15). The checklist ticks what the code has; the "Code now" columns show the code before P1.
+Status: design final (2026-11-14). Implemented in steps P1 to P5 (2026-11-15). The checklist ticks what the code has; the "Code now" columns show the code before P1.
 Design source: Paper file "Termul Design System", page **Troupe Design - V2** (rows 1 and 2), and the **Shell** page, board **Sidebar**.
 
 Scope: the shell rail in its expanded and collapsed states, the hover panels of the collapsed rail, and the open workspace tab label. `AGENTS.md` asks to check every surface: the browser client renders the same rail, so check it too.
@@ -86,7 +86,7 @@ Code now: `RailRow` shows a `Tooltip` with label + hint. The chat peek and the p
 - [x] Open-sidebar toggle in the tab bar, right of the traffic lights, when collapsed
 - [x] Hover chat peek, project card, nav tooltip with shortcut
 - [x] Open tab label `secondary-foreground`
-- [ ] Browser client checked (same rail)
+- [ ] Browser client checked in a real browser (code review and the parity checklist pass; P1 was checked in the browser, P2–P5 not yet)
 - [x] Durable logs for new flows if any are added (`src/renderer/lib/log-api.ts`)
 - [ ] Light theme checked (design is dark only)
 
@@ -104,7 +104,17 @@ The Side panel Chats tab, its header Workspace switcher and the StatusBar are go
 - [x] Durable logs: worktree switch from the rail, shell picked from the strip, chat import started, chat opened from the palette.
 - [ ] Paper has no frame for the worktree chip, the row "…" button or the shell menu yet.
 
+### P5: phone, browser parity, clean-up
+
+- [x] Phone: the phone shell mounts no Rail, tool strip or right panel (`WorkspaceLayout.mobile.test.tsx`, e2e `mobile-drawer-home`).
+- [x] Phone drawer chat rows use the Rail live state (`useChatLiveState`) and the Rail trail (`ChatRowTrail`): one status per chat (Needs you, then Running, then New), the same as the desktop Rail. The rows keep their layout and the created time. `AgentChatStatusGlyphs` and `agentChatStatusSlots` are removed.
+- [x] Browser client (desktop width): the tool strip has no Remote access and no Browser button (browser tabs are native webviews; the palette command and the shortcut are gated the same way); it shows the connection lamp. Covered by `ShellToolStrip.test.tsx` and the parity checklist.
+- [x] Parity checklist: tool strip gating, the palette Chats group and the Projects menu Import item.
+- [x] E2E specs use the V2 UI: Rail chat rows (`rail-project-chats`), tool strip buttons, the command palette Chats group, tab drag for splits. Helpers in `tests/e2e/ui.ts`: `railChat`, `showAllRailChats`, `openRightPanelView`.
+- [x] Orphans removed: the `icon` variant of `ImportChatsButton`, `ProjectSwitcher`, `sidebar-search-field`.
+
 ## Open items
 
+- A chat can no longer be dragged onto a pane edge from the chat list (the Chats cards had it). The Rail chat rows are not draggable, and `startChatDrag` in `use-pane-dnd.tsx` has no caller. Decide: add drag to the Rail rows, or remove the chat drag path.
 - The collapsed rail shows a status dot on the agent icon (P2).
 - The design shows a dark theme only. Light-theme values come from the same tokens.

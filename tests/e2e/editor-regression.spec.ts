@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { expect, type Page, request, test } from 'playwright/test'
 import { E2E_BASE_URL, E2E_TOKEN } from './helpers'
-import { openWorkspace, selectColumnTab, selectProject } from './ui'
+import { openRightPanelView, openWorkspace, selectProject } from './ui'
 
 /**
  * Editor regression guards (the "editor always spinning" class):
@@ -49,11 +49,11 @@ async function workspaceRoot(): Promise<string> {
 }
 
 /**
- * The Explorer is a Side panel Column tab; Refresh lives in its header's
- * "More explorer actions" menu.
+ * The Explorer is a right panel view (tool strip "Explorer"); Refresh lives
+ * in its header's "More explorer actions" menu.
  */
 async function refreshExplorer(page: Page): Promise<void> {
-  await selectColumnTab(page, 'Explorer')
+  await openRightPanelView(page, 'Explorer')
   await page.getByRole('button', { name: 'More explorer actions' }).click()
   await page.getByRole('menuitem', { name: 'Refresh' }).click()
 }

@@ -6,11 +6,8 @@ import { ImportChatsButton } from '@/components/chat/ImportChatsButton'
 import { useChatHistoryEntries } from '@/components/chat/use-chat-history-entries'
 import { MoreHorizontal } from '@/components/icons'
 import { useColumnWorkingCopy } from '@/components/shell/use-column-working-copy'
-import {
-  AgentChatStatusGlyphs,
-  agentChatStatusSlots,
-  useAgentChatStatusSignals
-} from '@/components/workspace/tabs/agent-chat-status'
+import { useChatLiveState } from '@/components/shell/use-project-chats'
+import { ChatRowTrail, type ProjectChatLiveState } from '@/components/sidebar/project-chat-row'
 import { useMobileTabActions } from '@/hooks/use-mobile-tab-actions'
 import { copyChatReference } from '@/lib/chat-reference'
 import { logFrontendError } from '@/lib/log-api'
@@ -122,6 +119,37 @@ function useRowLongPress(onLongPress: () => void) {
   }
 }
 
+/**
+ * The status slot of a Recents row: the desktop Rail chat trail (running
+ * spinner, Needs you pill, New mark) from the same live state, so the phone
+ * and the Rail always agree. Render it only for a failed or non-idle chat
+ * (an idle row keeps just its created time); a failed chat adds a
+ * destructive dot first.
+ */
+function RecentsStatus({
+  liveState,
+  lastActivityAt,
+  failed = false
+}: {
+  liveState: ProjectChatLiveState
+  lastActivityAt: number
+  failed?: boolean
+}): React.JSX.Element {
+  return (
+    <>
+      {failed ? (
+        <span className="inline-flex size-3.5 items-center justify-center" title="Failed">
+          <span className="size-2 rounded-full bg-destructive" aria-hidden />
+          <span className="sr-only">Failed</span>
+        </span>
+      ) : null}
+      {liveState !== 'idle' ? (
+        <ChatRowTrail liveState={liveState} lastActivityAt={lastActivityAt} />
+      ) : null}
+    </>
+  )
+}
+
 interface RowShellProps {
   entryId: string
   title: string
@@ -199,9 +227,8 @@ interface OpenRecentsRowProps {
 }
 
 /**
- * An open chat in Recents: live title and status glyphs (the host-owned
- * signals the desktop `agent-chat-tab` uses). Status is glyphs with sr-only
- * text, never a text chip beside the title.
+ * An open chat in Recents: live title and the Rail chat trail
+ * (`useChatLiveState`, the host-owned signals the desktop Rail rows use).
  */
 function OpenRecentsRow({
   entry,
@@ -211,8 +238,7 @@ function OpenRecentsRow({
   onSelect,
   onOpenActions
 }: OpenRecentsRowProps): React.JSX.Element {
-  const signals = useAgentChatStatusSignals(sessionId)
-  const { showWorking, showUnread, statusText } = agentChatStatusSlots(signals)
+  const { liveState, statusWord, signals } = useChatLiveState(sessionId)
   const { title, indexAgentId, agentConfigId, agents } = useAcpStore(
     useShallow((s) => {
       const indexEntry = (s.sessionIndex ?? []).find((e) => e.id === sessionId)
@@ -224,13 +250,12 @@ function OpenRecentsRow({
       }
     })
   )
-  const hasStatus = signals.needsAttention || showWorking || showUnread
   return (
     <RecentsRowShell
       entryId={entry.id}
       title={title}
       isActive={isActive}
-      ariaLabel={rowAriaLabel(title, statusText, time)}
+      ariaLabel={rowAriaLabel(title, statusWord, time)}
       icon={
         <ChatEntryIcon
           agentId={signals.session?.agentId ?? indexAgentId ?? entry.agentId}
@@ -239,13 +264,9 @@ function OpenRecentsRow({
         />
       }
       status={
-        hasStatus ? (
-          <AgentChatStatusGlyphs
-            needsAttention={signals.needsAttention}
-            showWorking={showWorking}
-            showUnread={showUnread}
-          />
-        ) : null
+        liveState === 'idle' ? null : (
+          <RecentsStatus liveState={liveState} lastActivityAt={entry.lastActivityAt} />
+        )
       }
       time={time}
       onSelect={onSelect}
@@ -263,7 +284,7 @@ interface HistoryRecentsRowProps {
 
 /**
  * A chat in Recents with no open tab here. The host's chat activity still
- * reaches it, so a chat another surface is driving shows Working, Needs you
+ * reaches it, so a chat another surface is driving shows Running, Needs you
  * or New activity before this surface opens it; a failed chat shows Failed.
  */
 function HistoryRecentsRow({
@@ -272,11 +293,9 @@ function HistoryRecentsRow({
   onSelect,
   onOpenActions
 }: HistoryRecentsRowProps): React.JSX.Element {
-  const signals = useAgentChatStatusSignals(entry.id)
-  const { showWorking, showUnread, statuses } = agentChatStatusSlots(signals)
+  const { liveState, statusWord } = useChatLiveState(entry.id)
   const failed = entry.status === 'error'
-  const statusText = [...(failed ? ['Failed'] : []), ...statuses].join(', ')
-  const hasStatus = signals.needsAttention || showWorking || showUnread
+  const statusText = [failed ? 'Failed' : null, statusWord].filter(Boolean).join(', ')
   return (
     <RecentsRowShell
       entryId={entry.id}
@@ -292,20 +311,12 @@ function HistoryRecentsRow({
         />
       }
       status={
-        failed || hasStatus ? (
-          <>
-            {failed ? (
-              <span className="inline-flex size-3.5 items-center justify-center" title="Failed">
-                <span className="size-2 rounded-full bg-destructive" aria-hidden />
-                <span className="sr-only">Failed</span>
-              </span>
-            ) : null}
-            <AgentChatStatusGlyphs
-              needsAttention={signals.needsAttention}
-              showWorking={showWorking}
-              showUnread={showUnread}
-            />
-          </>
+        failed || liveState !== 'idle' ? (
+          <RecentsStatus
+            liveState={liveState}
+            lastActivityAt={entry.lastActivityAt}
+            failed={failed}
+          />
         ) : null
       }
       time={time}
@@ -594,7 +605,7 @@ export function MobileRecentsList({
 
       {activeProject && (
         <div className="px-2 pt-2">
-          <ImportChatsButton cwd={importCwd} projectId={activeProject.id} variant="row" />
+          <ImportChatsButton cwd={importCwd} projectId={activeProject.id} />
         </div>
       )}
 

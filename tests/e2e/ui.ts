@@ -58,27 +58,41 @@ export async function openRailNewProjectModal(page: Page): Promise<void> {
 }
 
 /**
- * Select a Side panel Column tab (Chats, Explorer or Changes) and wait until
- * it is selected. The last tab is remembered per project, so a spec that needs
- * a specific one selects it instead of assuming the default.
+ * Show the right panel on one view (Explorer, Changes or GitHub) with its tool
+ * strip button and wait until the button is pressed. A click on the open view
+ * hides the panel, so the helper clicks only when the view is not open. The
+ * last view is remembered per project, so a spec that needs a specific one
+ * opens it instead of assuming the default.
  */
-export async function selectColumnTab(
+export async function openRightPanelView(
   page: Page,
-  name: 'Chats' | 'Explorer' | 'Changes' | 'GitHub'
+  name: 'Explorer' | 'Changes' | 'GitHub'
 ): Promise<void> {
-  const tab = page.getByRole('tablist', { name: 'Side panel' }).getByRole('tab', {
-    name: new RegExp(`^${name}`)
-  })
-  await tab.click()
-  await expect(tab).toHaveAttribute('aria-selected', 'true')
+  const button = page
+    .getByRole('toolbar', { name: 'Tools' })
+    .getByRole('button', { name, exact: true })
+  if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click()
+  await expect(button).toHaveAttribute('aria-pressed', 'true')
 }
 
 /**
- * The Chats list card whose aria-label starts with `title` (the active
- * project's chats, closed ones included). Select the Chats tab first.
+ * The Rail chat row (under the open project) whose accessible name starts
+ * with `title`: the project's chats, closed ones included. Call
+ * {@link showAllRailChats} first when the chat may sit past "Show N more".
  */
-export function chatCard(page: Page, title: string) {
-  return page.locator(`button[data-chat-card-index][aria-label^="${cssEscape(title)}"]`).first()
+export function railChat(page: Page, title: string) {
+  return page
+    .getByTestId('rail-project-chats')
+    .getByRole('button', { name: new RegExp(`^${escapeRegExp(title)}`) })
+    .first()
+}
+
+/** Expand the open project's Rail chats past "Show N more" (no-op when all fit). */
+export async function showAllRailChats(page: Page): Promise<void> {
+  const more = page.getByTestId('rail-project-chats').getByRole('button', {
+    name: /^Show \d+ more/
+  })
+  if ((await more.count()) > 0) await more.first().click()
 }
 
 /**
@@ -94,7 +108,7 @@ export async function launchChat(page: Page, prompt: string): Promise<void> {
   // composer does not) — works for both the overlay dialog and the
   // empty-pane launcher.
   const composer = page.locator('[data-composer-editor="true"][aria-label="Agent prompt"]').first()
-  // Retry the Side panel's New chat button: on a pane with an active chat the
+  // Retry the Rail's New chat row: on a pane with an active chat the
   // first click can race the launcher overlay mount (observed as a flake).
   for (let attempt = 0; attempt < 3; attempt++) {
     await page.getByRole('button', { name: 'New chat', exact: true }).first().click()
@@ -118,8 +132,8 @@ export async function launchChat(page: Page, prompt: string): Promise<void> {
 
 /**
  * Wait for an agent-chat tab whose aria-label starts with `title`.
- * Scoped to the tab bar's draggable rows (`[draggable="true"]`) — the Chats
- * list cards and chat surfaces reuse the same aria-label text.
+ * Scoped to the tab bar's draggable rows (`[draggable="true"]`) — the Rail
+ * chat rows and chat surfaces reuse the same aria-label text.
  */
 export function chatTab(page: Page, title: string) {
   return page.locator(`[draggable="true"][aria-label^="${cssEscape(title)}"]`).first()
@@ -132,6 +146,10 @@ export function chatTab(page: Page, title: string) {
 export async function visibleChunkCount(page: Page): Promise<number> {
   const text = await page.locator('body').innerText()
   return (text.match(/\bchunk-\d+\b/g) ?? []).length
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function cssEscape(text: string): string {

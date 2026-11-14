@@ -206,11 +206,11 @@ describe('MobileRecentsList merged list', () => {
 
     const rows = document.querySelectorAll('[data-recents-entry-id="s1"]')
     expect(rows).toHaveLength(1)
-    const row = screen.getByRole('button', { name: 'Live title, Working' })
+    const row = screen.getByRole('button', { name: 'Live title, Running' })
     expect(row).toHaveAttribute('aria-current', 'page')
     expect(row).toHaveClass('rounded-full', 'bg-secondary', 'text-base', 'min-h-11')
-    // Status is a glyph with sr-only text, never a visible chip beside the title.
-    expect(within(row).getByText('Working')).toHaveClass('sr-only')
+    // The Rail chat trail: the running spinner.
+    expect(within(row).getByRole('status', { name: 'Running' })).toBeInTheDocument()
     expect(screen.queryByText('Index title')).not.toBeInTheDocument()
   })
 
@@ -220,8 +220,9 @@ describe('MobileRecentsList merged list', () => {
     seedChatActivity({ s1: { busy: true, needsYou: true } })
     renderList()
 
-    const row = screen.getByRole('button', { name: /^Desktop chat, Needs you, Working/ })
-    expect(within(row).getByTitle('Working')).toBeInTheDocument()
+    // One live state, as on the desktop Rail: Needs you wins over Running.
+    const row = screen.getByRole('button', { name: /^Desktop chat, Needs you(,|$)/ })
+    expect(within(row).getByText('Needs you')).toBeInTheDocument()
   })
 
   it('shows the host status of a Recents chat with no tab here, Failed included', () => {
@@ -250,7 +251,7 @@ describe('MobileRecentsList merged list', () => {
     })
     renderList()
 
-    expect(screen.getByRole('button', { name: /^Busy chat, Working/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Busy chat, Running/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^Done chat, New activity/ })).toBeInTheDocument()
     expect(
       screen.getByRole('button', { name: /^Failed chat, Failed, Needs you/ })
@@ -322,7 +323,7 @@ describe('MobileRecentsList merged list', () => {
     expect(onNavigate).toHaveBeenCalledTimes(2)
   })
 
-  it('truncates a long title and keeps the status glyph and actions on the row', () => {
+  it('truncates a long title and keeps the status trail and actions on the row', () => {
     const long = 'A very long chat title that keeps going and going past the drawer width ok'
     expect(long.length).toBeGreaterThanOrEqual(70)
     seedHistory([{ id: 's1', title: long }])
@@ -333,10 +334,10 @@ describe('MobileRecentsList merged list', () => {
 
     const title = screen.getByText(long)
     expect(title).toHaveClass('truncate', 'min-w-0', 'flex-1')
-    const row = screen.getByRole('button', { name: `${long}, Working` })
+    const row = screen.getByRole('button', { name: `${long}, Running` })
     expect(row).toHaveClass('min-w-0', 'w-full')
-    // The glyph slot never shrinks; the actions button is pinned inside the row.
-    expect(within(row).getByText('Working').closest('.shrink-0')).toBeTruthy()
+    // The status slot never shrinks; the actions button is pinned inside the row.
+    expect(within(row).getByRole('status', { name: 'Running' }).closest('.shrink-0')).toBeTruthy()
     const actions = screen.getByRole('button', { name: `More actions for ${long}` })
     expect(actions).toHaveClass('absolute', 'right-1')
   })
