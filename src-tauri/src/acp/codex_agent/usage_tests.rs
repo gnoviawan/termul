@@ -70,12 +70,40 @@ fn home(dir: &Path) -> PathBuf {
     dir.join("codex-home")
 }
 
+/// Run the mock app-server. On Windows the script is not a program, so Python
+/// runs it. The interpreter path is absolute so the probe's PATH refresh
+/// cannot hide it.
+async fn probe_script(script: &Path, dir: &Path) -> ProbeVerdict {
+    if cfg!(windows) {
+        let python = python_executable();
+        return probe_app_server(&python, &[script.to_string_lossy().into_owned()], dir).await;
+    }
+    probe_app_server(&script.to_string_lossy(), &[], dir).await
+}
+
+fn python_executable() -> String {
+    let output = std::process::Command::new("python")
+        .arg("-c")
+        .arg("import sys; print(sys.executable)")
+        .output()
+        .expect("python is required to run the mock app-server on Windows");
+    assert!(
+        output.status.success(),
+        "python -c failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("python executable path")
+        .trim()
+        .to_string()
+}
+
 #[tokio::test]
 async fn a_mock_app_server_reports_five_hour_and_weekly_windows() {
     let root = tempfile::tempdir().unwrap();
     let bin = program(root.path(), "ok");
     let dir = home(root.path());
-    let verdict = probe_app_server(&bin.to_string_lossy(), &[], &dir).await;
+    let verdict = probe_script(&bin, &dir).await;
     let usage = crate::acp::codex_accounts::usage::usage_from_verdict("default", verdict, 1);
     assert_eq!(usage.status, CodexUsageStatus::Ok);
     assert_eq!(usage.plan_type.as_deref(), Some("plus"));
@@ -94,7 +122,7 @@ async fn a_signed_out_app_server_is_signed_out() {
     let bin = program(root.path(), "signed_out");
     let dir = home(root.path());
     std::fs::create_dir_all(&dir).unwrap();
-    let verdict = probe_app_server(&bin.to_string_lossy(), &[], &dir).await;
+    let verdict = probe_script(&bin, &dir).await;
     let usage = crate::acp::codex_accounts::usage::usage_from_verdict("default", verdict, 1);
     assert_eq!(usage.status, CodexUsageStatus::SignedOut);
     assert!(usage.windows.is_empty());
@@ -118,7 +146,7 @@ async fn malformed_app_server_output_is_unavailable() {
     let bin = program(root.path(), "malformed");
     let dir = home(root.path());
     std::fs::create_dir_all(&dir).unwrap();
-    let verdict = probe_app_server(&bin.to_string_lossy(), &[], &dir).await;
+    let verdict = probe_script(&bin, &dir).await;
     let usage = crate::acp::codex_accounts::usage::usage_from_verdict("default", verdict, 1);
     assert_eq!(usage.status, CodexUsageStatus::Unavailable);
 }
