@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use super::{quote_arg, run_account};
+use super::{login_hint, quote_arg, run_account};
 use crate::acp::CodexAgentService;
 
 fn names(service: &CodexAgentService) -> Vec<String> {
@@ -16,7 +16,7 @@ fn names(service: &CodexAgentService) -> Vec<String> {
 
 fn run(service: &CodexAgentService, args: &[&str]) -> ExitCode {
     let args: Vec<String> = args.iter().map(ToString::to_string).collect();
-    run_account(service, std::path::Path::new("/tmp/troupe-state"), &args)
+    run_account(service, None, &args)
 }
 
 #[test]
@@ -24,6 +24,14 @@ fn a_state_dir_with_spaces_is_quoted_in_the_login_hint() {
     assert_eq!(quote_arg("/tmp/troupe"), "/tmp/troupe");
     assert_eq!(quote_arg("/tmp/my troupe"), "\"/tmp/my troupe\"");
     assert_eq!(quote_arg("/tmp/say\"hi"), "\"/tmp/say\\\"hi\"");
+    assert_eq!(
+        login_hint(None, "abc"),
+        "Sign in with: troupe-server codex account login abc"
+    );
+    assert_eq!(
+        login_hint(Some(std::path::Path::new("/tmp/my troupe")), "abc"),
+        "Sign in with: troupe-server codex --state-dir \"/tmp/my troupe\" account login abc"
+    );
 }
 
 #[test]

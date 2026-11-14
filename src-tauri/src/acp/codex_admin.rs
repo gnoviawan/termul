@@ -25,14 +25,19 @@ pub fn run(args: &[String]) -> ExitCode {
             index += 1;
         }
     }
-    let state_dir = state_dir.unwrap_or_else(|| {
+    // Only a directory the operator typed is repeated in the login hint.
+    // The resolved default directory stays off stdout.
+    let explicit_state_dir = state_dir.clone();
+    let state_dir = explicit_state_dir.clone().unwrap_or_else(|| {
         crate::web::ServerConfig::from_args(Vec::<String>::new())
             .map(|config| config.service_account_state_dir())
             .unwrap_or_else(|_| std::env::temp_dir().join("termul"))
     });
     let service = CodexAgentService::system(state_dir.join("acp-registry-binaries"));
     match command_args.as_slice() {
-        [area, rest @ ..] if area == "account" => run_account(&service, &state_dir, rest),
+        [area, rest @ ..] if area == "account" => {
+            run_account(&service, explicit_state_dir.as_deref(), rest)
+        }
         _ => {
             eprintln!("{}", usage());
             ExitCode::from(2)
@@ -44,7 +49,7 @@ pub fn run(args: &[String]) -> ExitCode {
 /// --device-auth` in this terminal.
 pub(crate) fn run_account(
     service: &CodexAgentService,
-    state_dir: &Path,
+    explicit_state_dir: Option<&Path>,
     args: &[String],
 ) -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -78,11 +83,7 @@ pub(crate) fn run_account(
         }
         ["add", name] => service.insert_profile(name).map(|created| {
             println!("Added account {} ({}).", created.name, created.id);
-            println!(
-                "Sign in with: troupe-server codex --state-dir {} account login {}",
-                quote_arg(&state_dir.display().to_string()),
-                created.id
-            );
+            println!("{}", login_hint(explicit_state_dir, &created.id));
         }),
         ["login", id] => service.run_account_cli_login(id),
         ["rename", id, name] => service.rename_account(id, name),
@@ -128,6 +129,19 @@ fn block_on(
     tokio::runtime::Runtime::new()
         .map_err(|error| format!("could not start runtime: {error}"))?
         .block_on(operation)
+}
+
+/// The command the operator can copy. A directory they passed with
+/// `--state-dir` is repeated. The host default is omitted, because a later
+/// `troupe-server codex account login` uses that same default.
+pub(crate) fn login_hint(explicit_state_dir: Option<&Path>, account_id: &str) -> String {
+    match explicit_state_dir {
+        Some(dir) => format!(
+            "Sign in with: troupe-server codex --state-dir {} account login {account_id}",
+            quote_arg(&dir.display().to_string())
+        ),
+        None => format!("Sign in with: troupe-server codex account login {account_id}"),
+    }
 }
 
 /// Quote one shell argument. Paths without spaces stay bare so the printed
