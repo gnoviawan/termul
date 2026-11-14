@@ -37,16 +37,19 @@ export function useCodexAccounts(
   const [refreshingUsage, setRefreshingUsage] = useState(false)
   const mounted = useRef(true)
 
+  const reloadGeneration = useRef(0)
   const reload = useCallback(async () => {
+    const generation = ++reloadGeneration.current
+    const current = () => mounted.current && generation === reloadGeneration.current
     try {
       const next = await codexAccountsApi.list()
-      if (!mounted.current) return
+      if (!current()) return
       setSnapshot(next)
       setError(null)
     } catch (err) {
-      if (mounted.current) setError(message(err))
+      if (current()) setError(message(err))
     } finally {
-      if (mounted.current) setLoading(false)
+      if (current()) setLoading(false)
     }
   }, [])
 

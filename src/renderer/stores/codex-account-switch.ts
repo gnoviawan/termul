@@ -26,6 +26,7 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
+import { isCodexAccountRestarting, setCodexAccountRestarting } from '@/stores/codex-account-restart'
 import { getAgentChatSessionIdsInAllTrees, useWorkspaceStore } from '@/stores/workspace-store'
 
 /** Config id of the host-managed Codex ACP agent. */
@@ -141,7 +142,6 @@ async function continueInNewSession(sessionId: string, resend: boolean): Promise
 }
 
 /** Chats with a restart already running or waiting, so a second switch does not stack. */
-const restarting = new Set<string>()
 /** One restart to run after the in-flight one, if the chat is still on the old account. */
 const restartFollowUp = new Map<string, { resend?: boolean; cancelTurn?: boolean }>()
 
@@ -154,7 +154,7 @@ async function waitForSharedAgent(agentId: string, sessionId: string): Promise<v
       return reason !== null && !isBackgroundWorkBlock(reason)
     })
     if (!busy) return
-    await waitUntilIdle(busy[0], false)
+    await waitUntilIdle(busy[0], true)
   }
 }
 
@@ -167,11 +167,11 @@ export async function restartCodexSession(
   sessionId: string,
   options: { resend?: boolean; cancelTurn?: boolean } = {}
 ): Promise<boolean> {
-  if (restarting.has(sessionId)) {
+  if (isCodexAccountRestarting(sessionId)) {
     restartFollowUp.set(sessionId, options)
     return false
   }
-  restarting.add(sessionId)
+  setCodexAccountRestarting(sessionId, true)
   try {
     const store = useAcpStore.getState()
     if (!isOpen(store, sessionId) || !isCodexSession(store, sessionId)) return false
@@ -243,7 +243,7 @@ export async function restartCodexSession(
     })
     return false
   } finally {
-    restarting.delete(sessionId)
+    setCodexAccountRestarting(sessionId, false)
     const again = restartFollowUp.get(sessionId)
     if (again) {
       restartFollowUp.delete(sessionId)

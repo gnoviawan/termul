@@ -55,8 +55,9 @@ pub(super) struct CachedUsage {
     attempted_at: i64,
 }
 
-/// Latest read per Account id.
-pub(super) type UsageCache = parking_lot::Mutex<HashMap<String, CachedUsage>>;
+/// Latest read per Account id. Shared with in-flight probes so a cancelled
+/// caller still leaves the completed read in the cache.
+pub(super) type UsageCache = Arc<parking_lot::Mutex<HashMap<String, CachedUsage>>>;
 
 /// In-flight usage probes, shared by concurrent callers of one account.
 pub(super) type UsageInflight = std::sync::Arc<
@@ -112,6 +113,7 @@ impl CodexAgentService {
             for (id, home, sender) in started {
                 let probe = Arc::clone(&self.usage_probe);
                 let inflight = Arc::clone(&self.usage_inflight);
+                let cache = Arc::clone(&self.usage_cache);
                 tokio::spawn(async move {
                     let checked_at = chrono::Utc::now().timestamp_millis();
                     let verdict = match &home {
@@ -122,6 +124,7 @@ impl CodexAgentService {
                         None => ProbeVerdict::Unavailable,
                     };
                     let usage = usage_from_verdict(&id, verdict, checked_at);
+                    remember(&mut cache.lock(), usage.clone());
                     inflight.lock().remove(&id);
                     let _ = sender.send(Some(usage));
                 });

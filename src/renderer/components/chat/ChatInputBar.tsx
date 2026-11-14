@@ -31,6 +31,7 @@ import {
   useSessionUsage
 } from '@/stores/acp-store'
 import type { OptionValues } from '@/stores/acp-store/composer-options'
+import { useCodexRestartingStore } from '@/stores/codex-account-restart'
 import { ModeChip } from './AgentHeader'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
 import { AgentModelSelector } from './agent-model-selector/AgentModelSelector'
@@ -150,8 +151,8 @@ export function ChatInputBar({
   session,
   projectRoot,
   busy,
-  disabled,
-  controlsDisabled = disabled,
+  disabled: composerDisabled,
+  controlsDisabled = composerDisabled,
   imageCapable = false,
   embedCapable = false,
   onSend,
@@ -173,6 +174,8 @@ export function ChatInputBar({
   isVisible = true,
   onDraftStart
 }: ChatInputBarProps): React.JSX.Element {
+  const accountRestarting = useCodexRestartingStore((state) => state.ids.includes(session.id))
+  const disabled = composerDisabled || accountRestarting
   const usableConfigOptions = configOptions.filter(
     (option) => option.type === 'boolean' || (option.options?.length ?? 0) > 0
   )

@@ -185,7 +185,7 @@ impl CodexAgentService {
             active,
             profile_store,
             login_probe,
-            usage_cache: parking_lot::Mutex::new(HashMap::new()),
+            usage_cache: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             usage_probe: Arc::new(usage::SystemCodexUsageProbe),
             usage_inflight: usage::UsageInflight::default(),
         }

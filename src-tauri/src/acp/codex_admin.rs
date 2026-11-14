@@ -144,14 +144,10 @@ pub(crate) fn login_hint(explicit_state_dir: Option<&Path>, account_id: &str) ->
     }
 }
 
-/// Quote one shell argument. Paths without spaces stay bare so the printed
-/// command can be copied. A space or quote is wrapped and the quote escaped.
+/// Quote one POSIX shell argument so `$`, backticks, and backslashes stay
+/// literal when the command is pasted. An embedded single quote becomes `'\''`.
 fn quote_arg(value: &str) -> String {
-    if value.contains([' ', '\t', '"']) {
-        format!("\"{}\"", value.replace('"', "\\\""))
-    } else {
-        value.to_string()
-    }
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn yes_no(value: bool) -> &'static str {

@@ -432,8 +432,10 @@ pub(crate) fn merge_dir(src: &Path, dst: &Path) -> io::Result<()> {
 /// after the copy finishes. A failed copy or rename deletes only that
 /// temporary file.
 fn copy_file_into_place(from: &Path, to: &Path) -> io::Result<()> {
+    // Open the source first. A missing source must not leave a staging file.
+    let mut source = fs::File::open(from)?;
     let (temp, mut file) = exclusive_temp_file(to)?;
-    let copied = io::copy(&mut fs::File::open(from)?, &mut file).and_then(|_| file.sync_all());
+    let copied = io::copy(&mut source, &mut file).and_then(|_| file.sync_all());
     drop(file);
     let result = copied.and_then(|_| fs::rename(&temp, to));
     if result.is_err() {

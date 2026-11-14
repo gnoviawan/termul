@@ -21,16 +21,17 @@ fn run(service: &CodexAgentService, args: &[&str]) -> ExitCode {
 
 #[test]
 fn a_state_dir_with_spaces_is_quoted_in_the_login_hint() {
-    assert_eq!(quote_arg("/tmp/troupe"), "/tmp/troupe");
-    assert_eq!(quote_arg("/tmp/my troupe"), "\"/tmp/my troupe\"");
-    assert_eq!(quote_arg("/tmp/say\"hi"), "\"/tmp/say\\\"hi\"");
+    assert_eq!(quote_arg("/tmp/troupe"), "'/tmp/troupe'");
+    assert_eq!(quote_arg("/tmp/my troupe"), "'/tmp/my troupe'");
+    assert_eq!(quote_arg("/tmp/$USER"), "'/tmp/$USER'");
+    assert_eq!(quote_arg("/tmp/say'hi"), "'/tmp/say'\\''hi'");
     assert_eq!(
         login_hint(None, "abc"),
         "Sign in with: troupe-server codex account login abc"
     );
     assert_eq!(
-        login_hint(Some(std::path::Path::new("/tmp/my troupe")), "abc"),
-        "Sign in with: troupe-server codex --state-dir \"/tmp/my troupe\" account login abc"
+        login_hint(Some(std::path::Path::new("/tmp/$USER")), "abc"),
+        "Sign in with: troupe-server codex --state-dir '/tmp/$USER' account login abc"
     );
 }
 

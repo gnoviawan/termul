@@ -314,6 +314,45 @@ async fn concurrent_usage_reads_share_one_probe() {
 }
 
 #[tokio::test]
+async fn a_cancelled_usage_read_still_caches_the_probe() {
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    let store = Arc::new(CodexAccountStore::new(&state, root.path().join("shared")));
+    let mut service = CodexAgentService::with_probe(store, Arc::new(SignedIn));
+    let hold = Arc::new(tokio::sync::Mutex::new(()));
+    let guard = hold.lock().await;
+    let gate = Arc::new(Gate {
+        hits: std::sync::atomic::AtomicUsize::new(0),
+        hold: Arc::clone(&hold),
+    });
+    service.usage_probe = Arc::clone(&gate) as Arc<dyn CodexUsageProbe>;
+    {
+        let first = service.accounts_usage(true);
+        tokio::pin!(first);
+        for _ in 0..50 {
+            if gate.hits.load(std::sync::atomic::Ordering::SeqCst) >= 1 {
+                break;
+            }
+            tokio::select! {
+                result = &mut first => panic!("probe finished before cancel: {result:?}"),
+                () = tokio::task::yield_now() => {}
+            }
+        }
+    }
+    drop(guard);
+    for _ in 0..50 {
+        if !service.usage_cache.lock().is_empty() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(!service.usage_cache.lock().is_empty());
+    let again = service.accounts_usage(true).await.unwrap();
+    assert_eq!(again.len(), 1);
+    assert_eq!(gate.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn a_recent_attempt_is_not_probed_again() {
     let root = tempfile::tempdir().unwrap();
     let state = root.path().join("state");
