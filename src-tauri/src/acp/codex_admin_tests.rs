@@ -26,12 +26,12 @@ fn a_state_dir_with_spaces_is_quoted_in_the_login_hint() {
     assert_eq!(quote_arg("/tmp/$USER"), "'/tmp/$USER'");
     assert_eq!(quote_arg("/tmp/say'hi"), "'/tmp/say'\\''hi'");
     assert_eq!(
-        login_hint(None, "abc"),
-        "Sign in with: troupe-server codex account login abc"
+        login_hint(None),
+        "Sign in with: troupe-server codex account login <id>"
     );
     assert_eq!(
-        login_hint(Some(std::path::Path::new("/tmp/$USER")), "abc"),
-        "Sign in with: troupe-server codex --state-dir '/tmp/$USER' account login abc"
+        login_hint(Some(std::path::Path::new("/tmp/$USER"))),
+        "Sign in with: troupe-server codex --state-dir '/tmp/$USER' account login <id>"
     );
 }
 

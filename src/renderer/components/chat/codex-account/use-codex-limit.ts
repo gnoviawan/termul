@@ -129,14 +129,22 @@ export const useCodexResumeStore = create<ResumeState>((set, get) => ({
   }
 }))
 
-useAcpStore.subscribe((state, prev) => {
-  if (state.sessions === prev.sessions) return
-  const { turns, cancel } = useCodexResumeStore.getState()
-  for (const sessionId of Object.keys(turns)) {
-    const current = state.sessions[sessionId]?.openTurnId ?? null
-    if (turnReplaced(turns[sessionId], current)) cancel(sessionId)
-  }
-})
+let stopResumeTurnWatch: (() => void) | undefined
+
+/** Watch turn changes even when no limit card is mounted. Idempotent, and a
+ * no-op when the store mock has no `subscribe` (component tests). */
+export function ensureCodexResumeTurnWatch(): void {
+  if (stopResumeTurnWatch) return
+  if (typeof useAcpStore.subscribe !== 'function') return
+  stopResumeTurnWatch = useAcpStore.subscribe((state, prev) => {
+    if (state.sessions === prev.sessions) return
+    const { turns, cancel } = useCodexResumeStore.getState()
+    for (const sessionId of Object.keys(turns)) {
+      const current = state.sessions[sessionId]?.openTurnId ?? null
+      if (turnReplaced(turns[sessionId], current)) cancel(sessionId)
+    }
+  })
+}
 
 export const useCodexSwitchingStore = create<Record<string, string>>(() => ({}))
 
@@ -172,6 +180,9 @@ export function useCodexLimit(sessionId: string): CodexLimit | null {
     sessionId in state.turns ? state.turns[sessionId] : undefined
   )
   const switchingTo = useCodexSwitchingStore((state) => state[sessionId] ?? null)
+  useEffect(() => {
+    ensureCodexResumeTurnWatch()
+  }, [])
   useEffect(() => {
     if (scheduledTurn === undefined) return
     if (turnReplaced(scheduledTurn, openTurnId)) cancelResume(sessionId)

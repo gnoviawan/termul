@@ -28,6 +28,7 @@ import {
 } from '@/stores/codex-account-switch'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import {
+  ensureCodexResumeTurnWatch,
   formatClock,
   isAtLimit,
   setSwitchingTo,
@@ -159,6 +160,7 @@ export function startCodexAutoSwitch(): () => void {
   const busyProjects = new Set<string>()
   let lastUsage: AcpState['sessionUsage'] | null = null
   let stopped = false
+  ensureCodexResumeTurnWatch()
 
   async function act(projectId: string, chats: readonly LimitedChat[]): Promise<void> {
     const state = useAcpStore.getState()

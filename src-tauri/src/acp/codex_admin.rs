@@ -82,8 +82,8 @@ pub(crate) fn run_account(
             })
         }
         ["add", name] => service.insert_profile(name).map(|created| {
-            println!("Added account {} ({}).", created.name, created.id);
-            println!("{}", login_hint(explicit_state_dir, &created.id));
+            println!("Added account {}.", created.name);
+            println!("{}", login_hint(explicit_state_dir));
         }),
         ["login", id] => service.run_account_cli_login(id),
         ["rename", id, name] => service.rename_account(id, name),
@@ -134,13 +134,13 @@ fn block_on(
 /// The command the operator can copy. A directory they passed with
 /// `--state-dir` is repeated. The host default is omitted, because a later
 /// `troupe-server codex account login` uses that same default.
-pub(crate) fn login_hint(explicit_state_dir: Option<&Path>, account_id: &str) -> String {
+pub(crate) fn login_hint(explicit_state_dir: Option<&Path>) -> String {
     match explicit_state_dir {
         Some(dir) => format!(
-            "Sign in with: troupe-server codex --state-dir {} account login {account_id}",
+            "Sign in with: troupe-server codex --state-dir {} account login <id>",
             quote_arg(&dir.display().to_string())
         ),
-        None => format!("Sign in with: troupe-server codex account login {account_id}"),
+        None => "Sign in with: troupe-server codex account login <id>".to_string(),
     }
 }
 
