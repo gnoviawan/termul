@@ -35,9 +35,33 @@ export interface CodexAccountsSnapshot {
   defaultAccountId: string
   /** Project id → Account id, only for Projects with an explicit choice. */
   projectAccounts: Record<string, string>
-  /**
-   * Stored preference. Automatic switching itself waits until a usage probe
-   * exists. The toggle only saves this flag.
-   */
+  /** A chat at its Account's limit continues on the signed-in Account with the most room. */
   autoSwitch: boolean
+}
+
+/** One usage window of an Account (about 5 hours, or weekly). */
+export interface CodexUsageWindow {
+  /** `session` (about 5 hours) or `weekly`. */
+  kind: 'session' | 'weekly'
+  /** Percent used, 0–100. */
+  percent: number
+  /** ISO-8601 reset time; `null` when Codex did not send one. */
+  resetsAt: string | null
+  /** Window length in minutes, when Codex sent it. */
+  windowDurationMins: number | null
+}
+
+export type CodexUsageStatus = 'ok' | 'unavailable' | 'signed_out' | 'error'
+
+/** The usage of one Account at `checkedAt`. */
+export interface CodexAccountUsage {
+  accountId: string
+  status: CodexUsageStatus
+  /** Plan name when Codex sent one (`plus`, `pro`, …). Never an email. */
+  planType: string | null
+  windows: CodexUsageWindow[]
+  /** Unix epoch milliseconds of the read. */
+  checkedAt: number
+  /** Reason for `error` or `unavailable`. Never holds login details. */
+  message: string | null
 }

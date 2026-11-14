@@ -303,9 +303,13 @@ export const WS_REQUEST_TYPES = [
   // Choose the Default `{ accountId }` → `{}` or a Project `{ projectId,
   // accountId | null, expectedAccountId? }` → `{ applied }`.
   'list_codex_accounts',
+  // `{ force? }` → `{ usage: CodexAccountUsage[] }`. Cached 5 min on the host.
+  // A forced read still reuses one younger than 60 s.
+  'list_codex_usage',
   'set_default_codex_account',
   'set_project_codex_account',
-  // `{ enabled }` → `{}`. Stores the flag. Switching waits for a usage probe.
+  // `{ enabled }` → `{}`. A chat at its Account's limit continues on the
+  // signed-in Account with the most room.
   'set_codex_auto_switch',
   // `{ name }` → the new signed-out account.
   'add_codex_account',
@@ -388,6 +392,7 @@ export const WS_COMMAND_CLASSES: Readonly<
   finish_claude_link_login: ['command', 'receipt-only'],
   cancel_claude_login: ['idempotent', null],
   list_codex_accounts: ['read', null],
+  list_codex_usage: ['read', null],
   set_default_codex_account: ['idempotent', null],
   set_project_codex_account: ['idempotent', null],
   set_codex_auto_switch: ['idempotent', null],

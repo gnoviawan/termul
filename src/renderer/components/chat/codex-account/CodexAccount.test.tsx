@@ -6,7 +6,7 @@ import { CodexAccountChip } from './CodexAccountChip'
 
 const { api, switcher, openApp } = vi.hoisted(() => ({
   openApp: vi.fn(),
-  api: { list: vi.fn() },
+  api: { list: vi.fn(), usage: vi.fn() },
   switcher: { switchProjectCodexAccount: vi.fn() }
 }))
 
@@ -26,6 +26,7 @@ vi.mock('@/stores/codex-account-switch', async () => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  api.usage.mockResolvedValue([])
   api.list.mockResolvedValue({
     accounts: [
       { id: 'default', name: 'Personal', builtin: true, signedIn: true },

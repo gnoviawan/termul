@@ -14,7 +14,11 @@ import type {
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
-import type { CodexAccount, CodexAccountsSnapshot } from '@shared/types/codex-accounts.types'
+import type {
+  CodexAccount,
+  CodexAccountsSnapshot,
+  CodexAccountUsage
+} from '@shared/types/codex-accounts.types'
 import type {
   McpCatalogIconPayload,
   McpCatalogPage,
@@ -1143,6 +1147,11 @@ export class WsAcpTransport implements AcpTransport {
 
   async listCodexAccounts(): Promise<CodexAccountsSnapshot> {
     return this.request<CodexAccountsSnapshot>('list_codex_accounts', {})
+  }
+
+  async listCodexUsage(force = false): Promise<CodexAccountUsage[]> {
+    const reply = await this.request<{ usage: CodexAccountUsage[] }>('list_codex_usage', { force })
+    return reply?.usage ?? []
   }
 
   async setDefaultCodexAccount(accountId: string): Promise<void> {

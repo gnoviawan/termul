@@ -184,6 +184,7 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "cancel_claude_login" => handle_cancel_claude_login(id, &req.payload, acp).await,
         // Codex Accounts. New names; the Claude handlers above are unchanged.
         "list_codex_accounts" => handle_list_codex_accounts(id, acp).await,
+        "list_codex_usage" => handle_list_codex_usage(id, &req.payload, acp).await,
         "set_default_codex_account" => handle_set_default_codex_account(id, &req.payload, acp).await,
         "set_project_codex_account" => handle_set_project_codex_account(id, &req.payload, acp).await,
         "set_codex_auto_switch" => handle_set_codex_auto_switch(id, &req.payload, acp).await,

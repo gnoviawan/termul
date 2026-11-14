@@ -28,6 +28,33 @@ fn classification_table() {
             Some(SessionLimit),
         ),
         (
+            "codex rate_limited kind",
+            rpc(
+                -32603,
+                "Codex reached its usage limit",
+                Some(json!({ "errorKind": "rate_limited" })),
+            ),
+            Some(QuotaExceeded),
+        ),
+        (
+            "codex quota_exhausted kind",
+            rpc(
+                -32603,
+                "Codex reached its usage limit",
+                Some(json!({ "errorKind": "quota_exhausted" })),
+            ),
+            Some(QuotaExceeded),
+        ),
+        (
+            "codex usageLimitExceeded info",
+            rpc(
+                -32603,
+                "usage limit",
+                Some(json!({ "codexErrorInfo": "usageLimitExceeded" })),
+            ),
+            Some(QuotaExceeded),
+        ),
+        (
             "claude billing error",
             rpc(
                 -32603,

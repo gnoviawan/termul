@@ -20,7 +20,11 @@ import type {
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
-import type { CodexAccount, CodexAccountsSnapshot } from '@shared/types/codex-accounts.types'
+import type {
+  CodexAccount,
+  CodexAccountsSnapshot,
+  CodexAccountUsage
+} from '@shared/types/codex-accounts.types'
 import type { IpcResult } from '@shared/types/ipc.types'
 import type {
   McpCatalogIconPayload,
@@ -256,6 +260,8 @@ export function createInvokeAcpTransport(): AcpTransport {
     cancelClaudeLogin: (accountId) =>
       invoke<boolean>('claude_accounts_login_cancel', { accountId }),
     listCodexAccounts: () => invoke<CodexAccountsSnapshot>('codex_accounts_list'),
+    listCodexUsage: (force = false) =>
+      invoke<CodexAccountUsage[]>('codex_accounts_usage', { force }),
     setDefaultCodexAccount: async (accountId) => {
       await invoke('codex_accounts_set_default', { accountId })
     },

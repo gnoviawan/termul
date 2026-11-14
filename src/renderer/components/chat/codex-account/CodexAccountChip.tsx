@@ -16,11 +16,30 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Spinner } from '@/components/ui/spinner'
+import {
+  codexChipUsage,
+  codexWindowLabel,
+  planLabel,
+  type UsageReading,
+  type UsageTone,
+  usageTone
+} from '@/lib/codex-usage-format'
 import { cn } from '@/lib/utils'
 import { switchProjectCodexAccount } from '@/stores/codex-account-switch'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useChatCodexAccount } from './use-chat-codex-account'
 import { type ProjectCodexAccount, useProjectCodexAccount } from './use-project-codex-account'
+
+const TONE_TEXT: Record<UsageTone, string> = {
+  normal: 'text-secondary-foreground',
+  warning: 'text-warning',
+  critical: 'text-destructive'
+}
+
+const DOT_TONE = { normal: 'ok', warning: 'warning', critical: 'critical' } as const
+
+const spoken = (reading: UsageReading): string =>
+  `${reading.label.charAt(0).toLowerCase()}${reading.label.slice(1)} ${reading.percent}% used`
 
 /** Composer chip for a Codex chat. */
 export function CodexAccountChip({ sessionId }: { sessionId: string }): React.JSX.Element | null {
@@ -41,14 +60,17 @@ function AccountChip({ ctx }: { ctx: ProjectCodexAccount | null }): React.JSX.El
   const [switching, setSwitching] = useState(false)
   if (!ctx) return null
 
-  const readiness = codexAccountReadiness(ctx.current)
+  const readiness = codexAccountReadiness(ctx.current.account, ctx.current.usage)
   const signedOut = readiness !== 'ready'
+  const used = signedOut ? null : codexChipUsage(ctx.current.usage)
+  const segments = used ? [used.main, ...(used.other ? [used.other] : [])] : []
+  const tone = usageTone(Math.max(0, ...segments.map((segment) => segment.percent)))
   const snapshot = ctx.accounts.snapshot
 
   const choose = async (accountId: string | null): Promise<void> => {
     const nextId = accountId ?? snapshot?.defaultAccountId ?? null
     const next = snapshot?.accounts.find((a) => a.id === nextId)
-    if (accountId === (ctx.explicit ? ctx.current.id : null)) return
+    if (accountId === (ctx.explicit ? ctx.current.account.id : null)) return
     setSwitching(true)
     try {
       await switchProjectCodexAccount(ctx.projectId, accountId)
@@ -62,13 +84,17 @@ function AccountChip({ ctx }: { ctx: ProjectCodexAccount | null }): React.JSX.El
     }
   }
 
-  const name = ctx.current.name
-  const defaultReadiness = ctx.defaultAccount ? codexAccountReadiness(ctx.defaultAccount) : 'ready'
+  const name = ctx.current.account.name
+  const defaultReadiness = ctx.defaultAccount
+    ? codexAccountReadiness(ctx.defaultAccount, ctx.accounts.usage[ctx.defaultAccount.id])
+    : 'ready'
 
   return (
     <DropdownMenu
       onOpenChange={(open) => {
-        if (open) void ctx.accounts.reload()
+        if (!open) return
+        void ctx.accounts.reload()
+        void ctx.accounts.refreshUsage(false)
       }}
     >
       <DropdownMenuTrigger asChild>
@@ -82,14 +108,22 @@ function AccountChip({ ctx }: { ctx: ProjectCodexAccount | null }): React.JSX.El
             "after:absolute after:-inset-1 after:content-['']",
             'hover:text-foreground data-[state=open]:text-foreground disabled:opacity-60'
           )}
-          aria-label={`Codex account: ${name}. Change account`}
+          aria-label={`Codex account: ${[name, ...segments.map(spoken)].join(', ')}. Change account`}
         >
           {switching ? (
             <Spinner size={10} decorative />
           ) : (
-            <StatusDot tone={signedOut ? 'signed-out' : 'ok'} />
+            <StatusDot tone={signedOut ? 'signed-out' : DOT_TONE[tone]} />
           )}
           <span className="max-w-24 truncate">{name}</span>
+          {segments.map((segment, index) => (
+            <span key={segment.short} className="flex items-center gap-1.5 tabular-nums">
+              {index > 0 && <span aria-hidden>·</span>}
+              <span className={TONE_TEXT[segment.tone]}>
+                {segment.short} {segment.percent}%
+              </span>
+            </span>
+          ))}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
@@ -115,7 +149,18 @@ function AccountChip({ ctx }: { ctx: ProjectCodexAccount | null }): React.JSX.El
           </DropdownMenuItem>
         )}
         {(snapshot?.accounts ?? []).map((account) => {
-          const rowReady = codexAccountReadiness(account)
+          const rowUsage = ctx.accounts.usage[account.id]
+          const rowReady = codexAccountReadiness(account, rowUsage)
+          const window = rowUsage?.status === 'ok' ? rowUsage.windows : []
+          const detail =
+            rowReady === 'ready'
+              ? [
+                  planLabel(rowUsage?.planType ?? null),
+                  ...window.map((item) => `${codexWindowLabel(item)} ${Math.round(item.percent)}%`)
+                ]
+                  .filter(Boolean)
+                  .join(' · ') || 'Signed in'
+              : CODEX_NOT_READY_REASON[rowReady]
           return (
             <DropdownMenuItem
               key={account.id}
@@ -125,12 +170,10 @@ function AccountChip({ ctx }: { ctx: ProjectCodexAccount | null }): React.JSX.El
             >
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-xs text-foreground">{account.name}</span>
-                <span className="truncate text-2xs text-muted-foreground">
-                  {rowReady === 'ready' ? 'Signed in' : CODEX_NOT_READY_REASON[rowReady]}
-                </span>
+                <span className="truncate text-2xs text-muted-foreground">{detail}</span>
               </span>
               <span className="flex size-4 shrink-0 items-center justify-center">
-                {ctx.explicit && account.id === ctx.current.id && <Check size={14} />}
+                {ctx.explicit && account.id === ctx.current.account.id && <Check size={14} />}
               </span>
             </DropdownMenuItem>
           )

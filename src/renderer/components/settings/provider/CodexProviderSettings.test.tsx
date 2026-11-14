@@ -1,5 +1,5 @@
 import type { CodexAccountsSnapshot } from '@shared/types/codex-accounts.types'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useProjectStore } from '@/stores/project-store'
 import type { Project } from '@/types/project'
@@ -17,7 +17,8 @@ const { api, toast, admits, applyProjectCodexAccount, signInCodexAccount } = vi.
     setDefault: vi.fn(),
     setProjectAccount: vi.fn(),
     setAutoSwitch: vi.fn(),
-    startLogin: vi.fn()
+    startLogin: vi.fn(),
+    usage: vi.fn()
   },
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() }
 }))
@@ -66,12 +67,13 @@ beforeEach(() => {
   api.remove.mockResolvedValue(['office'])
   api.setDefault.mockResolvedValue(undefined)
   api.setAutoSwitch.mockResolvedValue(undefined)
+  api.usage.mockResolvedValue([])
   signInCodexAccount.mockResolvedValue(undefined)
   applyProjectCodexAccount.mockResolvedValue([])
 })
 
 describe('CodexProviderSettings', () => {
-  it('lists each Codex account and the automatic-switching placeholder', async () => {
+  it('lists each Codex account and automatic switching', async () => {
     render(<CodexProviderSettings />)
     const personal = await screen.findByTestId('codex-account-default')
     expect(personal).toHaveTextContent('Personal')
@@ -83,8 +85,43 @@ describe('CodexProviderSettings', () => {
     expect(work).toHaveTextContent('m-pos')
     expect(screen.getByLabelText('Switch accounts automatically')).toBeChecked()
     expect(
-      screen.getByText(/Automatic switching starts when Codex usage limits/)
+      screen.getByText(/continue it on the signed-in account with the most room/)
     ).toBeInTheDocument()
+  })
+
+  it('shows 5-hour and weekly usage bars', async () => {
+    api.usage.mockResolvedValue([
+      {
+        accountId: 'default',
+        status: 'ok',
+        planType: 'plus',
+        windows: [
+          {
+            kind: 'session',
+            percent: 82,
+            resetsAt: new Date(Date.now() + 3_600_000).toISOString(),
+            windowDurationMins: 300
+          },
+          {
+            kind: 'weekly',
+            percent: 10,
+            resetsAt: new Date(Date.now() + 86_400_000).toISOString(),
+            windowDurationMins: 10080
+          }
+        ],
+        checkedAt: Date.now(),
+        message: null
+      }
+    ])
+    render(<CodexProviderSettings />)
+    const personal = await screen.findByTestId('codex-account-default')
+    await waitFor(() => expect(personal).toHaveTextContent('82%'))
+    expect(personal).toHaveTextContent('5-hour')
+    expect(personal).toHaveTextContent('Weekly')
+    expect(within(personal).getByRole('progressbar', { name: '5-hour usage' })).toHaveAttribute(
+      'aria-valuenow',
+      '82'
+    )
   })
 
   it('stores the automatic-switching flag without switching chats', async () => {

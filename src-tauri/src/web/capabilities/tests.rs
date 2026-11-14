@@ -98,6 +98,7 @@ fn view_only_may_read_but_not_mutate() {
         "list_claude_accounts",
         "list_claude_usage",
         "list_codex_accounts",
+        "list_codex_usage",
         "store_read",
         "mark_chat_read",
     ] {

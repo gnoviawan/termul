@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use usage::UsageCache;
+
 use super::codex_accounts::{
     signed_out_error, AccountResolution, CodexAccountStore, BUILTIN_ACCOUNT_ID,
 };
@@ -144,6 +146,8 @@ pub struct CodexAgentService {
     active: bool,
     profile_store: Option<Arc<CodexAccountStore>>,
     login_probe: Arc<dyn CodexLoginStatus>,
+    usage_cache: UsageCache,
+    usage_probe: Arc<dyn usage::CodexUsageProbe>,
 }
 
 impl CodexAgentService {
@@ -160,30 +164,32 @@ impl CodexAgentService {
                 "[codex-accounts] no home directory; only the built-in account is available"
             );
         }
-        Self {
-            active: true,
-            profile_store: store,
-            login_probe: Arc::new(SystemCodexLoginProbe),
-        }
+        Self::assemble(true, store, Arc::new(SystemCodexLoginProbe))
     }
 
     /// A service that does not select a Codex home. Used by unit-test managers.
     #[must_use]
     pub fn without_host_state() -> Self {
+        Self::assemble(false, None, Arc::new(SystemCodexLoginProbe))
+    }
+
+    fn assemble(
+        active: bool,
+        profile_store: Option<Arc<CodexAccountStore>>,
+        login_probe: Arc<dyn CodexLoginStatus>,
+    ) -> Self {
         Self {
-            active: false,
-            profile_store: None,
-            login_probe: Arc::new(SystemCodexLoginProbe),
+            active,
+            profile_store,
+            login_probe,
+            usage_cache: parking_lot::Mutex::new(HashMap::new()),
+            usage_probe: Arc::new(usage::SystemCodexUsageProbe),
         }
     }
 
     #[cfg(test)]
     fn with_probe(store: Arc<CodexAccountStore>, login_probe: Arc<dyn CodexLoginStatus>) -> Self {
-        Self {
-            active: true,
-            profile_store: Some(store),
-            login_probe,
-        }
+        Self::assemble(true, Some(store), login_probe)
     }
 
     fn resolve_account(&self, project_id: Option<&str>) -> AccountResolution {
@@ -304,6 +310,7 @@ fn strip_api_credentials(env: &mut HashMap<String, String>) {
 }
 
 mod accounts;
+mod usage;
 pub use accounts::CodexSignInCheck;
 
 #[cfg(test)]

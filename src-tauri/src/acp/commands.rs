@@ -241,7 +241,9 @@ fn codex_command(
     command
 }
 
-fn resolve_codex_program(codex_bin: Option<&str>) -> crate::pty::manager::ResolvedProgram {
+pub(crate) fn resolve_codex_program(
+    codex_bin: Option<&str>,
+) -> crate::pty::manager::ResolvedProgram {
     let program = codex_bin
         .map(str::trim)
         .filter(|value| !value.is_empty())
