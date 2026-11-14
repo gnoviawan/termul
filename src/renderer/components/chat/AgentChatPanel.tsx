@@ -51,6 +51,7 @@ import { isAgentDeadError, sessionTurnBusy } from '@/stores/prompt-queue-orchest
 import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { AskUserQuestion } from './AskUserQuestion'
+import { AsciiGlow } from './ascii-glow/AsciiGlow'
 import { BrowserConsentCard } from './BrowserConsentCard'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
@@ -917,7 +918,7 @@ export function AgentChatPanel({
       ref={rootRef}
       onFocus={onFocus}
       onBlur={onBlur}
-      className="@container flex h-full flex-col bg-terminal-bg"
+      className="@container relative isolate flex h-full flex-col bg-terminal-bg"
       // Story 5.3 (T2.1): apply OSK spacer as bottom padding so the sticky
       // composer card stays visible above the on-screen keyboard. iOS Safari
       // ignores `interactive-widget=resizes-content` (T3.1) — the layout
@@ -932,6 +933,9 @@ export function AgentChatPanel({
           : undefined
       }
     >
+      {/* Under the start screen only; -z-10 inside this isolated root keeps
+          it below the hero and the composer. */}
+      {isEmptyChat ? <AsciiGlow className="-z-10" /> : null}
       <PendingRestartBanner sessionId={sessionId} />
       {isClosed && isOpeningHistory && !isLaunchingSession && (
         <div

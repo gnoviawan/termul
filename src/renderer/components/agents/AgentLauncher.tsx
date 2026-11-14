@@ -46,6 +46,7 @@ import {
   restoredLauncherOptions
 } from '@/components/agents/pending-launcher-options'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
+import { AsciiGlow } from '@/components/chat/ascii-glow/AsciiGlow'
 import { appOwnedTempPaths, dedupeAttachmentBlocks } from '@/components/chat/chat-attachments'
 import {
   extractFastModeOption,
@@ -1749,6 +1750,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           isMobileShell={isMobileShell}
         />
       )}
+      <AsciiGlow />
       {/* Scrollable content layer above the static backdrop — the backdrop
           stays pane-pinned at any scroll offset. */}
       <div

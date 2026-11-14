@@ -18,7 +18,7 @@
     "noImplicitAny": true,
     "noFallthroughCasesInSwitch": true,
     "resolveJsonModule": true,
-    "types": [],
+    "types": ["@webgpu/types"],
     "paths": {
       "@renderer/*": ["./src/renderer/*"],
       "@/*": ["./src/renderer/*"],
