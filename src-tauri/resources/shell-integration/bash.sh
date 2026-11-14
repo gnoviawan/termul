@@ -394,18 +394,23 @@ __termul_save_bindings() {
     __termul_old_x_2=$(bind -m vi-command -X) || return 1
 }
 
-__termul_restore_shell_bindings() {
+# Replay the dumped bindings of the two keys bootstrap rebinds. Not `bind -f`:
+# bash backs small here-strings with a pipe, which readline reads as empty.
+# Not the whole dump either: replayed `\M-` lines rebind ESC prefixes.
+__termul_replay_bindings() {
     local map=$1 binding
     while IFS= read -r binding; do
-        [ -z "$binding" ] || bind -m "$map" -x "$binding"
-    done <<< "$2"
+        case $binding in
+            '"\e[99;1~"'* | '"\e[99;2~"'*) bind -m "$map" ${2:+"$2"} "$binding" ;;
+        esac
+    done <<< "$3"
 }
 
 # Restore the function, macro and shell-command dumps with one shared path.
 __termul_restore_map() {
-    bind -m "$1" -f /dev/stdin <<< "$2"
-    bind -m "$1" -f /dev/stdin <<< "$3"
-    __termul_restore_shell_bindings "$1" "$4"
+    __termul_replay_bindings "$1" '' "$2"
+    __termul_replay_bindings "$1" '' "$3"
+    __termul_replay_bindings "$1" -x "$4"
 }
 
 __termul_restore_bindings() {
@@ -513,7 +518,7 @@ __termul_bootstrap || {
     unset __termul_owned_debug_trap __termul_current_debug_trap
     unset __termul_user_command __termul_last_status
     unset __termul_prompt_generation __termul_initialized __termul_generator __termul_prompt_suppressed
-    unset -f __termul_{complete,candidates,tokenize,decode_draft,prompt,debug,status,budget_completion,run_completer,completion_output,emit_completion,user_prompt,restore_prompt,preexec,frame,json_escape,bootstrap,save_bindings,restore_bindings,restore_map,restore_shell_bindings,bind_clear_line,bind_restore_prompt,reclaim_prompt,capture_debug}
+    unset -f __termul_{complete,candidates,tokenize,decode_draft,prompt,debug,status,budget_completion,run_completer,completion_output,emit_completion,user_prompt,restore_prompt,preexec,frame,json_escape,bootstrap,save_bindings,restore_bindings,restore_map,replay_bindings,bind_clear_line,bind_restore_prompt,reclaim_prompt,capture_debug}
     return 0
 }
 unset __termul_bindings_changed __termul_old_0 __termul_old_1 __termul_old_2

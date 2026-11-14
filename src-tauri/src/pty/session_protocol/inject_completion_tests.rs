@@ -330,7 +330,7 @@ fn round3_3_bash_failed_bootstrap_removes_startup_directory() {
         );
         assert!(
             !directory.exists(),
-            "failed bootstrap leaked startup directory: {shell:?}: {directory:?}"
+            "failed bootstrap leaked startup directory: {shell:?}"
         );
     }
 }
@@ -572,10 +572,7 @@ fn audit_10_successful_bootstrap_removes_startup_directory() {
             .join(format!("termul-shell-{}", live.session_id));
         live.handshake();
         live.read_until_idle();
-        assert!(
-            !directory.exists(),
-            "startup directory leaked: {shell:?}: {directory:?}"
-        );
+        assert!(!directory.exists(), "startup directory leaked: {shell:?}");
     }
 }
 
@@ -726,7 +723,7 @@ fn round4_4_zsh_failed_bootstrap_removes_startup_directory() {
     );
     assert!(
         !directory.exists(),
-        "failed bootstrap leaked startup directory: {directory:?}"
+        "failed bootstrap leaked startup directory"
     );
 }
 
