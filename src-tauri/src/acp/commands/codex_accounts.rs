@@ -8,8 +8,17 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use crate::acp::codex_accounts::usage::CodexAccountUsage;
 use crate::acp::codex_accounts::CodexAccountsSnapshot;
 use crate::acp::{CodexAgentService, CodexSignInCheck};
+
+#[tauri::command]
+pub async fn codex_accounts_usage(
+    service: State<'_, Arc<CodexAgentService>>,
+    force: Option<bool>,
+) -> Result<Vec<CodexAccountUsage>, String> {
+    service.accounts_usage(force.unwrap_or(false)).await
+}
 
 #[tauri::command]
 pub async fn codex_accounts_list(

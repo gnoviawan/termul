@@ -11,7 +11,11 @@ import type {
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
-import type { CodexAccount, CodexAccountsSnapshot } from '@shared/types/codex-accounts.types'
+import type {
+  CodexAccount,
+  CodexAccountsSnapshot,
+  CodexAccountUsage
+} from '@shared/types/codex-accounts.types'
 import type {
   McpCatalogIconPayload,
   McpCatalogPage,
@@ -310,6 +314,11 @@ export interface AcpTransport {
   cancelClaudeLogin(accountId: string): Promise<boolean>
   /** Codex Accounts of the host; secret-free. ChatGPT logins only. */
   listCodexAccounts(): Promise<CodexAccountsSnapshot>
+  /**
+   * Plan windows of every Codex Account. Cached 5 minutes on the host.
+   * `force` still reuses a read younger than 60 seconds.
+   */
+  listCodexUsage(force?: boolean): Promise<CodexAccountUsage[]>
   setDefaultCodexAccount(accountId: string): Promise<void>
   /**
    * `null` returns the Project to the Default Account. With

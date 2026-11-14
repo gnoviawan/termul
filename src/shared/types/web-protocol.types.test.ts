@@ -93,8 +93,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 81 request types including warm-pool promotion, host-owned session delete, browser stop and subagent stop', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(81)
+  it('exports exactly 82 request types including warm-pool promotion, host-owned session delete, browser stop and subagent stop', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(82)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -182,6 +182,7 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'finish_claude_link_login',
       'cancel_claude_login',
       'list_codex_accounts',
+      'list_codex_usage',
       'set_default_codex_account',
       'set_project_codex_account',
       'set_codex_auto_switch',

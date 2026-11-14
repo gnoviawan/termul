@@ -22,6 +22,7 @@ import { AccountAvatar, DefaultPill } from './ClaudeAccountRow'
 import { CodexAccountActions } from './CodexAccountActions'
 import { CodexAddAccountDialog } from './CodexAddAccountDialog'
 import { CodexSignInDialog } from './CodexSignInDialog'
+import { CodexUsageMeters } from './CodexUsageMeters'
 import { CODEX_NOT_READY_REASON, codexAccountReadiness } from './codex-account-status'
 import { ProviderGroupHeader } from './ProviderGroupHeader'
 
@@ -34,7 +35,10 @@ const errorText = (error: unknown): string =>
  * ChatGPT. The automatic-switching control only stores the flag.
  */
 export function CodexProviderSettings(): React.JSX.Element {
-  const { snapshot, loading, error, reload } = useCodexAccounts()
+  const { snapshot, usage, loading, error, reload, refreshUsage, refreshingUsage } =
+    useCodexAccounts({
+      usage: true
+    })
   const canManage = useServerAdmitsRemoteWrites()
   const projects = useProjectStore((s) => s.projects)
   const [addOpen, setAddOpen] = useState(false)
@@ -120,7 +124,7 @@ export function CodexProviderSettings(): React.JSX.Element {
             : undefined
         }
         lastChecked={null}
-        refreshing={false}
+        refreshing={refreshingUsage}
         action={
           canManage &&
           !failed && (
@@ -159,13 +163,15 @@ export function CodexProviderSettings(): React.JSX.Element {
       {!loading && !failed && snapshot && (
         <div>
           {accounts.map((account) => {
-            const readiness = codexAccountReadiness(account)
+            const read = usage[account.id]
+            const readiness = codexAccountReadiness(account, read)
             const projectNames = (projectsByAccount[account.id] ?? []).map((p) => p.name)
+            const windows = read?.status === 'ok' ? read.windows : []
             return (
               <div
                 key={account.id}
                 data-testid={`codex-account-${account.id}`}
-                className="flex items-center gap-3 border-b border-border/60 py-3 last:border-b-0"
+                className="flex items-start gap-3 border-b border-border/60 py-3 last:border-b-0"
               >
                 <AccountAvatar name={account.name} />
                 <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -180,6 +186,7 @@ export function CodexProviderSettings(): React.JSX.Element {
                         ? 'Signed in'
                         : CODEX_NOT_READY_REASON[readiness]}
                   </span>
+                  <CodexUsageMeters windows={windows} />
                 </div>
                 {canManage && (
                   <CodexAccountActions
@@ -207,7 +214,7 @@ export function CodexProviderSettings(): React.JSX.Element {
           <SettingsRow
             htmlFor="codex-auto-switch"
             label="Switch accounts automatically"
-            description="Saves your choice. Automatic switching starts when Codex usage limits are available."
+            description="When a chat reaches its account's limit, continue it on the signed-in account with the most room."
             layout="inline"
           >
             <Switch
@@ -282,6 +289,7 @@ export function CodexProviderSettings(): React.JSX.Element {
             onSignedIn={async (account) => {
               setSigningIn(null)
               await reload()
+              await refreshUsage(true)
               toast.success(`${account.name} is signed in`)
             }}
           />

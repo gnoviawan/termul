@@ -10,7 +10,11 @@
  * The same path works on the desktop app and on a remote browser.
  */
 
-import type { CodexAccount, CodexAccountsSnapshot } from '@shared/types/codex-accounts.types'
+import type {
+  CodexAccount,
+  CodexAccountsSnapshot,
+  CodexAccountUsage
+} from '@shared/types/codex-accounts.types'
 import type { AgentConfig, SpawnAgentResult } from '@/lib/acp-api'
 import { getAcpTransport } from './acp-transport'
 import { runCommand } from './command-engine'
@@ -33,6 +37,14 @@ export const codexAccountsApi = {
   list: (): Promise<CodexAccountsSnapshot> =>
     logged('list', () => getAcpTransport().listCodexAccounts()),
 
+  /**
+   * Plan windows of every Account. The host caches them for 5 minutes.
+   * `force` still reuses a read younger than 60 seconds. A failed read keeps
+   * the last good windows.
+   */
+  usage: (force = false): Promise<CodexAccountUsage[]> =>
+    logged('usage', () => getAcpTransport().listCodexUsage(force)),
+
   setDefault: (accountId: string): Promise<void> =>
     logged('setDefault', () => getAcpTransport().setDefaultCodexAccount(accountId)),
 
@@ -49,7 +61,7 @@ export const codexAccountsApi = {
       getAcpTransport().setProjectCodexAccount(projectId, accountId, options.expectedAccountId)
     ),
 
-  /** Stores the flag. It does not switch chats until a usage probe exists. */
+  /** A chat at its limit continues on the signed-in Account with the most room. */
   setAutoSwitch: (enabled: boolean): Promise<void> =>
     logged('setAutoSwitch', () => getAcpTransport().setCodexAutoSwitch(enabled)),
 

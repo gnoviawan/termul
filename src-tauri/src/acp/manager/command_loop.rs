@@ -8,6 +8,8 @@ use crate::acp::legacy_models::{
     advertises_model_config_option, resolve_models, send_with_legacy_models,
     LEGACY_MODEL_SWITCH_UNSUPPORTED,
 };
+use agent_client_protocol::schema::v1::PromptResponse;
+
 use crate::acp::session::PendingElicitation;
 
 /// The agent driver's main loop: complete `initialize`, then service commands
@@ -779,12 +781,14 @@ pub(super) async fn run_command_loop(
                     let cancel_cx = turn_cx.clone();
                     let outcome: Result<StopReason, events::AcpErrorDetail> = race_turn(
                         async {
-                            turn_cx
+                            match turn_cx
                                 .send_request(PromptRequest::new(&session_id, content))
                                 .block_task()
                                 .await
-                                .map(|r| r.stop_reason)
-                                .map_err(events::AcpErrorDetail::from)
+                            {
+                                Ok(response) => codex_plan_limit_outcome(&response),
+                                Err(error) => Err(events::AcpErrorDetail::from(error)),
+                            }
                         },
                         cancel_rx,
                         &mut idle_rx,
@@ -1770,6 +1774,22 @@ pub(super) fn initialize_message(
         auth.insert("gateway".to_string(), serde_json::json!({}));
     }
     UntypedMessage::new("initialize", &value).map_err(|error| error.to_string())
+}
+
+/// A Codex plan-limit on the prompt result becomes a turn error, so the
+/// renderer can switch accounts. Any other result keeps its stop reason.
+fn codex_plan_limit_outcome(
+    response: &PromptResponse,
+) -> Result<StopReason, events::AcpErrorDetail> {
+    let kind = response.meta.as_ref().and_then(|meta| {
+        crate::acp::codex_accounts::usage::codex_plan_limit_kind(&serde_json::Value::Object(
+            meta.clone(),
+        ))
+    });
+    if let Some(kind) = kind {
+        return Err(events::AcpErrorDetail::codex_plan_limit(kind));
+    }
+    Ok(response.stop_reason)
 }
 
 fn api_key_auth_meta(shape: ApiKeyShape, key: &ApiKey) -> Meta {

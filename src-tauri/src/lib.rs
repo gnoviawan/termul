@@ -2265,6 +2265,7 @@ pub fn run() {
             acp::commands::claude_accounts_set_project,
             acp::commands::claude_accounts_set_auto_switch,
             acp::commands::codex_accounts_list,
+            acp::commands::codex_accounts_usage,
             acp::commands::codex_accounts_set_default,
             acp::commands::codex_accounts_set_project,
             acp::commands::codex_accounts_set_auto_switch,

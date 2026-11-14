@@ -26,7 +26,7 @@ export function CodexProjectAccountSettings({
   onChange,
   onManageAccounts
 }: CodexProjectAccountSettingsProps): React.JSX.Element {
-  const { snapshot, loading, error, reload } = codex.accounts
+  const { snapshot, loading, error, reload, refreshUsage } = codex.accounts
   const canManage = useServerAdmitsRemoteWrites()
   const [signingIn, setSigningIn] = useState<CodexAccountView | null>(null)
   const accounts = snapshot?.accounts ?? []
@@ -113,6 +113,7 @@ export function CodexProjectAccountSettings({
         onSignedIn={async () => {
           setSigningIn(null)
           await reload()
+          await refreshUsage(true)
         }}
       />
     </div>

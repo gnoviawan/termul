@@ -3,6 +3,7 @@ import { codexAccountsApi } from '@/lib/codex-accounts-api'
 
 const transport = vi.hoisted(() => ({
   listCodexAccounts: vi.fn(),
+  listCodexUsage: vi.fn(),
   setDefaultCodexAccount: vi.fn(),
   setProjectCodexAccount: vi.fn(),
   setCodexAutoSwitch: vi.fn(),
@@ -51,6 +52,9 @@ describe('codexAccountsApi', () => {
     expect(transport.setDefaultCodexAccount).toHaveBeenCalledWith('ab12')
     expect(transport.setProjectCodexAccount).toHaveBeenCalledWith('office', null, 'ab12')
     expect(transport.setCodexAutoSwitch).toHaveBeenCalledWith(false)
+    transport.listCodexUsage.mockResolvedValue([])
+    await codexAccountsApi.usage(true)
+    expect(transport.listCodexUsage).toHaveBeenCalledWith(true)
   })
 
   it('adds, renames, removes, and starts a sign-in spawn', async () => {

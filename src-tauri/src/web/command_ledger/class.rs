@@ -156,6 +156,7 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     ),
     ("cancel_claude_login", CommandClass::idempotent()),
     ("list_codex_accounts", CommandClass::read()),
+    ("list_codex_usage", CommandClass::read()),
     ("set_default_codex_account", CommandClass::idempotent()),
     ("set_project_codex_account", CommandClass::idempotent()),
     ("set_codex_auto_switch", CommandClass::idempotent()),

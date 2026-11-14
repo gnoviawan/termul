@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { ClaudeAccountChip } from '@/components/chat/claude-account/ClaudeAccountChip'
 import { ClaudeLimitWarning } from '@/components/chat/claude-account/ClaudeLimitWarning'
 import { CodexAccountChip } from '@/components/chat/codex-account/CodexAccountChip'
+import { CodexLimitWarning } from '@/components/chat/codex-account/CodexLimitWarning'
 import { Paperclip } from '@/components/icons'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
@@ -607,6 +608,7 @@ export function ChatInputBar({
             )}
             {permission && <PermissionPrompt permission={permission} isVisible={isVisible} />}
             {!controlsDisabled && <ClaudeLimitWarning sessionId={session.id} atTop={!permission} />}
+            {!controlsDisabled && <CodexLimitWarning sessionId={session.id} atTop={!permission} />}
             <AttachmentPreviewGroup
               attachments={attachments}
               onRemove={removeAttachment}

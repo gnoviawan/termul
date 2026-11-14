@@ -244,6 +244,7 @@ pub fn ws_requirement(request_type: &str) -> Requirement {
         | "list_claude_accounts"
         | "list_claude_usage"
         | "list_codex_accounts"
+        | "list_codex_usage"
         | "store_read"
         | "mark_chat_read" => Requirement::View,
         "store_write" | "store_delete" => Requirement::DeviceStore,

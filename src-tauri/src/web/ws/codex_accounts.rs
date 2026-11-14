@@ -58,6 +58,30 @@ pub(super) struct StartCodexAccountLoginPayload {
     config: AgentConfig,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ListCodexUsagePayload {
+    #[serde(default)]
+    force: bool,
+}
+
+/// `list_codex_usage { force? }` → the usage windows of every Account.
+/// Reads are cached 5 minutes; a forced read still reuses one younger than 60 seconds.
+pub(super) async fn handle_list_codex_usage(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: ListCodexUsagePayload = serde_json::from_value(payload.clone()).unwrap_or_default();
+    match acp.codex_agent().accounts_usage(parsed.force).await {
+        Ok(usage) => ok_with_payload(id, &json!({ "usage": usage })),
+        Err(error) => {
+            warn!(error = %error, "list_codex_usage failed");
+            WsReply::err(id, WsErrorCode::Unsupported, error)
+        }
+    }
+}
+
 /// `list_codex_accounts` → the secret-free Account snapshot.
 pub(super) async fn handle_list_codex_accounts(id: String, acp: &Arc<AcpManager>) -> WsReply {
     match acp.codex_agent().accounts_snapshot().await {
