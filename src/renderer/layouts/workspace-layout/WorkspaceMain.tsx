@@ -46,15 +46,17 @@ export function WorkspaceMain({
   // Every visited project's tree stays mounted; only the active one is visible.
   const mountedProjectIds = useMountedProjectIds()
   const activeTreeProjectId = useWorkspaceStore((state) => state.activeProjectId)
-  // Flagged shell only: the SSH header is the top row when it owns the window
-  // controls (no provider on the classic and mobile shells = unchanged).
+  // Flagged shell only: the SSH header is the top row in SSH mode (no
+  // provider on the mobile shell = unchanged). It ends with the window
+  // controls spacer unless the open right panel's header does.
   const topRowValue = useTopRow()
   const sshTopRow =
-    topRowValue?.roles.controlsOwner === 'ssh-header'
+    topRowValue?.roles.showPanelOwner === 'ssh-header'
       ? {
           dragRegion: topRowValue.platform.dragRegions,
-          windowControls: topRowValue.platform.windowControls,
-          startSlot: topRowValue.roles.showPanelOwner === 'ssh-header'
+          windowControls:
+            topRowValue.platform.windowControls && topRowValue.roles.controlsOwner === 'ssh-header',
+          startSlot: true
         }
       : undefined
   // Mobile shell only: a split synced from desktop collapses to the active

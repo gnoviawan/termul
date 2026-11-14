@@ -1,6 +1,7 @@
+import type { ShellInfo } from '@shared/types/ipc.types'
 import { useEffect } from 'react'
 import { ConnectionStatusIndicator } from '@/components/ConnectionStatusIndicator'
-import { FolderTree, GitBranch, Github, Globe, Terminal, type TermulIcon } from '@/components/icons'
+import { FolderTree, GitBranch, Github, Globe, type TermulIcon } from '@/components/icons'
 import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
 import { logShellEvent } from '@/components/shell/shell-log'
 import { useTopRowPlatform } from '@/components/shell/top-row-context'
@@ -17,6 +18,7 @@ import {
   useShellLayoutStore
 } from '@/stores/shell-layout-store'
 import type { Project } from '@/types/project'
+import { TerminalStripButton } from './TerminalStripButton'
 import { ToolStrip } from './ToolStrip'
 
 const VIEWS: ReadonlyArray<{ id: ShellLastColumnTab; label: string; Icon: TermulIcon }> = [
@@ -29,8 +31,8 @@ interface ShellToolStripProps {
   activeProject: Project | undefined
   /** The SSH workspace is open: Explorer toggles the remote file browser, the git views are off. */
   sshOpen: boolean
-  /** Opens a new terminal tab in the active pane (the add-terminal handler). */
-  onNewTerminal: () => void
+  /** Opens a new terminal tab in the active pane: the default shell, or `shell`. */
+  onNewTerminal: (shell?: ShellInfo) => void
   /** Opens a new browser tab in the active pane. */
   onNewBrowserTab: () => void
 }
@@ -39,8 +41,8 @@ interface ShellToolStripProps {
  * The shell's right edge strip (Paper "Tool strip"). Top: Explorer, Changes
  * (with the changed-file count) and GitHub, each showing the right panel on
  * that view, or hiding it when that view is already open; the open view is
- * raised. Bottom: a new Terminal tab and a new Browser tab on every click,
- * and Remote access (desktop only; the web client shows its connection lamp
+ * raised. Bottom: a new Terminal tab (right-click: pick the shell) and a new
+ * Browser tab on every click, and Remote access (desktop only; the web client shows its connection lamp
  * there instead).
  */
 export function ShellToolStrip({
@@ -50,7 +52,8 @@ export function ShellToolStrip({
   onNewBrowserTab
 }: ShellToolStripProps): React.JSX.Element {
   const desktop = isTauriContext()
-  const dragRegion = useTopRowPlatform().dragRegions ? true : undefined
+  const platform = useTopRowPlatform()
+  const dragRegion = platform.dragRegions ? true : undefined
   const projectId = activeProject?.id ?? ''
   const panelVisible = useFileExplorerVisible()
   const updatePanelVisibility = useUpdatePanelVisibility()
@@ -90,7 +93,13 @@ export function ShellToolStrip({
   const tabsEnabled = hasProject && !sshOpen
 
   return (
-    <ToolStrip aria-label="Tools" data-testid="tool-strip" data-tauri-drag-region={dragRegion}>
+    <ToolStrip
+      aria-label="Tools"
+      data-testid="tool-strip"
+      data-tauri-drag-region={dragRegion}
+      // Windows/Linux: the strip starts below the window controls (44px row).
+      className={platform.windowControls ? 'pt-[50px]' : undefined}
+    >
       <ToolStrip.Group>
         {VIEWS.map(({ id, label, Icon }) => {
           const open = viewOpen(id)
@@ -119,15 +128,11 @@ export function ShellToolStrip({
       </ToolStrip.Group>
       <ToolStrip.Spacer data-tauri-drag-region={dragRegion} />
       <ToolStrip.Group className="pb-2">
-        <ToolStrip.Button
-          label="New terminal"
+        <TerminalStripButton
+          projectShell={activeProject?.defaultShell}
           shortcut={terminalShortcut}
           disabled={!tabsEnabled}
-          onClick={() => {
-            logShellEvent('strip opens a terminal tab')
-            onNewTerminal()
-          }}
-          icon={<Terminal size={14} aria-hidden />}
+          onNewTerminal={onNewTerminal}
         />
         {/* Browser tabs are native webviews: desktop only. */}
         {desktop && (

@@ -216,7 +216,7 @@ describe('ShellRail', () => {
         ]
       })
       renderRail()
-      const alpha = screen.getByTestId('project-item-p1').parentElement as HTMLElement
+      const alpha = screen.getByTestId('project-item-p1').closest('li') as HTMLElement
       expect(within(alpha).getByRole('list', { name: 'Chats in Alpha' })).toBeInTheDocument()
       expect(within(alpha).getByRole('button', { name: 'Chat a' })).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Chat b' })).not.toBeInTheDocument()
@@ -515,9 +515,12 @@ describe('ShellRail', () => {
       seedChats()
       const heights = () => ({
         nav: screen.getByRole('button', { name: 'Search' }).className.match(/\bh-7\b/)?.[0],
-        project: screen
-          .getByRole('button', { name: /^Project: Alpha/ })
-          .className.match(/\bh-7\.5\b/)?.[0],
+        // Expanded: the row box around its stretched button; collapsed: the button.
+        project: (() => {
+          const button = screen.getByRole('button', { name: /^Project: Alpha/ })
+          const row = button.closest('[data-project-row]') ?? button
+          return row.className.match(/\bh-7\.5\b/)?.[0]
+        })(),
         chat: screen.getByRole('button', { name: 'Chat a' }).className.match(/\bh-7\.5\b/)?.[0],
         header: screen.getByTestId('rail-header').className.match(/\bh-11\b/)?.[0],
         section: screen.getByTestId('rail-section-projects').className.match(/\bh-10\b/)?.[0]

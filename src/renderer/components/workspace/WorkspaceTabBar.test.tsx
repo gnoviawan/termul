@@ -1496,7 +1496,7 @@ describe('WorkspaceTabBar', () => {
       expect(screen.queryByTestId('window-controls')).toBeNull()
     })
 
-    it('renders the window controls flush at the right end, after the tabs', async () => {
+    it('ends with the window controls spacer, after the tabs; the controls live in the shell', async () => {
       const { container } = render(
         <WorkspaceTabBar
           paneId="pane-a"
@@ -1507,26 +1507,13 @@ describe('WorkspaceTabBar', () => {
       )
       await flushShellEffect()
 
-      const controls = screen.getByTestId('window-controls')
+      const spacer = screen.getByTestId('window-controls-inset')
       const bar = container.firstElementChild as HTMLElement
-      expect(bar.lastElementChild).toBe(controls)
-      expect(controls).not.toHaveAttribute('data-tauri-drag-region')
-      expect(screen.getAllByRole('button', { name: /window$/ })).toHaveLength(3)
+      expect(bar.lastElementChild).toBe(spacer)
+      expect(spacer).toHaveAttribute('data-tauri-drag-region')
+      expect(screen.queryByTestId('window-controls')).toBeNull()
+      expect(screen.queryAllByRole('button', { name: /window$/ })).toHaveLength(0)
       expect(screen.queryByRole('button', { name: 'New tab' })).toBeNull()
-    })
-
-    it('renders the controls without drag attributes on a bar without drag (web-like)', async () => {
-      const { container } = render(
-        <WorkspaceTabBar
-          paneId="pane-a"
-          tabs={[]}
-          activeTabId={null}
-          topRow={{ dragRegion: false, windowControls: true }}
-        />
-      )
-      await flushShellEffect()
-      expect(dragged(container)).toHaveLength(0)
-      expect(screen.getByTestId('window-controls')).toBeInTheDocument()
     })
   })
 })

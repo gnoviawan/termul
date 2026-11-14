@@ -69,8 +69,8 @@ Many lines?
 ```
 
 ```tsx
-// ContextBarSettingsPopover.tsx
-<Switch checked={checked} onCheckedChange={onCheckedChange} />
+// RemoteAccessPopover.tsx
+<Switch checked={isRunning} disabled={remoteBusy} onCheckedChange={onToggle} />
 ```
 
 ## Incorrect

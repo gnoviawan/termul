@@ -5,6 +5,7 @@ import {
   useNativeWebviewOccluded
 } from '@/hooks/use-native-webview-occlusion'
 import { OUTSIDE_PROJECT_ROOT_REASON } from '@/lib/active-worktree'
+import { logFrontendError } from '@/lib/log-api'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import { mockTerminal } from '@/lib/test-utils/terminal'
 import { expectNotWriteGated, expectWriteGated } from '@/lib/test-utils/write-gate'
@@ -15,7 +16,12 @@ import { useTerminalStore } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { createLeaf } from '@/stores/workspace-store/tree'
 import type { Project, Worktree } from '@/types/project'
-import { WorkspaceSwitcher } from './WorkspaceSwitcher'
+import {
+  RailWorktreeChip,
+  RailWorktreeSwitcher,
+  RailWorktreeSwitcherProvider,
+  useOpenRailWorktreeSwitcher
+} from './worktree-switcher'
 
 const mocks = vi.hoisted(() => ({
   admits: { value: true },
@@ -82,18 +88,31 @@ function Occluded(): React.JSX.Element {
   return <span data-testid="occluded">{String(useNativeWebviewOccluded())}</span>
 }
 
+/** A Rail project row stand-in: a click asks the provider to open the switcher (as the menu item does). */
+function Row({ project }: { project: Project }): React.JSX.Element {
+  const open = useOpenRailWorktreeSwitcher()
+  return (
+    <RailWorktreeSwitcher project={project}>
+      <button type="button" onClick={() => open(project.id)}>
+        Project row
+      </button>
+      <RailWorktreeChip project={project} collapsed={false} />
+    </RailWorktreeSwitcher>
+  )
+}
+
 function renderSwitcher(project = makeProject()) {
   useProjectStore.setState({ projects: [project], isWorktreeOperationLocked: false })
   return render(
-    <>
-      <WorkspaceSwitcher project={project} />
+    <RailWorktreeSwitcherProvider>
+      <Row project={project} />
       <Occluded />
-    </>
+    </RailWorktreeSwitcherProvider>
   )
 }
 
 function trigger(): HTMLElement {
-  return screen.getByRole('button', { name: /Workspace|feat\/a|fix\/b/ })
+  return screen.getByRole('button', { name: 'Project row' })
 }
 
 async function openSwitcher(): Promise<HTMLElement> {
@@ -104,7 +123,7 @@ async function openSwitcher(): Promise<HTMLElement> {
 const options = (): HTMLElement[] => screen.getAllByRole('option')
 const search = (): HTMLElement => screen.getByLabelText('Search or create a worktree')
 
-describe('WorkspaceSwitcher', () => {
+describe('RailWorktreeSwitcher', () => {
   beforeEach(() => {
     mocks.admits.value = true
     for (const fn of [
@@ -131,34 +150,36 @@ describe('WorkspaceSwitcher', () => {
     useProjectStore.setState({ projects: initialProjects, isWorktreeOperationLocked: false })
   })
 
-  describe('trigger', () => {
-    it('reads Workspace without a pick and the picked worktree branch with one', () => {
+  describe('worktree chip', () => {
+    it('shows nothing without a pick, or for a pruned or outside-root pick', () => {
       renderSwitcher()
-      expect(screen.getByRole('button', { name: /Workspace/ })).toBeInTheDocument()
+      expect(screen.queryByTestId('rail-worktree-chip-p1')).not.toBeInTheDocument()
       cleanup()
-      useShellLayoutStore.setState({ worktreePickByProject: { p1: 'e:/proj/.termul/worktrees/a' } })
-      renderSwitcher()
-      expect(screen.getByRole('button', { name: /feat\/a/ })).toBeInTheDocument()
-    })
-
-    it('shows the branch in its own case, not as an uppercase section label', () => {
-      useShellLayoutStore.setState({ worktreePickByProject: { p1: 'e:/proj/.termul/worktrees/a' } })
-      renderSwitcher()
-      const label = screen.getByText('feat/a')
-      expect(label).not.toHaveClass('label-panel')
-      expect(label.closest('button')).toHaveClass('text-foreground')
-    })
-
-    it('reads Workspace for a pruned or outside-root pick', () => {
       useShellLayoutStore.setState({
         worktreePickByProject: { p1: 'e:/proj/.termul/worktrees/gone' }
       })
       renderSwitcher()
-      expect(screen.getByRole('button', { name: /Workspace/ })).toBeInTheDocument()
+      expect(screen.queryByTestId('rail-worktree-chip-p1')).not.toBeInTheDocument()
       cleanup()
       useShellLayoutStore.setState({ worktreePickByProject: { p1: 'd:/elsewhere/ext' } })
       renderSwitcher()
-      expect(screen.getByRole('button', { name: /Workspace/ })).toBeInTheDocument()
+      expect(screen.queryByTestId('rail-worktree-chip-p1')).not.toBeInTheDocument()
+    })
+
+    it('shows the picked worktree in its own case, with the path as title', () => {
+      useShellLayoutStore.setState({ worktreePickByProject: { p1: 'e:/proj/.termul/worktrees/a' } })
+      renderSwitcher()
+      const chip = screen.getByTestId('rail-worktree-chip-p1')
+      expect(chip).toHaveTextContent('Worktree: feat/a')
+      expect(within(chip).getByText('feat/a').parentElement).toHaveAttribute('title', WT_A.path)
+    })
+
+    it('keeps the line on the collapsed Rail as a branch glyph with a hidden label', () => {
+      useShellLayoutStore.setState({ worktreePickByProject: { p1: 'e:/proj/.termul/worktrees/a' } })
+      render(<RailWorktreeChip project={makeProject()} collapsed />)
+      const chip = screen.getByTestId('rail-worktree-chip-p1')
+      expect(chip).toHaveClass('h-4.5')
+      expect(chip).toHaveAttribute('title', 'Worktree: feat/a')
     })
   })
 
@@ -291,7 +312,14 @@ describe('WorkspaceSwitcher', () => {
       fireEvent.click(options()[1])
       expect(pickOf()).toBe('e:/proj/.termul/worktrees/a')
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-      expect(screen.getByRole('button', { name: /feat\/a/ })).toBeInTheDocument()
+      expect(screen.getByTestId('rail-worktree-chip-p1')).toHaveTextContent('feat/a')
+      // One durable line, with the project id and no path.
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: 'Rail',
+          message: '[rail] worktree switch for project p1: a worktree'
+        })
+      )
     })
 
     it('clears the pick from the Workspace row', async () => {

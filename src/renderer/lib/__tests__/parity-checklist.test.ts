@@ -2171,13 +2171,13 @@ describe('Host-owned chat activity parity (chat list status on every surface)', 
         /useAgentChatStatusSignals\(/
       )
     }
-    // The desktop chat card and the Rail chat row read it through `useChatLiveState`.
-    for (const row of [
-      ['components', 'shell', 'ChatCard.tsx'],
-      ['components', 'shell', 'rail', 'RailProjectChats.tsx']
-    ]) {
-      expect(readFileSync(join(LIB_DIR, '..', ...row), 'utf-8')).toMatch(/useChatLiveState\(/)
-    }
+    // The desktop Rail chat row reads it through `useChatLiveState`.
+    expect(
+      readFileSync(
+        join(LIB_DIR, '..', 'components', 'shell', 'rail', 'RailProjectChats.tsx'),
+        'utf-8'
+      )
+    ).toMatch(/useChatLiveState\(/)
   })
 })
 
@@ -3546,10 +3546,13 @@ describe('Agent session import parity', () => {
     )
   })
 
-  it('the chat list offers the import on the desktop Chats tab and the phone drawer', () => {
+  it('the import is offered in the desktop Rail + menu and the phone drawer', () => {
     const components = join(LIB_DIR, '..', 'components')
-    expect(readFileSync(join(components, 'shell', 'ChatsList.tsx'), 'utf-8')).toMatch(
-      /<ImportChatsButton[^>]*variant="icon"/
+    expect(readFileSync(join(components, 'sidebar', 'use-rail-import-chats.tsx'), 'utf-8')).toMatch(
+      /<ImportChatsDialog[^>]*projectId=/
+    )
+    expect(readFileSync(join(components, 'sidebar', 'add-project-menu.tsx'), 'utf-8')).toMatch(
+      /onSelect=\{onImportChats\}/
     )
     expect(readFileSync(join(components, 'mobile', 'MobileRecentsList.tsx'), 'utf-8')).toMatch(
       /<ImportChatsButton[^>]*variant="row"/

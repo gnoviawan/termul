@@ -100,10 +100,10 @@ describe('SidePanelColumn', () => {
       controlsOwner: 'pane',
       showPanelOwner: 'pane'
     }
-    const renderWith = (platform: TopRowPlatform) => {
+    const renderWith = (platform: TopRowPlatform, owner: TopRowRoles['controlsOwner'] = 'pane') => {
       useShellLayoutStore.setState({ lastColumnTabByProject: { p1: 'changes' } })
       render(
-        <TopRowProvider roles={roles} platform={platform}>
+        <TopRowProvider roles={{ ...roles, controlsOwner: owner }} platform={platform}>
           <SidePanelColumn activeProject={makeProject()} />
         </TopRowProvider>
       )
@@ -121,6 +121,19 @@ describe('SidePanelColumn', () => {
     it('has no drag region on web', () => {
       const header = renderWith({ dragRegions: false, windowControls: false, trafficLights: false })
       expect(header).not.toHaveAttribute('data-tauri-drag-region')
+    })
+
+    it('ends with the window controls spacer on Windows/Linux while it owns them', () => {
+      const windows = { dragRegions: true, windowControls: true, trafficLights: false }
+      const header = renderWith(windows, 'right-panel')
+      const spacer = screen.getByTestId('window-controls-inset')
+      expect(header.lastElementChild).toBe(spacer)
+      expect(screen.queryByTestId('window-controls')).toBeNull()
+    })
+
+    it('has no spacer while the main area owns the controls, or on macOS', () => {
+      renderWith({ dragRegions: true, windowControls: true, trafficLights: false }, 'pane')
+      expect(screen.queryByTestId('window-controls-inset')).toBeNull()
     })
   })
 })

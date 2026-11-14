@@ -1,24 +1,5 @@
 ﻿import { MONO_STACK } from '@/lib/font-stacks'
 
-// Context bar visibility settings
-export interface ContextBarSettings {
-  showProjectName: boolean
-  showGitBranch: boolean
-  showGitStatus: boolean
-  showWorkingDirectory: boolean
-  showExitCode: boolean
-}
-
-// Default settings for users with no saved blob: project name and file counts
-// (`showGitStatus`) are hidden; branch, directory and exit code are shown.
-export const DEFAULT_CONTEXT_BAR_SETTINGS: ContextBarSettings = {
-  showProjectName: false,
-  showGitBranch: true,
-  showGitStatus: false,
-  showWorkingDirectory: true,
-  showExitCode: true
-}
-
 // Table of contents panel settings
 export interface TocSettings {
   isVisible: boolean

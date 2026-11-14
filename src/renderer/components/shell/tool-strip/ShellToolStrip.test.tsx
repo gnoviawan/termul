@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as appSettingsHooks from '@/hooks/use-app-settings'
 import { useGitStatusStore } from '@/stores/git-status-store'
@@ -6,8 +6,9 @@ import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/she
 import type { Project } from '@/types/project'
 import { ShellToolStrip } from './ShellToolStrip'
 
-const { tauriRef, mockLog, refreshWorkingCopy } = vi.hoisted(() => ({
+const { tauriRef, macRef, mockLog, refreshWorkingCopy } = vi.hoisted(() => ({
   tauriRef: { current: true },
+  macRef: { current: false },
   mockLog: vi.fn(() => Promise.resolve()),
   refreshWorkingCopy: vi.fn(() => Promise.resolve())
 }))
@@ -15,6 +16,12 @@ const { tauriRef, mockLog, refreshWorkingCopy } = vi.hoisted(() => ({
 vi.mock('@/lib/tauri-runtime', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   isTauriContext: () => tauriRef.current
+}))
+vi.mock('@/lib/platform', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  get isMac() {
+    return macRef.current
+  }
 }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLog }))
 vi.mock('@/components/RemoteAccessPopover', () => ({
@@ -56,6 +63,7 @@ const layout = () => useShellLayoutStore.getState()
 beforeEach(() => {
   vi.clearAllMocks()
   tauriRef.current = true
+  macRef.current = false
   resetShellLayoutStoreForTests()
   useShellLayoutStore.setState({ status: 'ready' })
   useGitStatusStore.setState({ statuses: {}, refreshWorkingCopy } as never)
@@ -63,6 +71,22 @@ beforeEach(() => {
 })
 
 describe('ShellToolStrip', () => {
+  it('starts below the window controls on Windows/Linux desktop only', () => {
+    renderStrip()
+    expect(strip()).toHaveClass('pt-[50px]')
+    cleanup()
+
+    macRef.current = true
+    renderStrip()
+    expect(strip()).not.toHaveClass('pt-[50px]')
+    cleanup()
+
+    macRef.current = false
+    tauriRef.current = false
+    renderStrip()
+    expect(strip()).not.toHaveClass('pt-[50px]')
+  })
+
   it('shows Explorer, Changes, GitHub on top and Terminal, Browser, Remote access pinned', () => {
     renderStrip()
     const [top, bottom] = within(strip()).getAllByRole('group')

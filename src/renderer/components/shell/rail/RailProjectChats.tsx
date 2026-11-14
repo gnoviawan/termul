@@ -26,6 +26,7 @@ import {
   RailHoverPanelTrigger
 } from './rail-hover-panel'
 import { logRailEvent } from './rail-log'
+import { RAIL_WORKTREE_CHIP_HEIGHT, RailWorktreeChip, usePickedWorktree } from './worktree-switcher'
 
 /**
  * The chat peek opens 4px above the project row that sits on top of the
@@ -92,14 +93,13 @@ interface RailProjectChatsProps {
 }
 
 /**
- * The active project's chats in the Rail (Sidebar V2): the same cards as the
- * Chats list (scoped by the worktree pick, newest first), the first five, then
+ * The active project's chats in the Rail (Sidebar V2): the chat cards scoped
+ * by the worktree pick, newest first; the first five, then
  * "Show N more". A click opens or focuses the chat.
  *
  * Collapsed Rail: one agent icon per chat at the same y, "···" for "Show N
  * more", and a hover peek next to the Rail with the project row and these
  * rows drawn expanded.
- * TODO(P4): chat search and import come back here.
  */
 export function RailProjectChats({
   project,
@@ -109,7 +109,7 @@ export function RailProjectChats({
 }: RailProjectChatsProps): React.JSX.Element | null {
   const collapsed = useRailCollapsed()
   const { cards, openChatId } = useProjectChats(project)
-  const { onOpen } = useChatCardActions(project.id)
+  const { onOpen } = useChatCardActions()
   const [hoveredChatId, setHoveredChatId] = useState<string | null>(null)
   const [peekOpen, setPeekOpen] = useState(false)
 
@@ -122,6 +122,8 @@ export function RailProjectChats({
     [onOpen, onChatOpened, peek]
   )
   const closePeek = useCallback(() => setPeekOpen(false), [])
+  // The peek repeats the worktree chip, so it moves up by the chip line too.
+  const chipOffset = usePickedWorktree(project) ? RAIL_WORKTREE_CHIP_HEIGHT : 0
 
   if (cards.length === 0) return null
   const openIndex = cards.findIndex((card) => isOpenChatCard(card, openChatId))
@@ -163,12 +165,16 @@ export function RailProjectChats({
   return (
     <RailHoverPanel open={peekOpen} onOpenChange={setPeekOpen}>
       <RailHoverPanelTrigger asChild>{group}</RailHoverPanelTrigger>
-      <RailHoverPanelContent alignOffset={PEEK_ALIGN_OFFSET} data-testid="rail-chat-peek">
+      <RailHoverPanelContent
+        alignOffset={PEEK_ALIGN_OFFSET - chipOffset}
+        data-testid="rail-chat-peek"
+      >
         <RailDensityProvider density="expanded">
           <RailHoverPanelProjectRow
             icon={<ProjectIcon project={project} size={16} />}
             name={project.name}
           />
+          <RailWorktreeChip project={project} collapsed={false} />
           <RailProjectChats
             project={project}
             peek

@@ -1,12 +1,12 @@
-import { WindowControls } from '@/components/shell/TopRowChrome'
+import { WindowControlsInset } from '@/components/shell/TopRowChrome'
 import { TopRowStartSlot } from '@/components/shell/TopRowStartSlot'
 import { useTopRow } from '@/components/shell/top-row-context'
 
 /**
  * Top row of the main area when no pane tab bar exists (no projects, or a
  * routed page): a 44px drag bar that carries the start slot (expand-Rail
- * toggle) and the window controls at its end.
- * Rendered by `ShellFrame` only when the fallback bar owns the controls.
+ * toggle) and, unless the open right panel's header does, the window
+ * controls spacer at its end. Rendered by `ShellFrame` in fallback mode.
  */
 export function TopRowFallbackBar(): React.JSX.Element {
   const topRow = useTopRow()
@@ -26,7 +26,7 @@ export function TopRowFallbackBar(): React.JSX.Element {
         className="h-full min-w-0 flex-1"
         data-tauri-drag-region={dragRegion ? true : undefined}
       />
-      <WindowControls windowControls={windowControls} />
+      <WindowControlsInset windowControls={windowControls} />
     </div>
   )
 }

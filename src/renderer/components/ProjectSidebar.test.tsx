@@ -355,7 +355,7 @@ describe('ProjectSidebar', () => {
     const onSelectProject = vi.fn()
     renderWithRouter({ onSelectProject })
 
-    fireEvent.click(screen.getByText('Project Two'))
+    fireEvent.click(screen.getByRole('button', { name: 'Project: Project Two' }))
 
     expect(onSelectProject).toHaveBeenCalledWith('2')
   })
@@ -376,10 +376,12 @@ describe('ProjectSidebar', () => {
   it('keeps the active project row plain (Paper 10X5): no keycap, the same hover wash', () => {
     renderWithRouter({ activeProjectId: '1' })
 
-    const activeRow = screen.getByTestId('project-item-1').querySelector('[role="button"]')
-    const idleRow = screen.getByTestId('project-item-2').querySelector('[role="button"]')
+    const activeRow = screen.getByTestId('project-item-1').querySelector('[data-project-row]')
+    const idleRow = screen.getByTestId('project-item-2').querySelector('[data-project-row]')
     expect(activeRow).toHaveClass('h-7.5', 'rounded-md')
-    expect(activeRow).toHaveAttribute('aria-current', 'page')
+    expect(
+      within(screen.getByTestId('project-item-1')).getByRole('button', { name: /^Project:/ })
+    ).toHaveAttribute('aria-current', 'page')
     expect(activeRow).not.toHaveClass('keycap')
     expect(idleRow).not.toHaveClass('keycap')
     // The wash shows under the same conditions as the actions it sits under.
@@ -497,7 +499,7 @@ describe('ProjectSidebar Project Icons', () => {
     const projectRow = screen.getByTestId('project-item-1')
     const tile = projectRow.querySelector('[data-project-color="blue"]')
     expect(tile).toHaveClass('rounded', 'bg-project-blue')
-    expect(projectRow.querySelector('[role="button"]')).not.toHaveClass('border-l-2')
+    expect(projectRow.querySelector('[data-project-row]')).not.toHaveClass('border-l-2')
   })
 
   it('shows the project identity glyph on archived projects', () => {
@@ -948,11 +950,9 @@ describe('ProjectSidebar: Mono-style alignment and groups', () => {
   it('puts project rows and their icons on the shared Rail column', () => {
     renderWithRouter({ projects: railProjects.slice(0, 2) })
 
-    const row = within(screen.getByTestId('project-item-1')).getByRole('button', {
-      name: /Project: Rail Project 1/
-    })
+    const row = screen.getByTestId('project-item-1').querySelector('[data-project-row]')
     expect(row).toHaveClass('gap-2', 'px-3', 'rounded-md')
-    const iconColumn = row.querySelector('[data-rail-icon-column]')
+    const iconColumn = row?.querySelector('[data-rail-icon-column]')
     expect(iconColumn).toHaveClass('size-4', 'shrink-0')
   })
 
@@ -1012,9 +1012,7 @@ describe('ProjectSidebar: Mono-style alignment and groups', () => {
     // Children sit in the same icon column; the container gives the grouping, not indentation.
     const groupList = container.querySelector('[data-group-container-id="group-1"]')
     expect(groupList).not.toHaveClass('pl-4')
-    const childRow = within(screen.getByTestId('project-item-1')).getByRole('button', {
-      name: /Project: Rail Project 1/
-    })
+    const childRow = screen.getByTestId('project-item-1').querySelector('[data-project-row]')
     expect(childRow).toHaveClass('gap-2', 'px-3')
   })
 

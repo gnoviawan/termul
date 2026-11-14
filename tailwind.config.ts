@@ -59,6 +59,7 @@ export default {
         overlay: 'oklch(var(--overlay) / <alpha-value>)',
         'row-hover': 'var(--row-hover)',
         'row-hover-solid': 'var(--row-hover-solid)',
+        'popover-edge': 'var(--popover-edge)',
         warning: {
           DEFAULT: 'oklch(var(--warning) / <alpha-value>)',
           foreground: 'oklch(var(--warning-foreground) / <alpha-value>)'
@@ -163,6 +164,7 @@ export default {
         'prompt-panel': 'var(--prompt-panel-shadow)',
         emboss: 'var(--shadow-emboss)',
         'emboss-hover': 'var(--shadow-emboss-hover)',
+        'rail-hover-panel': 'var(--rail-hover-panel-shadow)',
         // Alpha kept inline here (single place); the hue components come from
         // the per-theme --glow-* tokens emitted by applyColorTheme.
         'glow-blue': '0 0 15px oklch(var(--glow-blue) / 0.3)',

@@ -82,6 +82,22 @@ describe('top-row selectors', () => {
     expect(fallback.rightmostLeafId).toBeNull()
     expect(fallback.leftmostLeafId).toBeNull()
   })
+
+  it('gives the controls spacer to the right panel while it is open, in every mode', () => {
+    for (const mode of ['panes', 'ssh', 'fallback'] as const) {
+      const open = selectTopRowRoles({
+        root: H(A, B),
+        fullscreenPaneId: null,
+        mode,
+        rightPanelOpen: true
+      })
+      expect(open.controlsOwner).toBe('right-panel')
+      // The start slot stays with the main area's top row.
+      const closed = selectTopRowRoles({ root: H(A, B), fullscreenPaneId: null, mode })
+      expect(open.showPanelOwner).toBe(closed.showPanelOwner)
+      expect(open.rightmostLeafId).toBe(closed.rightmostLeafId)
+    }
+  })
 })
 
 describe('getTopRowPlatform', () => {
@@ -163,5 +179,15 @@ describe('paneTopRowRole', () => {
   it('gives no pane the controls when the SSH header owns them', () => {
     const ssh = selectTopRowRoles({ root: A, fullscreenPaneId: null, mode: 'ssh' })
     expect(paneTopRowRole(ssh, desktop, 'A').windowControls).toBe(false)
+  })
+
+  it('gives no pane the controls spacer while the right panel is open', () => {
+    const open = selectTopRowRoles({
+      root: H(A, V(B, C)),
+      fullscreenPaneId: null,
+      mode: 'panes',
+      rightPanelOpen: true
+    })
+    expect(paneTopRowRole(open, desktop, 'B').windowControls).toBe(false)
   })
 })

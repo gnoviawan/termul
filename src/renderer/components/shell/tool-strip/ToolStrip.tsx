@@ -65,6 +65,8 @@ function ToolStripSpacer({
 interface ToolStripButtonProps extends Omit<React.ComponentPropsWithoutRef<'button'>, 'children'> {
   /** Name and tooltip label. */
   label: string
+  /** Muted second part of the tooltip (a secondary way to use the button). */
+  hint?: string
   /** Keyboard shortcut shown as a keycap in the tooltip. */
   shortcut?: string
   /** The open view: raised (`.keycap`) with a foreground glyph. */
@@ -83,7 +85,7 @@ interface ToolStripButtonProps extends Omit<React.ComponentPropsWithoutRef<'butt
  */
 const ToolStripButton = forwardRef<HTMLButtonElement, ToolStripButtonProps>(
   function ToolStripButton(
-    { label, shortcut, active = false, icon, badge, className, type = 'button', ...props },
+    { label, hint, shortcut, active = false, icon, badge, className, type = 'button', ...props },
     ref
   ) {
     return (
@@ -107,6 +109,7 @@ const ToolStripButton = forwardRef<HTMLButtonElement, ToolStripButtonProps>(
         </TooltipTrigger>
         <RailHoverTooltipContent
           label={label}
+          hint={hint}
           shortcut={shortcut}
           side="left"
           sideOffset={TOOL_STRIP_TOOLTIP_OFFSET}

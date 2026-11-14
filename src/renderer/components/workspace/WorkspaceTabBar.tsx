@@ -2,7 +2,7 @@ import { AnimatePresence, useReducedMotion } from 'framer-motion'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { Maximize2, Minimize2 } from '@/components/icons'
-import { WindowControls } from '@/components/shell/TopRowChrome'
+import { WindowControlsInset } from '@/components/shell/TopRowChrome'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { clipboardApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
@@ -52,7 +52,7 @@ interface WorkspaceTabBarProps {
   /**
    * Flagged shell only: this bar is part of the window top row. `dragRegion`
    * marks the empty space of the bar as a window drag region; `windowControls`
-   * renders the window controls flush at its right end. Unset = classic bar.
+   * ends the bar with the window controls spacer. Unset = classic bar.
    */
   topRow?: { dragRegion: boolean; windowControls: boolean }
   /**
@@ -648,7 +648,7 @@ export function WorkspaceTabBar({
           </div>
         )}
 
-        {topRow?.windowControls && <WindowControls windowControls />}
+        <WindowControlsInset windowControls={Boolean(topRow?.windowControls)} />
       </div>
     </TabPaneProvider>
   )

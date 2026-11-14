@@ -1,7 +1,14 @@
-import { type KeyboardEvent, useMemo, useState } from 'react'
+import {
+  createContext,
+  type KeyboardEvent,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { toast } from 'sonner'
-import { Check, ChevronDown, GitBranch, Plus, Terminal } from '@/components/icons'
-import { Button } from '@/components/ui/button'
+import { Check, GitBranch, Plus, Terminal } from '@/components/icons'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -9,7 +16,7 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { PopoverSearchBand } from '@/components/ui/popover-search-band'
 import { Spinner } from '@/components/ui/spinner'
 import { WriteGate } from '@/components/ui/write-gate'
@@ -21,7 +28,6 @@ import { pickedWorkingCopy } from '@/lib/working-copy'
 import {
   buildWorkspaceRows,
   filterWorkspaceRows,
-  WORKSPACE_ROW_FALLBACK_LABEL,
   type WorkspaceRow,
   worktreeLabel,
   worktreeNameFromQuery
@@ -33,55 +39,144 @@ import { useTerminalStore } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { getAllLeafPanes } from '@/stores/workspace-store/tree'
 import type { Project } from '@/types/project'
-import { useCreateWorktree } from './use-create-worktree'
+import { useCreateWorktree } from '../use-create-worktree'
+import { logRailEvent } from './rail-log'
 
 const ROW_CLASS =
   'flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 text-left text-xs text-foreground transition-colors duration-150 ease-out'
 const ROW_HIGHLIGHT_CLASS = 'bg-foreground/[0.06]'
 
-interface WorkspaceSwitcherProps {
-  project: Project
+interface RailWorktreeSwitcherState {
+  /** Project whose switcher is open, or `null`. */
+  openProjectId: string | null
+  setOpenProjectId: (projectId: string | null) => void
+}
+
+const RailWorktreeSwitcherContext = createContext<RailWorktreeSwitcherState>({
+  openProjectId: null,
+  setOpenProjectId: () => {}
+})
+
+/**
+ * Owns which Rail project row shows its worktree switcher. The project row
+ * menu ("Switch worktree…") opens it; at most one is open at a time.
+ */
+export function RailWorktreeSwitcherProvider({
+  children
+}: {
+  children: React.ReactNode
+}): React.JSX.Element {
+  const [openProjectId, setOpenProjectId] = useState<string | null>(null)
+  const value = useMemo(() => ({ openProjectId, setOpenProjectId }), [openProjectId])
+  return (
+    <RailWorktreeSwitcherContext.Provider value={value}>
+      {children}
+    </RailWorktreeSwitcherContext.Provider>
+  )
+}
+
+/** Opens the switcher of `projectId` (after the row menu that asked for it has closed). */
+export function useOpenRailWorktreeSwitcher(): (projectId: string) => void {
+  const { setOpenProjectId } = useContext(RailWorktreeSwitcherContext)
+  return useCallback(
+    (projectId: string) => {
+      // The menu item closes its menu and returns focus to the row first; a
+      // popover opened in the same tick would see that as an outside focus.
+      setTimeout(() => setOpenProjectId(projectId), 0)
+    },
+    [setOpenProjectId]
+  )
 }
 
 /**
- * Side panel header trigger and popover that picks the working copy (project
- * folder or a listed worktree) the shell narrows to. It is the third writer of
- * the pick (after the worktree shortcuts and the reconciler); opening a
- * terminal from a row never touches it.
+ * Wraps one Rail project row (its anchor) with the worktree switcher popover:
+ * the working copies of the project (project folder and listed worktrees),
+ * search, create and a terminal action per row. Closing returns focus to the
+ * row.
  */
-export function WorkspaceSwitcher({ project }: WorkspaceSwitcherProps): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const pick = useWorktreePick(project.id)
-  const picked = activeWorktreeOf(project, pick)
-  const label = picked ? worktreeLabel(picked) : WORKSPACE_ROW_FALLBACK_LABEL
-
+export function RailWorktreeSwitcher({
+  project,
+  side = 'bottom',
+  children
+}: {
+  project: Project
+  side?: 'bottom' | 'right'
+  /** The project row: the popover anchor. */
+  children: React.ReactNode
+}): React.JSX.Element {
+  const { openProjectId, setOpenProjectId } = useContext(RailWorktreeSwitcherContext)
+  const open = openProjectId === project.id
+  const anchorRef = useRef<HTMLDivElement>(null)
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          // A button, not a section label: a resting wash and the branch in its
-          // own case (branch names are case-sensitive).
-          className="-ml-2 mr-1 h-7 min-w-0 flex-1 justify-start gap-1.5 bg-foreground/[0.03] px-2 text-xs font-medium text-foreground hover:bg-foreground/[0.06] data-[state=open]:bg-foreground/[0.06]"
-          title={picked ? picked.path : 'Switch working copy'}
-        >
-          {picked?.branch && (
-            <GitBranch size={12} className="shrink-0 text-muted-foreground" aria-hidden="true" />
-          )}
-          <span className="min-w-0 flex-1 truncate text-left">{label}</span>
-          <ChevronDown size={12} className="shrink-0 text-muted-foreground" aria-hidden="true" />
-        </Button>
-      </PopoverTrigger>
+    <Popover open={open} onOpenChange={(next) => setOpenProjectId(next ? project.id : null)}>
+      <PopoverAnchor asChild>
+        <div ref={anchorRef}>{children}</div>
+      </PopoverAnchor>
       <PopoverContent
-        side="bottom"
+        side={side}
         align="start"
         aria-label="Working copies"
         className="w-80 overflow-hidden rounded-xl border bg-popover p-0 shadow-lg"
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          anchorRef.current?.querySelector<HTMLElement>('[role="button"],button')?.focus()
+        }}
       >
-        <WorkspaceSwitcherPanel project={project} onClose={() => setOpen(false)} />
+        <WorktreeSwitcherPanel project={project} onClose={() => setOpenProjectId(null)} />
       </PopoverContent>
     </Popover>
+  )
+}
+
+/** Height of the worktree chip line under a Rail project row (`h-4.5`). */
+export const RAIL_WORKTREE_CHIP_HEIGHT = 18
+
+/** The picked worktree the chip shows, or `undefined` for the project folder. */
+export function usePickedWorktree(project: Project): ReturnType<typeof activeWorktreeOf> {
+  return activeWorktreeOf(project, useWorktreePick(project.id))
+}
+
+/**
+ * Muted chip under a Rail project name with the picked worktree (Sidebar V2
+ * P4). Nothing when the pick is the project folder. The collapsed Rail keeps
+ * the line's height with a branch glyph, so every icon stays at its y.
+ */
+export function RailWorktreeChip({
+  project,
+  collapsed
+}: {
+  project: Project
+  collapsed: boolean
+}): React.JSX.Element | null {
+  const picked = usePickedWorktree(project)
+  if (!picked) return null
+  const label = worktreeLabel(picked)
+  if (collapsed) {
+    return (
+      <div
+        className="flex h-4.5 items-center justify-center text-muted-foreground"
+        title={`Worktree: ${label}`}
+        data-testid={`rail-worktree-chip-${project.id}`}
+      >
+        <GitBranch size={10} aria-hidden="true" />
+        <span className="sr-only">Worktree: {label}</span>
+      </div>
+    )
+  }
+  return (
+    <div
+      className="flex h-4.5 min-w-0 items-start pr-3 pl-9"
+      data-testid={`rail-worktree-chip-${project.id}`}
+    >
+      <span
+        className="inline-flex h-4 min-w-0 max-w-full items-center gap-1 rounded bg-foreground/[0.06] px-1.5 text-3xs text-muted-foreground"
+        title={picked.path}
+      >
+        <GitBranch size={10} className="shrink-0" aria-hidden="true" />
+        <span className="sr-only">Worktree: </span>
+        <span className="min-w-0 truncate">{label}</span>
+      </span>
+    </div>
   )
 }
 
@@ -104,7 +199,7 @@ function toastTerminalOutcome(
   }
 }
 
-function WorkspaceSwitcherPanel({
+function WorktreeSwitcherPanel({
   project,
   onClose
 }: {
@@ -164,9 +259,11 @@ function WorkspaceSwitcherPanel({
 
   const choose = (row: WorkspaceRow): void => {
     if (row.outsideProjectRoot) return
-    useShellLayoutStore
-      .getState()
-      .setWorktreePick(project.id, row.kind === 'worktree' ? row.path : null)
+    const worktree = row.kind === 'worktree'
+    useShellLayoutStore.getState().setWorktreePick(project.id, worktree ? row.path : null)
+    logRailEvent(
+      `worktree switch for project ${project.id}: ${worktree ? 'a worktree' : 'the project folder'}`
+    )
     onClose()
   }
 

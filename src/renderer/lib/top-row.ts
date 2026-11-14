@@ -6,8 +6,14 @@ import type { PaneNode } from '@/types/workspace.types'
 /** What the main area shows, as far as the top row is concerned. */
 export type TopRowMode = 'panes' | 'ssh' | 'fallback'
 
-/** Who renders the window controls (Windows/Linux desktop). */
-export type TopRowControlsOwner = 'pane' | 'ssh-header' | 'fallback-bar'
+/**
+ * Who reserves the room next to the window controls (Windows/Linux desktop).
+ * The shell draws the controls once, in the window's top-right corner above
+ * the tool strip; they are wider than the strip, so the top row surface to
+ * the strip's left ends with a spacer. That is the right panel header while
+ * the panel is open, else the main area's own top row.
+ */
+export type TopRowControlsOwner = 'pane' | 'ssh-header' | 'fallback-bar' | 'right-panel'
 
 /** Who renders the top row start slot (traffic-light inset, expand-Rail toggle). */
 export type TopRowShowPanelOwner = 'pane' | 'ssh-header' | 'fallback-bar'
@@ -38,6 +44,7 @@ export interface PaneTopRowRole {
   /** Leftmost top-edge pane: its tab bar touches the Rail and holds the start slot. */
   leftEdge: boolean
   dragRegion: boolean
+  /** Ends with the window controls spacer (`WindowControlsInset`). */
   windowControls: boolean
 }
 
@@ -75,19 +82,31 @@ export function getLeftmostTopEdgeLeafId(root: PaneNode): string | null {
 }
 
 /**
- * The single place that decides who owns the window controls and the top
- * row start slot. A fullscreen pane is the whole tree. SSH and the fallback
+ * The single place that decides who reserves room for the window controls
+ * and who owns the top row start slot. A fullscreen pane is the whole tree. SSH and the fallback
  * bar carry no pane roles, so each renders the slot in its own bar.
  */
 export function selectTopRowRoles({
   root,
   fullscreenPaneId,
-  mode
+  mode,
+  rightPanelOpen = false
 }: {
   root: PaneNode
   fullscreenPaneId: string | null
   mode: TopRowMode
+  /** The right panel is shown: its header sits next to the window controls. */
+  rightPanelOpen?: boolean
 }): TopRowRoles {
+  const roles = selectMainTopRowRoles(root, fullscreenPaneId, mode)
+  return rightPanelOpen ? { ...roles, controlsOwner: 'right-panel' } : roles
+}
+
+function selectMainTopRowRoles(
+  root: PaneNode,
+  fullscreenPaneId: string | null,
+  mode: TopRowMode
+): TopRowRoles {
   if (mode === 'ssh') {
     return {
       topEdgeLeafIds: new Set(),

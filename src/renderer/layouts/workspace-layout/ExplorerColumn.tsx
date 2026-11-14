@@ -1,5 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { lazy, type ReactNode, Suspense } from 'react'
+import { SidePanelHeader, useWindowControlsInPanel } from '@/components/shell/SidePanelHeader'
 import { useSidePanelResize } from '@/components/shell/use-side-panel-resize'
 import { getExplorerColumnBlocks } from '@/layouts/workspace-layout/explorer-column-blocks'
 import { panelRevealMotion } from '@/layouts/workspace-layout/panel-motion'
@@ -38,6 +39,9 @@ export function ExplorerColumn({
   const isExplorerVisible = useFileExplorerVisible()
   const { width, min, max, onResizeMouseDown, onResizeKeyDown } = useSidePanelResize()
   const { activeSSHProfile } = ssh
+  // Windows/Linux: the remote file browser has no top row header of its own,
+  // so it gets one to end with the window controls spacer.
+  const controlsInPanel = useWindowControlsInPanel()
   const { showFileColumn, sftpSession } = getExplorerColumnBlocks({
     isExplorerVisible,
     activeProject,
@@ -46,11 +50,16 @@ export function ExplorerColumn({
   })
 
   const content = sftpSession ? (
-    <SSHFileExplorer
-      key={sftpSession.attemptId}
-      connectionId={sftpSession.attemptId}
-      profileName={activeSSHProfile?.name ?? 'host'}
-    />
+    <>
+      {controlsInPanel && <SidePanelHeader title="Remote files" />}
+      <div className="min-h-0 flex-1">
+        <SSHFileExplorer
+          key={sftpSession.attemptId}
+          connectionId={sftpSession.attemptId}
+          profileName={activeSSHProfile?.name ?? 'host'}
+        />
+      </div>
+    </>
   ) : showFileColumn ? (
     sidePanel
   ) : null

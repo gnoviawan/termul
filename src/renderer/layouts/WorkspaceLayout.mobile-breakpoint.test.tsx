@@ -3,9 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { MOBILE_WEB_SHELL_MAX_PX } from '@/hooks/use-mobile-web-shell'
-import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
-import { DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
 import type { LeafNode, SplitNode } from '@/types/workspace.types'
 
 // Story 12 (CAP-8, QA finding F3): regression test for the REAL
@@ -474,16 +472,10 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
     gitState.statuses = {}
     gitState.selectedFile = null
     gitState.commitContexts = {}
-    // The project name is hidden by default; show it so the "demo" presence /
-    // absence assertions below stay meaningful.
-    useContextBarSettingsStore.setState({
-      settings: { ...DEFAULT_CONTEXT_BAR_SETTINGS, showProjectName: true }
-    })
     installMatchMediaStub()
   })
 
   afterEach(() => {
-    useContextBarSettingsStore.setState({ settings: { ...DEFAULT_CONTEXT_BAR_SETTINGS } })
     if (originalMatchMedia !== undefined) {
       Object.defineProperty(window, 'matchMedia', originalMatchMedia)
     }

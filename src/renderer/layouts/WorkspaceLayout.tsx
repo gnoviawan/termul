@@ -1,3 +1,4 @@
+import type { ShellInfo } from '@shared/types/ipc.types'
 import { useCallback, useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { CanvasMountLayer } from '@/components/canvas/CanvasMountLayer'
@@ -160,7 +161,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
   })
   const { handleNewBrowserTab, handleAddTerminal } = tabOpeners
   // Tool strip: a new terminal / browser tab in the active pane on every click.
-  const handleNewTerminal = useCallback(() => handleAddTerminal(undefined), [handleAddTerminal])
+  const handleNewTerminal = useCallback(
+    (shell?: ShellInfo) => handleAddTerminal(undefined, shell),
+    [handleAddTerminal]
+  )
   const handleNewActiveBrowserTab = useCallback(() => handleNewBrowserTab(), [handleNewBrowserTab])
 
   // Determine if we should show the terminal area (only on workspace dashboard)

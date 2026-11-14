@@ -2,7 +2,7 @@ import type { SSHProfile } from '@shared/types/ssh.types'
 import { useMemo } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
-import { WindowControls } from '@/components/shell/TopRowChrome'
+import { WindowControlsInset } from '@/components/shell/TopRowChrome'
 import { TopRowStartSlot, useTopRowStartSlotVisible } from '@/components/shell/TopRowStartSlot'
 import { hostLabel } from '@/lib/ssh-messages'
 import { closeSSHSession, openSSHSession, requestCloseSSHSession } from '@/lib/ssh-sessions'
@@ -26,8 +26,8 @@ import { SSHSessionView } from './SSHSessionView'
 interface SSHWorkspaceProps {
   /**
    * The header is the window top row. `dragRegion` marks its empty space as
-   * a window drag region; `windowControls` renders the window controls flush
-   * at its right end; `startSlot` puts the top row start slot (expand-Rail
+   * a window drag region; `windowControls` ends it with the window controls
+   * spacer; `startSlot` puts the top row start slot (expand-Rail
    * toggle) at its start.
    */
   topRow?: { dragRegion: boolean; windowControls: boolean; startSlot: boolean }
@@ -109,7 +109,7 @@ export function SSHWorkspace({ topRow }: SSHWorkspaceProps): React.JSX.Element {
           className="h-full min-w-4 flex-1"
           data-tauri-drag-region={topRow?.dragRegion ? true : undefined}
         />
-        {topRow?.windowControls && <WindowControls windowControls />}
+        <WindowControlsInset windowControls={Boolean(topRow?.windowControls)} />
       </div>
 
       <div className="relative min-h-0 flex-1">

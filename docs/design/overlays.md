@@ -9,7 +9,7 @@ Pick one shell. Do not stack a second overlay library.
 | `ConfirmDialog` | `ConfirmDialog.tsx` | Desktop yes/no. Variants: `default` \| `danger` (not `destructive`). Overlay `bg-overlay/60`. |
 | `AlertDialog` | `ui/alert-dialog.tsx` | Confirm already inside chat/mobile Radix trees (`ChatMessage`, `MobileFileExplorer`). Overlay `bg-overlay/80`. |
 | `SettingsModal` | `settings/SettingsModal.tsx` | Wide settings shell only. Do not replace with `Dialog`. Overlay `bg-overlay/60`. |
-| `Popover` | `ui/popover.tsx` | Non-blocking extra UI (`ContextBarSettingsPopover`). |
+| `Popover` | `ui/popover.tsx` | Non-blocking extra UI (`RemoteAccessPopover`, the Rail worktree switcher). |
 
 `Drawer` (`ui/drawer.tsx`, vaul) has no product call site. Do not add a second bottom-sheet stack — use `Sheet` `side="bottom"`.
 

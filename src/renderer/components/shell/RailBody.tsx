@@ -5,6 +5,7 @@ import { RailHeader } from '@/components/shell/RailHeader'
 import { RailProjectChats } from '@/components/shell/rail/RailProjectChats'
 import { logRailEvent } from '@/components/shell/rail/rail-log'
 import { RailNav, RailNavRow } from '@/components/shell/rail/rail-nav'
+import { RailWorktreeSwitcherProvider } from '@/components/shell/rail/worktree-switcher'
 import { useNewChat } from '@/components/shell/use-new-chat'
 import { useShortcutLabel } from '@/components/shell/use-shortcut-label'
 import { useProjectActions } from '@/stores/project-store'
@@ -100,23 +101,27 @@ export function RailBody({
         />
       </RailNav>
 
-      <ProjectSidebar
-        projects={projects}
-        activeProjectId={activeProjectId}
-        onSelectProject={onSelectProject}
-        onNewProject={onNewProject}
-        onUpdateProject={updateProject}
-        onDeleteProject={deleteProject}
-        onArchiveProject={archiveProject}
-        onRestoreProject={restoreProject}
-        onReorderProjects={reorderProjects}
-        onSSHConnect={onSSHConnect}
-        onSelectSSHProfile={onSelectSSHProfile}
-        activeSSHProfileId={activeSSHProfileId}
-        activeProjectContent={
-          activeProject ? <RailProjectChats key={activeProject.id} project={activeProject} /> : null
-        }
-      />
+      <RailWorktreeSwitcherProvider>
+        <ProjectSidebar
+          projects={projects}
+          activeProjectId={activeProjectId}
+          onSelectProject={onSelectProject}
+          onNewProject={onNewProject}
+          onUpdateProject={updateProject}
+          onDeleteProject={deleteProject}
+          onArchiveProject={archiveProject}
+          onRestoreProject={restoreProject}
+          onReorderProjects={reorderProjects}
+          onSSHConnect={onSSHConnect}
+          onSelectSSHProfile={onSelectSSHProfile}
+          activeSSHProfileId={activeSSHProfileId}
+          activeProjectContent={
+            activeProject ? (
+              <RailProjectChats key={activeProject.id} project={activeProject} />
+            ) : null
+          }
+        />
+      </RailWorktreeSwitcherProvider>
 
       <RailFooter
         isShortcutsOpen={isShortcutsOpen}

@@ -69,6 +69,8 @@ export interface ProjectListProps {
   railSections?: boolean
   onNewProject?: () => void
   onNewGroup?: () => void
+  /** Import chats into the open project (the `+` menu); absent hides the item. */
+  onImportChats?: () => void
   /** Shown under the active project's row, inside its drag item (the Rail's chats). */
   activeProjectContent?: React.ReactNode
 }
@@ -111,6 +113,7 @@ export function ProjectList({
   railSections = false,
   onNewProject,
   onNewGroup,
+  onImportChats,
   activeProjectContent
 }: ProjectListProps): React.JSX.Element {
   // One draggable active-project row, shared by grouped and ungrouped lists.
@@ -312,6 +315,7 @@ export function ProjectList({
                 <AddProjectMenu
                   onNewProject={() => onNewProject?.()}
                   onNewGroup={() => onNewGroup?.()}
+                  onImportChats={onImportChats}
                   buttonClassName={RAIL_SECTION_BUTTON_CLASS}
                 />
               </RailSectionHeader>

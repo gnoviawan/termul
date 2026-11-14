@@ -1,8 +1,10 @@
+import type { ShellInfo } from '@shared/types/ipc.types'
 import { type ReactNode, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { ResizeEdges } from '@/components/ResizeEdges'
 import { ShellRail } from '@/components/shell/ShellRail'
 import { SidePanelColumn } from '@/components/shell/SidePanelColumn'
+import { WindowControls } from '@/components/shell/TopRowChrome'
 import { TopRowFallbackBar } from '@/components/shell/TopRowFallbackBar'
 import { ShellToolStrip } from '@/components/shell/tool-strip/ShellToolStrip'
 import { TopRowProvider } from '@/components/shell/top-row-context'
@@ -10,6 +12,7 @@ import { getTrafficLightInset } from '@/components/shell/traffic-light-inset'
 import { useNativeWebviewOcclusion } from '@/hooks/use-native-webview-occlusion'
 import { PaneDndProvider } from '@/hooks/use-pane-dnd'
 import { ExplorerColumn } from '@/layouts/workspace-layout/ExplorerColumn'
+import { getExplorerColumnBlocks } from '@/layouts/workspace-layout/explorer-column-blocks'
 import type { SSHWorkspaceState } from '@/layouts/workspace-layout/use-ssh-workspace'
 import {
   getTopRowPlatform,
@@ -19,6 +22,7 @@ import {
   type TopRowRoles
 } from '@/lib/top-row'
 import { isWorkspaceRoutePath } from '@/lib/workspace-route'
+import { useFileExplorerVisible } from '@/stores/file-explorer-store'
 import { useSidebarVisible } from '@/stores/sidebar-store'
 import { useThemePickerOpen } from '@/stores/theme-picker-store'
 import { useFullscreenPaneId, usePaneRoot } from '@/stores/workspace-store'
@@ -39,8 +43,8 @@ export interface ShellFrameProps {
   handleToggleThemePicker: () => void
   handleOpenAgentChat: () => void
   handleOpenCanvas: () => void
-  /** Opens a new terminal tab in the active pane (tool strip). */
-  handleNewTerminal: () => void
+  /** Opens a new terminal tab in the active pane (tool strip): the default shell, or `shell`. */
+  handleNewTerminal: (shell?: ShellInfo) => void
   /** Opens a new browser tab in the active pane (tool strip). */
   handleNewBrowserTab: () => void
   /** The `workspaceMain` element, rendered inside the main area. */
@@ -83,7 +87,9 @@ function ShellTopRowProvider({
  * tool strip, edge to edge with no gutter or card. Every column runs the full
  * window height on the background surface, split by 0.5px hairlines. The
  * window has no title strip: the Rail header, the 44px tab bar and the right
- * panel header share one top row (roles come from `selectTopRowRoles`).
+ * panel header share one top row (roles come from `selectTopRowRoles`). On
+ * Windows and Linux the window controls sit in the top-right corner, above
+ * the tool strip.
  */
 export function ShellFrame({
   projects,
@@ -114,9 +120,18 @@ export function ShellFrame({
     : projects.length === 0 || !isWorkspaceRoutePath(pathname)
       ? 'fallback'
       : 'panes'
+  // Same rule as `ExplorerColumn`: is the right panel on screen?
+  const isExplorerVisible = useFileExplorerVisible()
+  const panelBlocks = getExplorerColumnBlocks({
+    isExplorerVisible,
+    activeProject,
+    ssh,
+    hasSidePanel: Boolean(activeProject)
+  })
+  const rightPanelOpen = panelBlocks.showFileColumn || panelBlocks.sftpSession !== null
   const roles = useMemo(
-    () => selectTopRowRoles({ root: paneRoot, fullscreenPaneId, mode }),
-    [paneRoot, fullscreenPaneId, mode]
+    () => selectTopRowRoles({ root: paneRoot, fullscreenPaneId, mode, rightPanelOpen }),
+    [paneRoot, fullscreenPaneId, mode, rightPanelOpen]
   )
   const platform = useMemo(() => getTopRowPlatform(), [])
 
@@ -149,12 +164,12 @@ export function ShellFrame({
 
           {/* Shell row: main area | right panel | tool strip. */}
           <div
-            className="flex-1 flex overflow-hidden min-h-0 min-w-0 h-full"
+            className="relative flex-1 flex overflow-hidden min-h-0 min-w-0 h-full"
             data-testid="shell-row"
           >
             <PaneDndProvider>
               <main className="flex-1 flex flex-col min-w-0 border-l-[0.5px] border-border bg-background overflow-clip">
-                {roles.controlsOwner === 'fallback-bar' && <TopRowFallbackBar />}
+                {roles.showPanelOwner === 'fallback-bar' && <TopRowFallbackBar />}
                 {workspaceMain}
               </main>
 
@@ -175,6 +190,14 @@ export function ShellFrame({
               sshOpen={ssh.workspaceOpen}
               onNewTerminal={handleNewTerminal}
               onNewBrowserTab={handleNewBrowserTab}
+            />
+
+            {/* Windows/Linux: the window controls in the top-right corner,
+                above the tool strip (which starts below them). The top row
+                surface on their left ends with the matching spacer. */}
+            <WindowControls
+              windowControls={platform.windowControls}
+              className="absolute top-0 right-0 h-11 border-b-[0.5px] border-border bg-background"
             />
           </div>
         </div>

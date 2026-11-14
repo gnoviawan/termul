@@ -45,9 +45,8 @@ export interface ProjectChats {
 }
 
 /**
- * Chats of one project for the Rail and the Chats list: the same cards
- * `buildChatCards` makes from the session index, scoped by the project's
- * worktree pick, plus the open chat id. Live state is per chat: read it with
+ * Chats of one project for the Rail: the cards `buildChatCards` makes from
+ * the session index, scoped by the project's worktree pick, plus the open chat id. Live state is per chat: read it with
  * {@link useChatLiveState} in each row.
  */
 export function useProjectChats(project: Project): ProjectChats {

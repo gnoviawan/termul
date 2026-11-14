@@ -94,7 +94,9 @@ describe('SSHWorkspace header', () => {
       <SSHWorkspace topRow={{ dragRegion: true, windowControls: true, startSlot: true }} />
     )
     expect(container.querySelectorAll('[data-tauri-drag-region]').length).toBeGreaterThan(0)
-    expect(screen.getByTestId('window-controls')).toBeInTheDocument()
+    // The controls live in the shell corner; the header ends with their spacer.
+    expect(screen.getByTestId('window-controls-inset')).toBeInTheDocument()
+    expect(screen.queryByTestId('window-controls')).toBeNull()
   })
 
   describe('start slot', () => {

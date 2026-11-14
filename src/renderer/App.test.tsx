@@ -1,18 +1,7 @@
-import { PersistenceKeys } from '@shared/types/persistence.types'
 import { act, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useUpdaterStore } from '@/stores/updater-store'
 import App from './App'
-
-const { mockContextBarSettingsRead } = vi.hoisted(() => ({
-  mockContextBarSettingsRead: vi.fn()
-}))
-
-vi.mock('./hooks/use-context-bar-settings', () => ({
-  useContextBarSettings: () => {
-    void mockContextBarSettingsRead(PersistenceKeys.contextBarSettings)
-  }
-}))
 
 const { mockUseVisibilityState } = vi.hoisted(() => ({
   mockUseVisibilityState: vi.fn(() => undefined)
@@ -252,14 +241,6 @@ describe('App Routes', () => {
     expect(document.body.innerHTML).toBeTruthy()
   })
 
-  it('loads context bar settings on mount', async () => {
-    render(<App />)
-
-    await waitFor(() => {
-      expect(mockContextBarSettingsRead).toHaveBeenCalledWith(PersistenceKeys.contextBarSettings)
-    })
-  })
-
   it('wires app visibility tracking at app scope', () => {
     render(<App />)
     expect(mockUseVisibilityState).toHaveBeenCalled()
@@ -434,7 +415,6 @@ describe('App server setup gate (gh-1105)', () => {
     expect(mockUsePersistenceErrorToasts).not.toHaveBeenCalled()
     expect(mockUseVisibilityState).not.toHaveBeenCalled()
     expect(mockUseRemoteProjects).not.toHaveBeenCalled()
-    expect(mockContextBarSettingsRead).not.toHaveBeenCalled()
     // The probe itself lives in the App body (outside the swapped subtree)
     // and still primed.
     expect(mockCheckWebSetupGate).toHaveBeenCalled()

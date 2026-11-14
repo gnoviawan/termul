@@ -1,16 +1,21 @@
 import type { GitDiffStat } from '@shared/types/ipc.types'
 import { type KeyboardEvent, memo, useEffect, useRef } from 'react'
-import { Settings } from '@/components/icons'
+import { MoreHorizontal, Settings } from '@/components/icons'
 import { ProjectIcon } from '@/components/ProjectIcon'
 import { RailTooltip } from '@/components/shell/rail-button'
 import { RAIL_ICON_BOX_CLASS, RAIL_ROW_INSET_CLASS } from '@/components/shell/rail-layout'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { Kbd } from '@/components/ui/kbd'
 import { FIELD_FOCUS_CLASS, FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
+import { isContextMenuKey, openContextMenuFrom } from '@/lib/context-menu-key'
 import { cn } from '@/lib/utils'
 import type { Project } from '@/types/project'
 import { ProjectDiffStat } from '../shell/ProjectDiffStat'
 import { type ProjectRowStatus, ProjectStatusMarks } from './indicators'
+
+/** A 20px icon action at the end of the row (More, Settings). */
+const ROW_ACTION_CLASS =
+  'inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground'
 
 export interface ProjectItemProps {
   project: Project
@@ -76,30 +81,41 @@ export const ProjectItem = memo(function ProjectItem({
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
-            onClick={isEditing ? undefined : onClick}
             onContextMenu={onContextMenu}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                if (!isEditing) onClick()
-              }
-            }}
+            data-project-row
             className={cn(
-              'group flex h-7.5 w-full cursor-pointer select-none items-center text-left text-xs',
+              'group relative flex h-7.5 w-full cursor-pointer select-none items-center text-left text-xs',
               // Paper 10X5: the open project is a plain row (only the open
               // chat under it is raised), radius 6.
               'rounded-md',
               RAIL_ROW_INSET_CLASS,
-              'transition-colors duration-150 ease-out focus-visible:ring-inset',
-              FOCUS_RING_CLASS,
+              'transition-colors duration-150 ease-out',
               'hover:bg-row-hover focus-within:bg-row-hover'
             )}
-            aria-current={isActive ? 'page' : undefined}
-            aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}
           >
-            <span data-rail-icon-column className={RAIL_ICON_BOX_CLASS}>
+            {/* The row's own control fills it (under its content, which lets
+                pointer events through), so the row actions are its siblings,
+                not nested controls. */}
+            <button
+              type="button"
+              onClick={isEditing ? undefined : onClick}
+              onKeyDown={(e) => {
+                if (!isContextMenuKey(e)) return
+                e.preventDefault()
+                openContextMenuFrom(e.currentTarget)
+              }}
+              tabIndex={isEditing ? -1 : undefined}
+              className={cn(
+                'absolute inset-0 rounded-md focus-visible:ring-inset',
+                FOCUS_RING_CLASS
+              )}
+              aria-current={isActive ? 'page' : undefined}
+              aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}
+            />
+            <span
+              data-rail-icon-column
+              className={cn(RAIL_ICON_BOX_CLASS, 'pointer-events-none relative')}
+            >
               <ProjectIcon project={project} size={16} />
             </span>
 
@@ -111,14 +127,14 @@ export const ProjectItem = memo(function ProjectItem({
                 onChange={(e) => onEditNameChange(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onBlur={onSaveRename}
-                className={`h-6 min-w-0 flex-1 rounded border border-border bg-card px-1.5 text-xs text-foreground ${FIELD_FOCUS_CLASS}`}
+                className={`relative h-6 min-w-0 flex-1 rounded border border-border bg-card px-1.5 text-xs text-foreground ${FIELD_FOCUS_CLASS}`}
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
               // Name and diff stat share one box whose width never changes on
               // hover: the actions sit on top of its end, over a fade, so
               // nothing reflows and the name is not cut again.
-              <span className="relative flex min-w-0 flex-1 items-center gap-2">
+              <span className="pointer-events-none relative flex min-w-0 flex-1 items-center gap-2">
                 {/* Fills the row and fades its last 24px instead of an ellipsis. */}
                 <span
                   className="fade-end min-w-0 flex-1 font-medium text-secondary-foreground transition-colors duration-150 ease-out group-hover:text-foreground"
@@ -135,9 +151,23 @@ export const ProjectItem = memo(function ProjectItem({
                     shows under the same conditions as the wash (hover and
                     focus-within). */}
                 <span
-                  className="absolute inset-y-0 right-0 hidden items-center gap-1 bg-gradient-to-l from-row-hover-solid from-60% to-transparent pl-6 group-hover:flex group-focus-within:flex"
+                  className="pointer-events-auto absolute inset-y-0 right-0 hidden items-center gap-1 bg-gradient-to-l from-row-hover-solid from-60% to-transparent pl-6 group-hover:flex group-focus-within:flex"
                   data-testid="project-row-actions"
                 >
+                  <RailTooltip label="More actions">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openContextMenuFrom(e.currentTarget)
+                      }}
+                      className={`${ROW_ACTION_CLASS} ${FOCUS_RING_CLASS}`}
+                      aria-label={`More actions for ${project.name}`}
+                      aria-haspopup="menu"
+                    >
+                      <MoreHorizontal size={12} />
+                    </button>
+                  </RailTooltip>
                   <RailTooltip label="Project settings">
                     <button
                       type="button"
@@ -145,7 +175,7 @@ export const ProjectItem = memo(function ProjectItem({
                         e.stopPropagation()
                         onSettingsClick()
                       }}
-                      className={`inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground ${FOCUS_RING_CLASS}`}
+                      className={`${ROW_ACTION_CLASS} ${FOCUS_RING_CLASS}`}
                       aria-label={`Settings for ${project.name}`}
                     >
                       <Settings size={12} />
@@ -160,10 +190,14 @@ export const ProjectItem = memo(function ProjectItem({
             {/* Status marks stay outside the name box: always visible, and the
                 needs-you pill stays clickable. The activity spinner yields to
                 the rename input. */}
-            <ProjectStatusMarks
-              status={isEditing && status.live === 'activity' ? { ...status, live: null } : status}
-              onOpenNeedsYou={onOpenNeedsYou}
-            />
+            <span className="pointer-events-none relative flex shrink-0 items-center gap-2 empty:hidden [&_button]:pointer-events-auto">
+              <ProjectStatusMarks
+                status={
+                  isEditing && status.live === 'activity' ? { ...status, live: null } : status
+                }
+                onOpenNeedsYou={onOpenNeedsYou}
+              />
+            </span>
           </div>
         </ContextMenuTrigger>
         {renderContextMenu?.(project)}

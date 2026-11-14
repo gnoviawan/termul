@@ -95,6 +95,25 @@ const paneContents = (page: Page): Locator => page.locator('[data-pane-content]'
 const chatCard = (page: Page, title: string): Locator =>
   page.locator(`button[data-chat-card-index][aria-label^="${title}"]`)
 const toolStrip = (page: Page): Locator => page.getByRole('toolbar', { name: 'Tools' })
+/** The active project's chats in the Rail. */
+const railChats = (page: Page): Locator =>
+  railNav(page).getByRole('list', { name: `Chats in ${PROJECT}` })
+
+/** A Rail chat row by title (its name may end with a status word). */
+const railChat = (page: Page, title: string): Locator =>
+  railChats(page).getByRole('button', { name: new RegExp(`^${title}`) })
+
+/** Opens the worktree switcher from the project row menu (Sidebar V2 P4). */
+async function openWorktreeSwitcher(page: Page): Promise<Locator> {
+  await railNav(page)
+    .getByRole('button', { name: new RegExp(`^Project: ${PROJECT}`) })
+    .click({ button: 'right' })
+  await page.getByRole('menuitem', { name: /Switch worktree/ }).click()
+  const list = page.getByRole('listbox', { name: 'Working copies' })
+  await expect(list).toBeVisible()
+  return list
+}
+
 const stripButton = (page: Page, name: string): Locator =>
   toolStrip(page).getByRole('button', { name, exact: true })
 
@@ -435,10 +454,23 @@ test('Journey 2: two fixes at once, one in a new worktree', async ({ page }) => 
     await expect(card).not.toContainText(created.branch)
   })
 
-  await skipStep(
-    '4. Workspace switcher lists both copies; picking the worktree narrows Chats',
-    'Sidebar V2 P3 removed the Side panel header that held the Workspace switcher; it has no place yet'
-  )
+  await test.step('4. The project row menu switches to the worktree; the Rail chats narrow and the chip shows it', async () => {
+    const list = await openWorktreeSwitcher(page)
+    const worktreeRow = list.getByRole('option', { name: new RegExp(created.branch) })
+    await expect(worktreeRow).toBeVisible()
+    // The worktree's only open tab is its chat.
+    await expect(worktreeRow.locator('[title^="1 open tab"]')).toBeVisible()
+    // The project folder is listed too (first row).
+    await expect(list.getByRole('option').first()).not.toContainText(created.branch)
+
+    await worktreeRow.click()
+    await expect(list).toHaveCount(0)
+
+    await expect(railChat(page, CHAT_WORKTREE)).toBeVisible()
+    await expect(railChat(page, CHAT_CHECKOUT)).toHaveCount(0)
+    await expect(railChat(page, CHAT_ONE)).toHaveCount(0)
+    await expect(page.getByTestId(`rail-worktree-chip-${PROJECT_ID}`)).toContainText(created.branch)
+  })
 
   await test.step('5. The tool strip Terminal opens a new terminal tab in the worktree folder', async () => {
     await chatTab(page, CHAT_WORKTREE).click()
@@ -452,13 +484,32 @@ test('Journey 2: two fixes at once, one in a new worktree', async ({ page }) => 
     }
   })
 
-  await skipStep(
-    '6. The switcher row terminal action opens a terminal whose cwd is the worktree folder',
-    'the Workspace switcher has no place in Sidebar V2 P3'
-  )
+  await test.step('6. The switcher row terminal action opens a terminal whose cwd is the worktree folder', async () => {
+    const spawnedBefore = spawns.cwds().length
+    const list = await openWorktreeSwitcher(page)
+    // The action sits beside its option and shows on hover.
+    await list.getByRole('option', { name: new RegExp(created.branch) }).hover()
+    // Keyboard activation: the popover closes in the click handler, which makes
+    // a pointer click's post-action checks see a detached element and retry.
+    const rowAction = page.getByRole('button', { name: `Open terminal in ${created.branch}` })
+    await rowAction.focus()
+    await page.keyboard.press('Enter')
+
+    await expect(page.getByText('Terminal opened').first()).toBeVisible()
+    await expect.poll(() => spawns.cwds().length).toBeGreaterThan(spawnedBefore)
+    expect(norm(spawns.cwds().at(-1) ?? '')).toBe(norm(created.path))
+  })
 
   await skipStep(
     '2b. the worktree branch is renamed to the suggested name (chat/fix-903)',
     'the suggested name comes from a real model turn; the fake agent suggests nothing'
   )
+
+  await test.step('cleanup: back to the project folder so the Rail shows every chat again', async () => {
+    const list = await openWorktreeSwitcher(page)
+    await list.getByRole('option').first().click()
+    await expect(railChat(page, CHAT_CHECKOUT)).toBeVisible()
+    await expect(railChat(page, CHAT_WORKTREE)).toBeVisible()
+    await expect(page.getByTestId(`rail-worktree-chip-${PROJECT_ID}`)).toHaveCount(0)
+  })
 })

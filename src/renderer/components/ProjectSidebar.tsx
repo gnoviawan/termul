@@ -11,6 +11,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { NewGroupModal } from './NewGroupModal'
 import { NewWorktreeModal } from './NewWorktreeModal'
 import { useRailCollapsed } from './shell/rail/rail-density'
+import { useOpenRailWorktreeSwitcher } from './shell/rail/worktree-switcher'
 import { AddProjectMenu } from './sidebar/add-project-menu'
 import { GroupContextMenuContent } from './sidebar/group-context-menu'
 import {
@@ -23,6 +24,7 @@ import { RailSectionDivider } from './sidebar/rail-section-header'
 import { SSHResizableSection } from './sidebar/ssh-section'
 import type { ColorPickerState, ProjectSidebarProps } from './sidebar/types'
 import { useProjectRail } from './sidebar/use-project-rail'
+import { useRailImportChats } from './sidebar/use-rail-import-chats'
 
 /** Projects header icon button: the panel button plus a 14px glyph. */
 const HEADER_ICON_BUTTON = `${PANEL_ICON_BUTTON_CLASS} cursor-pointer [&_svg]:size-3.5`
@@ -93,6 +95,10 @@ export function ProjectSidebar({
   const [colorPicker, setColorPicker] = useState<ColorPickerState | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null)
   const [worktreeProjectId, setWorktreeProjectId] = useState<string | null>(null)
+  const openWorktreeSwitcher = useOpenRailWorktreeSwitcher()
+
+  // Import chats (the `+` menu) into the open project's working copy.
+  const { onImportChats, dialog: importChatsDialog } = useRailImportChats(projects, activeProjectId)
 
   const handleOpenColorPicker = useCallback(
     (targetId: string, targetType: 'project' | 'group'): void => {
@@ -269,6 +275,7 @@ export function ProjectSidebar({
         moveProjectToGroup={moveProjectToGroup}
         onCreateGroupForProject={(projectId) => setNewGroupModal({ projectIdToMove: projectId })}
         onNewWorktree={setWorktreeProjectId}
+        onSwitchWorktree={openWorktreeSwitcher}
         onArchiveProject={onArchiveProject}
         onConfirmDelete={setDeleteTarget}
       />
@@ -280,7 +287,8 @@ export function ProjectSidebar({
       onUpdateProject,
       onArchiveProject,
       groups,
-      moveProjectToGroup
+      moveProjectToGroup,
+      openWorktreeSwitcher
     ]
   )
 
@@ -333,6 +341,7 @@ export function ProjectSidebar({
             <AddProjectMenu
               onNewProject={onNewProject}
               onNewGroup={() => setNewGroupModal({})}
+              onImportChats={onImportChats}
               buttonClassName={HEADER_ICON_BUTTON}
             />
           </div>
@@ -378,6 +387,7 @@ export function ProjectSidebar({
         railSections={railSections}
         onNewProject={onNewProject}
         onNewGroup={() => setNewGroupModal({})}
+        onImportChats={onImportChats}
         activeProjectContent={activeProjectContent}
       />
 
@@ -435,6 +445,8 @@ export function ProjectSidebar({
         onClose={() => setWorktreeProjectId(null)}
         projectId={worktreeProjectId ?? ''}
       />
+
+      {importChatsDialog}
 
       {/* New Group Modal */}
       <NewGroupModal

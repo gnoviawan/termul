@@ -280,12 +280,11 @@ describe('ShellFrame', () => {
       expect(row).toContainElement(screen.getByTestId('tool-strip'))
     })
 
-    it('renders the fallback bar with the controls when there is no project', () => {
+    it('renders the fallback bar with the controls spacer when there is no project', () => {
       renderFrame()
       const bar = screen.getByTestId('top-row-fallback-bar')
       expect(bar).toHaveAttribute('data-tauri-drag-region')
-      expect(screen.getAllByTestId('window-controls')).toHaveLength(1)
-      expect(bar).toContainElement(screen.getByTestId('window-controls'))
+      expect(bar).toContainElement(screen.getByTestId('window-controls-inset'))
       // Inside the main card, above workspaceMain.
       const main = screen.getByTestId('workspace-main').closest('main') as HTMLElement
       expect(main).toContainElement(bar)
@@ -295,10 +294,25 @@ describe('ShellFrame', () => {
       ).toBeTruthy()
     })
 
+    it('draws the window controls once, in the top-right corner above the tool strip', () => {
+      renderFrame()
+      const controls = screen.getByTestId('window-controls')
+      expect(screen.getAllByTestId('window-controls')).toHaveLength(1)
+      expect(screen.getByTestId('shell-row')).toContainElement(controls)
+      expect(screen.getByTestId('shell-row')).toHaveClass('relative')
+      expect(controls).toHaveClass('absolute', 'top-0', 'right-0', 'h-11')
+      expect(controls).not.toHaveAttribute('data-tauri-drag-region')
+      // After the strip in the DOM, so it paints over the strip's top.
+      expect(
+        screen.getByTestId('tool-strip').compareDocumentPosition(controls) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+    })
+
     it('renders the fallback bar on a routed page, not on a workspace route', () => {
       const { unmount } = renderFrame(withProject, '/snapshots')
       expect(screen.getByTestId('top-row-fallback-bar')).toBeInTheDocument()
-      expect(screen.getAllByTestId('window-controls')).toHaveLength(1)
+      expect(screen.getByTestId('window-controls-inset')).toBeInTheDocument()
       unmount()
 
       renderFrame(withProject, '/c/chat-1')
@@ -319,19 +333,19 @@ describe('ShellFrame', () => {
       expect(screen.queryByTestId('top-row-start-slot')).not.toBeInTheDocument()
     })
 
-    it('leaves the controls to the pane tab bars in panes mode', () => {
+    it('keeps the controls in the corner in panes mode, with no fallback bar', () => {
       renderFrame(withProject)
       expect(screen.queryByTestId('top-row-fallback-bar')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('window-controls')).not.toBeInTheDocument()
+      expect(screen.getAllByTestId('window-controls')).toHaveLength(1)
     })
 
-    it('does not render the fallback bar in SSH mode (the SSH header owns the controls)', () => {
+    it('does not render the fallback bar in SSH mode (the SSH header is the top row)', () => {
       renderFrame({
         ...withProject,
         ssh: { ...ssh, activeSSHProfile: { id: 's1' } } as unknown as SSHWorkspaceState
       })
       expect(screen.queryByTestId('top-row-fallback-bar')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('window-controls')).not.toBeInTheDocument()
+      expect(screen.getAllByTestId('window-controls')).toHaveLength(1)
     })
 
     it('renders no controls on macOS or web, even in the fallback bar', () => {

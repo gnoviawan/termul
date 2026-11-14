@@ -11,6 +11,7 @@ import {
 import { RAIL_ICON_BOX_CLASS } from '@/components/shell/rail-layout'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
+import { isContextMenuKey, openContextMenuFrom } from '@/lib/context-menu-key'
 import { cn } from '@/lib/utils'
 import type { Project } from '@/types/project'
 
@@ -49,6 +50,11 @@ export const ProjectIconItem = memo(function ProjectIconItem({
                 type="button"
                 onClick={onClick}
                 onContextMenu={onContextMenu}
+                onKeyDown={(e) => {
+                  if (!isContextMenuKey(e)) return
+                  e.preventDefault()
+                  openContextMenuFrom(e.currentTarget)
+                }}
                 // Paper 1BU1: the open project is plain on the collapsed Rail too.
                 className={cn(
                   'flex h-7.5 w-full cursor-pointer select-none items-center justify-center rounded-md',
