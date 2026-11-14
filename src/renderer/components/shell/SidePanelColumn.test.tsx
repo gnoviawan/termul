@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TopRowPlatform, TopRowRoles } from '@/lib/top-row'
@@ -245,8 +245,7 @@ describe('SidePanelColumn', () => {
         )
       )
     }
-    const header = (): HTMLElement =>
-      screen.getByTestId('workspace-switcher').parentElement as HTMLElement
+    const header = (): HTMLElement => screen.getByTestId('side-panel-header')
 
     it('is not a drag region on web or without a provider', () => {
       const { unmount } = renderOn(web)
@@ -281,7 +280,26 @@ describe('SidePanelColumn', () => {
       collapsedMac.unmount()
 
       renderOn(desktop)
-      expect(header().style.paddingLeft).toBe('')
+      expect(header().style.paddingLeft).toBe('8px')
+    })
+
+    it('starts with the expand-Rail toggle only while the Rail is collapsed (Sidebar V2)', () => {
+      useShellLayoutStore.setState({ railExpanded: false })
+      const collapsed = renderOn(mac)
+      const toggle = within(header()).getByRole('button', { name: 'Expand or collapse projects' })
+      expect(toggle).toHaveAttribute('aria-pressed', 'false')
+      // Left of the workspace switcher, right of the traffic-light inset.
+      expect(
+        toggle.compareDocumentPosition(screen.getByTestId('workspace-switcher')) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+      collapsed.unmount()
+
+      useShellLayoutStore.setState({ railExpanded: true })
+      renderOn(mac)
+      expect(
+        within(header()).queryByRole('button', { name: 'Expand or collapse projects' })
+      ).toBeNull()
     })
 
     it('adds no inset with the Rail expanded, even on macOS', () => {

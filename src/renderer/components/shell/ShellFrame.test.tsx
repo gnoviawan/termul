@@ -1,4 +1,4 @@
-import { act, render, renderHook, screen } from '@testing-library/react'
+import { act, render, renderHook, screen, within } from '@testing-library/react'
 import { useEffect } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -163,7 +163,6 @@ describe('ShellFrame', () => {
 
     const props = railProps.current as ShellRailProps
     expect(props.projects).toEqual([oneProject])
-    expect(props.activeProject).toBe(oneProject)
     expect(props.activeProjectId).toBe('p1')
     expect(props.canOpenCanvas).toBe(true)
     expect(props.isShortcutsOpen).toBe(true)
@@ -357,10 +356,16 @@ describe('ShellFrame', () => {
       expect(screen.queryByTestId('show-side-panel-slot')).not.toBeInTheDocument()
       second.unmount()
 
+      // Elsewhere there is no inset, but the collapsed Rail's expand toggle
+      // still opens the top row (Sidebar V2).
       platformRef.mac = false
       useShellLayoutStore.setState({ railExpanded: false })
       renderFrame()
-      expect(screen.queryByTestId('show-side-panel-slot')).not.toBeInTheDocument()
+      const slot = screen.getByTestId('show-side-panel-slot')
+      expect(slot.style.paddingLeft).toBe('')
+      expect(
+        within(slot).getByRole('button', { name: 'Expand or collapse projects' })
+      ).toBeInTheDocument()
     })
 
     it('keeps workspaceMain mounted when the mode flips between fallback and panes', () => {

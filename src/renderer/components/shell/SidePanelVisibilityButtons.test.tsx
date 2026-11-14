@@ -1,10 +1,16 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as appSettingsHooks from '@/hooks/use-app-settings'
+import { selectTopRowRoles, type TopRowPlatform } from '@/lib/top-row'
 import { useProjectStore } from '@/stores/project-store'
 import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
 import type { Project } from '@/types/project'
-import { ShowSidePanelSlot, SidePanelVisibilityButton } from './SidePanelVisibilityButtons'
+import {
+  ShowSidePanelSlot,
+  SidePanelVisibilityButton,
+  useShowSidePanelSlotVisible
+} from './SidePanelVisibilityButtons'
+import { TopRowProvider } from './top-row-context'
 
 const { mockToastError } = vi.hoisted(() => ({ mockToastError: vi.fn() }))
 vi.mock('sonner', () => ({ toast: { error: mockToastError } }))
@@ -71,5 +77,67 @@ describe('ShowSidePanelSlot', () => {
     useProjectStore.setState({ projects: [project('')] })
     render(<ShowSidePanelSlot />)
     expect(screen.queryByTestId('show-side-panel-slot')).toBeNull()
+  })
+})
+
+describe('ShowSidePanelSlot expand-Rail toggle (Sidebar V2)', () => {
+  const roles = selectTopRowRoles({
+    root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
+    fullscreenPaneId: null,
+    mode: 'panes'
+  })
+  const mac: TopRowPlatform = { dragRegions: true, windowControls: false, trafficLights: true }
+  const web: TopRowPlatform = { dragRegions: false, windowControls: false, trafficLights: false }
+
+  const renderSlot = (platform: TopRowPlatform, railToggleInMain: boolean, inset = 0) =>
+    render(
+      <TopRowProvider
+        roles={roles}
+        platform={platform}
+        mainStartInsetPx={inset}
+        railToggleInMain={railToggleInMain}
+      >
+        <ShowSidePanelSlot />
+      </TopRowProvider>
+    )
+
+  it('opens with the toggle right of the traffic lights (24px start padding) on macOS', () => {
+    useShellLayoutStore.setState({ railExpanded: false, sidePanelVisible: true })
+    renderSlot(mac, true, 24)
+    const slot = screen.getByTestId('show-side-panel-slot')
+    expect(slot.style.paddingLeft).toBe('24px')
+    const toggle = within(slot).getByRole('button', { name: 'Expand or collapse projects' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    expect(toggle).toHaveClass('size-7')
+    expect(slot.firstElementChild).toBe(toggle)
+  })
+
+  it('shows the toggle with no inset elsewhere, and expands the Rail', () => {
+    const expand = vi.fn(() => Promise.resolve())
+    vi.spyOn(appSettingsHooks, 'useUpdatePanelVisibility').mockReturnValue(expand)
+    useShellLayoutStore.setState({ railExpanded: false, sidePanelVisible: true })
+    renderSlot(web, true)
+    const slot = screen.getByTestId('show-side-panel-slot')
+    expect(slot).toHaveClass('pl-2')
+    fireEvent.click(within(slot).getByRole('button', { name: 'Expand or collapse projects' }))
+    expect(expand).toHaveBeenCalledWith('sidebarVisible', true)
+  })
+
+  it('has no toggle while the Rail is expanded', () => {
+    useShellLayoutStore.setState({ railExpanded: true, sidePanelVisible: true })
+    renderSlot(mac, false)
+    expect(screen.queryByTestId('show-side-panel-slot')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Expand or collapse projects' })).toBeNull()
+  })
+
+  it('counts the toggle as a reason to render the slot', () => {
+    useShellLayoutStore.setState({ railExpanded: false, sidePanelVisible: true })
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <TopRowProvider roles={roles} platform={web} railToggleInMain>
+        {children}
+      </TopRowProvider>
+    )
+    const { result } = renderHook(() => useShowSidePanelSlotVisible(), { wrapper })
+    expect(result.current).toBe(true)
   })
 })

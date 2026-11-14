@@ -8,9 +8,11 @@ import {
   RailChatItem,
   RailChatList,
   RailChatRow,
+  RailChatStatusDot,
   RailChatTitle,
   RailShowMore
 } from './rail-chats'
+import { RailDensityProvider } from './rail-density'
 import { RailNav, RailNavRow } from './rail-nav'
 
 describe('RailNav / RailNavRow', () => {
@@ -164,5 +166,67 @@ describe('RailChatGroup parts', () => {
       'RailShowMore must be used inside <RailChatGroup>'
     )
     vi.restoreAllMocks()
+  })
+})
+
+describe('icon-only density (collapsed Rail)', () => {
+  const collapsed = (ui: React.ReactNode) =>
+    render(
+      <TooltipProvider>
+        <RailDensityProvider density="collapsed">{ui}</RailDensityProvider>
+      </TooltipProvider>
+    )
+
+  it('keeps the 28px nav row, centres the 14px icon and draws no label', () => {
+    collapsed(
+      <RailNav data-testid="nav">
+        <RailNavRow label="Search" icon={<Search />} shortcut="Ctrl+K" onClick={vi.fn()} />
+      </RailNav>
+    )
+    expect(screen.getByTestId('nav')).toHaveClass('gap-px', 'px-2', 'pt-2', 'pb-2.5')
+    const row = screen.getByRole('button', { name: 'Search' })
+    expect(row).toHaveClass('h-7', 'justify-center', 'rounded-md', 'hover:bg-foreground/[0.06]')
+    expect(row).not.toHaveClass('px-3')
+    expect(row).toHaveTextContent('')
+    expect(row.querySelector('[data-rail-icon-column]')).toHaveClass('size-3.5')
+  })
+
+  it('shows the hover tooltip: label and shortcut keycap, 28px, radius 8', async () => {
+    collapsed(<RailNavRow label="Search" icon={<Search />} shortcut="Ctrl+K" onClick={vi.fn()} />)
+    fireEvent.focus(screen.getByRole('button', { name: 'Search' }))
+    const tooltip = await screen.findByRole('tooltip')
+    expect(tooltip).toHaveTextContent('Search')
+    const surface = tooltip.parentElement as HTMLElement
+    expect(surface).toHaveClass(
+      'h-7',
+      'rounded-lg',
+      'outline-popover-edge',
+      'shadow-rail-hover-panel'
+    )
+    expect(surface.querySelector(':scope > kbd')).toHaveClass('keycap')
+    expect(surface.querySelector(':scope > kbd')).toHaveTextContent('Ctrl+K')
+  })
+
+  it('keeps the 30px chat row with only the icon, and the open chat raised', () => {
+    collapsed(
+      <RailChatGroup total={1}>
+        <RailChatList aria-label="Chats">
+          <RailChatItem index={0}>
+            <RailChatRow open aria-label="Chat a">
+              <RailChatIcon>A</RailChatIcon>
+              <RailChatTitle>Chat a</RailChatTitle>
+            </RailChatRow>
+          </RailChatItem>
+        </RailChatList>
+      </RailChatGroup>
+    )
+    const row = screen.getByRole('button', { name: 'Chat a' })
+    expect(row).toHaveClass('h-7.5', 'justify-center', 'rounded-md', 'keycap')
+    expect(screen.queryByText('Chat a')).toBeNull()
+  })
+
+  it('draws no status dot for an idle chat', () => {
+    const { container } = render(<RailChatStatusDot state="idle" />)
+    expect(container).toBeEmptyDOMElement()
   })
 })

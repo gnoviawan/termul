@@ -1,6 +1,7 @@
 import { LayoutGroup, Reorder } from 'framer-motion'
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { ChevronDown, ChevronRight, FolderPlus } from '@/components/icons'
+import { useRailCollapsed } from '@/components/shell/rail/rail-density'
 import { RailTooltip } from '@/components/shell/rail-button'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
@@ -116,6 +117,7 @@ export function ProjectList({
   // Dropping on a folder header or group container moves the project there.
   // The row also watches git for its diff stat.
   const showSections = railSections
+  const collapsed = useRailCollapsed()
   // The lifted row's shadow is a CSS transition keyed off data-dragging:
   // Motion can't interpolate a var() shadow, so whileDrag would snap it.
   // The lift (opaque bg) holds until the row lands, and `relative` lets
@@ -130,7 +132,8 @@ export function ProjectList({
         drag="y"
         layout="position"
         data-dragging={liftedId === project.id || undefined}
-        className="relative list-none rounded-lg transition-shadow duration-[110ms] ease-out motion-reduce:transition-none data-[dragging]:bg-sidebar data-[dragging]:shadow-md data-[dragging]:duration-150"
+        // `gap-px`: the active project's chats sit 1px under its row.
+        className="relative flex list-none flex-col gap-px rounded-lg transition-shadow duration-[110ms] ease-out motion-reduce:transition-none data-[dragging]:bg-sidebar data-[dragging]:shadow-md data-[dragging]:duration-150"
         whileDrag={{
           scale: 1.02,
           pointerEvents: 'none'
@@ -193,14 +196,19 @@ export function ProjectList({
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-2 pt-0.5 pb-1" data-group-id="root">
+    <div
+      className={cn('flex-1 overflow-y-auto px-2 pt-0.5 pb-1', collapsed && 'scrollbar-hide')}
+      data-group-id="root"
+    >
       {projects.length === 0 ? (
-        <div className="flex flex-col items-center justify-center p-6 text-center opacity-60">
-          <p className="text-sm text-muted-foreground">No projects yet</p>
-          <p className="text-xs text-muted-foreground mt-1">
-            Create your first project to get started
-          </p>
-        </div>
+        collapsed ? null : (
+          <div className="flex flex-col items-center justify-center p-6 text-center opacity-60">
+            <p className="text-sm text-muted-foreground">No projects yet</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Create your first project to get started
+            </p>
+          </div>
+        )
       ) : (
         <div data-testid="active-projects-container">
           {/* LayoutGroup keeps Reorder layout measurements in sync when an item's
@@ -323,8 +331,8 @@ export function ProjectList({
             )}
           </LayoutGroup>
 
-          {/* Archived Projects Section */}
-          {archivedProjects.length > 0 && (
+          {/* Archived Projects Section (not on the collapsed Rail) */}
+          {!collapsed && archivedProjects.length > 0 && (
             <div className="mt-2 flex flex-col gap-0.5">
               <button
                 onClick={() => setShowArchived(!showArchived)}

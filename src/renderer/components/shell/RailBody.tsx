@@ -11,7 +11,7 @@ import { useProjectActions } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 
-interface RailExpandedProps {
+interface RailBodyProps {
   projects: Project[]
   activeProjectId: string
   onSelectProject: (id: string) => void
@@ -31,13 +31,17 @@ interface RailExpandedProps {
 const NEED_PROJECT = 'Open a project first'
 
 /**
- * Expanded Rail body, top to bottom: the header (top row part, ending in the
- * Rail toggle), the nav (New chat, Search, Canvas, Automations), the Projects
+ * Rail body, top to bottom: the header (top row part, ending in the Rail
+ * toggle), the nav (New chat, Search, Canvas, Automations), the Projects
  * section with the active project's chats (and the SSH section on desktop),
- * and the icon-only footer. Fills the width its container gives it
- * and inherits the Rail's sidebar surface.
+ * and the icon-only footer. Fills the width its container gives it and
+ * inherits the Rail's sidebar surface.
+ *
+ * One tree for both Rail states: every part reads the density from
+ * `RailDensityProvider` (set by `ShellRail`). Collapsed, the rows keep their
+ * heights and only drop labels and meta, so every icon stays at its y.
  */
-export function RailExpanded({
+export function RailBody({
   projects,
   activeProjectId,
   onSelectProject,
@@ -52,7 +56,7 @@ export function RailExpanded({
   onShortcutsOpenChange,
   isThemePickerOpen,
   onToggleThemePicker
-}: RailExpandedProps): React.JSX.Element {
+}: RailBodyProps): React.JSX.Element {
   const { updateProject, deleteProject, archiveProject, restoreProject, reorderProjects } =
     useProjectActions()
   const searchShortcut = useShortcutLabel('commandPalette')

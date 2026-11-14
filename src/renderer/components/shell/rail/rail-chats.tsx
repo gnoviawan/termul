@@ -1,6 +1,9 @@
 import { createContext, forwardRef, useContext, useMemo, useState } from 'react'
+import type { ProjectChatLiveState } from '@/components/sidebar/project-chat-row'
 import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
+import { RAIL_CHAT_STATUS_DOT_CLASS } from './rail-chat-status'
+import { useRailCollapsed } from './rail-density'
 
 /** Chats a Rail project shows before "Show N more". */
 export const RAIL_CHAT_LIMIT = 5
@@ -100,11 +103,15 @@ export interface RailChatRowProps extends React.ComponentPropsWithoutRef<'button
  * One chat row: 30px, 35px left (the agent icon sits under the project
  * name), 12px right, 9px gaps. Compose {@link RailChatIcon},
  * {@link RailChatTitle} and a trail (for example `ChatRowTrail`) inside.
+ *
+ * Collapsed Rail: the same 30px row with only the agent icon, centred (radius
+ * 6, hover 6% foreground). The open chat keeps its keycap.
  */
 export const RailChatRow = forwardRef<HTMLButtonElement, RailChatRowProps>(function RailChatRow(
   { open = false, className, ...props },
   ref
 ) {
+  const collapsed = useRailCollapsed()
   return (
     <button
       ref={ref}
@@ -112,10 +119,11 @@ export const RailChatRow = forwardRef<HTMLButtonElement, RailChatRowProps>(funct
       aria-current={open ? 'true' : undefined}
       data-open={open || undefined}
       className={cn(
-        'flex h-7.5 w-full min-w-0 items-center gap-2.25 rounded-lg pr-3 pl-8.75 text-left text-xs',
+        'flex h-7.5 w-full min-w-0 items-center text-left text-xs',
+        collapsed ? 'justify-center rounded-md px-0' : 'gap-2.25 rounded-lg pr-3 pl-8.75',
         'transition-colors duration-150 ease-out focus-visible:ring-inset',
         FOCUS_RING_CLASS,
-        open ? 'keycap' : 'hover:bg-row-hover',
+        open ? 'keycap' : collapsed ? 'hover:bg-foreground/[0.06]' : 'hover:bg-row-hover',
         className
       )}
       {...props}
@@ -123,7 +131,7 @@ export const RailChatRow = forwardRef<HTMLButtonElement, RailChatRowProps>(funct
   )
 })
 
-/** 12px agent icon box at the start of a chat row. */
+/** 12px agent icon box at the start of a chat row. Holds a {@link RailChatStatusDot}. */
 export function RailChatIcon({
   className,
   ...props
@@ -131,17 +139,47 @@ export function RailChatIcon({
   return (
     <span
       aria-hidden="true"
-      className={cn('inline-flex size-3 shrink-0 items-center justify-center', className)}
+      className={cn('relative inline-flex size-3 shrink-0 items-center justify-center', className)}
       {...props}
     />
   )
 }
 
-/** Chat title: fills the row and fades at its end instead of an ellipsis. */
+/**
+ * 6px status dot on the agent icon's bottom-right corner (collapsed Rail,
+ * where the trail is hidden): needs-you warning, running primary, new
+ * activity foreground, nothing when idle. Decorative: put the status in the
+ * row's accessible name.
+ */
+export function RailChatStatusDot({
+  state,
+  className,
+  ...props
+}: Omit<React.ComponentPropsWithoutRef<'span'>, 'children'> & {
+  state: ProjectChatLiveState
+}): React.JSX.Element | null {
+  const fill = RAIL_CHAT_STATUS_DOT_CLASS[state]
+  if (!fill) return null
+  return (
+    <span
+      aria-hidden="true"
+      data-rail-chat-status={state}
+      className={cn('absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full', fill, className)}
+      {...props}
+    />
+  )
+}
+
+/**
+ * Chat title: fills the row and fades at its end instead of an ellipsis.
+ * Not drawn on the collapsed Rail (the row's accessible name carries it).
+ */
 export function RailChatTitle({
   className,
   ...props
-}: React.ComponentPropsWithoutRef<'span'>): React.JSX.Element {
+}: React.ComponentPropsWithoutRef<'span'>): React.JSX.Element | null {
+  const collapsed = useRailCollapsed()
+  if (collapsed) return null
   return (
     <span
       className={cn('fade-end min-w-0 flex-1 text-xs text-secondary-foreground', className)}
@@ -153,15 +191,19 @@ export function RailChatTitle({
 /**
  * "Show N more" / "Show less" under a chat group: 28px, 56px left (the
  * title column), `muted-foreground` 12px. Nothing when every chat fits.
+ * Collapsed Rail: the same 28px row reads "···" (centred); its accessible
+ * name keeps the words.
  */
 export const RailShowMore = forwardRef<
   HTMLButtonElement,
   Omit<React.ComponentPropsWithoutRef<'button'>, 'children'>
 >(function RailShowMore({ className, onClick, ...props }, ref) {
   const { total, limit, pinnedIndex, expanded, setExpanded } = useRailChatGroup('RailShowMore')
+  const collapsed = useRailCollapsed()
   const pinnedPastLimit = pinnedIndex !== undefined && pinnedIndex >= limit ? 1 : 0
   const hidden = total - limit - pinnedPastLimit
   if (hidden <= 0 && !expanded) return null
+  const words = expanded ? 'Show less' : `Show ${hidden} more`
   return (
     <button
       ref={ref}
@@ -171,15 +213,21 @@ export const RailShowMore = forwardRef<
         setExpanded(!expanded)
         onClick?.(event)
       }}
+      aria-label={
+        collapsed ? (expanded ? 'Show fewer chats' : `Show ${hidden} more chats`) : undefined
+      }
       className={cn(
-        'flex h-7 w-full items-center rounded-lg pl-14 text-left text-xs text-muted-foreground',
-        'transition-colors duration-150 ease-out hover:bg-row-hover hover:text-foreground focus-visible:ring-inset',
+        'flex h-7 w-full items-center text-xs text-muted-foreground',
+        collapsed
+          ? 'justify-center rounded-md hover:bg-foreground/[0.06]'
+          : 'rounded-lg pl-14 text-left hover:bg-row-hover',
+        'transition-colors duration-150 ease-out hover:text-foreground focus-visible:ring-inset',
         FOCUS_RING_CLASS,
         className
       )}
       {...props}
     >
-      {expanded ? 'Show less' : `Show ${hidden} more`}
+      {collapsed ? <span aria-hidden="true">···</span> : words}
     </button>
   )
 })

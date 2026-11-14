@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from 'react'
 import { toast } from 'sonner'
+import { toggleRailVisibility } from '@/components/shell/use-rail-toggle'
 import { useUpdateAppSetting, useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { getShortcutTargetContext } from '@/layouts/workspace-layout/shortcut-target'
 import { keyboardApi } from '@/lib/api'
@@ -175,7 +176,7 @@ export function useWorkspaceKeyboard({
         return
       }
 
-      // Toggle Side Panel (Ctrl+B / ⌘+B; id toggleFileExplorer) — skip when in editor/input/terminal
+      // Toggle Side Panel (Ctrl+Alt+B / ⌘⌥B; id toggleFileExplorer) — skip when in editor/input/terminal
       if (matchesShortcut(e, getActiveKey('toggleFileExplorer'))) {
         if (!isInEditor && !isInInput && !isInTerminal) {
           e.preventDefault()
@@ -188,15 +189,14 @@ export function useWorkspaceKeyboard({
         return
       }
 
+      // Expand or collapse the Rail (Ctrl+B / ⌘B; id sidebarToggle). Works
+      // from a terminal (the terminal hands app shortcuts on); an editor or
+      // input keeps the key.
       if (matchesShortcut(e, getActiveKey('sidebarToggle'))) {
         if (!isInEditor && !isInInput) {
           e.preventDefault()
           e.stopPropagation()
-          void updatePanelVisibility('sidebarVisible', !isSidebarVisible).catch((error) => {
-            toast.error(
-              error instanceof Error ? error.message : 'Failed to update sidebar visibility'
-            )
-          })
+          toggleRailVisibility(isSidebarVisible, updatePanelVisibility, 'shortcut')
         }
         return
       }
@@ -391,11 +391,7 @@ export function useWorkspaceKeyboard({
           applyZoomAction('zoomReset')
           break
         case 'sidebarToggle':
-          void updatePanelVisibility('sidebarVisible', !isSidebarVisible).catch((error) => {
-            toast.error(
-              error instanceof Error ? error.message : 'Failed to update sidebar visibility'
-            )
-          })
+          toggleRailVisibility(isSidebarVisible, updatePanelVisibility, 'shortcut')
           break
         case 'colorThemePicker':
           handleOpenThemePicker()

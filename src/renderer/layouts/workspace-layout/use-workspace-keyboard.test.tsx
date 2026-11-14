@@ -5,10 +5,11 @@ import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/she
 import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
 import { useWorkspaceKeyboard } from './use-workspace-keyboard'
 
-const { mockWriteDebounced, mockWrite, mockToastError } = vi.hoisted(() => ({
+const { mockWriteDebounced, mockWrite, mockToastError, mockLog } = vi.hoisted(() => ({
   mockWriteDebounced: vi.fn(),
   mockWrite: vi.fn(),
-  mockToastError: vi.fn()
+  mockToastError: vi.fn(),
+  mockLog: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -22,7 +23,7 @@ vi.mock('@/lib/api', () => ({
   acpApi: {},
   terminalApi: {}
 }))
-vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLog }))
 vi.mock('sonner', () => ({ toast: { error: mockToastError } }))
 vi.mock('@/lib/platform', () => ({ isMac: false }))
 
@@ -73,33 +74,56 @@ describe('useWorkspaceKeyboard panel toggles (shell-layout store)', () => {
     useShellLayoutStore.setState({ status: 'ready' })
   })
 
-  it('keeps the shortcut ids and default keys, with the new labels', () => {
+  it('keeps the shortcut ids, with Ctrl+B on the Rail and Ctrl+Alt+B on the Side panel', () => {
     expect(DEFAULT_KEYBOARD_SHORTCUTS.sidebarToggle).toMatchObject({
       id: 'sidebarToggle',
       label: 'Toggle Projects',
-      description: 'Expand or collapse projects',
-      defaultKey: 'ctrl+shift+b'
+      description: 'Expand or collapse the projects sidebar',
+      defaultKey: 'ctrl+b'
     })
     expect(DEFAULT_KEYBOARD_SHORTCUTS.toggleFileExplorer).toMatchObject({
       id: 'toggleFileExplorer',
       label: 'Toggle Side Panel',
       description: 'Show or hide side panel',
-      defaultKey: 'ctrl+b'
+      defaultKey: 'ctrl+alt+b'
     })
   })
 
-  it('default Ctrl+B flips sidePanelVisible and Ctrl+Shift+B flips railExpanded', () => {
+  it('default Ctrl+B flips railExpanded and Ctrl+Alt+B flips sidePanelVisible', () => {
     mountKeyboard()
 
-    press('b', { ctrlKey: true })
-    expect(layout().sidePanelVisible).toBe(false)
-    expect(layout().railExpanded).toBe(true)
+    press('b', { ctrlKey: true, code: 'KeyB' })
+    expect(layout().railExpanded).toBe(false)
+    expect(layout().sidePanelVisible).toBe(true)
 
-    press('B', { ctrlKey: true, shiftKey: true })
+    press('b', { ctrlKey: true, altKey: true, code: 'KeyB' })
+    expect(layout().sidePanelVisible).toBe(false)
     expect(layout().railExpanded).toBe(false)
 
-    press('b', { ctrlKey: true })
-    expect(layout().sidePanelVisible).toBe(true)
+    press('b', { ctrlKey: true, code: 'KeyB' })
+    expect(layout().railExpanded).toBe(true)
+  })
+
+  it('matches Ctrl+Alt+B by its physical key when Option changes the character (macOS ⌘⌥B)', () => {
+    mountKeyboard()
+
+    press('∫', { ctrlKey: true, altKey: true, code: 'KeyB' })
+    expect(layout().sidePanelVisible).toBe(false)
+    expect(layout().railExpanded).toBe(true)
+  })
+
+  it('logs the Rail toggle from the shortcut', () => {
+    mountKeyboard()
+
+    press('b', { ctrlKey: true, code: 'KeyB' })
+
+    expect(mockLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'info',
+        source: 'Rail',
+        message: '[rail] collapse rail (shortcut)'
+      })
+    )
   })
 
   it('persists through the shell-layout record and never through settings/app', () => {
@@ -109,7 +133,7 @@ describe('useWorkspaceKeyboard panel toggles (shell-layout store)', () => {
 
     expect(mockWriteDebounced).toHaveBeenCalledWith(
       'shell-layout',
-      expect.objectContaining({ sidePanelVisible: false })
+      expect.objectContaining({ railExpanded: false })
     )
     expect(mockWriteDebounced).not.toHaveBeenCalledWith('settings/app', expect.anything())
     expect(mockWrite).not.toHaveBeenCalled()
@@ -118,7 +142,7 @@ describe('useWorkspaceKeyboard panel toggles (shell-layout store)', () => {
   it('a custom sidebarToggle key flips railExpanded and the default key no longer does', () => {
     mountKeyboard({ sidebarToggle: CUSTOM_SIDEBAR_KEY })
 
-    press('B', { ctrlKey: true, shiftKey: true })
+    press('b', { ctrlKey: true })
     expect(layout().railExpanded).toBe(true)
 
     press('j', { ctrlKey: true, altKey: true })
@@ -128,20 +152,35 @@ describe('useWorkspaceKeyboard panel toggles (shell-layout store)', () => {
   it('a custom toggleFileExplorer key flips sidePanelVisible and the default key no longer does', () => {
     mountKeyboard({ toggleFileExplorer: CUSTOM_EXPLORER_KEY })
 
-    press('b', { ctrlKey: true })
+    press('b', { ctrlKey: true, altKey: true })
     expect(layout().sidePanelVisible).toBe(true)
 
     press('k', { ctrlKey: true, altKey: true })
     expect(layout().sidePanelVisible).toBe(false)
   })
 
-  it('skips the explorer toggle in an input and the sidebar toggle in an input', () => {
+  it('toggles the Rail from a terminal, where the Side panel toggle stays inert', () => {
+    mountKeyboard()
+    const terminal = document.createElement('div')
+    terminal.className = 'xterm'
+    const textarea = document.createElement('textarea')
+    terminal.appendChild(textarea)
+    document.body.appendChild(terminal)
+
+    press('b', { ctrlKey: true, altKey: true, code: 'KeyB' }, textarea)
+    expect(layout().sidePanelVisible).toBe(true)
+    press('b', { ctrlKey: true, code: 'KeyB' }, textarea)
+    expect(layout().railExpanded).toBe(false)
+    document.body.removeChild(terminal)
+  })
+
+  it('skips both toggles in an input', () => {
     mountKeyboard()
     const input = document.createElement('input')
     document.body.appendChild(input)
 
     press('b', { ctrlKey: true }, input)
-    press('B', { ctrlKey: true, shiftKey: true }, input)
+    press('b', { ctrlKey: true, altKey: true }, input)
 
     expect(layout().sidePanelVisible).toBe(true)
     expect(layout().railExpanded).toBe(true)
@@ -154,7 +193,7 @@ describe('useWorkspaceKeyboard panel toggles (shell-layout store)', () => {
 
     press('b', { ctrlKey: true })
 
-    expect(layout().sidePanelVisible).toBe(true)
+    expect(layout().railExpanded).toBe(true)
     expect(mockWriteDebounced).not.toHaveBeenCalled()
     expect(mockToastError).not.toHaveBeenCalled()
   })

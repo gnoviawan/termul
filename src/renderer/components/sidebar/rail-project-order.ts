@@ -13,9 +13,8 @@ export interface RailProjectLayout {
 }
 
 /**
- * Splits the open (not archived) projects the way the expanded Rail lists
- * them: by group first, then the ungrouped ones. The collapsed Rail reads the
- * same split through {@link orderRailProjects}, so both show one order.
+ * Splits the open (not archived) projects the way the Rail lists them (both
+ * densities): by group first, then the ungrouped ones.
  */
 export function layoutRailProjects(
   projects: readonly Project[],
@@ -34,24 +33,4 @@ export function layoutRailProjects(
     return { group, projects: inGroup }
   })
   return { groups: railGroups, ungrouped: open.filter((project) => !grouped.has(project.id)) }
-}
-
-/**
- * Open projects as one flat list in the expanded Rail's order: group order,
- * then each group's `projectIds`, then the ungrouped ones. A project listed in
- * two groups appears once, at its first place.
- */
-export function orderRailProjects(
-  projects: readonly Project[],
-  groups: readonly ProjectGroup[]
-): Project[] {
-  const { groups: railGroups, ungrouped } = layoutRailProjects(projects, groups)
-  const seen = new Set<string>()
-  const ordered: Project[] = []
-  for (const project of [...railGroups.flatMap((entry) => entry.projects), ...ungrouped]) {
-    if (seen.has(project.id)) continue
-    seen.add(project.id)
-    ordered.push(project)
-  }
-  return ordered
 }

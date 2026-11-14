@@ -203,10 +203,10 @@ vi.mock('@/stores/keyboard-shortcuts-store', async () => {
     zoomIn: { customKey: 'ctrl+=', defaultKey: 'ctrl+=' },
     zoomOut: { customKey: 'ctrl+-', defaultKey: 'ctrl+-' },
     zoomReset: { customKey: 'ctrl+0', defaultKey: 'ctrl+0' },
-    sidebarToggle: { customKey: 'ctrl+shift+b', defaultKey: 'ctrl+shift+b' },
+    sidebarToggle: { customKey: 'ctrl+b', defaultKey: 'ctrl+b' },
     closeTab: { customKey: 'ctrl+w', defaultKey: 'ctrl+w' },
     saveFile: { customKey: 'ctrl+s', defaultKey: 'ctrl+s' },
-    toggleFileExplorer: { customKey: 'ctrl+b', defaultKey: 'ctrl+b' },
+    toggleFileExplorer: { customKey: 'ctrl+alt+b', defaultKey: 'ctrl+alt+b' },
     newBrowserTab: { customKey: 'ctrl+shift+n', defaultKey: 'ctrl+shift+n' },
     colorThemePicker: { customKey: 'ctrl+alt+t', defaultKey: 'ctrl+alt+t' },
     settings: { customKey: 'ctrl+,', defaultKey: 'ctrl+,' }
@@ -907,10 +907,10 @@ describe('WorkspaceLayout - Empty States', () => {
       mockUseActiveTerminalId.mockReturnValue('')
     })
 
-    it.skip('keeps Ctrl+B toggling file explorer and persists globally', () => {
+    it.skip('keeps Ctrl+Alt+B toggling file explorer and persists globally', () => {
       renderWithRouter()
 
-      fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
+      fireEvent.keyDown(window, { key: 'b', ctrlKey: true, altKey: true })
 
       expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('fileExplorerVisible', false)
     })
@@ -918,7 +918,7 @@ describe('WorkspaceLayout - Empty States', () => {
     it.skip('toggles sidebar with configured sidebar shortcut and persists globally', () => {
       renderWithRouter()
 
-      fireEvent.keyDown(window, { key: 'B', ctrlKey: true, shiftKey: true })
+      fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
 
       expect(mockUpdatePanelVisibility).toHaveBeenCalledWith('sidebarVisible', false)
     })
@@ -930,8 +930,8 @@ describe('WorkspaceLayout - Empty States', () => {
       document.body.appendChild(input)
       input.focus()
 
+      fireEvent.keyDown(input, { key: 'b', ctrlKey: true, altKey: true })
       fireEvent.keyDown(input, { key: 'b', ctrlKey: true })
-      fireEvent.keyDown(input, { key: 'B', ctrlKey: true, shiftKey: true })
 
       expect(useShellLayoutStore.getState().sidePanelVisible).toBe(true)
       expect(useShellLayoutStore.getState().railExpanded).toBe(true)

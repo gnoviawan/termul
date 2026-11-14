@@ -10,8 +10,9 @@ export const TRAFFIC_LIGHT_CLEARANCE_PX = 80
  * Where the shell steps aside for the macOS traffic lights while the Rail is
  * collapsed. The collapsed Rail (48px) and the shell gap (8px) already sit
  * under the lights, so the bar at the start of the shell row only adds the
- * rest: 80 - 48 - 8 = 24px of start padding. The Side panel header and the
- * main card stay at the top; nothing moves down.
+ * rest: 80 - 48 - 8 = 24px of start padding (the tab bar `padding-left: 24`
+ * of Sidebar V2). That bar then starts with the expand-Rail toggle. The Side
+ * panel header and the main card stay at the top; nothing moves down.
  */
 export interface TrafficLightInset {
   /**

@@ -9,10 +9,12 @@ import {
   useLastColumnTab,
   useShellLayoutStore
 } from '@/stores/shell-layout-store'
+import { useSidebarVisible } from '@/stores/sidebar-store'
 import type { Project } from '@/types/project'
 import { ChangesPanel } from './ChangesPanel'
 import { ColumnTabs, columnPanelId, columnTabId } from './ColumnTabs'
 import { visibleColumnTab } from './column-tab'
+import { RailToggleButton } from './RailToggleButton'
 import { SidePanelVisibilityButton } from './SidePanelVisibilityButtons'
 import { useTopRowPlatform } from './top-row-context'
 import { useTrafficLightInset } from './traffic-light-inset'
@@ -44,13 +46,15 @@ interface SidePanelColumnProps {
  * The header is the Side panel's part of the window top row (both Rail
  * states): a drag region on desktop. With the Rail collapsed on macOS the
  * column starts under the traffic lights, so the header takes the inset from
- * `useTrafficLightInset`.
+ * `useTrafficLightInset`. With the Rail collapsed it is the top row bar next
+ * to the Rail, so it starts with the expand-Rail toggle (Sidebar V2).
  */
 export function SidePanelColumn({ activeProject }: SidePanelColumnProps): React.JSX.Element {
   const projectId = activeProject.id
   const { cwd } = useColumnWorkingCopy(activeProject)
   const dragAttr = useTopRowPlatform().dragRegions ? true : undefined
   const trafficLightInset = useTrafficLightInset()
+  const railCollapsed = !useSidebarVisible()
 
   const selected = visibleColumnTab(useLastColumnTab(projectId))
   const changedCount = useGitStatusStore(selectChangedFileCount(cwd))
@@ -75,11 +79,19 @@ export function SidePanelColumn({ activeProject }: SidePanelColumnProps): React.
         <div
           className={PANEL_HEADER_CLASS}
           style={
-            trafficLightInset ? { paddingLeft: trafficLightInset.panelHeaderStartPx } : undefined
+            trafficLightInset
+              ? { paddingLeft: trafficLightInset.panelHeaderStartPx }
+              : railCollapsed
+                ? { paddingLeft: 8 }
+                : undefined
           }
           data-tauri-drag-region={dragAttr}
+          data-testid="side-panel-header"
         >
-          <WorkspaceSwitcher project={activeProject} />
+          <div className="flex min-w-0 items-center gap-1">
+            {railCollapsed && <RailToggleButton />}
+            <WorkspaceSwitcher project={activeProject} />
+          </div>
           <div className="flex shrink-0 items-center">
             <button
               type="button"

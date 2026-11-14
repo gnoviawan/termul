@@ -2015,10 +2015,10 @@ describe('ConnectedTerminal', () => {
 
       const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
 
+      // Ctrl+B: the Rail toggle (sidebarToggle).
       const event = new KeyboardEvent('keydown', {
-        key: 'B',
+        key: 'b',
         ctrlKey: true,
-        shiftKey: true,
         bubbles: true
       })
 

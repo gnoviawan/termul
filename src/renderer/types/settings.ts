@@ -400,8 +400,8 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
   sidebarToggle: {
     id: 'sidebarToggle',
     label: 'Toggle Projects',
-    description: 'Expand or collapse projects',
-    defaultKey: 'ctrl+shift+b'
+    description: 'Expand or collapse the projects sidebar',
+    defaultKey: 'ctrl+b'
   },
   closeTab: {
     id: 'closeTab',
@@ -419,7 +419,7 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
     id: 'toggleFileExplorer',
     label: 'Toggle Side Panel',
     description: 'Show or hide side panel',
-    defaultKey: 'ctrl+b'
+    defaultKey: 'ctrl+alt+b'
   },
   fileExplorerRename: {
     id: 'fileExplorerRename',

@@ -79,7 +79,6 @@ const projects: Project[] = [
 function buildProps(overrides: Partial<ShellRailProps> = {}): ShellRailProps {
   return {
     projects,
-    activeProject: projects[0],
     activeProjectId: 'p1',
     onSelectProject: vi.fn(),
     onNewProject: vi.fn(),
@@ -235,7 +234,7 @@ describe('ShellRail', () => {
     })
 
     it('disables Canvas with a hint when no project has a path', async () => {
-      const { props } = renderRail({ canOpenCanvas: false, activeProject: undefined })
+      const { props } = renderRail({ canOpenCanvas: false, activeProjectId: '' })
       const canvas = screen.getByRole('button', { name: 'Open canvas' })
       expect(canvas).toBeDisabled()
 
@@ -460,258 +459,113 @@ describe('ShellRail', () => {
       useShellLayoutStore.setState({ railExpanded: false })
     })
 
-    it('shows only the icons: project stack, Search, Canvas, Automations, SSH, Theme, Shortcuts, Settings, Report a bug', () => {
-      renderRail()
+    const seedChats = () =>
+      useAcpStore.setState({
+        sessions: {},
+        agentConfigs: [],
+        sessionIndex: [
+          mockSessionIndexEntry({ id: 'a', title: 'Chat a', projectId: 'p1', cwd: '/repo/alpha' }),
+          mockSessionIndexEntry({ id: 'b', title: 'Chat b', projectId: 'p2', cwd: '/repo/beta' })
+        ]
+      })
 
+    it('is the expanded Rail without labels: nav, Projects, chats, footer, 48px wide', () => {
+      seedChats()
+      renderRail()
       const nav = screen.getByRole('navigation', { name: 'Projects' })
-      const names = within(nav)
-        .getAllByRole('button')
-        .map((button) => button.getAttribute('aria-label'))
-      // The Rail toggle shares the top slot with the Troupe mark.
-      expect(names).toEqual([
-        'Expand or collapse projects',
-        'Switch project (Alpha)',
-        // Other open projects (not archived) follow the active one.
-        'Open Beta',
-        // The Side panel is shown, so it carries the Column tabs.
+      expect(screen.getByTestId('shell-rail')).toHaveStyle({ width: '48px' })
+      expect(
+        within(nav)
+          .getAllByRole('button')
+          .map((b) => b.getAttribute('aria-label'))
+      ).toEqual([
+        'New chat',
         'Search',
         'Open canvas',
         'Open automations',
-        'SSH hosts',
-        // Pinned at the bottom; Settings then Report a bug, the same
-        // relative pair order as the expanded footer.
-        'Color themes',
-        'Open keyboard shortcuts menu',
+        'Project: Alpha (active)',
+        'Chat a',
+        'Project: Beta',
         'Settings',
-        'Report a bug'
+        'Report a bug',
+        'Color themes',
+        'Open keyboard shortcuts menu'
       ])
-      expect(within(nav).queryByText('Projects')).not.toBeInTheDocument()
+      // No label, name or section title is drawn.
+      for (const text of ['New chat', 'Search', 'Projects', 'Alpha', 'Beta', 'Chat a']) {
+        expect(within(nav).queryByText(text)).not.toBeInTheDocument()
+      }
+      // The header row stays (same height) but holds no mark and no toggle.
+      const header = screen.getByTestId('rail-header')
+      expect(header).toHaveClass('h-12')
+      expect(header).toBeEmptyDOMElement()
+      expect(screen.queryByRole('button', { name: 'Expand or collapse projects' })).toBeNull()
+      // SSH is hidden; the old icon stack and tab track are gone.
       expect(within(nav).queryByTestId('ssh-section')).not.toBeInTheDocument()
-      expect(screen.getByTestId('shell-rail')).toHaveStyle({ width: '48px' })
-      // The top band (8px gutter + 40px row) is drag space on desktop.
-      // Without traffic lights the mark / toggle swap sits in it.
-      const band = screen.getByTestId('rail-top-band')
-      expect(band).toHaveClass('h-12', 'pt-2')
-      expect(band).toHaveAttribute('data-tauri-drag-region')
-      expect(within(band).getByTestId('rail-brand-swap')).toBeInTheDocument()
-      // Theme, Shortcuts, Settings and Report a bug are pinned at the bottom.
-      const bottom = screen.getByRole('button', { name: 'Settings' }).parentElement as HTMLElement
-      expect(bottom).toHaveClass('mt-auto')
-      expect(
-        within(bottom)
-          .getAllByRole('button')
-          .map((b) => b.getAttribute('aria-label'))
-      ).toEqual(['Color themes', 'Open keyboard shortcuts menu', 'Settings', 'Report a bug'])
+      expect(within(nav).queryByTestId('rail-column-tab-track')).not.toBeInTheDocument()
+      expect(within(nav).queryByRole('button', { name: /Switch project/ })).toBeNull()
+      useAcpStore.setState({ sessionIndex: [] })
     })
 
-    it('shows the Column tabs only while the Side panel is not on screen', () => {
-      const track = () => screen.queryByTestId('rail-column-tab-track')
-      const tabs = () =>
-        within(track() as HTMLElement)
-          .getAllByRole('button')
-          .map((b) => b.getAttribute('aria-label'))
-
-      const shown = renderRail()
-      expect(track()).not.toBeInTheDocument()
-      shown.unmount()
-
-      // Everything collapsed: the Rail carries the tabs.
-      useShellLayoutStore.setState({ sidePanelVisible: false })
-      const hidden = renderRail()
-      expect(tabs()).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
-      hidden.unmount()
-
-      // The SSH workspace replaces the Side panel, so the Rail keeps the tabs.
-      useShellLayoutStore.setState({ sidePanelVisible: true })
-      useSSHStore.setState({ workspaceOpen: true })
-      const ssh = renderRail()
-      expect(tabs()).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
-      ssh.unmount()
-      useSSHStore.setState({ workspaceOpen: false })
-
-      // No project (or one without a local folder): no Side panel, so the
-      // Rail keeps the tabs.
-      for (const activeProject of [undefined, { ...projects[0], path: '' }]) {
-        const view = renderRail({ activeProject })
-        expect(tabs()).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
-        view.unmount()
-      }
-      renderRail({ activeProject: undefined, activeProjectId: '' })
-      for (const name of ['Chats', 'Explorer', 'Changes', 'GitHub']) {
-        expect(
-          within(track() as HTMLElement).getByRole('button', { name, exact: true })
-        ).toBeDisabled()
-      }
-    })
-
-    describe('Column tab hold after a Rail tab click (#1725)', () => {
-      // A Rail tab click opens the Side panel. Dropping the track at once moved
-      // Search, Canvas and Automations up under the pointer.
-      const track = () => screen.queryByTestId('rail-column-tab-track')
-      const rail = () => screen.getByTestId('rail-top-band').parentElement as HTMLElement
-      const openSidePanel = () =>
-        act(() => useShellLayoutStore.setState({ sidePanelVisible: true }))
-      // `detail` 1 = a pointer click; Enter or Space on a focused tab fires a click with `detail` 0.
-      const clickTab = (name: string, detail = 1) =>
-        fireEvent.click(within(track() as HTMLElement).getByRole('button', { name, exact: true }), {
-          detail
-        })
-
-      beforeEach(() => {
-        useShellLayoutStore.setState({ sidePanelVisible: false })
-        renderRail()
+    it('keeps every row at its expanded height, so each icon keeps its y', () => {
+      seedChats()
+      const heights = () => ({
+        nav: screen.getByRole('button', { name: 'Search' }).className.match(/\bh-7\b/)?.[0],
+        project: screen
+          .getByRole('button', { name: /^Project: Alpha/ })
+          .className.match(/\bh-7\.5\b/)?.[0],
+        chat: screen.getByRole('button', { name: 'Chat a' }).className.match(/\bh-7\.5\b/)?.[0],
+        header: screen.getByTestId('rail-header').className.match(/\bh-12\b/)?.[0],
+        section: screen.getByTestId('rail-section-projects').className.match(/\bh-10\b/)?.[0]
       })
+      useShellLayoutStore.setState({ railExpanded: true })
+      const expanded = renderRail()
+      const open = heights()
+      expanded.unmount()
 
-      it('keeps the tabs until the pointer leaves the Rail', () => {
-        fireEvent.pointerEnter(rail(), { pointerId: 1 })
-        clickTab('Explorer')
-        openSidePanel()
-        expect(track()).toBeInTheDocument()
-        fireEvent.pointerLeave(rail(), { pointerId: 1 })
-        expect(track()).not.toBeInTheDocument()
-      })
-
-      it('removes the tabs at once when the Side panel opens without a Rail tab click', () => {
-        // Keyboard shortcut or Side panel toggle, with the pointer resting on the Rail.
-        fireEvent.pointerEnter(rail(), { pointerId: 1 })
-        openSidePanel()
-        expect(track()).not.toBeInTheDocument()
-      })
-
-      it('keeps the tabs while another pointer is still in the Rail', () => {
-        fireEvent.pointerEnter(rail(), { pointerId: 1 })
-        clickTab('Changes')
-        openSidePanel()
-        fireEvent.pointerEnter(rail(), { pointerId: 2 })
-        fireEvent.pointerLeave(rail(), { pointerId: 2 })
-        expect(track()).toBeInTheDocument()
-        fireEvent.pointerLeave(rail(), { pointerId: 1 })
-        expect(track()).not.toBeInTheDocument()
-      })
-
-      it('keeps the tabs after a touch tap until a press lands outside the Rail', () => {
-        // A tap fires pointerleave before click.
-        fireEvent.pointerEnter(rail(), { pointerId: 7 })
-        fireEvent.pointerLeave(rail(), { pointerId: 7 })
-        clickTab('Explorer')
-        openSidePanel()
-        expect(track()).toBeInTheDocument()
-        fireEvent.pointerDown(within(rail()).getByRole('button', { name: 'Search' }))
-        expect(track()).toBeInTheDocument()
-        fireEvent.pointerDown(document.body)
-        expect(track()).not.toBeInTheDocument()
-      })
-
-      it('removes the tabs at once after a keyboard tab activation with no pointer on the Rail', () => {
-        clickTab('Explorer', 0)
-        openSidePanel()
-        expect(track()).not.toBeInTheDocument()
-      })
-
-      it('keeps the tabs after a keyboard tab activation while the pointer rests on the Rail', () => {
-        fireEvent.pointerEnter(rail(), { pointerId: 1 })
-        clickTab('Explorer', 0)
-        openSidePanel()
-        expect(track()).toBeInTheDocument()
-        fireEvent.pointerLeave(rail(), { pointerId: 1 })
-        expect(track()).not.toBeInTheDocument()
-      })
-
-      it('does not hold after a click on the track padding', () => {
-        fireEvent.pointerEnter(rail(), { pointerId: 1 })
-        fireEvent.click(track() as HTMLElement, { detail: 1 })
-        openSidePanel()
-        expect(track()).not.toBeInTheDocument()
-      })
-
-      it('drops the hold when the Side panel closes', () => {
-        fireEvent.pointerEnter(rail(), { pointerId: 1 })
-        clickTab('Explorer')
-        openSidePanel()
-        act(() => useShellLayoutStore.setState({ sidePanelVisible: false }))
-        act(() => useShellLayoutStore.setState({ sidePanelVisible: true }))
-        expect(track()).not.toBeInTheDocument()
-      })
-
-      it('does not hold after a tab click while the SSH workspace is open', () => {
-        // The SSH workspace replaces the Side panel, so the click reveals nothing.
-        act(() => useSSHStore.setState({ workspaceOpen: true }))
-        fireEvent.pointerEnter(rail(), { pointerId: 1 })
-        clickTab('Explorer')
-        openSidePanel()
-        expect(track()).toBeInTheDocument()
-        act(() => useSSHStore.setState({ workspaceOpen: false }))
-        expect(track()).not.toBeInTheDocument()
-      })
-    })
-
-    it('puts the mark / toggle swap below the empty top band under the macOS traffic lights', () => {
-      tauriRef.current = true
-      macRef.current = true
-      try {
-        renderRail()
-        const band = screen.getByTestId('rail-top-band')
-        const swap = screen.getByTestId('rail-brand-swap')
-        expect(within(band).queryByTestId('rail-brand-swap')).toBeNull()
-        expect(band.nextElementSibling).toBe(swap)
-        expect(
-          within(swap).getByRole('button', { name: 'Expand or collapse projects' })
-        ).toBeInTheDocument()
-      } finally {
-        macRef.current = false
-      }
-    })
-
-    it('swaps the Troupe mark for the toggle in one clipped slot on hover, focus and touch', () => {
+      useShellLayoutStore.setState({ railExpanded: false })
       renderRail()
-      const swap = screen.getByTestId('rail-brand-swap')
-      expect(swap).toHaveClass('size-9', 'overflow-hidden', 'group/swap')
-      expect(screen.getByTestId('shell-rail')).toHaveClass('group/rail')
-
-      const mark = screen.getByTestId('rail-brand-swap-mark')
-      expect(within(mark).getByTestId('shell-brand-mark')).toBeInTheDocument()
-      expect(mark).toHaveClass(
-        'group-hover/rail:translate-x-[var(--distance-base)]',
-        'group-hover/rail:opacity-0',
-        'group-hover/rail:blur-[var(--blur-small)]',
-        'group-focus-within/swap:translate-x-[var(--distance-base)]',
-        'group-focus-within/swap:opacity-0',
-        // jsdom cannot evaluate media queries: the pinned-on-no-hover state is
-        // covered by asserting these tokens, not by simulating the condition.
-        '[@media(any-hover:none)]:pointer-events-none',
-        '[@media(any-hover:none)]:opacity-0',
-        'duration-[var(--duration-fast)]',
-        // Hover-in waits 80ms; hover-out and focus do not.
-        'group-hover/rail:delay-[var(--duration-micro)]',
-        'motion-reduce:transition-opacity'
-      )
-
-      const toggleSlot = screen.getByTestId('rail-brand-swap-toggle')
-      const toggle = within(toggleSlot).getByRole('button', {
-        name: 'Expand or collapse projects'
+      expect(heights()).toEqual(open)
+      expect(heights()).toEqual({
+        nav: 'h-7',
+        project: 'h-7.5',
+        chat: 'h-7.5',
+        header: 'h-12',
+        section: 'h-10'
       })
-      expect(toggle).toHaveAttribute('aria-pressed', 'false')
-      // The slot clips at 36px, so the focus ring is drawn inside.
-      expect(toggle).toHaveClass('size-9', 'focus-visible:ring-inset')
-      // Rest: 8px to the left, faded and blurred; shown on hover, focus, touch.
-      expect(toggleSlot).toHaveClass(
-        '-translate-x-[var(--distance-base)]',
-        'opacity-0',
-        'blur-[var(--blur-small)]',
-        'group-hover/rail:translate-x-0',
-        'group-hover/rail:opacity-100',
-        'group-focus-within/swap:translate-x-0',
-        'group-focus-within/swap:opacity-100',
-        '[@media(any-hover:none)]:translate-x-0',
-        '[@media(any-hover:none)]:opacity-100',
-        'motion-reduce:transition-opacity'
-      )
+      useAcpStore.setState({ sessionIndex: [] })
     })
 
-    it('names the switcher without a project and keeps Canvas disabled', () => {
-      renderRail({ activeProject: undefined, activeProjectId: '', canOpenCanvas: false })
-      expect(screen.getByRole('button', { name: 'Switch project' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Open canvas' })).toBeDisabled()
+    it('turns the Projects header into a 20×1 divider', () => {
+      renderRail()
+      const section = screen.getByTestId('rail-section-projects')
+      expect(section).toHaveClass('h-10', 'pt-3', 'justify-center')
+      expect(section.querySelector('[data-rail-section-divider]')).toHaveClass(
+        'h-px',
+        'w-5',
+        'bg-border'
+      )
+      expect(
+        screen.queryByRole('button', { name: 'Add project or folder group' })
+      ).not.toBeInTheDocument()
+    })
+
+    it('stacks the footer upward with Settings at the bottom', () => {
+      renderRail()
+      const footer = screen.getByTestId('rail-footer')
+      expect(footer).toHaveClass('flex-col-reverse', 'gap-1', 'py-1.5')
+      const settings = within(footer).getByRole('button', { name: 'Settings' })
+      expect(settings).toHaveClass('size-8')
+      // column-reverse: the first child (Settings) is drawn at the bottom.
+      expect(footer.firstElementChild).toBe(settings)
+    })
+
+    it('shows the nav tooltip with the shortcut keycap at x = 52', async () => {
+      renderRail()
+      fireEvent.focus(screen.getByRole('button', { name: 'Search' }))
+      const tooltip = await screen.findByRole('tooltip')
+      expect(tooltip).toHaveTextContent('Search')
+      expect(tooltip).toHaveTextContent('Ctrl+K')
     })
 
     it('opens the command palette, the canvas and Settings from the icons', () => {
@@ -723,10 +577,27 @@ describe('ShellRail', () => {
       expect(props.onOpenCanvas).toHaveBeenCalledTimes(1)
       expect(useSettingsModalStore.getState().view).toBe('app')
     })
+
+    it('switches project from a project icon', () => {
+      const { props } = renderRail()
+      fireEvent.click(screen.getByRole('button', { name: 'Project: Beta' }))
+      expect(props.onSelectProject).toHaveBeenCalledWith('p2')
+    })
+
+    it('opens the project card on hover: the name and the diff stat', async () => {
+      useGitStatusStore.setState({
+        diffStats: { '/repo/beta': { additions: 12, deletions: 3 } }
+      } as never)
+      renderRail()
+      fireEvent.pointerEnter(screen.getByRole('button', { name: 'Project: Beta' }))
+      const card = await screen.findByTestId('rail-project-card')
+      expect(card).toHaveTextContent('Beta')
+      expect(card).toHaveClass('w-60', 'rounded-[10px]', 'p-1', 'outline-popover-edge')
+    })
   })
 
   describe('expand and collapse', () => {
-    it('flips through the persisted path from the header toggle and the collapsed swap toggle', async () => {
+    it('collapses from the header toggle through the persisted path and logs it', async () => {
       tauriRef.current = false
       renderRail()
       const nav = screen.getByTestId('shell-rail')
@@ -736,20 +607,24 @@ describe('ShellRail', () => {
       expect(updatePanelVisibility).toHaveBeenCalledWith('sidebarVisible', false)
       await waitFor(() => expect(nav).toHaveAttribute('data-expanded', 'false'))
       expect(useShellLayoutStore.getState().railExpanded).toBe(false)
-
-      fireEvent.click(screen.getByRole('button', { name: 'Expand or collapse projects' }))
-      expect(updatePanelVisibility).toHaveBeenLastCalledWith('sidebarVisible', true)
-      await waitFor(() => expect(nav).toHaveAttribute('data-expanded', 'true'))
-      expect(useShellLayoutStore.getState().railWidth).toBe(248)
+      expect(mockLog).toHaveBeenCalledWith({
+        level: 'info',
+        source: 'Rail',
+        message: '[rail] collapse rail (button)'
+      })
     })
 
-    it('toasts when the visibility update fails', async () => {
-      useShellLayoutStore.setState({ railExpanded: false })
+    it('toasts and logs when the visibility update fails', async () => {
       updatePanelVisibility.mockRejectedValueOnce(new Error('disk full'))
       renderRail()
 
       fireEvent.click(screen.getByRole('button', { name: 'Expand or collapse projects' }))
       await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('disk full'))
+      expect(mockLog).toHaveBeenCalledWith({
+        level: 'error',
+        source: 'Rail',
+        message: '[rail] toggle rail failed: disk full'
+      })
     })
 
     it('keeps the worktree reconciler running while collapsed', () => {
@@ -762,138 +637,6 @@ describe('ShellRail', () => {
       renderRail()
       expect(reconcilerSpy).toHaveBeenCalledTimes(1)
       expect(reconcilerSpy).toHaveBeenCalledWith('p1')
-    })
-  })
-
-  describe('Project switcher', () => {
-    beforeEach(() => {
-      useShellLayoutStore.setState({ railExpanded: false })
-    })
-
-    async function openSwitcher() {
-      const trigger = screen.getByRole('button', { name: 'Switch project (Alpha)' })
-      fireEvent.click(trigger)
-      const search = await screen.findByRole('textbox', { name: 'Search projects' })
-      return { trigger, search }
-    }
-
-    it('lists the open projects with paths and marks the active one', async () => {
-      renderRail()
-      const { search } = await openSwitcher()
-
-      expect(search).toHaveFocus()
-      const options = screen.getAllByRole('option')
-      expect(options.map((option) => option.textContent)).toEqual([
-        expect.stringContaining('Alpha'),
-        expect.stringContaining('Beta'),
-        'New project'
-      ])
-      expect(screen.queryByText('Old')).not.toBeInTheDocument()
-      expect(within(options[0]).getByText('/repo/alpha')).toBeInTheDocument()
-      expect(within(options[0]).getByLabelText('Active project')).toBeInTheDocument()
-      expect(within(options[1]).queryByLabelText('Active project')).not.toBeInTheDocument()
-    })
-
-    it('filters by name and shows the empty line', async () => {
-      renderRail()
-      const { search } = await openSwitcher()
-
-      fireEvent.change(search, { target: { value: 'bet' } })
-      expect(screen.getByText('Beta')).toBeInTheDocument()
-      expect(screen.queryByText('Alpha')).not.toBeInTheDocument()
-
-      fireEvent.change(search, { target: { value: 'zzz' } })
-      expect(screen.getByText('No projects found')).toBeInTheDocument()
-      // New project stays reachable.
-      expect(screen.getByRole('option', { name: 'New project' })).toBeInTheDocument()
-    })
-
-    it('Enter switches to the highlighted project, navigates home and closes', async () => {
-      const { props } = renderRail()
-      const { search } = await openSwitcher()
-
-      fireEvent.change(search, { target: { value: 'bet' } })
-      fireEvent.keyDown(search, { key: 'Enter' })
-
-      expect(props.onSelectProject).toHaveBeenCalledWith('p2')
-      expect(mockNavigate).toHaveBeenCalledWith('/')
-      await waitFor(() =>
-        expect(screen.queryByRole('textbox', { name: 'Search projects' })).not.toBeInTheDocument()
-      )
-    })
-
-    it('arrow keys move the highlight', async () => {
-      const { props } = renderRail()
-      const { search } = await openSwitcher()
-
-      fireEvent.keyDown(search, { key: 'ArrowDown' })
-      fireEvent.keyDown(search, { key: 'Enter' })
-      expect(props.onSelectProject).toHaveBeenCalledWith('p2')
-    })
-
-    it('clicking a row switches project', async () => {
-      const { props } = renderRail()
-      await openSwitcher()
-
-      fireEvent.click(screen.getByRole('option', { name: /Beta/ }))
-      expect(props.onSelectProject).toHaveBeenCalledWith('p2')
-      expect(mockNavigate).toHaveBeenCalledWith('/')
-    })
-
-    it('Esc closes the switcher and returns focus to the icon', async () => {
-      const { props } = renderRail()
-      const { trigger, search } = await openSwitcher()
-
-      fireEvent.keyDown(search, { key: 'Escape' })
-      await waitFor(() =>
-        expect(screen.queryByRole('textbox', { name: 'Search projects' })).not.toBeInTheDocument()
-      )
-      await waitFor(() => expect(trigger).toHaveFocus())
-      expect(props.onSelectProject).not.toHaveBeenCalled()
-    })
-
-    it("New project opens today's dialog and closes", async () => {
-      const { props } = renderRail()
-      await openSwitcher()
-
-      fireEvent.click(screen.getByRole('option', { name: 'New project' }))
-      expect(props.onNewProject).toHaveBeenCalledTimes(1)
-      await waitFor(() =>
-        expect(screen.queryByRole('textbox', { name: 'Search projects' })).not.toBeInTheDocument()
-      )
-    })
-
-    it('opens with no active project and keeps New project reachable', async () => {
-      const { props } = renderRail({ activeProject: undefined, activeProjectId: '' })
-      fireEvent.click(screen.getByRole('button', { name: 'Switch project' }))
-      await screen.findByRole('textbox', { name: 'Search projects' })
-
-      expect(screen.queryByLabelText('Active project')).not.toBeInTheDocument()
-      fireEvent.click(screen.getByRole('option', { name: 'New project' }))
-      expect(props.onNewProject).toHaveBeenCalledTimes(1)
-    })
-
-    it('forgets the query after closing', async () => {
-      renderRail()
-      const { search, trigger } = await openSwitcher()
-      fireEvent.change(search, { target: { value: 'bet' } })
-      fireEvent.keyDown(search, { key: 'Escape' })
-      await waitFor(() => expect(trigger).toHaveFocus())
-
-      fireEvent.click(trigger)
-      expect(await screen.findByRole('textbox', { name: 'Search projects' })).toHaveValue('')
-    })
-
-    it('occludes native webviews while open, until it closes', async () => {
-      const observer = renderHook(() => useNativeWebviewOccluded())
-      renderRail()
-      expect(observer.result.current).toBe(false)
-
-      const { search } = await openSwitcher()
-      expect(observer.result.current).toBe(true)
-
-      fireEvent.keyDown(search, { key: 'Escape' })
-      await waitFor(() => expect(observer.result.current).toBe(false))
     })
   })
 

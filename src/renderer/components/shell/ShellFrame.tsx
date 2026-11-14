@@ -91,8 +91,15 @@ function ShellTopRowProvider({
     trafficLightInset && !explorerColumn.showFileColumn && !explorerColumn.sftpSession
       ? trafficLightInset.panelHeaderStartPx
       : 0
+  // With the Side panel column on screen its header carries the toggle.
+  const railToggleInMain = !railExpanded && !explorerColumn.showFileColumn
   return (
-    <TopRowProvider roles={roles} platform={platform} mainStartInsetPx={mainStartInsetPx}>
+    <TopRowProvider
+      roles={roles}
+      platform={platform}
+      mainStartInsetPx={mainStartInsetPx}
+      railToggleInMain={railToggleInMain}
+    >
       {children}
     </TopRowProvider>
   )
@@ -159,7 +166,6 @@ export function ShellFrame({
         <div className="flex-1 flex overflow-hidden min-h-0 h-full">
           <ShellRail
             projects={projects}
-            activeProject={activeProject}
             activeProjectId={activeProjectId}
             onSelectProject={onSelectProject}
             onNewProject={() => setIsNewProjectModalOpen(true)}
@@ -201,7 +207,8 @@ export function ShellFrame({
 
                   {/* Same top in every Rail and Side panel state. Under the
                       macOS traffic lights the top row pads its start instead
-                      (`mainStartInsetPx`, see `ShowSidePanelSlot`). */}
+                      (`mainStartInsetPx`), and with the Rail collapsed it
+                      starts with the expand toggle (see `ShowSidePanelSlot`). */}
                   <main className="flex-1 flex flex-col min-w-0 rounded-xl border border-border bg-card overflow-clip">
                     {roles.controlsOwner === 'fallback-bar' && <TopRowFallbackBar />}
                     {workspaceMain}

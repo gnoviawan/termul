@@ -10,6 +10,7 @@ import { ColorPickerPopover } from './ColorPickerPopover'
 import { ConfirmDialog } from './ConfirmDialog'
 import { NewGroupModal } from './NewGroupModal'
 import { NewWorktreeModal } from './NewWorktreeModal'
+import { useRailCollapsed } from './shell/rail/rail-density'
 import { AddProjectMenu } from './sidebar/add-project-menu'
 import { GroupContextMenuContent } from './sidebar/group-context-menu'
 import {
@@ -18,6 +19,7 @@ import {
 } from './sidebar/project-context-menu'
 import { ProjectList } from './sidebar/project-list'
 import { layoutRailProjects } from './sidebar/rail-project-order'
+import { RailSectionDivider } from './sidebar/rail-section-header'
 import { SSHResizableSection } from './sidebar/ssh-section'
 import type { ColorPickerState, ProjectSidebarProps } from './sidebar/types'
 import { useProjectRail } from './sidebar/use-project-rail'
@@ -46,6 +48,7 @@ export function ProjectSidebar({
   activeSSHProfileId,
   activeProjectContent
 }: ProjectSidebarProps): React.JSX.Element {
+  const collapsed = useRailCollapsed()
   const {
     addProject,
     addGroup,
@@ -308,8 +311,7 @@ export function ProjectSidebar({
     return map
   }, [activeProjects])
 
-  // Groups in group order, then the ungrouped projects: the same order the
-  // collapsed Rail's stack reads.
+  // Groups in group order, then the ungrouped projects (both Rail densities).
   const { groups: visibleGroups, ungrouped: ungroupedActiveProjects } = useMemo(
     () => layoutRailProjects(projects, groups),
     [projects, groups]
@@ -322,9 +324,10 @@ export function ProjectSidebar({
 
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col">
-      {/* Header with inline + button */}
-      {!railSections && (
-        <div className={cn(PANEL_HEADER_CLASS, 'pt-3 pl-4.5')}>
+      {/* Header with inline + button. Collapsed Rail: a divider at its y. */}
+      {!railSections && collapsed && <RailSectionDivider data-testid="rail-section-projects" />}
+      {!railSections && !collapsed && (
+        <div className={cn(PANEL_HEADER_CLASS, 'pt-3 pl-4.5')} data-testid="rail-section-projects">
           <span className="label-panel">Projects</span>
           <div className="flex items-center">
             <AddProjectMenu
@@ -378,12 +381,14 @@ export function ProjectSidebar({
         activeProjectContent={activeProjectContent}
       />
 
-      {/* SSH Connections - Resizable */}
-      <SSHResizableSection
-        onSSHConnect={onSSHConnect}
-        onSelectProfile={onSelectSSHProfile}
-        activeProfileId={activeSSHProfileId}
-      />
+      {/* SSH Connections - Resizable. Hidden on the collapsed Rail. */}
+      {!collapsed && (
+        <SSHResizableSection
+          onSSHConnect={onSSHConnect}
+          onSelectProfile={onSelectSSHProfile}
+          activeProfileId={activeSSHProfileId}
+        />
+      )}
 
       {/* Group Delete Confirmation Dialog */}
       <ConfirmDialog

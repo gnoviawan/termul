@@ -1,4 +1,5 @@
 import { ChevronDown, ChevronRight, Folder, MoreHorizontal } from '@/components/icons'
+import { useRailCollapsed } from '@/components/shell/rail/rail-density'
 import { RailTooltip } from '@/components/shell/rail-button'
 import { RAIL_ICON_BOX_CLASS, RAIL_ROW_INSET_CLASS } from '@/components/shell/rail-layout'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
@@ -29,9 +30,79 @@ const HOVER_REVEAL = 'group-hover:inline-flex group-focus-within:inline-flex'
  * icon (in the group colour); on hover or focus it becomes a chevron and a
  * `…` button appears at the end. An expanded group keeps its chevron. The row
  * is a button that toggles the group; the `…` button opens the same menu as a
- * right-click, so nothing is hover-only.
+ * right-click, so nothing is hover-only. On the collapsed Rail it is
+ * {@link RailGroupIconRow}.
  */
-export function RailGroupRow({
+export function RailGroupRow(props: RailGroupRowProps): React.JSX.Element {
+  if (useRailCollapsed()) return <RailGroupIconRow {...props} />
+  return <RailGroupLabelRow {...props} />
+}
+
+/**
+ * Group row of the collapsed Rail (Sidebar V2): the expanded row's height
+ * with only the folder icon (the chevron on hover or focus, always when the
+ * group is open), centred. A click folds the group; right-click opens its
+ * menu. The name is the button's accessible name.
+ */
+function RailGroupIconRow({
+  group,
+  isCollapsed,
+  isDragOver,
+  onToggle,
+  onContextMenu,
+  menu
+}: RailGroupRowProps): React.JSX.Element {
+  const Chevron = isCollapsed ? ChevronRight : ChevronDown
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <button
+          type="button"
+          onClick={onToggle}
+          onContextMenu={onContextMenu}
+          aria-expanded={!isCollapsed}
+          aria-label={group.name}
+          data-group-id={group.id}
+          data-testid={`rail-group-row-${group.id}`}
+          className={cn(
+            'group flex h-8 w-full cursor-pointer select-none items-center justify-center rounded-lg',
+            'transition-colors duration-150 ease-out',
+            FOCUS_RING_CLASS,
+            isDragOver
+              ? 'bg-primary/10 ring-1 ring-inset ring-primary/60'
+              : 'hover:bg-foreground/[0.06]'
+          )}
+        >
+          <span
+            className={cn(
+              RAIL_ICON_BOX_CLASS,
+              isCollapsed ? 'group-hover:hidden group-focus-visible:hidden' : 'hidden'
+            )}
+          >
+            <Folder
+              size={16}
+              className={group.color ? getColorClasses(group.color).text : 'text-muted-foreground'}
+            />
+          </span>
+          <span
+            className={cn(
+              RAIL_ICON_BOX_CLASS,
+              'text-muted-foreground',
+              isCollapsed
+                ? 'hidden group-hover:inline-flex group-focus-visible:inline-flex'
+                : 'inline-flex'
+            )}
+          >
+            <Chevron size={12} />
+          </span>
+        </button>
+      </ContextMenuTrigger>
+      {menu}
+    </ContextMenu>
+  )
+}
+
+function RailGroupLabelRow({
   group,
   isCollapsed,
   isDragOver,

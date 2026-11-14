@@ -2,6 +2,7 @@ import { RailToggleButton } from '@/components/shell/RailToggleButton'
 import { ShellBrandMark } from '@/components/shell/ShellBrandMark'
 import { TrafficLightClearance } from '@/components/shell/TopRowChrome'
 import { useTopRowPlatform } from '@/components/shell/top-row-context'
+import { useRailCollapsed } from './rail/rail-density'
 
 /**
  * Top row part of the expanded Rail, 48px tall: the 8px window gutter, then
@@ -12,10 +13,18 @@ import { useTopRowPlatform } from '@/components/shell/top-row-context'
  * Then drag space, then the 28px Rail toggle: the row's last control, just
  * left of the Side panel header. On desktop every part except the toggle is
  * a window drag handle.
+ *
+ * Collapsed Rail: the same row, empty (only the macOS traffic lights sit over
+ * it) and a drag handle; the expand toggle moves to the top row bar next to
+ * the Rail (`ShowSidePanelSlot`, the Side panel header).
  */
 export function RailHeader(): React.JSX.Element {
   const platform = useTopRowPlatform()
+  const collapsed = useRailCollapsed()
   const drag = platform.dragRegions ? true : undefined
+  if (collapsed) {
+    return <div className="h-12 shrink-0" data-testid="rail-header" data-tauri-drag-region={drag} />
+  }
   return (
     <div
       className="flex h-12 shrink-0 items-center pt-2 pr-1.5"
@@ -37,7 +46,7 @@ export function RailHeader(): React.JSX.Element {
         </div>
       )}
       <div className="min-w-0 flex-1 self-stretch" data-tauri-drag-region={drag} />
-      <RailToggleButton size="sm" tooltipSide="bottom" />
+      <RailToggleButton />
     </div>
   )
 }

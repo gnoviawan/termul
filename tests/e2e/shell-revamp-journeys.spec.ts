@@ -97,26 +97,15 @@ const columnTab = (page: Page, name: RegExp): Locator => page.getByRole('tab', {
 const workspaceSwitcherTrigger = (page: Page): Locator =>
   page.locator('button[aria-haspopup="dialog"][title]:has(> span.label-panel)')
 
-/** Opacity the user sees: the element's own times every ancestor's. */
-function effectiveOpacity(element: Element): number {
-  let opacity = 1
-  for (let node: Element | null = element; node; node = node.parentElement) {
-    opacity *= Number(getComputedStyle(node).opacity)
-  }
-  return opacity
-}
-
 /**
- * The collapsed Rail keeps its toggle slid out of the 36px mark slot at
- * opacity 0 until the pointer is over the Rail, so hover the Rail the way a
- * pointer user does and click only once the toggle is fully shown.
+ * Expands or collapses the Rail. Expanded, the toggle ends the Rail header;
+ * collapsed, it opens the top row bar next to the Rail (the tab bar, right of
+ * the macOS traffic lights, or the Side panel header). Exactly one shows.
  */
 async function clickRailToggle(page: Page): Promise<void> {
-  const toggle = railNav(page).getByRole('button', { name: RAIL_TOGGLE })
-  await railNav(page).hover()
-  await expect(toggle).toBeVisible()
+  const toggle = page.getByRole('button', { name: RAIL_TOGGLE })
+  await expect(toggle).toHaveCount(1)
   await expect(toggle).toBeInViewport({ ratio: 1 })
-  await expect.poll(() => toggle.evaluate(effectiveOpacity)).toBe(1)
   await toggle.click()
 }
 
@@ -307,18 +296,26 @@ test('Journey 1: three chats on one project, side by side, next to the diff', as
     'a screenshot turn needs a real vision-capable model; the fake agent only streams text'
   )
 
-  await test.step('6. Collapse the Rail, switch projects from the Project switcher, browse Explorer', async () => {
+  await test.step('6. Collapse the Rail to its 1:1 icons, switch projects, peek and expand', async () => {
     try {
       await clickRailToggle(page)
       await expect(railNav(page)).toHaveAttribute('data-expanded', 'false')
+      // Sidebar V2: the collapsed Rail is the expanded one without labels.
+      await expect(railNav(page).getByRole('button', { name: 'Search' })).toBeVisible()
+      await expect(railNav(page).getByText(PROJECT, { exact: true })).toHaveCount(0)
+      // The old icon stack, project switcher and Column tab track are gone.
+      await expect(page.getByTestId('rail-column-tab-track')).toHaveCount(0)
+      await expect(railNav(page).getByRole('button', { name: /^Switch project/ })).toHaveCount(0)
 
-      const switcher = railNav(page).getByRole('button', { name: /^Switch project/ })
-      await expect(switcher).toHaveAttribute('aria-label', `Switch project (${PROJECT})`)
-      await switcher.click()
-      await page.getByRole('dialog', { name: 'Switch project' }).waitFor({ state: 'visible' })
-      await page.getByRole('option', { name: /proj-b/ }).click()
+      // Hovering a project icon opens its card next to the Rail.
+      const projB = railNav(page).getByRole('button', { name: 'Project: proj-b' })
+      await projB.hover()
+      await expect(page.getByTestId('rail-project-card')).toContainText('proj-b')
+
+      // A click on the icon switches project.
+      await projB.click()
       await expect(
-        railNav(page).getByRole('button', { name: 'Switch project (proj-b)' })
+        railNav(page).getByRole('button', { name: 'Project: proj-b (active)' })
       ).toBeVisible()
 
       // #903: the main area shows exactly the selected project's own tabs.
@@ -327,38 +324,29 @@ test('Journey 1: three chats on one project, side by side, next to the diff', as
 
       // Back on termul's project: its three chat panes are restored.
       await railNav(page)
-        .getByRole('button', { name: /^Switch project/ })
+        .getByRole('button', { name: `Project: ${PROJECT}` })
         .click()
-      await page.getByRole('dialog', { name: 'Switch project' }).waitFor({ state: 'visible' })
-      await page.getByRole('option', { name: new RegExp(PROJECT) }).click()
       await expect(
-        railNav(page).getByRole('button', { name: `Switch project (${PROJECT})` })
+        railNav(page).getByRole('button', { name: `Project: ${PROJECT} (active)` })
       ).toBeVisible()
       for (const title of [CHAT_ONE, CHAT_TWO, CHAT_THREE]) {
         await expect(chatTab(page, title)).toBeVisible()
       }
       await expect(paneContents(page)).toHaveCount(3)
 
-      // With the Side panel shown, it keeps its own tab bar and the
-      // collapsed Rail shows no column icons.
-      const railTabs = page.getByTestId('rail-column-tab-track')
-      await expect(page.getByRole('tablist', { name: 'Side panel' })).toBeVisible()
-      await expect(railTabs).toHaveCount(0)
+      // Hovering a chat icon opens the chat peek; a click there opens the chat.
+      const chatIcon = railNav(page).getByRole('button', { name: new RegExp(`^${CHAT_TWO}`) })
+      await chatIcon.hover()
+      const peek = page.getByTestId('rail-chat-peek')
+      await expect(peek).toContainText(PROJECT)
+      await expect(peek).toContainText(CHAT_ONE)
+      await peek.getByRole('button', { name: new RegExp(`^${CHAT_ONE}`) }).click()
+      await expect(peek).toHaveCount(0)
 
-      // Everything collapsed: Explorer, picked from the Rail's column icons,
-      // shows the Side panel on that tab, and the tabs move back into it.
-      await page.getByRole('button', { name: 'Hide side panel' }).click()
-      await railTabs.getByRole('button', { name: 'Explorer', exact: true }).click()
-      const explorer = page.getByRole('tabpanel', { name: 'Explorer' })
-      await expect(explorer).toBeVisible()
-      // Focus moves to the panel's Explorer tab.
-      await expect(columnTab(page, /^Explorer/)).toBeFocused()
-      await expect(explorer).toContainText('notes.txt')
-      // #1725: the Rail keeps its tabs while the pointer is still on it, so the
-      // buttons below them do not move under the pointer; they go once it leaves.
-      await expect(railTabs).toHaveCount(1)
-      await page.mouse.move(800, 400)
-      await expect(railTabs).toHaveCount(0)
+      // Expand again from the top row toggle (not in the Rail any more).
+      await expect(railNav(page).getByRole('button', { name: RAIL_TOGGLE })).toHaveCount(0)
+      await clickRailToggle(page)
+      await expect(railNav(page)).toHaveAttribute('data-expanded', 'true')
     } finally {
       // The Rail state is a persisted setting shared with later specs.
       if ((await railNav(page).getAttribute('data-expanded')) === 'false') {
