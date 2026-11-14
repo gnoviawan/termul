@@ -17,6 +17,10 @@ pub mod deliver;
 pub mod filter;
 pub mod frame;
 pub mod gate;
+// Only the non-Windows PTY spawn path injects shell integration; on Windows the
+// planner is exercised solely by unit tests, so a non-test build sees it as unused.
+#[cfg_attr(windows, allow(dead_code))]
+pub mod inject;
 pub mod prompt_spacer;
 pub mod rpc;
 pub mod suppression;
@@ -31,6 +35,14 @@ mod filter_tests;
 mod gate_test_support;
 #[cfg(test)]
 mod gate_tests;
+#[cfg(test)]
+mod inject_completion_tests;
+#[cfg(test)]
+mod inject_test_support;
+#[cfg(test)]
+mod inject_tests;
+#[cfg(test)]
+mod inject_zsh_capture_tests;
 #[cfg(test)]
 mod isolation_tests;
 #[cfg(test)]
