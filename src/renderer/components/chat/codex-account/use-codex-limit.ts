@@ -84,20 +84,24 @@ export const useCodexResumeStore = create<ResumeState>((set, get) => ({
   timers: {},
   schedule: (sessionId, at) => {
     get().cancel(sessionId)
-    const turnId = useAcpStore.getState().sessions[sessionId]?.openTurnId ?? null
+    const sessionAtSchedule = useAcpStore.getState().sessions[sessionId]
+    const turnId = sessionAtSchedule?.openTurnId ?? null
+    const agentId = sessionAtSchedule?.agentId ?? null
     const timer = setTimeout(
       () => {
         const session = useAcpStore.getState().sessions[sessionId]
-        const limit = useAcpStore.getState().sessionUsage[sessionId]?.rateLimit
         const current = session?.openTurnId ?? null
-        const stillLimited = limit?.status === 'rejected' && !turnReplaced(turnId, current)
+        // A probe card can schedule this with no session rateLimit. Continue
+        // while the same agent and turn are still the ones that were scheduled.
+        const sameChat =
+          session != null && session.agentId === agentId && !turnReplaced(turnId, current)
         set((state) => {
           const { [sessionId]: _at, ...nextAt } = state.at
           const { [sessionId]: _turn, ...turns } = state.turns
           const { [sessionId]: _timer, ...timers } = state.timers
           return { at: nextAt, turns, timers }
         })
-        if (!stillLimited) return
+        if (!sameChat) return
         void logFrontendError({
           level: 'info',
           source: 'codexLimit.resume',

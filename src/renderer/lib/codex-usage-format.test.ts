@@ -31,6 +31,16 @@ describe('codex usage format', () => {
     expect(codexChipUsage(read)?.other?.short).toBe('Wk')
   })
 
+  it('skips a window that has already reset', () => {
+    const past = new Date(Date.now() - 60_000).toISOString()
+    const future = new Date(Date.now() + 3_600_000).toISOString()
+    const read = usage([
+      { kind: 'session', percent: 100, resetsAt: past, windowDurationMins: 300 },
+      { kind: 'weekly', percent: 80, resetsAt: future, windowDurationMins: 10080 }
+    ])
+    expect(primaryCodexWindow(read)?.kind).toBe('weekly')
+  })
+
   it('hides a calm weekly window on the chip', () => {
     const read = usage([
       { kind: 'session', percent: 10, resetsAt: null, windowDurationMins: 300 },

@@ -26,13 +26,17 @@ export function codexWindowShort(window: CodexUsageWindow): string {
   return window.kind === 'weekly' ? 'Wk' : '5h'
 }
 
-/** The window the bar and the chip show first: the most used one. */
-export function primaryCodexWindow(usage: CodexAccountUsage | undefined): CodexUsageWindow | null {
+/** The window the bar shows first: the most used one that has not reset. */
+export function primaryCodexWindow(
+  usage: CodexAccountUsage | undefined,
+  now = Date.now()
+): CodexUsageWindow | null {
   if (usage?.status !== 'ok') return null
-  return usage.windows.reduce<CodexUsageWindow | null>(
-    (top, window) => (!top || window.percent > top.percent ? window : top),
-    null
-  )
+  return usage.windows.reduce<CodexUsageWindow | null>((top, window) => {
+    const resetAt = codexResetSeconds(window)
+    if (resetAt !== null && resetAt * 1000 <= now) return top
+    return !top || window.percent > top.percent ? window : top
+  }, null)
 }
 
 /** Shape the shared usage bar accepts. */
