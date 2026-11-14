@@ -352,10 +352,13 @@ export function ChatInputBar({
 
     await holdComposer(async () => {
       const contexts = conversationContexts()
-      const send = buildComposerSend(
-        buildPromptParts(contexts ? await contexts : undefined),
-        attachments
-      )
+      const parts = buildPromptParts(contexts ? await contexts : undefined)
+      // A restart can begin while contexts resolve. The send callbacks swallow
+      // the rejection, so leaving here is what keeps the unsent draft.
+      if (useCodexRestartingStore.getState().ids.includes(session.id)) {
+        throw new Error('This chat is switching Codex accounts')
+      }
+      const send = buildComposerSend(parts, attachments)
       if (!send) return
       if (send.kind === 'text') onSend(send.text)
       else if (send.display) onSendBlocks(send.wire, send.display)
