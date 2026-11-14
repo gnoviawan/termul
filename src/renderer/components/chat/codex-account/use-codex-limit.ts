@@ -1,6 +1,6 @@
 import type { ClaudeRateLimit } from '@shared/types/claude-accounts.types'
 import type { CodexAccountUsage, CodexUsageWindow } from '@shared/types/codex-accounts.types'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { toastAccountChoiceError } from '@/components/settings/provider/account-choice-error'
@@ -65,23 +65,39 @@ export function codexDisplayLimit(
 
 interface ResumeState {
   at: Record<string, number>
+  /** `openTurnId` when the resume was scheduled. `null` means the turn had already ended. */
+  turns: Record<string, string | null>
   timers: Record<string, ReturnType<typeof setTimeout>>
   schedule: (sessionId: string, at: number) => void
   cancel: (sessionId: string) => void
 }
 
+/** A newer turn started after the resume was scheduled. */
+function turnReplaced(scheduled: string | null, current: string | null): boolean {
+  if (scheduled === null) return current !== null
+  return current !== null && current !== scheduled
+}
+
 export const useCodexResumeStore = create<ResumeState>((set, get) => ({
   at: {},
+  turns: {},
   timers: {},
   schedule: (sessionId, at) => {
     get().cancel(sessionId)
+    const turnId = useAcpStore.getState().sessions[sessionId]?.openTurnId ?? null
     const timer = setTimeout(
       () => {
+        const session = useAcpStore.getState().sessions[sessionId]
+        const limit = useAcpStore.getState().sessionUsage[sessionId]?.rateLimit
+        const current = session?.openTurnId ?? null
+        const stillLimited = limit?.status === 'rejected' && !turnReplaced(turnId, current)
         set((state) => {
           const { [sessionId]: _at, ...nextAt } = state.at
+          const { [sessionId]: _turn, ...turns } = state.turns
           const { [sessionId]: _timer, ...timers } = state.timers
-          return { at: nextAt, timers }
+          return { at: nextAt, turns, timers }
         })
+        if (!stillLimited) return
         void logFrontendError({
           level: 'info',
           source: 'codexLimit.resume',
@@ -93,6 +109,7 @@ export const useCodexResumeStore = create<ResumeState>((set, get) => ({
     )
     set((state) => ({
       at: { ...state.at, [sessionId]: at },
+      turns: { ...state.turns, [sessionId]: turnId },
       timers: { ...state.timers, [sessionId]: timer }
     }))
   },
@@ -101,8 +118,9 @@ export const useCodexResumeStore = create<ResumeState>((set, get) => ({
     if (timer) clearTimeout(timer)
     set((state) => {
       const { [sessionId]: _at, ...nextAt } = state.at
+      const { [sessionId]: _turn, ...turns } = state.turns
       const { [sessionId]: _timer, ...timers } = state.timers
-      return { at: nextAt, timers }
+      return { at: nextAt, turns, timers }
     })
   }
 }))
@@ -135,8 +153,16 @@ export interface CodexLimit {
 export function useCodexLimit(sessionId: string): CodexLimit | null {
   const ctx = useChatCodexAccount(sessionId)
   const live = useAcpStore((state) => state.sessionUsage?.[sessionId]?.rateLimit ?? null)
+  const openTurnId = useAcpStore((state) => state.sessions[sessionId]?.openTurnId ?? null)
   const cancelResume = useCodexResumeStore((state) => state.cancel)
+  const scheduledTurn = useCodexResumeStore((state) =>
+    sessionId in state.turns ? state.turns[sessionId] : undefined
+  )
   const switchingTo = useCodexSwitchingStore((state) => state[sessionId] ?? null)
+  useEffect(() => {
+    if (scheduledTurn === undefined) return
+    if (turnReplaced(scheduledTurn, openTurnId)) cancelResume(sessionId)
+  }, [scheduledTurn, openTurnId, sessionId, cancelResume])
   const [, rerender] = useState(0)
   const limit = ctx ? codexDisplayLimit(live, ctx.current.usage) : null
   if (!ctx || !limit) return null
@@ -152,11 +178,15 @@ export function useCodexLimit(sessionId: string): CodexLimit | null {
     setSwitchingTo(sessionId, target.account.name)
     cancelResume(sessionId)
     try {
-      await switchProjectCodexAccount(projectId, target.account.id, {
+      const continued = await switchProjectCodexAccount(projectId, target.account.id, {
         continueSessionIds: atLimit ? [sessionId] : undefined,
         expectedAccountId: currentAccountId
       })
       await reloadAccounts()
+      if (continued === null) {
+        toast.info('That account was changed on another client')
+        return
+      }
       toast.success(`Switched to ${target.account.name}`)
     } catch (err) {
       toastAccountChoiceError(err, 'Could not switch')

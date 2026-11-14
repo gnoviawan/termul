@@ -7,7 +7,7 @@
  */
 
 import type { ClaudeRateLimit } from '@shared/types/claude-accounts.types'
-import type { CodexAccountUsage } from '@shared/types/codex-accounts.types'
+import type { CodexAccountUsage, CodexUsageWindow } from '@shared/types/codex-accounts.types'
 import { useEffect } from 'react'
 import { toast } from 'sonner'
 import { toastAccountChoiceError } from '@/components/settings/provider/account-choice-error'
@@ -17,6 +17,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { type AcpState, useAcpStore } from '@/stores/acp-store'
 import { withRateLimit } from '@/stores/acp-store/rate-limit'
 import {
+  applyProjectCodexAccount,
   isChatOpenHere,
   isCodexSession,
   restartCodexSession,
@@ -90,10 +91,16 @@ function limitedChats(state: AcpState): LimitedChat[] {
   return chats
 }
 
+/** A window whose reset time is still ahead. A missing time stays usable. */
+function windowStillOpen(window: CodexUsageWindow, now = Date.now()): boolean {
+  const resetAt = codexResetSeconds(window)
+  return resetAt === null || resetAt * 1000 > now
+}
+
 /** Fill a rejected turn from the last good probe when the error has no reset time. */
 function withProbe(limit: ClaudeRateLimit, read: CodexAccountUsage | undefined): ClaudeRateLimit {
   const window = primaryCodexWindow(read)
-  if (!window) return limit
+  if (!window || !windowStillOpen(window)) return limit
   return {
     ...limit,
     kind: limit.kind ?? (window.kind === 'weekly' ? 'seven_day' : 'five_hour'),
@@ -117,9 +124,12 @@ async function stampProbeLimits(): Promise<void> {
   for (const [sessionId, session] of Object.entries(state.sessions)) {
     if (!session.projectId || !isCodexSession(state, sessionId)) continue
     if (state.sessionUsage[sessionId]?.rateLimit?.status === 'rejected') continue
+    // A finished chat stays on screen. Only a turn that is still held is resent.
+    const held = session.activeTurn === true || session.openTurnId != null
+    if (!held || !runsProjectAccount(state, sessionId)) continue
     const accountId = projectCodexAccountId(snapshot, session.projectId)
     const window = primaryCodexWindow(reads[accountId])
-    if (!window || window.percent < 100) continue
+    if (!window || window.percent < 100 || !windowStillOpen(window)) continue
     const limit: ClaudeRateLimit = {
       status: 'rejected',
       resetsAt: codexResetSeconds(window),
@@ -234,8 +244,9 @@ export function startCodexAutoSwitch(): () => void {
           })
           if (!continued) {
             log(
-              `Another client switched project ${projectId} first; chats ${idList} continue there`
+              `Another client switched project ${projectId} first; restarting chats ${idList} on its account`
             )
+            await applyProjectCodexAccount(projectId, { continueSessionIds: sessionIds })
             return
           }
           const stalled = sessionIds.filter((id) => !continued.includes(id))
@@ -261,6 +272,12 @@ export function startCodexAutoSwitch(): () => void {
             error,
             'Could not confirm the account switch or continue the chat'
           )
+          for (const id of sessionIds) {
+            for (const key of [...attempts]) {
+              if (key.startsWith(`${id}:`)) attempts.delete(key)
+            }
+          }
+          throw error
         } finally {
           for (const id of sessionIds) setSwitchingTo(id, null)
         }

@@ -1,10 +1,12 @@
 import type { CodexAccountUsage } from '@shared/types/codex-accounts.types'
 import { fireEvent, render, screen } from '@testing-library/react'
+import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAcpStore } from '@/stores/acp-store'
 import { FRESH } from '@/stores/acp-store/testkit'
 import { CodexLimitNotice } from './CodexLimitNotice'
 import { CodexLimitWarning } from './CodexLimitWarning'
+import { useCodexResumeStore } from './use-codex-limit'
 
 const { api, switcher, openApp, admits } = vi.hoisted(() => ({
   admits: { value: true },
@@ -15,7 +17,7 @@ const { api, switcher, openApp, admits } = vi.hoisted(() => ({
 
 vi.mock('@/lib/codex-accounts-api', () => ({ codexAccountsApi: api }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }))
 vi.mock('@/stores/settings-modal-store', () => ({
   useSettingsModalStore: (select: (state: { openApp: typeof openApp }) => unknown) =>
     select({ openApp })
@@ -128,6 +130,26 @@ describe('CodexLimitNotice', () => {
         expectedAccountId: 'default'
       })
     )
+  })
+
+  it('reports a lost compare-and-set instead of a successful switch', async () => {
+    switcher.switchProjectCodexAccount.mockResolvedValue(null)
+    api.usage.mockResolvedValue([read('default', 100), read('ab12', 4), read('cd34', 40)])
+    render(<CodexLimitNotice sessionId="s1" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Switch to Work and continue' }))
+    await vi.waitFor(() =>
+      expect(toast.info).toHaveBeenCalledWith('That account was changed on another client')
+    )
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('keeps Cancel visible when a resume is scheduled and another account has room', async () => {
+    api.usage.mockResolvedValue([read('default', 100), read('ab12', 4), read('cd34', 40)])
+    useCodexResumeStore.getState().schedule('s1', Date.now() + 60_000)
+    render(<CodexLimitNotice sessionId="s1" />)
+    expect(await screen.findByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Switch to Work and continue' })).toBeInTheDocument()
+    useCodexResumeStore.getState().cancel('s1')
   })
 
   it('offers wait for reset and Add account when no other account has room', async () => {

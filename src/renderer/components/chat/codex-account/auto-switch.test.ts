@@ -12,6 +12,7 @@ const { api, switcher } = vi.hoisted(() => ({
   api: { list: vi.fn(), usage: vi.fn() },
   switcher: {
     switchProjectCodexAccount: vi.fn(),
+    applyProjectCodexAccount: vi.fn(),
     isChatOpenHere: vi.fn(),
     restartCodexSession: vi.fn()
   }
@@ -29,6 +30,7 @@ vi.mock('@/stores/codex-account-switch', async () => {
   return {
     ...actual,
     switchProjectCodexAccount: switcher.switchProjectCodexAccount,
+    applyProjectCodexAccount: switcher.applyProjectCodexAccount,
     isChatOpenHere: switcher.isChatOpenHere,
     restartCodexSession: switcher.restartCodexSession
   }
@@ -144,6 +146,7 @@ describe('startCodexAutoSwitch', () => {
     api.list.mockResolvedValue(snapshot())
     api.usage.mockResolvedValue([read('default', 40), read('ab12', 4), read('cd34', 40)])
     switcher.switchProjectCodexAccount.mockResolvedValue(['s1'])
+    switcher.applyProjectCodexAccount.mockResolvedValue(['s1'])
     switcher.isChatOpenHere.mockReturnValue(true)
     switcher.restartCodexSession.mockResolvedValue(true)
     stop = startCodexAutoSwitch()
@@ -209,6 +212,42 @@ describe('startCodexAutoSwitch', () => {
       continueSessionIds: ['s1'],
       expectedAccountId: 'default'
     })
+  })
+
+  it('restarts limited chats when another client switched the project first', async () => {
+    switcher.switchProjectCodexAccount.mockResolvedValue(null)
+    setLimit(1_900_000_000)
+    await vi.waitFor(() => expect(switcher.applyProjectCodexAccount).toHaveBeenCalled())
+    expect(switcher.applyProjectCodexAccount).toHaveBeenCalledWith('office', {
+      continueSessionIds: ['s1']
+    })
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('does not resend a completed chat when the probe is at 100%', async () => {
+    api.usage.mockResolvedValue([read('default', 100), read('ab12', 4), read('cd34', 40)])
+    stop()
+    stop = startCodexAutoSwitch()
+    await vi.waitFor(() => expect(api.usage).toHaveBeenCalled())
+    expect(switcher.switchProjectCodexAccount).not.toHaveBeenCalled()
+  })
+
+  it('switches a held turn when the probe is at 100% and the window is still open', async () => {
+    const resetsAt = new Date(Date.now() + 3_600_000).toISOString()
+    api.usage.mockResolvedValue([
+      read('default', 100, resetsAt),
+      read('ab12', 4, resetsAt),
+      read('cd34', 40, resetsAt)
+    ])
+    useAcpStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        s1: { ...state.sessions.s1, activeTurn: true }
+      }
+    }))
+    stop()
+    stop = startCodexAutoSwitch()
+    await vi.waitFor(() => expect(switcher.switchProjectCodexAccount).toHaveBeenCalled())
   })
 
   it('treats a mid-turn quota_exhausted error as at-limit and switches', async () => {

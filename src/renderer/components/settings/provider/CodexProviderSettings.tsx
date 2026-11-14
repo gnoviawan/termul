@@ -35,9 +35,10 @@ const errorText = (error: unknown): string =>
  * ChatGPT. The automatic-switching control only stores the flag.
  */
 export function CodexProviderSettings(): React.JSX.Element {
-  const { snapshot, usage, loading, error, reload, refreshingUsage } = useCodexAccounts({
-    usage: true
-  })
+  const { snapshot, usage, loading, error, reload, refreshUsage, refreshingUsage } =
+    useCodexAccounts({
+      usage: true
+    })
   const canManage = useServerAdmitsRemoteWrites()
   const projects = useProjectStore((s) => s.projects)
   const [addOpen, setAddOpen] = useState(false)
@@ -288,6 +289,7 @@ export function CodexProviderSettings(): React.JSX.Element {
             onSignedIn={async (account) => {
               setSigningIn(null)
               await reload()
+              await refreshUsage(true)
               toast.success(`${account.name} is signed in`)
             }}
           />

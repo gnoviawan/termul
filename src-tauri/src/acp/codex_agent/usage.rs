@@ -46,8 +46,16 @@ impl CodexUsageProbe for SystemCodexUsageProbe {
     }
 }
 
+/// A cached read plus the time of the last probe, including a failed one.
+/// `usage.checked_at` stays on the windows that are shown. `attempted_at`
+/// is the throttle: a new probe waits 60 seconds after the last attempt.
+pub(super) struct CachedUsage {
+    usage: CodexAccountUsage,
+    attempted_at: i64,
+}
+
 /// Latest read per Account id.
-pub(super) type UsageCache = parking_lot::Mutex<HashMap<String, CodexAccountUsage>>;
+pub(super) type UsageCache = parking_lot::Mutex<HashMap<String, CachedUsage>>;
 
 impl CodexAgentService {
     /// Usage of every Account, in list order. Reads younger than 5 minutes
@@ -59,15 +67,17 @@ impl CodexAgentService {
         let now = chrono::Utc::now().timestamp_millis();
         let max_age = if force { USAGE_MIN_AGE } else { USAGE_MAX_AGE };
         let max_age_ms = i64::try_from(max_age.as_millis()).unwrap_or(i64::MAX);
+        let min_age_ms = i64::try_from(USAGE_MIN_AGE.as_millis()).unwrap_or(i64::MAX);
         let stale: Vec<(String, Option<PathBuf>)> = {
             let cache = self.usage_cache.lock();
             snapshot
                 .profiles
                 .iter()
                 .filter(|row| {
-                    cache
-                        .get(&row.id)
-                        .is_none_or(|usage| now.saturating_sub(usage.checked_at) >= max_age_ms)
+                    cache.get(&row.id).is_none_or(|entry| {
+                        now.saturating_sub(entry.attempted_at) >= min_age_ms
+                            && now.saturating_sub(entry.usage.checked_at) >= max_age_ms
+                    })
                 })
                 .map(|row| {
                     let home = store
@@ -115,23 +125,42 @@ impl CodexAgentService {
         Ok(snapshot
             .profiles
             .iter()
-            .filter_map(|row| cache.get(&row.id).cloned())
+            .filter_map(|row| cache.get(&row.id).map(|entry| entry.usage.clone()))
             .collect())
     }
 }
 
 /// Keep a good read when a later probe cannot reach Codex. A signed-out read
-/// replaces it: the login is gone.
-fn remember(cache: &mut HashMap<String, CodexAccountUsage>, usage: CodexAccountUsage) {
-    let keep_good = matches!(
-        usage.status,
-        CodexUsageStatus::Unavailable | CodexUsageStatus::Error
-    ) && cache
-        .get(&usage.account_id)
-        .is_some_and(|prev| prev.status == CodexUsageStatus::Ok);
-    if !keep_good {
-        cache.insert(usage.account_id.clone(), usage);
+/// replaces it: the login is gone. A result older than the cached read is
+/// dropped, so a slow probe cannot overwrite a newer one. A failed attempt
+/// still moves `attempted_at`, which is the 60-second probe interval.
+fn remember(cache: &mut HashMap<String, CachedUsage>, usage: CodexAccountUsage) {
+    let attempt = usage.checked_at;
+    if let Some(prev) = cache.get_mut(&usage.account_id) {
+        if attempt < prev.usage.checked_at {
+            return;
+        }
+        let failed = matches!(
+            usage.status,
+            CodexUsageStatus::Unavailable | CodexUsageStatus::Error
+        );
+        if failed && prev.usage.status == CodexUsageStatus::Ok {
+            prev.attempted_at = prev.attempted_at.max(attempt);
+            return;
+        }
+        *prev = CachedUsage {
+            usage,
+            attempted_at: attempt.max(prev.attempted_at),
+        };
+        return;
     }
+    cache.insert(
+        usage.account_id.clone(),
+        CachedUsage {
+            usage,
+            attempted_at: attempt,
+        },
+    );
 }
 
 fn ensure_home(home: &Path) -> Result<(), &'static str> {

@@ -31,7 +31,7 @@ fn classification_table() {
             "codex rate_limited kind",
             rpc(
                 -32603,
-                "Codex reached its usage limit",
+                "Internal error",
                 Some(json!({ "errorKind": "rate_limited" })),
             ),
             Some(QuotaExceeded),
@@ -40,7 +40,7 @@ fn classification_table() {
             "codex quota_exhausted kind",
             rpc(
                 -32603,
-                "Codex reached its usage limit",
+                "Internal error",
                 Some(json!({ "errorKind": "quota_exhausted" })),
             ),
             Some(QuotaExceeded),
@@ -49,7 +49,7 @@ fn classification_table() {
             "codex usageLimitExceeded info",
             rpc(
                 -32603,
-                "usage limit",
+                "Internal error",
                 Some(json!({ "codexErrorInfo": "usageLimitExceeded" })),
             ),
             Some(QuotaExceeded),

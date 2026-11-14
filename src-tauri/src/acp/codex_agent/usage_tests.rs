@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::super::{CodexAgentService, CodexLoginStatus};
-use super::{probe_app_server, remember, CodexUsageProbe};
+use super::{probe_app_server, remember, CachedUsage, CodexUsageProbe};
 use crate::acp::codex_accounts::usage::{CodexAccountUsage, CodexUsageStatus, ProbeVerdict};
 use crate::acp::codex_accounts::CodexAccountStore;
 
@@ -159,7 +159,7 @@ async fn a_failed_probe_keeps_the_last_good_read() {
         status: CodexUsageStatus::Ok,
         plan_type: Some("plus".to_string()),
         windows: vec![],
-        checked_at: 1,
+        checked_at: 10,
         message: None,
     };
     remember(&mut cache, good.clone());
@@ -169,10 +169,12 @@ async fn a_failed_probe_keeps_the_last_good_read() {
             "default",
             CodexUsageStatus::Error,
             "Codex usage timed out",
-            2,
+            12,
         ),
     );
-    assert_eq!(cache.get("default"), Some(&good));
+    let kept = cache.get("default").expect("cached read");
+    assert_eq!(kept.usage, good);
+    assert_eq!(kept.attempted_at, 12);
     remember(
         &mut cache,
         CodexAccountUsage {
@@ -185,7 +187,22 @@ async fn a_failed_probe_keeps_the_last_good_read() {
         },
     );
     assert_eq!(
-        cache.get("default").map(|usage| usage.status),
+        cache.get("default").map(|entry| entry.usage.status),
+        Some(CodexUsageStatus::Ok)
+    );
+    remember(
+        &mut cache,
+        CodexAccountUsage {
+            account_id: "default".to_string(),
+            status: CodexUsageStatus::SignedOut,
+            plan_type: None,
+            windows: vec![],
+            checked_at: 13,
+            message: None,
+        },
+    );
+    assert_eq!(
+        cache.get("default").map(|entry| entry.usage.status),
         Some(CodexUsageStatus::SignedOut)
     );
 }
@@ -221,17 +238,55 @@ async fn the_service_keeps_a_good_read_when_the_next_probe_fails() {
     service.usage_probe = Arc::new(Boom);
     service.usage_cache.lock().insert(
         "default".to_string(),
-        CodexAccountUsage {
-            account_id: "default".to_string(),
-            status: CodexUsageStatus::Ok,
-            plan_type: Some("plus".to_string()),
-            windows: vec![],
-            checked_at: 0,
-            message: None,
+        CachedUsage {
+            usage: CodexAccountUsage {
+                account_id: "default".to_string(),
+                status: CodexUsageStatus::Ok,
+                plan_type: Some("plus".to_string()),
+                windows: vec![],
+                checked_at: 0,
+                message: None,
+            },
+            attempted_at: 0,
         },
     );
     let usage = service.accounts_usage(true).await.unwrap();
     assert_eq!(usage.len(), 1);
+    assert_eq!(usage[0].status, CodexUsageStatus::Ok);
+    assert_eq!(usage[0].plan_type.as_deref(), Some("plus"));
+}
+
+struct SignsOut;
+
+#[async_trait::async_trait]
+impl CodexUsageProbe for SignsOut {
+    async fn probe(&self, _codex_home: &Path) -> ProbeVerdict {
+        ProbeVerdict::SignedOut
+    }
+}
+
+#[tokio::test]
+async fn a_recent_attempt_is_not_probed_again() {
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    let store = Arc::new(CodexAccountStore::new(&state, root.path().join("shared")));
+    let mut service = CodexAgentService::with_probe(store, Arc::new(SignedIn));
+    service.usage_probe = Arc::new(SignsOut);
+    service.usage_cache.lock().insert(
+        "default".to_string(),
+        CachedUsage {
+            usage: CodexAccountUsage {
+                account_id: "default".to_string(),
+                status: CodexUsageStatus::Ok,
+                plan_type: Some("plus".to_string()),
+                windows: vec![],
+                checked_at: 0,
+                message: None,
+            },
+            attempted_at: chrono::Utc::now().timestamp_millis(),
+        },
+    );
+    let usage = service.accounts_usage(true).await.unwrap();
     assert_eq!(usage[0].status, CodexUsageStatus::Ok);
     assert_eq!(usage[0].plan_type.as_deref(), Some("plus"));
 }

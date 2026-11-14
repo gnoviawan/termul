@@ -64,6 +64,19 @@ export function CodexLimitNotice({ sessionId }: { sessionId: string }): React.JS
       </div>
 
       <div className="flex flex-wrap items-center gap-2 pl-[1.5625rem]">
+        {scheduledAt && (
+          <span className="flex items-center gap-2 text-2xs text-secondary-foreground">
+            <Clock size={12} />
+            Continues at {formatClock(scheduledAt)}
+            <button
+              type="button"
+              onClick={() => cancelResume(sessionId)}
+              className="font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-focus-ring"
+            >
+              Cancel
+            </button>
+          </span>
+        )}
         {switching ? (
           <span className="flex items-center gap-2 text-2xs text-secondary-foreground">
             <Spinner size={12} decorative />
@@ -97,19 +110,7 @@ export function CodexLimitNotice({ sessionId }: { sessionId: string }): React.JS
               </DropdownMenu>
             )}
           </>
-        ) : scheduledAt ? (
-          <span className="flex items-center gap-2 text-2xs text-secondary-foreground">
-            <Clock size={12} />
-            Continues at {formatClock(scheduledAt)}
-            <button
-              type="button"
-              onClick={() => cancelResume(sessionId)}
-              className="font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-focus-ring"
-            >
-              Cancel
-            </button>
-          </span>
-        ) : (
+        ) : scheduledAt ? null : (
           <>
             {limit.resetsAt !== null && (
               <Button
