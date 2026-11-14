@@ -301,7 +301,7 @@ impl super::CodexLoginStatus for FixedLogins {
         self.logouts
             .lock()
             .expect("logout record")
-            .push(codex_home.map(Path::to_path_buf));
+            .push(codex_home.map(std::path::Path::to_path_buf));
         Ok(())
     }
 }
