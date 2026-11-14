@@ -121,6 +121,34 @@ describe('ensureLiveAgent — definite host spawn rejections (AD-5)', () => {
     expect(state.spawnAgent).toHaveBeenCalledTimes(1)
   })
 
+  it('surfaces a signed-out Codex account on a history reopen; the prewarm stays silent', async () => {
+    const { state, get, set } = makeStore()
+    let reject!: (error: unknown) => void
+    state.spawnAgent.mockReturnValue(
+      new Promise((_, rej) => {
+        reject = rej
+      })
+    )
+    const prewarm = ensureLiveAgent(get, set, 'cfg-1', '/w', { silentSpawnFailure: true })
+    const reopen = ensureLiveAgent(get, set, 'cfg-1', '/w', {
+      silentSpawnFailure: true,
+      surfaceDefiniteRejection: true
+    })
+    const reopenOutcome = reopen.then(
+      () => 'resolved',
+      (error: unknown) => error
+    )
+    reject(
+      new AcpTransportError(
+        'codex_account_signed_out',
+        'The Codex account "Work" is not signed in.'
+      )
+    )
+    expect(await prewarm).toBeNull()
+    expect(await reopenOutcome).toMatchObject({ code: 'codex_account_signed_out' })
+    expect(state.spawnAgent).toHaveBeenCalledTimes(1)
+  })
+
   it('an edited agent NAME is a different launch for the recorded-rejection check', async () => {
     const { state, get, set } = makeStore()
     state.spawnAgent.mockRejectedValue(new AcpTransportError('invalid_agent_config', 'bad'))

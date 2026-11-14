@@ -46,9 +46,11 @@ import { type AgentAuthPolicy, agentPolicyForConfigId } from '@/lib/agents/acp-r
 import {
   classifySetupError,
   claudeAccountSignedOutMessage,
+  codexAccountSignedOutMessage,
   describeProviderFailure,
   isAgentAuthRequiredError,
-  isClaudeAccountSignedOutError
+  isClaudeAccountSignedOutError,
+  isCodexAccountSignedOutError
 } from '@/lib/agents/acp-spawn-errors'
 import { serializeSelectionContexts } from '@/lib/composer/selection-context'
 import { restoreConversationLabels, stripConversationEnvelopes } from '@/lib/conversation-envelope'
@@ -603,7 +605,13 @@ export function withSessionResumeError(
       ...session,
       replaying: null,
       ...plainLastError(
-        `${RESUME_FAILED_PREFIX}${isClaudeAccountSignedOutError(err) ? claudeAccountSignedOutMessage(err) : String(err)}`
+        `${RESUME_FAILED_PREFIX}${
+          isClaudeAccountSignedOutError(err)
+            ? claudeAccountSignedOutMessage(err)
+            : isCodexAccountSignedOutError(err)
+              ? codexAccountSignedOutMessage(err)
+              : String(err)
+        }`
       )
     }
   }
