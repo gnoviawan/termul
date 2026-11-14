@@ -24,6 +24,10 @@ pub const CODEX_ACP_CONFIG_ID: &str = "acp-registry:codex-acp";
 pub const CODEX_HOME_ENV: &str = "CODEX_HOME";
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 const CODEX_ACCESS_TOKEN_ENV: &str = "CODEX_ACCESS_TOKEN";
+/// Set on the agent env only as a signal to the spawn path. The child
+/// command removes this name and the two credential names from its own
+/// environment, including values inherited from the host process.
+pub(crate) const STRIP_CODEX_API_CREDENTIALS: &str = "TERMUL_STRIP_CODEX_API_CREDENTIALS";
 
 /// Which setting chose the Codex home of a managed agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,14 +87,22 @@ fn absolute_home(value: &str, home: Option<&Path>) -> Option<PathBuf> {
 
 #[async_trait::async_trait]
 trait CodexLoginStatus: Send + Sync {
-    async fn login_status(&self, codex_home: Option<&Path>) -> Result<Option<bool>, String>;
+    async fn login_status(
+        &self,
+        codex_home: Option<&Path>,
+        codex_bin: Option<&str>,
+    ) -> Result<Option<bool>, String>;
 }
 
 struct SystemCodexLoginProbe;
 
 #[async_trait::async_trait]
 impl CodexLoginStatus for SystemCodexLoginProbe {
-    async fn login_status(&self, codex_home: Option<&Path>) -> Result<Option<bool>, String> {
+    async fn login_status(
+        &self,
+        codex_home: Option<&Path>,
+        codex_bin: Option<&str>,
+    ) -> Result<Option<bool>, String> {
         let home = match codex_home {
             Some(dir) => Some(dir.to_str().ok_or_else(|| {
                 log::warn!("[acp-codex] account home is not valid Unicode");
@@ -98,11 +110,13 @@ impl CodexLoginStatus for SystemCodexLoginProbe {
             })?),
             None => None,
         };
-        Ok(match codex_login_status(home.map(str::to_string)).await {
-            CodexLoginState::SignedIn => Some(true),
-            CodexLoginState::SignedOut => Some(false),
-            CodexLoginState::Unavailable => None,
-        })
+        Ok(
+            match codex_login_status(home.map(str::to_string), codex_bin).await {
+                CodexLoginState::SignedIn => Some(true),
+                CodexLoginState::SignedOut => Some(false),
+                CodexLoginState::Unavailable => None,
+            },
+        )
     }
 }
 
@@ -201,11 +215,16 @@ impl CodexAgentService {
                 return Err("Could not create the Codex home folder".to_string());
             }
         }
-        match self.login_probe.login_status(home.as_deref()).await {
+        let codex_bin = config.env.get("CODEX_PATH").map(String::as_str);
+        match self
+            .login_probe
+            .login_status(home.as_deref(), codex_bin)
+            .await
+        {
             Ok(Some(true)) => {}
-            Ok(status) => {
+            Ok(Some(false)) => {
                 log::warn!(
-                    "[acp-codex] managed config rejected: {} profile is not signed in (status={status:?})",
+                    "[acp-codex] managed config rejected: {} profile is not signed in",
                     source.label()
                 );
                 let message = match source {
@@ -221,12 +240,25 @@ impl CodexAgentService {
                 };
                 return Err(signed_out_error(message));
             }
+            Ok(None) => {
+                log::warn!(
+                    "[acp-codex] managed config rejected: {} profile login could not be checked",
+                    source.label()
+                );
+                return Err(
+                    "Could not check the Codex login. Install the Codex CLI, or set CODEX_PATH to the codex binary, then retry."
+                        .to_string(),
+                );
+            }
             Err(error) => {
                 log::warn!("[acp-codex] managed config rejected: {error}");
                 return Err(error);
             }
         }
         strip_api_credentials(&mut config.env);
+        config
+            .env
+            .insert(STRIP_CODEX_API_CREDENTIALS.to_string(), "1".to_string());
         match &home {
             Some(dir) => {
                 let dir = dir.to_str().ok_or_else(|| {

@@ -47,7 +47,7 @@ pub struct CodexCliAuthStatus {
 /// `codex-acp` uses (`CODEX_HOME`, default `~/.codex`).
 #[tauri::command]
 pub async fn codex_cli_auth_status(codex_home: Option<String>) -> CodexCliAuthStatus {
-    let state = match codex_login_status(codex_home).await {
+    let state = match codex_login_status(codex_home, None).await {
         CodexLoginProbe::SignedIn => "signed-in",
         CodexLoginProbe::SignedOut => "signed-out",
         CodexLoginProbe::Unavailable => "unavailable",
@@ -65,11 +65,30 @@ pub(crate) enum CodexLoginProbe {
 }
 
 /// `codex login status` for one home. `None` uses the host default (`~/.codex`).
+/// `codex_bin` is the executable the managed adapter will run (`CODEX_PATH`);
+/// when it is absent the host `CODEX_PATH` is used, then `codex` on `PATH`.
 /// Exit 0 is signed in, exit 1 is signed out, and every other result is
 /// unavailable. The command's output is discarded and never logged.
-pub(crate) async fn codex_login_status(codex_home: Option<String>) -> CodexLoginProbe {
-    let resolved = crate::pty::manager::resolve_spawn_program("codex")
-        .unwrap_or_else(|_| crate::pty::manager::ResolvedProgram::new("codex".to_string()));
+pub(crate) async fn codex_login_status(
+    codex_home: Option<String>,
+    codex_bin: Option<&str>,
+) -> CodexLoginProbe {
+    let program = codex_bin
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            std::env::var("CODEX_PATH")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        });
+    let resolved = match program {
+        Some(path) => crate::pty::manager::resolve_spawn_program(&path)
+            .unwrap_or_else(|_| crate::pty::manager::ResolvedProgram::new(path)),
+        None => crate::pty::manager::resolve_spawn_program("codex")
+            .unwrap_or_else(|_| crate::pty::manager::ResolvedProgram::new("codex".to_string())),
+    };
     let mut command = tokio::process::Command::new(&resolved.program);
     // Polled every 4s by the renderer: never flash a console window.
     crate::process_util::background_command_hygiene(&mut command);
@@ -80,7 +99,11 @@ pub(crate) async fn codex_login_status(codex_home: Option<String>) -> CodexLogin
         .kill_on_drop(true)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(std::process::Stdio::null())
+        // The managed child does not receive these. The probe must not treat
+        // a host API key as a ChatGPT login for the selected home.
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("CODEX_ACCESS_TOKEN");
     let mut path_env = std::collections::HashMap::new();
     crate::pty::env_refresh::apply_fresh_path(&mut path_env);
     if let Some(path) = path_env

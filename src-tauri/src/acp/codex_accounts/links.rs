@@ -28,6 +28,10 @@ pub const PRIVATE_FILES: &[&str] = &["auth.json"];
 /// Codex already wrote in `account` are left alone (never deleted).
 /// Returns the number of entries that could not be linked.
 pub fn ensure_links(shared: &Path, account: &Path) -> io::Result<usize> {
+    // A relative symlink target is resolved from the link's directory, not the
+    // process working directory. Store an absolute target so a relative
+    // `CODEX_HOME` still points at the shared home.
+    let shared = absolute_shared_dir(shared)?;
     fs::create_dir_all(account)?;
     // `auth.json` is private. A shared name that also appears here would copy
     // a login into every Account.
@@ -70,6 +74,16 @@ pub fn ensure_links(shared: &Path, account: &Path) -> io::Result<usize> {
         }
     }
     Ok(failed)
+}
+
+/// `shared` when it is already absolute, otherwise `shared` joined to the
+/// process working directory.
+fn absolute_shared_dir(shared: &Path) -> io::Result<std::path::PathBuf> {
+    if shared.is_absolute() {
+        Ok(shared.to_path_buf())
+    } else {
+        Ok(std::env::current_dir()?.join(shared))
+    }
 }
 
 /// Remove the shared-entry links from `account`, never their targets.

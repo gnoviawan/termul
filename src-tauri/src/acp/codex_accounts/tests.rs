@@ -752,6 +752,30 @@ fn a_stale_project_choice_falls_back_to_the_default() {
     assert_eq!(s.resolve(Some("p1")).account_id, BUILTIN_ACCOUNT_ID);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_relative_shared_home_is_stored_as_an_absolute_symlink() {
+    let cwd = std::env::current_dir().unwrap();
+    let name = format!("codex-rel-shared-{}", std::process::id());
+    let shared = cwd.join(&name);
+    let account = cwd.join(format!("{name}-acct"));
+    let _ = fs::remove_dir_all(&shared);
+    let _ = fs::remove_dir_all(&account);
+    struct Cleanup(PathBuf, PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+            let _ = fs::remove_dir_all(&self.1);
+        }
+    }
+    let _cleanup = Cleanup(shared.clone(), account.clone());
+
+    assert_eq!(links::ensure_links(Path::new(&name), &account).unwrap(), 0);
+    let target = fs::read_link(account.join("sessions")).unwrap();
+    assert!(target.is_absolute());
+    assert_eq!(target, shared.join("sessions"));
+}
+
 #[test]
 fn account_ids_that_are_not_hex_never_map_to_a_path() {
     let f = fixture();
