@@ -41,7 +41,7 @@ pub(super) struct SystemCodexUsageProbe;
 #[async_trait::async_trait]
 impl CodexUsageProbe for SystemCodexUsageProbe {
     async fn probe(&self, codex_home: &Path) -> ProbeVerdict {
-        let resolved = crate::acp::commands::resolve_codex_program(None);
+        let resolved = crate::acp::commands::resolve_codex_program(None, None);
         probe_app_server(&resolved.program, &resolved.prepend_args, codex_home).await
     }
 }
