@@ -93,6 +93,7 @@ pub(crate) trait CodexLoginStatus: Send + Sync {
         &self,
         codex_home: Option<&Path>,
         codex_bin: Option<&str>,
+        project_path: Option<&str>,
     ) -> Result<Option<bool>, String>;
 
     /// Best-effort `codex logout` for one home. The default does nothing so a
@@ -110,6 +111,7 @@ impl CodexLoginStatus for SystemCodexLoginProbe {
         &self,
         codex_home: Option<&Path>,
         codex_bin: Option<&str>,
+        project_path: Option<&str>,
     ) -> Result<Option<bool>, String> {
         let home = match codex_home {
             Some(dir) => Some(dir.to_str().ok_or_else(|| {
@@ -119,7 +121,7 @@ impl CodexLoginStatus for SystemCodexLoginProbe {
             None => None,
         };
         Ok(
-            match codex_login_status(home.map(str::to_string), codex_bin).await {
+            match codex_login_status(home.map(str::to_string), codex_bin, project_path).await {
                 CodexLoginState::SignedIn => Some(true),
                 CodexLoginState::SignedOut => Some(false),
                 CodexLoginState::Unavailable => None,
@@ -239,9 +241,10 @@ impl CodexAgentService {
             }
         }
         let codex_bin = config.env.get("CODEX_PATH").map(String::as_str);
+        let project_path = project_path_override(&config.env);
         match self
             .login_probe
-            .login_status(home.as_deref(), codex_bin)
+            .login_status(home.as_deref(), codex_bin, project_path)
             .await
         {
             Ok(Some(true)) => {}
@@ -307,6 +310,15 @@ impl CodexAgentService {
 fn strip_api_credentials(env: &mut HashMap<String, String>) {
     env.remove(OPENAI_API_KEY_ENV);
     env.remove(CODEX_ACCESS_TOKEN_ENV);
+}
+
+/// The project env `PATH`, when one is set. The login probe merges it the
+/// same way the spawned adapter does.
+fn project_path_override(env: &HashMap<String, String>) -> Option<&str> {
+    env.iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("path"))
+        .map(|(_, value)| value.as_str())
+        .filter(|value| !value.trim().is_empty())
 }
 
 mod accounts;

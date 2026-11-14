@@ -224,6 +224,7 @@ impl CodexLoginStatus for SignedIn {
         &self,
         _codex_home: Option<&Path>,
         _codex_bin: Option<&str>,
+        _project_path: Option<&str>,
     ) -> Result<Option<bool>, String> {
         Ok(Some(true))
     }

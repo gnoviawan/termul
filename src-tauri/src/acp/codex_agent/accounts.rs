@@ -55,7 +55,7 @@ impl CodexAgentService {
             .collect();
         let probes = dirs
             .iter()
-            .map(|dir| self.login_probe.login_status(dir.as_deref(), None));
+            .map(|dir| self.login_probe.login_status(dir.as_deref(), None, None));
         let states = futures::future::join_all(probes).await;
         for (row, state) in snapshot.profiles.iter_mut().zip(states) {
             row.signed_in = state.unwrap_or_else(|_error| {
@@ -156,7 +156,7 @@ impl CodexAgentService {
         };
         let status = self
             .login_probe
-            .login_status(store.config_dir(id).as_deref(), None)
+            .login_status(store.config_dir(id).as_deref(), None, None)
             .await;
         if matches!(status, Ok(Some(true))) {
             return Ok(());
@@ -290,6 +290,7 @@ impl super::CodexLoginStatus for FixedLogins {
         &self,
         codex_home: Option<&std::path::Path>,
         _codex_bin: Option<&str>,
+        _project_path: Option<&str>,
     ) -> Result<Option<bool>, String> {
         let id = codex_home
             .and_then(|dir| dir.file_name()?.to_str())

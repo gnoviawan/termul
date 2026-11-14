@@ -13,6 +13,7 @@ use crate::acp::config::AgentConfig;
 struct RecordingProbe {
     probed: parking_lot::Mutex<Vec<Option<PathBuf>>>,
     bins: parking_lot::Mutex<Vec<Option<String>>>,
+    paths: parking_lot::Mutex<Vec<Option<String>>>,
     signed_out: Option<PathBuf>,
     /// The host home (`None`) reports signed out.
     host_signed_out: bool,
@@ -28,8 +29,10 @@ impl super::CodexLoginStatus for RecordingProbe {
         &self,
         codex_home: Option<&Path>,
         codex_bin: Option<&str>,
+        project_path: Option<&str>,
     ) -> Result<Option<bool>, String> {
         self.bins.lock().push(codex_bin.map(str::to_string));
+        self.paths.lock().push(project_path.map(str::to_string));
         if self.require_dir {
             let dir = codex_home.expect("a created home");
             assert!(dir.is_dir(), "Codex home must exist before the login probe");
@@ -47,7 +50,7 @@ impl super::CodexLoginStatus for RecordingProbe {
 }
 
 struct Host {
-    _root: tempfile::TempDir,
+    root: tempfile::TempDir,
     service: CodexAgentService,
     accounts: Arc<CodexAccountStore>,
     runtime: Arc<RecordingProbe>,
@@ -61,13 +64,14 @@ fn host(signed_out: impl FnOnce(&CodexAccountStore) -> Option<PathBuf>) -> Host 
         probed: parking_lot::Mutex::new(Vec::new()),
         signed_out: signed_out(&accounts),
         bins: parking_lot::Mutex::new(Vec::new()),
+        paths: parking_lot::Mutex::new(Vec::new()),
         host_signed_out: false,
         unavailable: false,
         require_dir: false,
     });
     let service = CodexAgentService::with_probe(Arc::clone(&accounts), runtime.clone());
     Host {
-        _root: root,
+        root,
         service,
         accounts,
         runtime,
@@ -181,7 +185,7 @@ async fn a_project_env_home_overrides_the_linked_account() {
     h.accounts
         .set_project_account("office", Some(&work.id), None)
         .unwrap();
-    let override_home = std::env::temp_dir().join("codex-work-home");
+    let override_home = h.root.path().join("codex-work-home");
     let mut config = with_home(override_home.to_str().unwrap());
     assert!(h
         .service
@@ -199,7 +203,8 @@ async fn a_project_env_home_overrides_the_linked_account() {
 
 #[tokio::test]
 async fn a_signed_out_project_env_home_names_the_project_env() {
-    let override_home = std::env::temp_dir().join("codex-signed-out-home");
+    let root = tempfile::tempdir().unwrap();
+    let override_home = root.path().join("codex-signed-out-home");
     let h = host(|_| Some(override_home.clone()));
     let mut config = with_home(override_home.to_str().unwrap());
     let error = h
@@ -243,6 +248,7 @@ async fn the_home_directory_exists_before_the_login_probe() {
         probed: parking_lot::Mutex::new(Vec::new()),
         signed_out: None,
         bins: parking_lot::Mutex::new(Vec::new()),
+        paths: parking_lot::Mutex::new(Vec::new()),
         host_signed_out: false,
         unavailable: false,
         require_dir: true,
@@ -289,6 +295,7 @@ async fn a_signed_out_builtin_account_names_the_host_login() {
         probed: parking_lot::Mutex::new(Vec::new()),
         signed_out: None,
         bins: parking_lot::Mutex::new(Vec::new()),
+        paths: parking_lot::Mutex::new(Vec::new()),
         host_signed_out: true,
         unavailable: false,
         require_dir: false,
@@ -350,6 +357,7 @@ async fn a_missing_codex_cli_is_not_reported_as_signed_out() {
     let runtime = Arc::new(RecordingProbe {
         probed: parking_lot::Mutex::new(Vec::new()),
         bins: parking_lot::Mutex::new(Vec::new()),
+        paths: parking_lot::Mutex::new(Vec::new()),
         signed_out: None,
         host_signed_out: false,
         unavailable: true,
@@ -381,5 +389,30 @@ async fn the_login_probe_uses_the_project_codex_path() {
     assert_eq!(
         h.runtime.bins.lock().as_slice(),
         &[Some("/opt/codex".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn the_login_probe_receives_the_project_path() {
+    let h = host(|_| None);
+    let mut config = managed();
+    config
+        .env
+        .insert("PATH".to_string(), "/opt/project-bin".to_string());
+    config
+        .env
+        .insert("CODEX_PATH".to_string(), "codex".to_string());
+    assert!(h
+        .service
+        .prepare_managed_config_for_project(&mut config, None)
+        .await
+        .unwrap());
+    assert_eq!(
+        h.runtime.paths.lock().as_slice(),
+        &[Some("/opt/project-bin".to_string())]
+    );
+    assert_eq!(
+        h.runtime.bins.lock().as_slice(),
+        &[Some("codex".to_string())]
     );
 }
