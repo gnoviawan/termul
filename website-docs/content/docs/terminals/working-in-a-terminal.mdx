@@ -1,9 +1,39 @@
 ---
 title: Work in a terminal
-description: Copy and paste, learn which keys reach your shell, open links and files, and set up scrollback, notifications, and the context bar.
+description: Type commands in the command editor, copy and paste, learn which keys reach your shell, open links and files, and set up scrollback, notifications, and the context bar.
 ---
 
 A Troupe terminal works like the terminal you already use. This page covers the parts that are specific to Troupe.
+
+## Type commands in the command editor
+
+In a local terminal on macOS or Linux whose shell is Bash or Zsh, you type commands in a command editor at the bottom of the terminal instead of on the shell's own prompt line. The terminal output stays above it. This works in the desktop app and in a browser connected to Troupe.
+
+Above the editor, chips show the terminal's working directory and its Git branch.
+
+The editor appears only while the shell waits for a command. When you run a command, the editor goes away and your keys go straight to the program, so interactive programs such as `vim`, `less`, or an AI coding agent work as usual. The editor comes back at the next prompt.
+
+Troupe doesn't use the command editor on Windows, for other shells such as fish or PowerShell, or for terminals that run a program such as an AI coding agent. If Troupe can't set up the editor when the shell starts, the terminal works the normal way. There is no setting to turn the editor off.
+
+### Keys in the command editor
+
+| Key | What it does |
+| --- | --- |
+| `Enter` | Runs the command. |
+| `Shift+Enter` | Starts a new line in the editor without running the command. |
+| `Tab` | Asks your shell for completions and opens a list of them. Press `Tab` again to insert the highlighted one. |
+| `Up`, `Down` | With the list open, move through the completions. Otherwise, go back and forward through commands you ran in this project that start with what you typed. In a command with several lines, they move between lines first. |
+| `Right` | At the end of the line, inserts the highlighted completion that shows as gray text after the cursor. |
+| `Esc` | Closes the completion list. |
+| `Ctrl+C` | Copies the selected text, in the editor or in the terminal output. With nothing selected, clears the editor. |
+| `Ctrl+D` | Deletes the character after the cursor. In an empty editor, sends end-of-input to the shell, which usually closes it. |
+| `Ctrl+A`, `Ctrl+E` | Move to the start or end of the line. |
+| `Ctrl+K`, `Ctrl+U`, `Ctrl+W` | Delete to the end of the line, to the start of the line, or the word before the cursor. |
+| `Ctrl+Z` (`Cmd+Z` on macOS) | Undoes the last edit. `Ctrl+Y` redoes it. On macOS, redo is `Cmd+Shift+Z`. On Linux, `Ctrl+Shift+Z` also works. |
+
+Troupe's own shortcuts still come first. For example, on Windows and Linux `Ctrl+K` opens the command palette and `Ctrl+W` closes the tab, as listed in [Keys that don't reach your shell](#keys-that-dont-reach-your-shell).
+
+When you paste into the editor, Troupe removes control characters from the text. Text you typed but didn't run stays in the editor if you switch to another terminal and back. The editor uses the terminal's font size, with a minimum of 16 pixels on touch screens.
 
 ## Copy and paste
 
@@ -29,7 +59,7 @@ If you open Troupe in a browser over plain `http://` from another computer, the 
 
 ## Keys that don't reach your shell
 
-Most keys go straight to your shell, including `Tab` for completion and readline keys such as `Ctrl+E`, `Ctrl+P`, `Ctrl+L`, and `Ctrl+D`. Troupe's own shortcuts come first, though, even when a terminal has focus.
+Most keys go straight to your shell, including `Tab` for completion and readline keys such as `Ctrl+E`, `Ctrl+P`, `Ctrl+L`, and `Ctrl+D`. Troupe's own shortcuts come first, though, even when a terminal has focus. While you type in the [command editor](#type-commands-in-the-command-editor), the editor handles the keys listed there.
 
 ### Windows and Linux desktop app
 
@@ -125,10 +155,10 @@ When a terminal you aren't looking at finishes, its pane also gets an amber outl
 
 ## Command history
 
-The **Command History** window is meant to list commands you ran in Troupe terminals, so you can find one and insert it again.
+The **Command History** window lists commands you ran in Troupe terminals, so you can find one and insert it again.
 
-<Callout type="warn">
-  Troupe doesn't record new commands at the moment, so the window shows **No command history yet**. Use your shell's own history instead, for example the `Up` arrow key or the `history` command.
+<Callout type="info">
+  Troupe records only commands you run from the [command editor](#type-commands-in-the-command-editor). In terminals without the editor, for example on Windows, the window stays empty. Use your shell's own history there, for example the `Up` arrow key or the `history` command.
 </Callout>
 
 To open the window:
@@ -137,7 +167,7 @@ To open the window:
 - In a browser, open the command palette and run **Command History**. `Ctrl+R` goes to your shell there.
 - On a phone, select the **...** button at the top of a terminal, then **Command history**.
 
-The window has a search box and a filter for **This Project** or **All Projects**. If it lists commands from an older version of Troupe, select one or press `Enter` to insert it at the prompt. Troupe doesn't run it. **Clear History** deletes the list for the current project.
+The window has a search box and a filter for **This Project** or **All Projects**. Select a command or press `Enter` to insert it at the prompt, or in the command editor. Troupe doesn't run it. **Clear History** deletes the list for the current project.
 
 ## Choose what the context bar shows
 
@@ -151,7 +181,7 @@ To choose what the bar shows, select the gear icon at the right end of the bar (
 - **Git Branch** shows the current branch. Select it to switch to another branch or create one. On by default.
 - **Git Status** shows how many files are modified, staged, and untracked, when there are any. Off by default.
 - **Working Directory** shows the active project or worktree folder. On by default.
-- **Exit Code** shows whether the last command in the active terminal succeeded. On by default. It appears only if your shell reports exit codes to the terminal. Many shells don't do this unless you set up shell integration.
+- **Exit Code** shows whether the last command in the active terminal succeeded. On by default. It appears only if your shell reports exit codes to the terminal. Terminals with the [command editor](#type-commands-in-the-command-editor) do this. Other shells often don't unless you set up shell integration.
 
 Troupe saves your choices with your settings. Every browser and phone that connects to the same Troupe uses them.
 
